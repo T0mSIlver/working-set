@@ -99,7 +99,8 @@ uv run scripts/tables.py           # regenerates every number quoted in docs/sce
 `scripts/scenario_model.py` is the shared model (calibrated to the baseline's
 2.77M-token FP8 anchor — projected from the measured FP16 pool, see
 docs/scenarios.md limitations; 35B-A3B constants from the published
-Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`); `scripts/scenarios.py`
-renders the static figures; and `interactive/index.html` is a dependency-free page
-mirroring the same math with live sliders for the workload, model, and topology.
-See [docs/scenarios.md](docs/scenarios.md).
+Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`; an FP8/FP16 KV-cache
+switch is available via `with_kv_dtype`, FP8 being the studied default);
+`scripts/scenarios.py` renders the static figures; and `interactive/index.html`
+is a dependency-free page mirroring the same math with live sliders for the
+workload, model, KV dtype, and topology. See [docs/scenarios.md](docs/scenarios.md).
