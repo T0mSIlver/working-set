@@ -28,7 +28,7 @@ two in sync.
 """
 from __future__ import annotations
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 KIB, MIB, GIB = 1024, 1024**2, 1024**3
 
@@ -132,6 +132,26 @@ MODELS = {
         mtp=1.7,                         # MTP module, speedup kept equal to baseline's fit
     ),
 }
+
+# ---- KV-cache dtype switch --------------------------------------------------
+# All MODELS constants assume the FP8 KV cache (`--kv-cache-dtype fp8_e4m3`),
+# as in the baseline study. FP16 KV doubles the bytes/token, which both halves
+# the pool (capacity) and doubles the per-step KV read (decode) — weights and
+# the DeltaNet recurrent state are unaffected. The activation-reserve
+# calibration always uses the FP8 27B constants (the anchor's definition), so
+# switching dtype never re-calibrates the reserve. Sanity: the FP16 27B pool
+# comes out at 1.385M tokens, inside the baseline's measured FP16 interval
+# [1.139M, 1.399M].
+KV_DTYPES = ("fp8", "fp16")
+
+def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
+    """Return `model` configured for the given KV-cache dtype."""
+    if kv_dtype not in KV_DTYPES:
+        raise ValueError(f"kv_dtype must be one of {KV_DTYPES}, got {kv_dtype!r}")
+    if kv_dtype == "fp8":
+        return model
+    return replace(model, kv_bpt=model.kv_bpt * 2, name=model.name + " [FP16 KV]")
+
 
 # ============================================================================
 # TOPOLOGY
@@ -362,6 +382,18 @@ def _selfcheck():
     for n in (1, 8, 32, 64):
         assert m35.w_decode(n, "coverage") <= m35.w_decode(n, "linear") + 1e-6
 
+    # KV dtype switch: FP16 doubles bytes/token -> pool halves exactly; the
+    # FP16 27B pool must land inside the baseline's MEASURED FP16 interval
+    m27_16 = with_kv_dtype(m27, "fp16")
+    assert m27_16.kv_bpt == 2 * m27.kv_bpt
+    assert abs(kv_pool_tokens(m27_16, t1) - kv_pool_tokens(m27, t1) / 2) < 1
+    assert 1.139e6 <= kv_pool_tokens(m27_16, t1) <= 1.399e6, \
+        "FP16 27B pool should fall in the measured [1139k, 1399k] interval"
+    assert with_kv_dtype(m27, "fp8") is m27          # fp8 = identity
+    _, p16, _, _ = decode_curves(with_kv_dtype(m35, "fp16"), t1, wl, [64], n_iter=300)
+    _, p8, _, _ = decode_curves(m35, t1, wl, [64], n_iter=300)
+    assert p16[0] < p8[0], "FP16 KV must decode slower (double KV read)"
+
     # warm capacity sanity: pool grows => capacity grows
     lo = warm_capacity(m35, t1, wl, n_iter=120)[1]
     hi = warm_capacity(m35, tp2, wl, n_iter=120)[1]
@@ -375,10 +407,11 @@ def _selfcheck():
 
     print("selfcheck OK")
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
-    for mk in MODELS:
-        for tk in TOPOLOGIES:
-            p = kv_pool_tokens(MODELS[mk], TOPOLOGIES[tk])
-            print(f"  pool {mk:7} {tk:12} = {p / 1e6:6.2f} M tokens")
+    for dtype in KV_DTYPES:
+        for mk in MODELS:
+            for tk in TOPOLOGIES:
+                p = kv_pool_tokens(with_kv_dtype(MODELS[mk], dtype), TOPOLOGIES[tk])
+                print(f"  pool {mk:7} {tk:12} {dtype:5} = {p / 1e6:6.2f} M tokens")
 
 
 if __name__ == "__main__":

@@ -111,6 +111,18 @@ def main():
             print(f"  {mk:7} {tk:12} warm={warm:4.0f} (user {warm_u:4.0f}){per_cache}  "
                   f"v@warm={v_at_warm[0]:5.0f} tok/s  mns@40={m40:3d}")
 
+    print("\n== KV dtype switch: FP16 KV cache (default everywhere else: FP8) ==")
+    print("  pool halves; warm capacity falls slightly less (state charge is dtype-independent)")
+    for mk in MODELS_K:
+        for tk in ["1xH200", "2xH200-TP2"]:
+            m16 = M.with_kv_dtype(MODELS[mk], "fp16")
+            pool = M.kv_pool_tokens(m16, TOPOLOGIES[tk])
+            warm = M.warm_capacity(m16, TOPOLOGIES[tk], w0, n_iter=1500)[1]
+            warm_u = M.warm_capacity(m16, TOPOLOGIES[tk], w0, n_iter=1500, which="user")[1]
+            _, v64, _, _ = M.decode_curves(m16, TOPOLOGIES[tk], w0, [64], n_iter=2000)
+            print(f"  {mk:7} {tk:12} pool={pool / 1e6:5.2f}M  warm={warm:4.0f} "
+                  f"(user {warm_u:4.0f})  v@mns64={v64[0]:4.0f} tok/s")
+
     print("\n== Sensitivity: fp32 DeltaNet state (35B-A3B, warm p50) ==")
     m = MODELS["35BA3B"]
     import dataclasses
