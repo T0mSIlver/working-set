@@ -32,7 +32,8 @@ The full write-up — setup, method, results, and recommendations — is in
 ```
 .
 ├── README.md                 # this file
-├── requirements.txt
+├── pyproject.toml            # project + dependencies (managed with uv)
+├── uv.lock                   # pinned, reproducible environment
 ├── docs/
 │   ├── writeup.md            # baseline experiment write-up
 │   └── scenarios.md          # extended-scenario study (2xH200, MoE, subagents, …)
@@ -54,23 +55,25 @@ The full write-up — setup, method, results, and recommendations — is in
 
 ## Running the scripts
 
-```bash
-pip install -r requirements.txt
+The project is managed with [uv](https://docs.astral.sh/uv/) — dependencies live
+in `pyproject.toml` and are pinned by `uv.lock`. `uv run` creates/updates the
+environment automatically on first use (or run `uv sync` explicitly):
 
+```bash
 # fully synthetic — runs out of the box, writes to figures/
-python scripts/warm_capacity.py
+uv run scripts/warm_capacity.py
 
 # real-data scripts need the two CSVs described in data/README.md
-python scripts/real_capacity.py
-python scripts/real_mns.py
-python scripts/warm_whisker.py
+uv run scripts/real_capacity.py
+uv run scripts/real_mns.py
+uv run scripts/warm_whisker.py
 ```
 
 Each script writes its PNGs into `figures/`. Override the input and output
 locations with environment variables:
 
 ```bash
-DATA_DIR=/path/to/csvs OUT_DIR=/tmp/figs python scripts/real_mns.py
+DATA_DIR=/path/to/csvs OUT_DIR=/tmp/figs uv run scripts/real_mns.py
 ```
 
 ### Script → figure map
@@ -88,9 +91,9 @@ prompt-caching sweep (not one of these scripts).
 ### Extended-scenario study
 
 ```bash
-python scripts/scenario_model.py   # self-checks (calibration + published-config identities)
-python scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation .png
-python scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
+uv run scripts/scenario_model.py   # self-checks (calibration + published-config identities)
+uv run scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation .png
+uv run scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
 ```
 
 `scripts/scenario_model.py` is the shared model (calibrated to the baseline's
