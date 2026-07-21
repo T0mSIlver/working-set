@@ -405,6 +405,43 @@ FP16 interval) is **partially circular** — the FP8 anchor was constructed as
 roughly 2× the FP16 estimate, so halving it lands near the measurement largely by
 construction. It validates internal consistency, not the model.
 
+## Planning stance (owner decisions, 2026-07-21)
+
+Recorded so the numbers below are read the way they were decided:
+
+1. **Measurement: deferred.** No re-anchoring measurement is scheduled yet; the
+   study stays a projection-anchored **hypothesis generator and configuration
+   ranker**. The single biggest trust upgrade remains one exact-configuration
+   35B-A3B measurement (limitation 13).
+2. **"Comfortable capacity" is defined as measured SLO capacity** — the largest
+   replayed population meeting explicit p95 TTFT and inter-token-latency targets.
+   This model **cannot produce that number**; until the replay exists, every
+   figure here ranks configurations and bounds scenarios, and none is a
+   user-count commitment.
+3. **Prefix domain: global sharing** is the modelled policy (one shared user
+   prefix per cache). Prerequisites this creates: byte-stable prompt versioning
+   across all users, and security acceptance of cross-user prefix-cache sharing
+   (no per-tenant cache salts). If either fails, subtract the ~200-session
+   tenant-split proxy (limitation 15).
+4. **Reporting: conservative base, visible headroom.** The purchasing-facing
+   number excludes the immature serving paths — **no CPU offload, no MTP speedup,
+   no N > 2 TP** — on top of the stacked-adverse structural case. The excluded
+   upside stays fully explorable: the interactive explorer has switches for the
+   structural assumption set (Central/Conservative), MTP (on/off), offload
+   (0–1024 GiB) and GPU count, so every tradeoff is playable rather than hidden.
+
+**Conservative purchasing view** (stacked structural case + immature paths off;
+regenerate via the "Structural-uncertainty stack" section of `tables.py`):
+
+| Config | Warm p5 (stacked) | user-class p5 | v@p5-warm, MTP off |
+| --- | --- | --- | --- |
+| 35B-A3B, 1×H200 | **144** | **130** | 43 tok/s |
+| 35B-A3B, TP2 | **403** | **367** | 34 tok/s |
+
+Note the MTP-off stress speed on TP2 (34 tok/s) sits between the 20 tok/s hard
+floor and the 40 tok/s comfort floor: without the speculative-decoding path, the
+comfort margin at full warm load depends on duty cycle < 100%.
+
 ## Outcomes
 
 | Hypothesis | Outcome |

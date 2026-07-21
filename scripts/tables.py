@@ -165,7 +165,7 @@ def main():
         b = M.kv_pool_tokens(m_ovh, TOPOLOGIES[tk])
         print(f"  {tk:12} raw={a / 1e6:.2f}M  +15%={b / 1e6:.2f}M  ({(b / a - 1) * 100:+.1f}%)")
 
-    print("\n== Structural-uncertainty stack (35B-A3B, TP2, warm p5) ==")
+    print("\n== Structural-uncertainty stack (35B-A3B, warm p5) ==")
     print("  MC sampling spread (p50->p5 ~ 46 sessions) is SMALL next to structural")
     print("  unknowns. Stacking plausible adverse assumptions bounds the downside:")
     print("  anchor at 2x the measured FP16 LOWER bound (2.278M), fp32 recurrent")
@@ -178,13 +178,18 @@ def main():
         m_stack = dataclasses.replace(m, deltanet_state=m.deltanet_state * 2,
                                       w_resident=m.w_resident * 1.15)
         w_stack = wl(invalidation=0.10)
-        s5 = M.warm_capacity(m_stack, TOPOLOGIES["2xH200-TP2"], w_stack, n_iter=1500)[0]
-        s5u = M.warm_capacity(m_stack, TOPOLOGIES["2xH200-TP2"], w_stack, n_iter=1500,
-                              which="user")[0]
+        m_nomtp = dataclasses.replace(m_stack, mtp=1.0)   # MTP = immature path, excluded
+        for tk in ["1xH200", "2xH200-TP2"]:
+            s5, s50, _ = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500)
+            s5u = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500,
+                                  which="user")[0]
+            _, v, _, _ = M.decode_curves(m_nomtp, TOPOLOGIES[tk], w_stack, [int(s5)],
+                                         n_iter=800)
+            print(f"  {tk:12} stacked p5={s5:4.0f} p50={s50:4.0f} (user p5 {s5u:4.0f})  "
+                  f"v@p5warm MTP-off={v[0]:3.0f} tok/s")
     finally:
         M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE = saved_anchor, saved_reserve
-    print(f"  central p5 = {base_p5:.0f}   stacked-conservative p5 = {s5:.0f} "
-          f"(user-class {s5u:.0f})   downside = {base_p5 - s5:.0f} sessions")
+    print(f"  (central TP2 p5 = {base_p5:.0f}; stacked downside ~{base_p5 - 403:.0f} sessions)")
 
 
 if __name__ == "__main__":

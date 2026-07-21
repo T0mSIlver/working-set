@@ -187,6 +187,7 @@ svg text{fill:var(--text-2)}
         <li><b>DP (data-parallel, any N)</b> keeps N per-replica caches. Aggregate throughput scales ~N×, but a returning user is only <em>warm on their home replica</em> (sticky routing), and a shared CPU-offload buffer splits N ways.</li>
         <li><b>Monte-Carlo jitter:</b> every render redraws the workload, so repeated runs (and neighbouring slider positions) can differ by a few sessions — that is sampling noise, not a real effect. The Python sweeps in <code>tables.py</code> use a fixed seed instead and are smooth. Real non-linearities (the expert-union kink at n=32, the cap's tail-truncation, the prefix floor) are explained in docs/scenarios.md.</li>
         <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts. The explorer uses the conservative no-overlap union bound (docs also show the optimistic expected-union bracket).</li>
+        <li><b>Structural assumptions &amp; MTP switches:</b> "Conservative" applies the stacked-adverse case from the docs (low anchor, fp32 state, +15% weights — add 10% invalidation manually for the full 403-session TP2 case); the MTP toggle shows what the immature speculative-decode path buys. The purchasing base excludes MTP, CPU offload and N&gt;2 TP; these controls exist so that headroom stays visible, not hidden.</li>
         <li><b>KV dtype:</b> all constants assume the FP8 KV cache (<code>--kv-cache-dtype fp8_e4m3</code>), as tested in the baseline. The FP16 switch doubles KV bytes/token (half the pool, heavier decode reads); weights and the DeltaNet state are unaffected, and the activation-reserve calibration stays pinned to the FP8 anchor. Sanity: FP16 + 27B + 1×H200 gives a 1.39M-token pool, inside the baseline's measured [1.14M, 1.40M].</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
@@ -214,6 +215,21 @@ svg text{fill:var(--text-2)}
             <button data-v="fp16" aria-pressed="false">FP16</button>
           </div>
           <div class="hint">FP16 doubles KV bytes/token: half the pool, slower decode. Weights &amp; DeltaNet state unaffected.</div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Central = the study's calibrated constants. Conservative = the stacked-adverse structural case: calibration anchor at 2× the measured FP16 LOWER bound (2.278M vs 2.77M), fp32 DeltaNet state (2×), and +15% deployed-weight overhead on the 35B-A3B. For the FULL stacked case from the docs, also set invalidation to 10%.">Structural assumptions</span></label>
+          <div class="seg" id="seg-assume" data-key="assume">
+            <button data-v="central" aria-pressed="true">Central</button>
+            <button data-v="conservative" aria-pressed="false">Conservative</button>
+          </div>
+          <div class="hint" id="assume-hint" style="display:none">Stacked-adverse constants active. Set invalidation to 10% to reproduce the docs' 403-session TP2 case.</div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Multi-Token Prediction speculative decoding (~1.7× decode speedup, transplanted from the 27B's fit). MTP together with hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps it OFF; toggle it on to see the headroom it would buy.">MTP speculative decode</span></label>
+          <div class="seg" id="seg-mtp" data-key="mtp">
+            <button data-v="on" aria-pressed="true">On · 1.7×</button>
+            <button data-v="off" aria-pressed="false">Off · 1.0×</button>
+          </div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="How many H200s the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas.">H200 GPUs</span> <span class="val"><span id="v-ngpu">1</span>×</span></label>
@@ -406,12 +422,21 @@ function actReserve(){
 }
 const ACT_RESERVE = actReserve();
 
+// per-GPU reserve for the active structural-assumption set. The try/catch
+// covers the load-time unit checks, which run before `state` is initialized
+// (temporal dead zone) and always use the central calibration.
+function reserveNow(){
+  try { return state.assume==="conservative" ? ACT_RESERVE_CONSERVATIVE : ACT_RESERVE; }
+  catch(e){ return ACT_RESERVE; }
+}
+
 function kv_pool_tokens(m, topo){
+  const R = reserveNow();
   let poolBytes;
   if (topo.kind === "tp"){
-    poolBytes = topo.n_gpu * CONFIG.VRAM_PER_GPU - m.w_resident - topo.n_gpu * ACT_RESERVE;
+    poolBytes = topo.n_gpu * CONFIG.VRAM_PER_GPU - m.w_resident - topo.n_gpu * R;
   } else { // single or per-replica of dp
-    poolBytes = CONFIG.VRAM_PER_GPU - m.w_resident - ACT_RESERVE;
+    poolBytes = CONFIG.VRAM_PER_GPU - m.w_resident - R;
   }
   return Math.max(poolBytes, 0) / m.kv_bpt;
 }
@@ -581,6 +606,7 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
    ========================================================================== */
 const state = {
   model: "27B", ngpu: 1, par: "tp", ram: 0, kv: "fp8", cap: 180,
+  assume: "central", mtp: "on",
   user_median: 31, user_sigma: 0.81,
   sub_median: 8, sub_sigma: 0.90,
   sub_ratio: 0.10, sub_shares_prefix: false,
@@ -876,14 +902,29 @@ function removeCross(svg){ const e=svg.querySelector('.xcross'); if(e) e.remove(
    ========================================================================== */
 let lastDC=null, lastWarmCur=null, lastWarmAll=null;
 
-// active model with the KV-dtype switch applied (mirrors with_kv_dtype in
-// scenario_model.py): FP16 doubles kv_bpt; weights/state untouched. The
-// ACT_RESERVE calibration always uses the FP8 constants in CONFIG.
+// active model with the KV-dtype, structural-assumption and MTP switches
+// applied. FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py). The
+// "conservative" structural set = stacked-adverse case from docs/scenarios.md:
+// fp32 DeltaNet state (2x), +15% deployed-weight overhead (35B-A3B only —
+// the 27B's 28.8 GiB is already an as-deployed figure), and a low calibration
+// anchor (applied in kv_pool_tokens via currentReserve()).
 function activeModel(){
-  const m = CONFIG.MODELS[state.model];
-  if (state.kv !== "fp16") return m;
-  return { ...m, kv_bpt: m.kv_bpt*2, name: m.name + " [FP16 KV]" };
+  let m = CONFIG.MODELS[state.model];
+  if (state.kv === "fp16") m = { ...m, kv_bpt: m.kv_bpt*2, name: m.name + " [FP16 KV]" };
+  if (state.assume === "conservative"){
+    m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [conservative]" };
+    if (state.model === "35BA3B") m = { ...m, w_resident: m.w_resident*1.15 };
+  }
+  if (state.mtp === "off") m = { ...m, mtp: 1.0 };
+  return m;
 }
+
+// low-anchor reserve for the conservative set: anchor at 2x the measured FP16
+// LOWER bound (2.278M tokens) instead of the projected 2.77M
+const ACT_RESERVE_CONSERVATIVE = (()=>{
+  const m = CONFIG.MODELS["27B"];
+  return CONFIG.VRAM_PER_GPU - m.w_resident - 2*1.139e6*m.kv_bpt;
+})();
 
 function computeAndRender(draft){
   const model=activeModel();
@@ -1000,6 +1041,7 @@ document.querySelectorAll('.seg').forEach(seg=>{
       seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===btn?'true':'false'));
       state[key]=btn.dataset.v;
       document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
+      document.getElementById('assume-hint').style.display = (state.assume==='conservative')?'block':'none';
       computeAndRender(false);
     });
   });
