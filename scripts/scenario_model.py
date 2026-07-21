@@ -109,7 +109,9 @@ MODELS = {
     "27B": Model(
         name="Qwen3.6-27B (dense)",
         kv_bpt=32 * KIB,                 # 16 attn layers x 4 KV heads x 256 x 2(K,V) x 1B
-        deltanet_state=75 * MIB,         # 48 DN layers x 48 vheads x 128x128 bf16 (+conv) = 75.7 MiB
+        deltanet_state=75 * MIB,         # baseline's 75 MiB; bf16 arithmetic (48 DN layers x
+                                         # 48 vheads x 128x128 + conv) gives 75.7 MiB
+
         w_resident=28.8 * GIB,           # baseline's stated as-deployed FP8 footprint
         w_decode_shared=28.8 * GIB,      # dense: every step reads all weights
         w_route_pertok=0.0,
@@ -121,7 +123,9 @@ MODELS = {
         name="Qwen3.6-35B-A3B (MoE, ~3B active)",
         kv_bpt=10_240,                   # 10 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
         deltanet_state=33_423_360,       # 30 DN layers x 32 vheads x 128x128 bf16 (+conv) = 31.9 MiB
-        w_resident=35_500_000_000,       # ~35.5B params x 1B FP8 (all experts + MTP module)
+        w_resident=35_500_000_000,       # ~35.5B params x 1B FP8: full model (embeddings,
+                                         # lm_head, attn/DN, all experts, MTP module)
+
         w_decode_shared=1_940_000_000,   # attn + deltanet + shared expert + router + lm_head / step
         w_route_pertok=1_006_632_960,    # 8 routed experts x 3.146M x 40 layers, FP8
         w_route_total=32_212_254_720,    # 256 routed experts (saturates at exactly n=32 linear)
@@ -345,8 +349,8 @@ def _selfcheck():
     assert abs(m35.w_route_total / m35.w_route_pertok - 32) < 1e-9  # kink at n=32
     active = m35.w_decode_shared + m35.w_route_pertok
     assert 2.8e9 < active < 3.1e9, "active bytes/token should be ~3B (published)"
-    assert m35.w_resident > m35.w_route_total + m35.w_decode_shared - 509e6, \
-        "resident must cover all experts + shared (lm_head aside, embed/MTP extra)"
+    assert m35.w_resident > m35.w_route_total + m35.w_decode_shared, \
+        "resident weights must exceed the bytes decode can touch in one step"
 
     # decode monotonicity + union bracketing
     mns = np.arange(1, 129)
