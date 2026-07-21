@@ -7,6 +7,11 @@ trade off against per-user decode speed for agentic coding workloads.
 The full write-up — setup, method, results, and recommendations — is in
 **[docs/writeup.md](docs/writeup.md)**.
 
+> **Extended study:** [docs/scenarios.md](docs/scenarios.md) carries the same
+> methodology to **2×H200** (tensor- vs data-parallel), the **35B-A3B MoE** model,
+> **subagent** workloads, **system-prompt size**, and a **cache-invalidation** rate —
+> with an interactive explorer at [`interactive/index.html`](interactive/index.html).
+
 ## Key findings
 
 - vLLM 0.19.0 mis-reports the KV cache size (`352k tokens`) due to a
@@ -29,13 +34,20 @@ The full write-up — setup, method, results, and recommendations — is in
 ├── README.md                 # this file
 ├── requirements.txt
 ├── docs/
-│   └── writeup.md            # full experiment write-up
+│   ├── writeup.md            # baseline experiment write-up
+│   └── scenarios.md          # extended-scenario study (2xH200, MoE, subagents, …)
 ├── scripts/                  # figure-generating scripts (matplotlib, Agg)
-│   ├── warm_capacity.py      # synthetic capacity/concurrency projections (no data needed)
-│   ├── real_capacity.py      # real-data: clean → fit log-normal → MC warm-fill
-│   ├── real_mns.py           # real-data: max_num_seqs speed/throughput tradeoff
-│   └── warm_whisker.py       # real-data: warm capacity p5/p50/p95 whiskers
-├── figures/                  # generated figures used in the write-up
+│   ├── warm_capacity.py      # baseline: synthetic capacity/concurrency projections
+│   ├── real_capacity.py      # baseline: clean → fit log-normal → MC warm-fill
+│   ├── real_mns.py           # baseline: max_num_seqs speed/throughput tradeoff
+│   ├── warm_whisker.py       # baseline: warm capacity p5/p50/p95 whiskers
+│   ├── scenario_model.py     # extended study: shared capacity + decode model
+│   └── scenarios.py          # extended study: renders the scenario figures
+├── interactive/
+│   └── index.html            # self-contained interactive scenario explorer
+├── research/
+│   └── model_35ba3b.md       # cited architecture parameterization for 35B-A3B
+├── figures/                  # generated figures used in the write-ups
 └── data/                     # provider CSVs (not committed — see data/README.md)
 ```
 
@@ -71,3 +83,16 @@ DATA_DIR=/path/to/csvs OUT_DIR=/tmp/figs python scripts/real_mns.py
 
 The experimental result `figures/prefix_cache_sweep.png` comes from the live
 prompt-caching sweep (not one of these scripts).
+
+### Extended-scenario study
+
+```bash
+# renders scenario_capacity / sysprompt / mns / subagent_invalidation .png (no CSVs needed)
+python scripts/scenarios.py
+```
+
+`scripts/scenario_model.py` is the shared model (calibrated to reproduce the
+baseline's measured 2.77M-token pool); `scripts/scenarios.py` renders the static
+figures; and `interactive/index.html` is a dependency-free page mirroring the same
+math with live sliders for the workload, model, and topology. See
+[docs/scenarios.md](docs/scenarios.md).

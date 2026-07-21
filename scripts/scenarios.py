@@ -90,26 +90,44 @@ def fig_capacity():
 # FIG 2: system-prompt size sweep (the 3k win)
 # ============================================================================
 def fig_sysprompt():
+    """The system-prompt tradeoff is two-sided: a bigger *shared* prefix dedups
+    more (more warm sessions) but every cache miss must re-prefill it."""
     sizes = [3_000, 15_000, 30_000]
-    topos = ["1xH200", "2xH200-TP2", "2xH200-DP2"]
     mk = "35BA3B"
-    fig, ax = plt.subplots(figsize=(9.5, 5.2))
-    x = np.arange(len(sizes)); w = 0.25
-    for i, tk in enumerate(topos):
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(13, 5.2))
+
+    # LEFT: warm capacity rises with a bigger shared prefix (dedup), 1xH200 & TP2
+    x = np.arange(len(sizes)); w = 0.34
+    for i, tk in enumerate(["1xH200", "2xH200-TP2"]):
         p50s, los, his = [], [], []
         for s in sizes:
-            wl = base_workload(sys_user=s, sys_sub=s)
-            p5, p50, p95 = M.warm_capacity(MODELS[mk], TOPOLOGIES[tk], wl, n_iter=1200)
+            p5, p50, p95 = M.warm_capacity(MODELS[mk], TOPOLOGIES[tk],
+                                           base_workload(sys_user=s), n_iter=1500)
             p50s.append(p50); los.append(p50 - p5); his.append(p95 - p50)
-        b = ax.bar(x + (i - 1) * w, p50s, w, yerr=[los, his], capsize=4,
-                   color=TOPO_COLOR[tk], alpha=.9, label=TOPO_LABEL[tk],
-                   error_kw=dict(lw=1.1, ecolor="#555"))
-        ax.bar_label(b, labels=[f"{v:.0f}" for v in p50s], padding=3, fontsize=8)
-    ax.set_xticks(x); ax.set_xticklabels([f"{s // 1000}k system prompt" for s in sizes])
-    ax.set_ylabel("warm reusable sessions (p50, whisker p5-p95)")
-    ax.set_title(f"Shrinking the shared system prompt frees cache  -  {MODELS[mk].name}\n"
-                 "smaller prefix = more unique-KV budget = more sessions kept warm", fontsize=11)
-    ax.legend(frameon=False, loc="upper right")
+        b = axL.bar(x + (i - .5) * w, p50s, w, yerr=[los, his], capsize=4,
+                    color=TOPO_COLOR[tk], alpha=.9, label=TOPO_LABEL[tk],
+                    error_kw=dict(lw=1.1, ecolor="#555"))
+        axL.bar_label(b, labels=[f"{v:.0f}" for v in p50s], padding=3, fontsize=8)
+    axL.set_xticks(x); axL.set_xticklabels([f"{s // 1000}k prefix" for s in sizes])
+    axL.set_ylabel("warm reusable sessions (p50, whisker p5-p95)")
+    axL.set_title("Upside: a bigger *shared* prefix dedups more\n"
+                  "(stored once) -> more sessions kept warm")
+    axL.legend(frameon=False, loc="upper left")
+
+    # RIGHT: cost side -- expected re-prefill tokens per request due to the prefix,
+    # paid on every cache miss (fraction f can't reuse it)
+    xs = np.linspace(3_000, 30_000, 100)
+    for f, col in [(0.01, BLUE), (0.05, ORANGE)]:
+        axR.plot(xs / 1000, f * xs, color=col, lw=2.2, label=f"invalidation {f*100:.0f}%")
+    for s in sizes:
+        axR.axvline(s / 1000, ls=":", color=MUTED, lw=.8)
+    axR.set_xlabel("shared system-prompt size (k tokens)")
+    axR.set_ylabel("expected re-prefilled prefix tokens / request")
+    axR.set_title("Cost: every cache miss re-prefills the whole prefix\n"
+                  "miss tax = f x prefix -> a lean 3k prompt is cheap & robust")
+    axR.legend(frameon=False, loc="upper left")
+    axL.set_xlabel("shared system-prompt size")
+    fig.suptitle(f"System-prompt size tradeoff  -  {MODELS[mk].name}", fontsize=12)
     fig.tight_layout(); fig.savefig(out("scenario_sysprompt.png"), bbox_inches="tight")
     plt.close(fig)
 
