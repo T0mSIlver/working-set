@@ -340,6 +340,10 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 
     which="all" counts every reusable session; which="user" counts only
     user-class sessions (the 'distinct users kept warm' planning number).
+
+    ram_gib is the CPU-offload buffer available to THIS cache. A DP deployment
+    shares the host buffer across its replicas, so DP callers must pass
+    system_ram / topo.replicas (the explorer does this via ramPerCache()).
     """
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)

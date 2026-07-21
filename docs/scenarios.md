@@ -186,6 +186,7 @@ Warm **reusable** sessions in one KV cache (p5 / **p50** / p95), reference workl
 (280 vs 94; 678 vs 222) — driven by 10 vs 32 KiB/token. (2) **TP2** gives **2.3–2.4×**
 the single-GPU pool (20.30 vs 8.42M tokens): the second weight copy it avoids becomes
 KV. (3) **DP2's per-cache capacity is unchanged**; system-wide it holds 2 × 280 = 560
+(p50 — the p5 planning view in §5 reads 502 vs TP2's 633)
 warm sessions across two caches — **less than TP2's 678 in one cache** — and needs
 sticky routing. With 600 GiB of CPU offload the 35B-A3B reaches **~2,400** warm
 sessions on 1×H200 (~2,780 on TP2) — but see the offload limitation: this is

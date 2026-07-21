@@ -232,8 +232,8 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-ram" min="0" max="1024" step="32" value="0">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="vLLM max_seq_len. Prompts longer than this are truncated. A lower cap trims the log-normal tail: smaller worst-case cold prefill, less pool hogging by huge sessions — more sessions warm. Model max: 262k.">max_seq_len cap</span> <span class="val"><span id="v-cap">180</span>k</span></label>
-          <input type="range" id="s-cap" min="30" max="262" step="4" value="180">
+          <label class="flabel"><span class="tip" data-tip="vLLM max_seq_len. Prompts longer than this are truncated. A lower cap trims the log-normal tail: smaller worst-case cold prefill, less pool hogging by huge sessions — more sessions warm. Model max: 262k (the top stop maps to the exact 262,144).">max_seq_len cap</span> <span class="val"><span id="v-cap">180</span>k</span></label>
+          <input type="range" id="s-cap" min="30" max="262" step="2" value="180">
         </div>
       </div>
 
@@ -610,7 +610,8 @@ function currentWL(){
     sys_user: state.sys*1000, sys_sub: 3000,
     sub_shares_prefix: state.sub_shares_prefix,
     invalidation: state.inval/100,
-    cap: state.cap*1000, min_tokens: 1000,
+    // top slider stop maps to the model's exact 262,144 max
+    cap: state.cap>=262 ? 262144 : state.cap*1000, min_tokens: 1000,
   };
 }
 
@@ -908,7 +909,7 @@ function computeAndRender(draft){
   const dpIt=Math.max(60, Math.round(warmIter/4));
   const tp5=[],tp95=[],dp5=[];
   for(const n of scaleNs){
-    const it=Math.max(50, Math.round(warmIter/(2*n)));
+    const it=Math.max(80, Math.round(warmIter/n));
     const [a,,c]=warmCapacity(model,makeTopo("tp",n),wl,state.ram,it);
     tp5.push(a); tp95.push(c);
     const [r5]=warmCapacity(model,makeTopo("dp",n),wl,state.ram/n,dpIt);
@@ -947,14 +948,14 @@ function renderTiles(model,topo,wl,dc,warm){
   // stress point: every p5-warm session decoding at once (computed directly at
   // that n — NOT clamped to the decode sweep's 120-seq range)
   const nOp=Math.max(1,Math.round(warm.p5));
-  const puOp=decodeAtN(model,topo,wl,nOp,220);
+  const puOp=decodeAtN(model,topo,wl,nOp,400);
   const aggOp=nOp*puOp*topo.replicas/1000;
   const floorClass = puOp>=40?'good':(puOp>=20?'warn':'crit');
   const dp = topo.kind==="dp";
   const tiles=[
     {k:"Warm sessions · p5", hero:true, v:fmt(warm.p5,0), u:dp?"per replica":"sessions",
-     sub: dp ? `system total ${fmt(warm.p5*topo.replicas,0)} — only with session-sticky routing`
-             : `the planning number — 95% of Monte-Carlo draws hold at least this many`,
+     sub: dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`
+             : `the planning number — 95% of draws hold at least this many · ≈ ${fmt(warm.p5*(1-p_sub(wl)),0)} distinct users`,
      tip:"THE number this study is built to produce. A warm session's KV + recurrent state sit in cache, so its next request prefills only the new turn — served well and comfortably. A cold request re-prefills everything and briefly thrashes the GPU for every active user. p5 = conservative tail: 95% of draws keep at least this many warm."},
     {k:"Warm p50 / p95", v:fmt(warm.p50,0), u:"sessions", sub:`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
      tip:"Same metric, median (p50) and optimistic (p95) draws. Plan on p5; use p50 to compare configurations."},
@@ -972,7 +973,7 @@ function renderTiles(model,topo,wl,dc,warm){
   document.getElementById('tiles').innerHTML = tiles.map(t=>{
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
     const kk = t.tip? `<span class="tip" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
-    return `<div class="tile${t.hero?' hero':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${t.v}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
+    return `<div class="tile${t.hero?' hero':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
   }).join('');
 }
 
