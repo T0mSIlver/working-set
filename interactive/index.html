@@ -123,6 +123,21 @@ input[type=range]::-moz-range-thumb{
 .tile .v{font-size:25px; font-weight:680; letter-spacing:-.02em; margin-top:4px; line-height:1.05}
 .tile .v .u{font-size:12.5px; font-weight:520; color:var(--text-2); margin-left:4px}
 .tile .sub2{font-size:11px; color:var(--text-2); margin-top:3px}
+/* hero tile: the planning number (warm p5) */
+.tile.hero{grid-column:span 2; border-color:var(--s1); border-width:1.5px}
+.tile.hero .k{color:var(--s1); font-weight:650}
+.tile.hero .v{font-size:38px}
+@media (max-width:480px){ .tile.hero{grid-column:auto} }
+
+/* hover tooltips (metric / control explanations) */
+.tip{cursor:help; border-bottom:1px dotted var(--muted); position:relative}
+.tip:hover::after{
+  content:attr(data-tip); position:absolute; left:0; top:100%; margin-top:7px;
+  background:var(--surface); color:var(--text); border:1px solid var(--border);
+  border-radius:8px; padding:9px 11px; width:270px; white-space:normal;
+  font-size:11.5px; font-weight:400; line-height:1.5; letter-spacing:0;
+  text-transform:none; z-index:20; box-shadow:var(--shadow);
+}
 
 /* charts grid */
 .charts{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
@@ -157,7 +172,7 @@ svg text{fill:var(--text-2)}
   <header class="app">
     <div>
       <h1>GPU scaling — interactive scenario explorer</h1>
-      <p class="sub">KV-cache capacity &amp; decode-speed decision space for the Qwen&nbsp;3.6 family (27B dense / 35B-A3B MoE) on H200 nodes.</p>
+      <p class="sub">How many sessions can we keep <b>warm</b> per H200 config (Qwen3.6 27B dense / 35B-A3B MoE)? Working hypothesis: a request that hits a warm session is served well and comfortably; a cold request re-prefills its whole context and briefly thrashes the GPU for everyone. Plan on <b>warm p5</b>.</p>
     </div>
     <button class="themebtn" id="themeBtn" type="button"><span id="themeIco">◐</span><span id="themeTxt">Theme</span></button>
   </header>
@@ -167,8 +182,10 @@ svg text{fill:var(--text-2)}
     <div class="body">
       <p>A transparent memory model, <b>calibrated to a 1×H200 + 27B FP8 pool of 2.77M KV tokens</b> — a figure <em>projected</em> from the baseline's measured FP16 pool (~1.337M tokens, ×2 for FP8 plus freed activation memory), not itself a direct measurement. The per-GPU activation reserve is <em>solved</em> from that anchor, so every other configuration falls out of the same arithmetic rather than being guessed.</p>
       <ul>
-        <li><b>TP (tensor-parallel)</b> shares one weight copy across both GPUs, so the pooled KV cache more than doubles, and effective decode bandwidth scales by <span class="tnum">n_gpu × 0.90</span>.</li>
-        <li><b>DP (data-parallel)</b> keeps a per-replica cache. Aggregate throughput doubles, but a returning user is only <em>warm on their home replica</em> — capacity here is reported per replica, not summed.</li>
+        <li><b>Goal &amp; primary metric:</b> we size deployments by <b>warm sessions, planning on p5</b>. Working hypothesis: a warm hit prefills only the new turn — served well and comfortably; a cold request re-prefills its whole context, briefly stealing bandwidth from every active user (thrash). Cold behaviour is deliberately NOT priced beyond this.</li>
+        <li><b>TP (tensor-parallel, any N)</b> shares one weight copy across all GPUs, so the pooled KV cache grows faster than N×; effective decode bandwidth scales by <span class="tnum">N × 0.90^log₂N</span> (the baseline's 0.90 haircut applied per doubling — beyond 2 GPUs this is a projection, not a measurement).</li>
+        <li><b>DP (data-parallel, any N)</b> keeps N per-replica caches. Aggregate throughput scales ~N×, but a returning user is only <em>warm on their home replica</em> (sticky routing), and a shared CPU-offload buffer splits N ways.</li>
+        <li><b>Monte-Carlo jitter:</b> every render redraws the workload, so repeated runs (and neighbouring slider positions) can differ by a few sessions — that is sampling noise, not a real effect. The Python sweeps in <code>tables.py</code> use a fixed seed instead and are smooth. Real non-linearities (the expert-union kink at n=32, the cap's tail-truncation, the prefix floor) are explained in docs/scenarios.md.</li>
         <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts. The explorer uses the conservative no-overlap union bound (docs also show the optimistic expected-union bracket).</li>
         <li><b>KV dtype:</b> all constants assume the FP8 KV cache (<code>--kv-cache-dtype fp8_e4m3</code>), as tested in the baseline. The FP16 switch doubles KV bytes/token (half the pool, heavier decode reads); weights and the DeltaNet state are unaffected, and the activation-reserve calibration stays pinned to the FP8 anchor. Sanity: FP16 + 27B + 1×H200 gives a 1.39M-token pool, inside the baseline's measured [1.14M, 1.40M].</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
@@ -199,21 +216,24 @@ svg text{fill:var(--text-2)}
           <div class="hint">FP16 doubles KV bytes/token: half the pool, slower decode. Weights &amp; DeltaNet state unaffected.</div>
         </div>
         <div class="field">
-          <label class="flabel">Topology</label>
-          <div class="seg" id="seg-topo" data-key="topo">
-            <button data-v="1xH200" aria-pressed="true">1×H200</button>
-            <button data-v="2xH200-TP2" aria-pressed="false">2×H200 TP</button>
-            <button data-v="2xH200-DP2" aria-pressed="false">2×H200 DP</button>
-          </div>
-          <div class="hint" id="dp-caveat" style="display:none">DP: returning users are only warm on their home replica.</div>
+          <label class="flabel"><span class="tip" data-tip="How many H200s the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas.">H200 GPUs</span> <span class="val"><span id="v-ngpu">1</span>×</span></label>
+          <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
-          <label class="flabel">CPU offload</label>
-          <div class="seg" id="seg-ram" data-key="ram">
-            <button data-v="0" aria-pressed="true">0</button>
-            <button data-v="200" aria-pressed="false">200 GiB</button>
-            <button data-v="600" aria-pressed="false">600 GiB</button>
+          <label class="flabel"><span class="tip" data-tip="TP (tensor-parallel): one engine, ONE shared prefix cache — best for warm capacity; bandwidth haircut of 0.90 per GPU-count doubling. DP (data-parallel): N replicas, aggregate throughput ×N, but the cache SPLITS — returning users are warm only on their home replica (needs sticky routing).">Parallelism (N&gt;1)</span></label>
+          <div class="seg" id="seg-par" data-key="par">
+            <button data-v="tp" aria-pressed="true">TP · one cache</button>
+            <button data-v="dp" aria-pressed="false">DP · N replicas</button>
           </div>
+          <div class="hint" id="dp-caveat" style="display:none">DP: cache splits — system-wide warm needs session-sticky routing; CPU offload is shared (split N ways).</div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Host-RAM buffer holding evicted sessions' KV + DeltaNet state. Extends how many sessions stay warm as STORAGE — restoring one over PCIe adds latency the model does not price. For DP the buffer is split across replicas.">CPU offload</span> <span class="val"><span id="v-ram">0</span> GiB</span></label>
+          <input type="range" id="s-ram" min="0" max="1024" step="32" value="0">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="vLLM max_seq_len. Prompts longer than this are truncated. A lower cap trims the log-normal tail: smaller worst-case cold prefill, less pool hogging by huge sessions — more sessions warm. Model max: 262k.">max_seq_len cap</span> <span class="val"><span id="v-cap">180</span>k</span></label>
+          <input type="range" id="s-cap" min="30" max="262" step="4" value="180">
         </div>
       </div>
 
@@ -271,7 +291,7 @@ svg text{fill:var(--text-2)}
   <div class="charts">
     <div class="panel card">
       <p class="ct">A · Prompt-length distribution</p>
-      <p class="cs">Log-normal density, user vs subagent. Dashed line = 180k truncation cap.</p>
+      <p class="cs">Log-normal density, user vs subagent. Dashed line = the max_seq_len truncation cap.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>User</span>
         <span class="li"><span class="sw" style="background:var(--s2)"></span>Subagent</span>
@@ -280,8 +300,12 @@ svg text{fill:var(--text-2)}
     </div>
 
     <div class="panel card">
-      <p class="ct">B · Warm reusable capacity</p>
-      <p class="cs">Current model across topologies. Whisker = p5–p95, dot = p50 (sessions).</p>
+      <p class="ct">B · Warm sessions (p5) vs hardware</p>
+      <p class="cs">The planning view: how the p5 warm-session count scales with H200 count, under the current workload, KV dtype and offload. Ring = your current configuration.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>TP — one shared cache (band to p95)</span>
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>DP — system total (needs sticky routing)</span>
+      </div>
       <div class="chartbox"><div id="chartB"></div></div>
     </div>
 
@@ -393,7 +417,7 @@ function kv_pool_tokens(m, topo){
 }
 
 function effective_bw(topo){
-  if (topo.kind === "tp") return topo.n_gpu * CONFIG.HBM_BW * CONFIG.TP_EFFICIENCY;
+  if (topo.kind === "tp") return topo.n_gpu * CONFIG.HBM_BW * tpEff(topo.n_gpu);
   return CONFIG.HBM_BW;
 }
 
@@ -417,6 +441,12 @@ function effective_bw(topo){
   console.assert(approx(m35.w_route_total/m35.w_route_pertok, 32, 1e-9), "linear saturation at n=32");
   const active = m35.w_decode_shared + m35.w_route_pertok;
   console.assert(active > 2.8e9 && active < 3.1e9, "active bytes/token ~3B, got "+active.toExponential(3));
+  // N-GPU topology helpers
+  console.assert(Math.abs(tpEff(2)-CONFIG.TP_EFFICIENCY)<1e-12 && tpEff(1)===1, "tpEff anchors");
+  console.assert(tpEff(8)<tpEff(4) && tpEff(4)<tpEff(2), "tpEff decreases per doubling");
+  const p4 = kv_pool_tokens(CONFIG.MODELS["35BA3B"], makeTopo("tp",4));
+  console.assert(p4 > 2*kv_pool_tokens(CONFIG.MODELS["35BA3B"], makeTopo("tp",2)),
+    "TP4 pool must exceed 2x TP2 (weights amortized)");
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -550,12 +580,25 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
    STATE
    ========================================================================== */
 const state = {
-  model: "27B", topo: "1xH200", ram: 0, kv: "fp8",
+  model: "27B", ngpu: 1, par: "tp", ram: 0, kv: "fp8", cap: 180,
   user_median: 31, user_sigma: 0.81,
   sub_median: 8, sub_sigma: 0.90,
   sub_ratio: 0.10, sub_shares_prefix: false,
   sys: 15, inval: 1.0,
 };
+
+// topology for arbitrary N H200s (mirrors topology()/tp_efficiency() in
+// scenario_model.py): TP = one engine, weights sharded, one shared cache,
+// 0.90 bandwidth haircut per GPU-count doubling; DP = N 1-GPU replicas.
+function tpEff(n){ return n<=1 ? 1.0 : Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(n)); }
+function makeTopo(kind, n){
+  if (n===1) return {name:"1×H200", n_gpu:1, kind:"single", replicas:1};
+  if (kind==="tp") return {name:`${n}×H200 TP`, n_gpu:n, kind:"tp", replicas:1};
+  return {name:`${n}×H200 DP`, n_gpu:n, kind:"dp", replicas:n};
+}
+function currentTopo(){ return makeTopo(state.par, state.ngpu); }
+// the host-RAM offload buffer is shared: DP replicas each get 1/N of it
+function ramPerCache(topo){ return topo.kind==="dp" ? state.ram/topo.replicas : state.ram; }
 
 function currentWL(){
   return {
@@ -567,7 +610,7 @@ function currentWL(){
     sys_user: state.sys*1000, sys_sub: 3000,
     sub_shares_prefix: state.sub_shares_prefix,
     invalidation: state.inval/100,
-    cap: 180000, min_tokens: 1000,
+    cap: state.cap*1000, min_tokens: 1000,
   };
 }
 
@@ -577,7 +620,7 @@ function currentWL(){
 const NS = "http://www.w3.org/2000/svg";
 function cssv(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function fmt(x, d){ return x.toLocaleString("en-US",{maximumFractionDigits:d??0, minimumFractionDigits:d??0}); }
-function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;"); }
 
 // generic scale
 function linScale(d0,d1,r0,r1){ const m=(r1-r0)/(d1-d0||1); return x=>r0+(x-d0)*m; }
@@ -597,8 +640,8 @@ function lognormPdf(x, median, sigma){
 function renderChartA(){
   const W=560,H=300, mL=44,mR=14,mT=12,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
-  const xmax=185000; // tokens, a touch past cap
   const wl=currentWL();
+  const xmax=Math.max(wl.cap*1.03, 90000); // a touch past the truncation cap
   const s1=cssv('--s1'), s2=cssv('--s2'), grid=cssv('--grid'), axis=cssv('--axis');
   const N=220;
   const xs=[], u=[], sub=[];
@@ -616,7 +659,8 @@ function renderChartA(){
   const sy=linScale(0,ymax,mT+ph,mT);
   let g='';
   // grid + x ticks (k)
-  const xticks=[0,50000,100000,150000];
+  const xstep=xmax>160000?50000:(xmax>80000?25000:10000);
+  const xticks=[]; for(let t=0;t<xmax;t+=xstep) xticks.push(t);
   xticks.forEach(t=>{
     const X=sx(t);
     g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
@@ -635,47 +679,59 @@ function renderChartA(){
   g+=path(u,s1);
   g+=path(sub,s2);
   // cap line
-  const cx=sx(180000);
+  const cx=sx(wl.cap);
   g+=`<line x1="${cx}" y1="${mT}" x2="${cx}" y2="${mT+ph}" stroke="${cssv('--crit')}" stroke-width="1.5" stroke-dasharray="4 3"/>`;
-  g+=`<text class="dlabel" x="${cx-4}" y="${mT+11}" text-anchor="end" fill="${cssv('--crit')}">cap 180k</text>`;
+  g+=`<text class="dlabel" x="${cx-4}" y="${mT+11}" text-anchor="end" fill="${cssv('--crit')}">cap ${Math.round(wl.cap/1000)}k</text>`;
   document.getElementById('chartA').innerHTML = svgEl(g,W,H);
 }
 
-/* ---- Chart B: warm capacity dot-whisker across topologies ---- */
-function renderChartB(res){
-  // res: array of {name, p5,p50,p95, highlight}
-  const W=560, rowH=54, mT=14, mB=30, mL=118, mR=54;
-  const H=mT+mB+res.length*rowH;
-  const pw=W-mL-mR;
-  let xmax=0; res.forEach(r=>{ if(r.p95>xmax)xmax=r.p95; });
-  xmax = Math.max(xmax*1.12, 10);
-  const sx=linScale(0,xmax,mL,mL+pw);
-  const grid=cssv('--grid'), axis=cssv('--axis'), s1=cssv('--s1'), s3=cssv('--s3'), txt=cssv('--text-2'), muted=cssv('--muted');
+/* ---- Chart B: warm capacity (p5) vs number of H200s, TP vs DP ---- */
+function renderChartB(sc){
+  // sc: {ns, tp5, tp95, dp5, cur:{n, par, p5}}  — dp5 = SYSTEM total (sticky)
+  const W=560,H=300, mL=52,mR=16,mT=16,mB=40;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const grid=cssv('--grid'), axis=cssv('--axis'), s1=cssv('--s1'), s3=cssv('--s3'), muted=cssv('--muted');
+  let ymax=0;
+  sc.tp95.forEach(v=>{ if(v>ymax)ymax=v; });
+  sc.dp5.forEach(v=>{ if(v>ymax)ymax=v; });
+  ymax=Math.max(ymax*1.12,10);
+  const nmax=sc.ns[sc.ns.length-1];
+  const sx=linScale(1,nmax,mL,mL+pw), sy=linScale(0,ymax,mT+ph,mT);
   let g='';
-  // x gridlines
-  const nt=4;
+  const nt=5;
   for(let i=0;i<=nt;i++){
-    const v=xmax*i/nt, X=sx(v);
-    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+res.length*rowH}" stroke="${grid}" stroke-width="1"/>`;
-    g+=`<text class="axtick" x="${X}" y="${mT+res.length*rowH+16}" text-anchor="middle">${fmt(v,0)}</text>`;
+    const v=ymax*i/nt, Y=sy(v);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${fmt(v,0)}</text>`;
   }
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-4}" text-anchor="middle">warm reusable sessions</text>`;
-  res.forEach((r,i)=>{
-    const cy=mT+i*rowH+rowH/2;
-    const col = r.highlight ? s1 : muted;
-    const x5=sx(r.p5), x50=sx(r.p50), x95=sx(r.p95);
-    g+=`<text class="${r.highlight?'dlabel':'axtick'}" x="${mL-12}" y="${cy+3}" text-anchor="end" fill="${r.highlight?cssv('--text'):txt}">${esc(r.name)}</text>`;
-    // whisker
-    g+=`<line x1="${x5}" y1="${cy}" x2="${x95}" y2="${cy}" stroke="${col}" stroke-width="2" stroke-linecap="round"/>`;
-    g+=`<line x1="${x5}" y1="${cy-5}" x2="${x5}" y2="${cy+5}" stroke="${col}" stroke-width="2"/>`;
-    g+=`<line x1="${x95}" y1="${cy-5}" x2="${x95}" y2="${cy+5}" stroke="${col}" stroke-width="2"/>`;
-    // p50 dot (>=8px)
-    g+=`<circle cx="${x50}" cy="${cy}" r="5.5" fill="${col}" stroke="${cssv('--surface')}" stroke-width="2"/>`;
-    // labels: p5 / p50 / p95
-    g+=`<text class="axtick" x="${x5}" y="${cy-11}" text-anchor="middle" fill="${muted}">${fmt(r.p5,0)}</text>`;
-    g+=`<text class="dlabel" x="${x50}" y="${cy-11}" text-anchor="middle">${fmt(r.p50,0)}</text>`;
-    g+=`<text class="axtick" x="${x95}" y="${cy-11}" text-anchor="middle" fill="${muted}">${fmt(r.p95,0)}</text>`;
+  sc.ns.forEach(n=>{
+    g+=`<text class="axtick" x="${sx(n)}" y="${mT+ph+15}" text-anchor="middle">${n}</text>`;
   });
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-5}" text-anchor="middle">number of H200 GPUs</text>`;
+  g+=`<text class="axlbl" transform="translate(13,${mT+ph/2}) rotate(-90)" text-anchor="middle">warm sessions (p5)</text>`;
+  // TP band p5..p95 + p5 line (the planning series)
+  let dband=`M ${sx(sc.ns[0])} ${sy(sc.tp5[0])}`;
+  for(let i=1;i<sc.ns.length;i++) dband+=` L ${sx(sc.ns[i])} ${sy(sc.tp5[i])}`;
+  for(let i=sc.ns.length-1;i>=0;i--) dband+=` L ${sx(sc.ns[i])} ${sy(sc.tp95[i])}`;
+  g+=`<path d="${dband} Z" fill="${s1}" opacity="0.10"/>`;
+  let dtp=`M ${sx(sc.ns[0])} ${sy(sc.tp5[0])}`;
+  for(let i=1;i<sc.ns.length;i++) dtp+=` L ${sx(sc.ns[i])} ${sy(sc.tp5[i])}`;
+  g+=`<path d="${dtp}" fill="none" stroke="${s1}" stroke-width="2.4" stroke-linejoin="round"/>`;
+  let ddp=`M ${sx(sc.ns[0])} ${sy(sc.dp5[0])}`;
+  for(let i=1;i<sc.ns.length;i++) ddp+=` L ${sx(sc.ns[i])} ${sy(sc.dp5[i])}`;
+  g+=`<path d="${ddp}" fill="none" stroke="${s3}" stroke-width="1.8" stroke-dasharray="5 4" stroke-linejoin="round"/>`;
+  sc.ns.forEach((n,i)=>{
+    g+=`<circle cx="${sx(n)}" cy="${sy(sc.tp5[i])}" r="4" fill="${s1}" stroke="${cssv('--surface')}" stroke-width="1.5"/>`;
+    g+=`<text class="dlabel" x="${sx(n)}" y="${sy(sc.tp5[i])-9}" text-anchor="middle" fill="${s1}">${fmt(sc.tp5[i],0)}</text>`;
+    g+=`<circle cx="${sx(n)}" cy="${sy(sc.dp5[i])}" r="3.2" fill="${s3}" stroke="${cssv('--surface')}" stroke-width="1.2"/>`;
+  });
+  // marker for the current configuration
+  if (sc.cur){
+    const cy=sy(sc.cur.p5system);
+    g+=`<circle cx="${sx(sc.cur.n)}" cy="${cy}" r="8" fill="none" stroke="${cssv('--text')}" stroke-width="1.6"/>`;
+    g+=`<text class="dlabel" x="${sx(sc.cur.n)+11}" y="${cy+4}" fill="${cssv('--text')}">you</text>`;
+  }
   document.getElementById('chartB').innerHTML = svgEl(g,W,H);
 }
 
@@ -830,7 +886,7 @@ function activeModel(){
 
 function computeAndRender(draft){
   const model=activeModel();
-  const topo=CONFIG.TOPOLOGIES[state.topo];
+  const topo=currentTopo();
   const wl=currentWL();
   const q = draft ? CONFIG.DRAFT : null;
   const warmIter = q? q.WARM_ITER : CONFIG.WARM_ITER;
@@ -840,16 +896,28 @@ function computeAndRender(draft){
   // Chart A (analytic, cheap)
   renderChartA();
 
-  // Chart B: warm across 3 topologies for current model
-  const all=[];
-  for(const key of ["1xH200","2xH200-TP2","2xH200-DP2"]){
-    const t=CONFIG.TOPOLOGIES[key];
-    const [p5,p50,p95]=warmCapacity(model,t,wl,state.ram,warmIter);
-    all.push({key, name:t.name, p5,p50,p95, highlight:key===state.topo});
+  // current configuration: warm capacity of ONE cache (DP: per replica)
+  const [p5,p50,p95]=warmCapacity(model,topo,wl,ramPerCache(topo),warmIter);
+  lastWarmCur={p5,p50,p95, system5:p5*topo.replicas, topo};
+
+  // Chart B: warm p5 vs number of GPUs (TP one cache vs DP system total),
+  // under the SAME offload setting as the current config (TP: whole buffer to
+  // the one cache; DP: buffer split across the N replicas). Larger pools hold
+  // more sessions, so fewer MC iterations suffice per point.
+  const scaleNs=[1,2,3,4,6,8];
+  const dpIt=Math.max(60, Math.round(warmIter/4));
+  const tp5=[],tp95=[],dp5=[];
+  for(const n of scaleNs){
+    const it=Math.max(50, Math.round(warmIter/(2*n)));
+    const [a,,c]=warmCapacity(model,makeTopo("tp",n),wl,state.ram,it);
+    tp5.push(a); tp95.push(c);
+    const [r5]=warmCapacity(model,makeTopo("dp",n),wl,state.ram/n,dpIt);
+    dp5.push(r5*n);
   }
-  lastWarmAll=all;
-  renderChartB(all);
-  lastWarmCur = all.find(r=>r.key===state.topo);
+  const sc={ns:scaleNs, tp5, tp95, dp5,
+            cur:{n:state.ngpu, par:state.par, p5system:lastWarmCur.system5}};
+  lastWarmAll=sc;
+  renderChartB(sc);
 
   // Decode curves for current topo
   const dc=decodeCurves(model,topo,wl,CONFIG.DECODE_NMAX,decStep,decIter);
@@ -882,18 +950,29 @@ function renderTiles(model,topo,wl,dc,warm){
   const puOp=decodeAtN(model,topo,wl,nOp,220);
   const aggOp=nOp*puOp*topo.replicas/1000;
   const floorClass = puOp>=40?'good':(puOp>=20?'warn':'crit');
+  const dp = topo.kind==="dp";
   const tiles=[
-    {k:"KV pool", v:fmt(pool/1e6,2), u:"M tok", sub:topo.name},
-    {k:"Warm p50", v:fmt(warm.p50,0), u:"sessions", sub:`p5 ${fmt(warm.p5,0)} · p95 ${fmt(warm.p95,0)}`},
-    {k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`},
-    {k:"Per-user, all p5 warm active", v:fmt(puOp,1), u:"tok/s", sub:`at n = ${nOp} concurrent`, cls:floorClass},
-    {k:"Aggregate, all p5 warm active", v:fmt(aggOp,1), u:"ktok/s", sub:`×${topo.replicas} replica${topo.replicas>1?'s':''}`},
+    {k:"Warm sessions · p5", hero:true, v:fmt(warm.p5,0), u:dp?"per replica":"sessions",
+     sub: dp ? `system total ${fmt(warm.p5*topo.replicas,0)} — only with session-sticky routing`
+             : `the planning number — 95% of Monte-Carlo draws hold at least this many`,
+     tip:"THE number this study is built to produce. A warm session's KV + recurrent state sit in cache, so its next request prefills only the new turn — served well and comfortably. A cold request re-prefills everything and briefly thrashes the GPU for every active user. p5 = conservative tail: 95% of draws keep at least this many warm."},
+    {k:"Warm p50 / p95", v:fmt(warm.p50,0), u:"sessions", sub:`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
+     tip:"Same metric, median (p50) and optimistic (p95) draws. Plan on p5; use p50 to compare configurations."},
+    {k:"KV pool", v:fmt(pool/1e6,2), u:"M tok", sub:topo.name,
+     tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
+    {k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
+     tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
+    {k:"Per-user, all p5 warm active", v:fmt(puOp,1), u:"tok/s", sub:`at n = ${nOp} concurrent`, cls:floorClass,
+     tip:"Stress test: if EVERY p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥40 tok/s (comfortable), amber ≥20 (floor). If green, the cache — not bandwidth — is the binding constraint."},
+    {k:"Aggregate, all p5 warm active", v:fmt(aggOp,1), u:"ktok/s", sub:`×${topo.replicas} replica${topo.replicas>1?'s':''}`,
+     tip:"System-wide token throughput at that same stress point (summed over DP replicas). A capacity ceiling for batch/offline work, not a latency promise."},
   ];
   const good=cssv('--good'),warn=cssv('--warn'),crit=cssv('--crit');
   const colMap={good,warn,crit};
   document.getElementById('tiles').innerHTML = tiles.map(t=>{
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
-    return `<div class="tile"><div class="k">${esc(t.k)}</div><div class="v tnum" ${vc}>${t.v}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
+    const kk = t.tip? `<span class="tip" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
+    return `<div class="tile${t.hero?' hero':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${t.v}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
   }).join('');
 }
 
@@ -918,10 +997,8 @@ document.querySelectorAll('.seg').forEach(seg=>{
   seg.querySelectorAll('button').forEach(btn=>{
     btn.addEventListener('click',()=>{
       seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===btn?'true':'false'));
-      let v=btn.dataset.v;
-      if(key==='ram') v=parseInt(v,10);
-      state[key]=v;
-      document.getElementById('dp-caveat').style.display = (state.topo==='2xH200-DP2')?'block':'none';
+      state[key]=btn.dataset.v;
+      document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
       computeAndRender(false);
     });
   });
@@ -929,6 +1006,9 @@ document.querySelectorAll('.seg').forEach(seg=>{
 
 // sliders
 const sliderMap=[
+  ['s-ngpu','ngpu',v=>parseInt(v,10)],
+  ['s-ram','ram',v=>parseInt(v,10)],
+  ['s-cap','cap',v=>parseInt(v,10)],
   ['s-user_median','user_median',v=>parseFloat(v)],
   ['s-user_sigma','user_sigma',v=>parseFloat(v)],
   ['s-sub_median','sub_median',v=>parseFloat(v)],
@@ -946,6 +1026,10 @@ document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
 });
 
 function syncLabels(){
+  document.getElementById('v-ngpu').textContent=fmt(state.ngpu,0);
+  document.getElementById('v-ram').textContent=fmt(state.ram,0);
+  document.getElementById('v-cap').textContent=fmt(state.cap,0);
+  document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
   document.getElementById('v-user_median').textContent=fmt(state.user_median,0);
   document.getElementById('v-user_sigma').textContent=state.user_sigma.toFixed(2);
   document.getElementById('v-sub_median').textContent=fmt(state.sub_median,0);
@@ -976,7 +1060,7 @@ themeBtn.addEventListener('click',()=>{
   // re-render charts with new theme colors
   if(lastWarmAll){ renderChartA(); renderChartB(lastWarmAll);
     if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.p5,p95:lastWarmCur.p95}); renderChartD(lastDC);
-      renderTiles(activeModel(),CONFIG.TOPOLOGIES[state.topo],currentWL(),lastDC,lastWarmCur);
+      renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur);
     }
   }
 });
@@ -984,7 +1068,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{
   if(!document.documentElement.getAttribute('data-theme')){ applyThemeLabel();
     if(lastWarmAll){ renderChartA(); renderChartB(lastWarmAll);
       if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.p5,p95:lastWarmCur.p95}); renderChartD(lastDC);
-        renderTiles(activeModel(),CONFIG.TOPOLOGIES[state.topo],currentWL(),lastDC,lastWarmCur); } }
+        renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur); } }
   }
 });
 

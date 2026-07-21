@@ -65,9 +65,10 @@ def fig_capacity():
             ax.plot(p50, y, "o", color=col, ms=10, markeredgecolor="white",
                     markeredgewidth=1.2, zorder=3)
             ax.annotate(f"{p50:.0f}", (p50, y), xytext=(0, 10), textcoords="offset points",
-                        ha="center", fontsize=8.5, color=col, fontweight="bold")
-            ax.annotate(f"{p5:.0f}", (p5, y), xytext=(-7, 0), textcoords="offset points",
-                        ha="right", va="center", fontsize=8, color=col)
+                        ha="center", fontsize=8.5, color=col)
+            # p5 is THE planning number (conservative tail) -> emphasized
+            ax.annotate(f"p5 {p5:.0f}", (p5, y), xytext=(-7, 0), textcoords="offset points",
+                        ha="right", va="center", fontsize=9, color=col, fontweight="bold")
             ax.annotate(f"{p95:.0f}", (p95, y), xytext=(7, 0), textcoords="offset points",
                         ha="left", va="center", fontsize=8, color=col)
     ax.set_yticks(list(yrows.values()))
@@ -221,13 +222,53 @@ def fig_subagent_invalidation():
     plt.close(fig)
 
 
+# ============================================================================
+# FIG 5: warm capacity vs number of H200s (TP one shared cache vs DP total)
+# ============================================================================
+def fig_scaling():
+    """The planning view: warm sessions (p5 emphasized) as hardware scales.
+    TP keeps ONE shared cache; DP's system total needs sticky routing."""
+    wl = base_workload()
+    ns = [1, 2, 3, 4, 6, 8]
+    fig, ax = plt.subplots(figsize=(9.5, 5.4))
+    for mk, col in [("35BA3B", ORANGE), ("27B", BLUE)]:
+        tp5, tp50, tp95, dp5 = [], [], [], []
+        for n in ns:
+            it = max(200, 1200 // n)
+            dr = 2000 + 1500 * n     # bigger pools hold more sessions than the default draw
+            p5, p50, p95 = M.warm_capacity(MODELS[mk], M.topology("tp", n), wl,
+                                           n_iter=it, draw=dr)
+            tp5.append(p5); tp50.append(p50); tp95.append(p95)
+            q5, _, _ = M.warm_capacity(MODELS[mk], M.topology("dp", n), wl, n_iter=it)
+            dp5.append(q5 * n)
+        ax.plot(ns, tp5, "o-", color=col, lw=2.4, ms=6,
+                label=f"{MODELS[mk].name} — TP, one cache (p5)")
+        ax.fill_between(ns, tp5, tp95, color=col, alpha=.10)
+        ax.plot(ns, dp5, "s--", color=col, lw=1.5, ms=5, alpha=.75,
+                label=f"{MODELS[mk].name} — DP system total (p5, sticky routing)")
+        for n, v in zip(ns, tp5):
+            ax.annotate(f"{v:.0f}", (n, v), xytext=(0, 9), textcoords="offset points",
+                        ha="center", fontsize=8.5, color=col, fontweight="bold")
+    ax.set_xlabel("number of H200 GPUs")
+    ax.set_ylabel("warm sessions  (p5 = planning number; shading to p95)")
+    ax.set_xticks(ns)
+    ax.set_ylim(bottom=0)
+    ax.legend(frameon=False, loc="upper left", fontsize=9)
+    ax.set_title("Warm-session scaling with hardware\n"
+                 "TP: weights stored once, one shared prefix cache. DP: cache splits — "
+                 "total only reachable with session-sticky routing", fontsize=11)
+    fig.tight_layout(); fig.savefig(out("scenario_scaling.png"), bbox_inches="tight")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     res = fig_capacity()
     fig_sysprompt()
     fig_mns()
     fig_subagent_invalidation()
+    fig_scaling()
     print("saved: scenario_capacity.png, scenario_sysprompt.png, scenario_mns.png, "
-          "scenario_subagent_invalidation.png")
+          "scenario_subagent_invalidation.png, scenario_scaling.png")
     print("\nwarm reusable p50 (0GB offload), reference workload:")
     for (mk, tk), (p5, p50, p95) in res.items():
         print(f"  {mk:7} {tk:12} {p5:5.0f} / {p50:5.0f} / {p95:5.0f}")

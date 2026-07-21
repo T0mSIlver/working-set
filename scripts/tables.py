@@ -92,8 +92,8 @@ def main():
         print(f"  f={f * 100:4.1f}%  {p50:5.0f}")
 
     print("\n== Serving-capacity planning table (conservative linear union) ==")
-    print("  warm      = reusable sessions cached between turns (p50, one cache)")
-    print("  warm_user = user-class sessions only (the 'distinct users kept warm' number)")
+    print("  warm p5   = THE planning number: sessions kept warm in >=95% of draws")
+    print("  warm p50  = median; warm_user = user-class sessions only (distinct users)")
     print("  v@warm    = per-user p50 tok/s if ALL warm sessions decode at once (100% duty)")
     print("  mns@40    = max concurrent decoders at >=40 tok/s p50 (speed bound alone)")
     print("  -> the binding constraint is min(warm, mns@40); duty<100% relaxes only mns@40")
@@ -103,13 +103,39 @@ def main():
         for tk in TOPOS_K:
             model, topo = MODELS[mk], TOPOLOGIES[tk]
             # n_iter matches the warm-capacity table so both quote the same p50
-            warm = M.warm_capacity(model, topo, w0, n_iter=1500)[1]
+            p5, warm, _ = M.warm_capacity(model, topo, w0, n_iter=1500)
             warm_u = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")[1]
             _, v_at_warm, _, _ = M.decode_curves(model, topo, w0, [int(warm)], n_iter=1000)
             m40 = max_mns_at_floor(model, topo, w0, 40)
             per_cache = " (per replica)" if topo.kind == "dp" else ""
-            print(f"  {mk:7} {tk:12} warm={warm:4.0f} (user {warm_u:4.0f}){per_cache}  "
+            print(f"  {mk:7} {tk:12} warm p5={p5:4.0f} p50={warm:4.0f} "
+                  f"(user {warm_u:4.0f}){per_cache}  "
                   f"v@warm={v_at_warm[0]:5.0f} tok/s  mns@40={m40:3d}")
+
+    print("\n== Scaling to N x H200 (35B-A3B, FP8) ==")
+    print("  TP: one engine, ONE shared cache | DP: N replicas, cache splits (sticky routing)")
+    print("  warm p5 = the planning number (95% of draws hold at least this many)")
+    for n in (1, 2, 4, 8):
+        row = []
+        for kind in ("tp", "dp"):
+            t = M.topology(kind, n)
+            p5, p50, _ = M.warm_capacity(MODELS["35BA3B"], t, w0, n_iter=max(200, 1500 // n), draw=2000 + 1500 * n)
+            sys_p5 = p5 * t.replicas
+            row.append(f"{kind.upper()}: cache p5={p5:5.0f} system p5={sys_p5:5.0f} (p50 {p50:.0f})")
+        print(f"  N={n}  " + "  |  ".join(row))
+
+    print("\n== max_seq_len cap sweep (35B-A3B, TP2, warm p5/p50) ==")
+    print("  lower cap truncates the log-normal tail -> smaller worst-case sessions")
+    for cap in (60_000, 120_000, 180_000, 262_144):
+        p5, p50, _ = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["2xH200-TP2"],
+                                     wl(cap=cap), n_iter=1200)
+        print(f"  cap={cap // 1000:3d}k  {p5:5.0f} / {p50:5.0f}")
+
+    print("\n== CPU offload sweep (35B-A3B, 1xH200, warm p50) ==")
+    for gib in (0, 64, 128, 256, 512, 1024):
+        p50 = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["1xH200"], w0,
+                              ram_gib=gib, n_iter=300, draw=16_000)[1]
+        print(f"  {gib:4d} GiB  {p50:5.0f}")
 
     print("\n== KV dtype switch: FP16 KV cache (default everywhere else: FP8) ==")
     print("  pool halves; warm capacity falls slightly less (state charge is dtype-independent)")
