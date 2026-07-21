@@ -310,9 +310,9 @@ Ordered roughly by how much each could move the numbers:
 ## Reproducibility
 
 ```
-python scripts/scenario_model.py   # self-checks: calibration + config identities
-python scripts/scenarios.py        # regenerates the four figures
-python scripts/tables.py           # regenerates every number quoted above
+uv run scripts/scenario_model.py   # self-checks: calibration + config identities
+uv run scripts/scenarios.py        # regenerates the four figures
+uv run scripts/tables.py           # regenerates every number quoted above
 ```
 
 The interactive explorer runs the calibration and published-config identity checks
