@@ -39,8 +39,12 @@ VRAM_PER_GPU   = 141e9      # H200 HBM3e, bytes (vendor "141 GB")
 HBM_BW         = 4.8e12     # per-GPU HBM bandwidth, bytes/s
 TP_EFFICIENCY  = 0.90       # tensor-parallel comm/overhead haircut on aggregate BW
 
-# The baseline measured this for 1xH200 + 27B (FP8 KV). We anchor the memory
-# model to it so ACT_RESERVE is *solved*, not guessed.
+# Calibration anchor for 1xH200 + 27B with FP8 KV. NOTE: this is a PROJECTED
+# figure, not a direct measurement — the baseline measured the FP16 pool
+# (P in [1139k, 1399k] tokens, best estimate ~1337k) and projected FP8 as ~2x
+# plus freed activation memory (see scripts/warm_capacity.py). We anchor the
+# memory model to it so ACT_RESERVE is *solved*, not guessed; if the FP8 pool
+# is ever measured directly, update this one constant.
 BASELINE_POOL_TOKENS_27B_1GPU = 2.77e6
 
 # ============================================================================
@@ -195,11 +199,12 @@ class Workload:
         return self.sub_ratio / (1.0 + self.sub_ratio)
 
     def sample(self, rng: np.random.Generator, size: int):
-        """Sample `size` requests. Returns (full_len, prefix, is_cold) arrays.
+        """Sample `size` requests. Returns (full_len, prefix, is_cold, is_sub).
 
         full_len : clipped prompt length (tokens)
         prefix   : shared-prefix tokens this request can dedup against (0 if cold)
         is_cold  : True for invalidating/unmatchable requests (no reuse at all)
+        is_sub   : True for subagent-class requests
         """
         is_sub = rng.random(size) < self.p_sub()
         # log-normal: sigma is the shape param; scale = median
@@ -216,18 +221,21 @@ class Workload:
 
         is_cold = rng.random(size) < self.invalidation
         prefix = np.where(is_cold, 0.0, prefix)   # cold: matches nothing (occupies full length)
-        return full, prefix, is_cold
+        return full, prefix, is_cold, is_sub
 
 
 # ============================================================================
 # CAPACITY  (warm, *reusable* sessions kept in one KV cache)
 # ============================================================================
-def _warm_once(full, prefix, is_cold, pool_tokens, ram_gib, model: Model, wl: Workload):
-    """Fill one KV cache (+ optional CPU offload) in arrival order; count how many
-    resident sessions are *reusable* (i.e. not cold/unmatchable).
+def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
+               model: Model, wl: Workload):
+    """Fill one KV cache (+ optional CPU offload) in arrival order; count the
+    resident sessions that are *reusable* (i.e. not cold/unmatchable), total
+    and user-class only. Returns (n_warm_all, n_warm_user).
 
-    Shared-prefix blocks are reserved once each (user + subagent) up front.
-    A cold request occupies its FULL length (no dedup) and never counts as warm.
+    Shared-prefix blocks are reserved once per request class present in the
+    mixture. A cold request occupies its FULL length (no dedup) and never
+    counts as warm.
 
     Every resident session additionally holds its constant Gated-DeltaNet
     recurrent state (a warm hit needs the state, not just the attention KV), so
@@ -240,40 +248,49 @@ def _warm_once(full, prefix, is_cold, pool_tokens, ram_gib, model: Model, wl: Wo
     state_tok = model.deltanet_state / model.kv_bpt
     gpu_cost = unique + state_tok
 
-    # reserve the distinct prefix blocks once (only those actually in this draw)
-    reserved = 0.0
-    reserved += wl.sys_user
-    if not wl.sub_shares_prefix:
+    # reserve one block per distinct prefix a request class can actually use
+    reserved = wl.sys_user
+    if not wl.sub_shares_prefix and wl.sub_ratio > 0:
         reserved += wl.sys_sub
     gpu_budget = pool_tokens - reserved
 
+    # 'right': a session whose cumulative cost exactly equals the budget fits
     cs = np.cumsum(gpu_cost)
-    n_gpu = int(np.searchsorted(cs, gpu_budget))
+    n_gpu = int(np.searchsorted(cs, gpu_budget, side="right"))
     n_gpu = min(n_gpu, len(unique))
 
+    n_res = n_gpu
     if ram_gib > 0:
         rem = unique[n_gpu:]
-        rem_cold = is_cold[n_gpu:]
         # CPU cost per offloaded session: KV bytes + DeltaNet state
         cost = rem * model.kv_bpt + model.deltanet_state
         cb = np.cumsum(cost)
         ram_budget = ram_gib * GIB - reserved * model.kv_bpt
-        n_cpu = int(np.searchsorted(cb, ram_budget))
-        n_cpu = min(n_cpu, len(rem))
-        resident_cold = int(is_cold[:n_gpu + n_cpu].sum())
-        return (n_gpu + n_cpu) - resident_cold
-    return n_gpu - int(is_cold[:n_gpu].sum())
+        n_cpu = int(np.searchsorted(cb, ram_budget, side="right"))
+        n_res = n_gpu + min(n_cpu, len(rem))
+    warm = ~is_cold[:n_res]
+    censored = n_res >= len(unique)   # budget not exhausted by this draw
+    return int(warm.sum()), int((warm & ~is_sub[:n_res]).sum()), censored
 
 
 def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
-                  n_iter=4000, draw=2000, seed=0):
-    """Monte-Carlo warm *reusable* capacity for ONE cache. Returns (p5,p50,p95)."""
+                  n_iter=4000, draw=2000, seed=0, which="all"):
+    """Monte-Carlo warm *reusable* capacity for ONE cache. Returns (p5,p50,p95).
+
+    which="all" counts every reusable session; which="user" counts only
+    user-class sessions (the 'distinct users kept warm' planning number).
+    """
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)
     counts = np.empty(n_iter)
     for i in range(n_iter):
-        full, prefix, cold = wl.sample(rng, draw)
-        counts[i] = _warm_once(full, prefix, cold, pool, ram_gib, model, wl)
+        full, prefix, cold, sub = wl.sample(rng, draw)
+        n_all, n_user, censored = _warm_once(full, prefix, cold, sub, pool,
+                                             ram_gib, model, wl)
+        if censored:
+            raise ValueError(f"draw={draw} too small: budget not exhausted "
+                             "(censored result); re-run with a larger draw")
+        counts[i] = n_user if which == "user" else n_all
     return np.percentile(counts, [5, 50, 95])
 
 
@@ -295,7 +312,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     bw = effective_bw(topo)
     p5, p50, p95, agg = [], [], [], []
     for n in mns_range:
-        full, _, _ = wl.sample(rng, (n_iter, n))
+        full, _, _, _ = wl.sample(rng, (n_iter, n))
         kv_bytes = full.sum(axis=1) * model.kv_bpt
         state_bytes = 2.0 * n * model.deltanet_state
         step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
@@ -341,10 +358,16 @@ def _selfcheck():
     for n in (1, 8, 32, 64):
         assert m35.w_decode(n, "coverage") <= m35.w_decode(n, "linear") + 1e-6
 
-    # warm capacity sanity: pool grows => capacity grows; state charge shrinks it
+    # warm capacity sanity: pool grows => capacity grows
     lo = warm_capacity(m35, t1, wl, n_iter=120)[1]
     hi = warm_capacity(m35, tp2, wl, n_iter=120)[1]
     assert 0 < lo < hi
+    # charging the per-session recurrent state must shrink capacity
+    import dataclasses
+    m35_nostate = dataclasses.replace(m35, deltanet_state=0.0)
+    assert warm_capacity(m35_nostate, t1, wl, n_iter=120)[1] > lo
+    # user-class count must be below the all-sessions count
+    assert warm_capacity(m35, t1, wl, n_iter=120, which="user")[1] < lo
 
     print("selfcheck OK")
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")

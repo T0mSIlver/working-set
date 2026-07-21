@@ -18,20 +18,24 @@ def wl(**kw):
 
 
 def mean_context(w: Workload, n=400_000, seed=1):
-    full, _, _ = w.sample(np.random.default_rng(seed), n)
+    full, _, _, _ = w.sample(np.random.default_rng(seed), n)
     return full.mean()
 
 
-def max_mns_at_floor(model, topo, w, floor, union="linear", hi=600):
-    """Largest max_num_seqs with per-user p50 >= floor tok/s."""
+def max_mns_at_floor(model, topo, w, floor, union="linear", hi=1500):
+    """Largest max_num_seqs with per-user p50 >= floor tok/s.
+
+    Raises if the crossing lies beyond `hi` rather than returning a
+    silently-censored value.
+    """
     best = 0
     for n in range(1, hi + 1):
-        _, p50, _, _ = M.decode_curves(model, topo, w, [n], n_iter=400)
+        _, p50, _, _ = M.decode_curves(model, topo, w, [n], n_iter=400, union=union)
         if p50[0] >= floor:
             best = n
         else:
-            break
-    return best
+            return best
+    raise ValueError(f"floor crossing beyond hi={hi}: censored result")
 
 
 def main():
@@ -48,8 +52,8 @@ def main():
             p5, p50, p95 = M.warm_capacity(MODELS[mk], TOPOLOGIES[tk], w0, n_iter=1500)
             print(f"  {mk:7} {tk:12} {p5:5.0f} / {p50:5.0f} / {p95:5.0f}")
 
-    print("\n== Warm with 600 GB CPU offload (35B-A3B) ==")
-    # draw must exceed the expected count or the Monte Carlo caps the answer
+    print("\n== Warm with 600 GiB CPU offload (35B-A3B) ==")
+    # draw must exceed the expected count or warm_capacity raises (censoring)
     for tk in ["1xH200", "2xH200-TP2"]:
         p5, p50, p95 = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES[tk], w0,
                                        ram_gib=600, n_iter=400, draw=10_000)
@@ -88,9 +92,10 @@ def main():
         print(f"  f={f * 100:4.1f}%  {p50:5.0f}")
 
     print("\n== Serving-capacity planning table (conservative linear union) ==")
-    print("  warm    = users whose session stays cached between turns (p50, one cache)")
-    print("  v@warm  = per-user p50 tok/s if ALL warm users decode at once (100% duty)")
-    print("  mns@40  = max concurrent decoders at >=40 tok/s p50 (speed bound alone)")
+    print("  warm      = reusable sessions cached between turns (p50, one cache)")
+    print("  warm_user = user-class sessions only (the 'distinct users kept warm' number)")
+    print("  v@warm    = per-user p50 tok/s if ALL warm sessions decode at once (100% duty)")
+    print("  mns@40    = max concurrent decoders at >=40 tok/s p50 (speed bound alone)")
     print("  -> the binding constraint is min(warm, mns@40); duty<100% relaxes only mns@40")
     mc = mean_context(w0)
     print(f"  mean sampled context = {mc / 1000:.1f}k tokens")
@@ -98,10 +103,11 @@ def main():
         for tk in TOPOS_K:
             model, topo = MODELS[mk], TOPOLOGIES[tk]
             warm = M.warm_capacity(model, topo, w0, n_iter=800)[1]
+            warm_u = M.warm_capacity(model, topo, w0, n_iter=800, which="user")[1]
             _, v_at_warm, _, _ = M.decode_curves(model, topo, w0, [int(warm)], n_iter=1000)
             m40 = max_mns_at_floor(model, topo, w0, 40)
             per_cache = " (per replica)" if topo.kind == "dp" else ""
-            print(f"  {mk:7} {tk:12} warm={warm:4.0f}{per_cache}  "
+            print(f"  {mk:7} {tk:12} warm={warm:4.0f} (user {warm_u:4.0f}){per_cache}  "
                   f"v@warm={v_at_warm[0]:5.0f} tok/s  mns@40={m40:3d}")
 
     print("\n== Sensitivity: fp32 DeltaNet state (35B-A3B, warm p50) ==")

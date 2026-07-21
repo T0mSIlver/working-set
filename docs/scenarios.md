@@ -38,10 +38,12 @@ Model refinements over the first draft of this study (each moves numbers by 10�
 3. **Recurrent-state bandwidth in decode.** Each decode step reads *and writes* every
    active sequence's DeltaNet state (2 × state × n bytes). Negligible at the
    baseline's `max_num_seqs = 6` (<2% of step bytes), no longer negligible at 64+.
-4. **Expert-union bracketing.** MoE weight-read growth is reported under two models
-   that bracket reality: a **linear no-overlap bound** `min(n·w_pertok, w_total)`
-   (conservative, the planning default) and the **expected union under uniform
-   routing** `w_total·(1−(1−8/256)^n)` (optimistic — real routing is correlated).
+4. **Expert-union bracketing.** MoE weight-read growth is reported under two models:
+   a **linear no-overlap bound** `min(n·w_pertok, w_total)` (a true upper bound on
+   bytes — the conservative planning default) and the **expected union under
+   i.i.d. uniform routing** `w_total·(1−(1−8/256)^n)` (a reference curve, not a
+   bound: routing correlation typically shrinks the union further, but load
+   balancing could widen it).
 
 ## Hypotheses
 
@@ -74,8 +76,11 @@ Stated up front, with predicted direction; outcomes are in [§ Outcomes](#outcom
 ### Memory / capacity
 
 The KV pool is derived from a transparent budget, **calibrated** so that
-1×H200 + 27B reproduces the baseline's *measured* 2.77M-token pool (this fixes the
-per-GPU activation/workspace reserve at ≈ 18.0 GiB):
+1×H200 + 27B reproduces the baseline's 2.77M-token FP8 pool. That anchor is itself a
+**projection**, not a direct measurement: the baseline measured the FP16 pool
+(P ∈ [1139k, 1399k], best estimate ~1337k tokens) and projected FP8 as ~2× plus freed
+activation memory. Calibration fixes the per-GPU activation/workspace reserve at
+≈ 18.0 GiB:
 
 ```
 ACT_RESERVE = VRAM_per_GPU − W_resident(27B) − 2.77e6 · KV_bpt(27B)
@@ -148,8 +153,9 @@ Warm **reusable** sessions in one KV cache (p5 / **p50** / p95), reference workl
 the single-GPU pool (20.30 vs 8.42M tokens): the second weight copy it avoids becomes
 KV. (3) **DP2's per-cache capacity is unchanged**; system-wide it holds 2 × 280 = 560
 warm sessions across two caches — **less than TP2's 678 in one cache** — and needs
-sticky routing. With 600 GB of CPU offload the 35B-A3B reaches **~2,400** warm
-sessions on 1×H200 (~2,780 on TP2).
+sticky routing. With 600 GiB of CPU offload the 35B-A3B reaches **~2,400** warm
+sessions on 1×H200 (~2,780 on TP2) — but see the offload limitation: this is
+*storage* capacity; restore latency over PCIe is not modelled.
 
 ### 2. System-prompt size — a two-sided tradeoff (H4)
 
@@ -179,13 +185,14 @@ Per-user p50 tok/s (conservative linear union | expected-union bracket):
 | 1×H200 / DP2 per replica | 319 \| 366 | 126 \| 135 | 89 \| 90 |
 | 2×H200 TP2 | 574 \| 659 | 227 \| 243 | 161 \| 162 |
 
-The union-model bracket is ≤ 15% and closes past the linear-saturation kink at
-n = 32 (all 256 experts active), so the conservative bound is tight where decisions
-are made. Because decode reads only ~3B active parameters, per-user speed stays above
-the 40 tok/s comfort floor to **mns ≈ 355** (1×H200) and **≥ 600** (TP2) — far beyond
-what the pool can hold warm (H7). **TP2 ≈ 1.8× per-user speed** at equal mns; **DP2
-doubles aggregate** (16.2 vs 14.6 ktok/s at mns 64, system-wide) but leaves per-user
-speed at the 1×H200 curve.
+The gap between the two union models peaks around the linear-saturation kink
+(~30% faster under the coverage model at n ≈ 32) and closes above it (+7% at
+mns 64, +1% at 120), so the conservative bound is tight in the high-concurrency
+region where the capacity decisions are made. Because decode reads only ~3B active
+parameters, per-user speed stays above the 40 tok/s comfort floor to **mns ≈ 355**
+(1×H200) and **≈ 695** (TP2) — far beyond what the pool can hold warm (H7).
+**TP2 ≈ 1.8× per-user speed** at equal mns; **DP2 doubles aggregate** (16.2 vs
+14.6 ktok/s at mns 64, system-wide) but leaves per-user speed at the 1×H200 curve.
 
 ### 4. Subagents and cache invalidation (H5, H6)
 
@@ -205,36 +212,39 @@ adopt).
 ## Serving capacity — the decision table (H7)
 
 The two candidate constraints per configuration, reference workload, conservative
-union model:
+union model. "Warm sessions" counts every reusable cached session; **"warm users"**
+counts only user-class sessions (subagent sessions, ~9% of the mix at r = 0.1, are
+excluded — a *user* corresponds to one user-class session in this model):
 
-| Config | Warm users (p50, cache bound) | v@warm: p50 tok/s if *all* warm users decode at once | mns@40 (speed bound alone) |
-| --- | --- | --- | --- |
-| 27B, 1×H200 | **94** | 48 | 118 |
-| 27B, TP2 | **222** | 41 | 228 |
-| 27B, DP2 | **2 × 94** (sticky) | 48 | 118 / replica |
-| 35B-A3B, 1×H200 | **279** | 49 | 355 |
-| 35B-A3B, TP2 | **677** | 41 | ≥ 600 |
-| 35B-A3B, DP2 | **2 × 279** (sticky) | 49 | 355 / replica |
+| Config | Warm sessions (p50) | of which warm **users** | v@warm: p50 tok/s if *all* warm sessions decode at once | mns@40 (speed bound alone) |
+| --- | --- | --- | --- | --- |
+| 27B, 1×H200 | 94 | **85** | 48 | 118 |
+| 27B, TP2 | 222 | **202** | 41 | 228 |
+| 27B, DP2 | 2 × 94 (sticky) | **2 × 85** | 48 | 118 / replica |
+| 35B-A3B, 1×H200 | 279 | **254** | 49 | 355 |
+| 35B-A3B, TP2 | 677 | **615** | 41 | 695 |
+| 35B-A3B, DP2 | 2 × 279 (sticky) | **2 × 254** | 49 | 355 / replica |
 
-**In every configuration the cache binds first** (warm < mns@40), and even in the
-worst case — every warm user decoding simultaneously — per-user p50 stays ≥ 41 tok/s.
-So for agentic coding on this hardware:
+**In every configuration the cache binds first** (warm sessions < mns@40), and even
+in the worst case — every warm session decoding simultaneously — per-user p50 stays
+≥ 41 tok/s. So for agentic coding on this hardware:
 
-- **Comfortable concurrent-user count ≈ warm capacity**: ~95 (27B, 1×H200) up to
-  ~680 (35B-A3B, TP2) per node-pair, before CPU offload.
+- **Comfortable concurrent-user count ≈ warm *user* capacity**: ~85 (27B, 1×H200)
+  up to ~615 (35B-A3B, TP2) per node-pair, before CPU offload.
 - Real duty cycles < 100% don't raise these numbers — idle users still occupy cache.
-  What raises them: CPU offload (600 GB ≈ **2,400–2,800** warm 35B-A3B sessions),
-  a bigger truly-shared prefix, or more subagent-like (short) traffic.
+  What raises them: CPU offload (600 GiB ≈ **2,400–2,800** warm 35B-A3B sessions —
+  as *storage*; restore latency unmodelled), a bigger truly-shared prefix, or more
+  subagent-like (short) traffic.
 - Oversubscribing beyond warm capacity degrades gracefully into cold-TTFT churn (LRU
   eviction), not into slow decode — the baseline's N=10 cyclic-eviction collapse is
   the failure mode to watch.
 
 **Suggested vLLM setup** (per the model above): `--kv-cache-dtype fp8_e4m3`;
 `--enable-prefix-caching`; `max_seq_len` 180k (caps worst-case cold prefill and pool
-hogging); `max_num_seqs` can safely sit at 2–4× the expected concurrent decoders
-(speed headroom is large — the risk is preemption/thrash if active KV outgrows the
-pool, not slowness); TP2 (`--tensor-parallel-size 2`) preferred over two DP replicas
-for this workload; if DP, make routing session-sticky.
+hogging); size `max_num_seqs` from the modelled speed ceilings above (mns@40) while
+keeping expected active KV within the pool — the study does not model preemption, so
+treat large values as needing a measurement pass; TP2 (`--tensor-parallel-size 2`)
+preferred over two DP replicas for this workload; if DP, make routing session-sticky.
 
 ## Outcomes
 
@@ -252,9 +262,16 @@ for this workload; if DP, make routing session-sticky.
 
 Ordered roughly by how much each could move the numbers:
 
-1. **The 2.77M-token anchor carries everything.** Every pool is derived from one
-   measured point (1×H200 + 27B). If that measurement's error bars ([1139k, 1399k]
-   at FP16, ×2 for FP8) shift, all capacities shift proportionally.
+1. **The 2.77M-token anchor carries everything — and it is a projection.** Every
+   pool derives from one 1×H200 + 27B point that was itself *projected* from the
+   measured FP16 pool ([1139k, 1399k], best estimate 1337k) as ~2× plus freed
+   activation memory; the FP8 pool was never measured directly. Both the FP16
+   error bars (±10%) and the FP8-projection assumptions propagate to every
+   capacity number here. A second, smaller inconsistency: the baseline defined
+   its measured P as "KV + DeltaNet states", while this study treats the anchor
+   as pure KV and charges state separately — double-counting the ~5 measured
+   sessions' states (~12k token-equivalents, ~0.4% of the pool; negligible but
+   worth removing when the anchor is re-measured).
 2. **No prefill/decode interference.** The decode model prices bandwidth only; chunked
    prefill of cold 100k+ prompts steals decode bandwidth and adds TTFT queueing not
    modelled here. At high invalidation or cold-start rates this is first-order.
@@ -268,8 +285,9 @@ Ordered roughly by how much each could move the numbers:
 5. **Deployed-weight overhead.** 35B-A3B resident bytes are raw param bytes; the 27B's
    stated footprint runs ~15% above raw. Applying +15% costs 6.2% of the 1×H200 pool
    (2.6% on TP2).
-6. **Expert-union bracket, not measurement.** Linear vs coverage differ ≤ 15% (mostly
-   below n = 32); real routing correlation lands between them.
+6. **Expert-union models, not measurement.** The linear bound is a true byte upper
+   bound; the coverage curve is an i.i.d.-routing reference, not a lower bound. Their
+   gap peaks ~30% at n ≈ 32 and closes above saturation.
 7. **TP haircut fixed at 0.90.** Real TP2 efficiency depends on kernel overlap and
    interconnect; 0.85–0.95 moves TP2 speeds ±5%.
 8. **Arrival order is an i.i.d. draw** — no burstiness, no correlated invalidation
@@ -278,6 +296,13 @@ Ordered roughly by how much each could move the numbers:
    flush.
 9. **Warm ≠ SLA.** "Warm capacity" counts sessions resident in cache, not a latency
    guarantee; a warm hit still pays prefill for the new turn's suffix.
+10. **CPU offload is priced as storage only.** Offloaded sessions count as warm, but
+    the PCIe transfer to restore them on the next turn (≈ 0.1–0.3 s per 100k-token
+    session at 32–64 GB/s, plus contention) is not modelled, so offload-inflated
+    counts are weaker "comfortable" claims than GPU-resident ones.
+11. **Decode is a pure HBM roofline.** Expert-dispatch overhead, attention/DeltaNet
+    compute, TP collectives, and scheduler overhead are not priced, so all tok/s
+    figures are upper bounds pending calibration against the real 35B-A3B.
 
 ## Reproducibility
 
@@ -287,4 +312,6 @@ python scripts/scenarios.py        # regenerates the four figures
 python scripts/tables.py           # regenerates every number quoted above
 ```
 
-The interactive explorer runs the same unit checks in the browser console on load.
+The interactive explorer runs the calibration and published-config identity checks
+in the browser console on load (a subset of the Python self-checks; the Monte-Carlo
+assertions run only in Python).
