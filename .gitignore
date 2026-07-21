@@ -1,0 +1,12 @@
+# Data (real provider CSVs are private / not committed)
+data/*.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
