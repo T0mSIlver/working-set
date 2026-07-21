@@ -1,5 +1,9 @@
 # Qwen 3.6 prompt caching and parallelism experiments
 
+> The projections below are extended to 2×H200, the 35B-A3B MoE model, subagent
+> workloads, system-prompt size, and cache invalidation in
+> [scenarios.md](scenarios.md) (with an interactive explorer).
+
 ## **Tested setup:**
 - 1 x H200 = 141 GB
 - Qwen 3.6 27B, FP8 *full* model weights ~ 28.8 GiB, **no** vision encoder

@@ -96,17 +96,17 @@ MODELS = {
         w_route_total=0.0,
         mtp=1.7,
     ),
-    # MoE model — PROVISIONAL placeholders, refined from architecture research.
+    # MoE model — Qwen3-Next-80B-A3B published config, scaled (expert count only)
+    # to 35B total / ~3B active. See research/model_35ba3b.md for provenance.
     "35BA3B": Model(
         name="Qwen 3.6 35B-A3B (MoE, ~3B active)",
-        kv_bpt=16 * KIB,                 # provisional: hybrid deltanet => fewer attn layers
-        deltanet_state=90 * MIB,         # provisional
-        w_resident=36.0 * GIB,           # provisional: 35B FP8, all experts resident
-        w_decode_shared=1.6 * GIB,       # provisional: attn/deltanet + shared expert
-        w_route_pertok=1.4 * GIB,        # provisional: routed active experts / token
-        w_route_total=34.0 * GIB,        # provisional: all routed experts
-        mtp=1.7,
-        provisional=True,
+        kv_bpt=12_288,                   # 12 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
+        deltanet_state=75_497_472,       # 36 DeltaNet layers x 32 vheads x 128x128 fp32 (=72 MiB)
+        w_resident=35_000_000_000,       # 35B params x 1B (FP8), all experts resident
+        w_decode_shared=1_490_000_000,   # attn + deltanet + shared expert + router + lm_head / step
+        w_route_pertok=1_510_000_000,    # 10 active routed experts per decoding token
+        w_route_total=32_900_000_000,    # 218 routed experts total (saturation ceiling)
+        mtp=1.7,                         # single MTP draft token, ~0.72-0.83 acceptance
     ),
 }
 
@@ -170,7 +170,7 @@ class Workload:
     sub_sigma: float = 0.9
     sub_ratio: float = 0.10           # subagent requests per user request (1/10)
     sys_user: float = 15_000          # main-user shared system-prompt prefix (tokens)
-    sys_sub: float = 15_000           # subagent shared prefix (tokens); own block
+    sys_sub: float = 3_000            # subagent shared prefix (tokens); own, leaner block
     sub_shares_prefix: bool = False   # if True, subagents reuse the user prefix
     invalidation: float = 0.01        # fraction of requests that can't match any KV
     cap: float = 180_000              # max_seq_len truncation cap (tokens)
@@ -191,13 +191,16 @@ class Workload:
         lu = rng.lognormal(np.log(self.user_median), self.user_sigma, size)
         ls = rng.lognormal(np.log(self.sub_median), self.sub_sigma, size)
         full = np.where(is_sub, ls, lu)
-        full = np.clip(full, self.min_tokens, self.cap)
 
         sub_prefix = self.sys_user if self.sub_shares_prefix else self.sys_sub
         prefix = np.where(is_sub, sub_prefix, self.sys_user).astype(float)
 
+        # a prompt always contains at least its shared system prefix, never > cap
+        lower = np.minimum(prefix, self.cap)
+        full = np.clip(full, lower, self.cap)
+
         is_cold = rng.random(size) < self.invalidation
-        prefix = np.where(is_cold, 0.0, prefix)   # cold: matches nothing
+        prefix = np.where(is_cold, 0.0, prefix)   # cold: matches nothing (occupies full length)
         return full, prefix, is_cold
 
 

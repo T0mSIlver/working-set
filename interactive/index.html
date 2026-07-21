@@ -172,7 +172,7 @@ svg text{fill:var(--text-2)}
         <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; decode speed is per-step bandwidth ÷ (weights + live KV), sped up by MTP.</li>
-        <li><span class="prov">Note:</span> the 35B-A3B architecture numbers are <b>provisional</b> pending config confirmation; edit the <code>CONFIG</code> block to revise.</li>
+        <li><span class="prov">Note:</span> the 35B-A3B numbers come from the real <b>Qwen3-Next-80B-A3B</b> config scaled (expert count only) to 35B / ~3B active &mdash; see <code>research/model_35ba3b.md</code>. Edit the <code>CONFIG</code> block to revise.</li>
       </ul>
     </div>
   </details>
@@ -297,7 +297,7 @@ svg text{fill:var(--text-2)}
     </div>
   </div>
 
-  <p class="foot">Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>. Constants live in the <code>CONFIG</code> block. 35B-A3B numbers provisional.</p>
+  <p class="foot">Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>. Constants live in the <code>CONFIG</code> block. 35B-A3B from Qwen3-Next config (see <code>research/model_35ba3b.md</code>).</p>
 </div>
 
 <script>
@@ -333,16 +333,15 @@ const CONFIG = {
       mtp: 1.7,
       provisional: false,
     },
-    "35BA3B": {                    // PROVISIONAL placeholders — revise here
+    "35BA3B": {                    // Qwen3-Next-80B-A3B config scaled to 35B; see research/model_35ba3b.md
       name: "Qwen 3.6 35B-A3B (MoE, ~3B active)",
-      kv_bpt: 16 * KIB,            // provisional: hybrid deltanet, fewer attn layers
-      deltanet_state: 90 * MIB,    // provisional
-      w_resident: 36.0 * GIB,      // provisional: 35B FP8, all experts resident
-      w_decode_shared: 1.6 * GIB,  // provisional: attn/deltanet + shared expert
-      w_route_pertok: 1.4 * GIB,   // provisional: routed active experts / token
-      w_route_total: 34.0 * GIB,   // provisional: all routed experts
-      mtp: 1.7,
-      provisional: true,
+      kv_bpt: 12288,               // 12 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
+      deltanet_state: 75497472,    // 36 DeltaNet layers x 32 vheads x 128x128 fp32 (=72 MiB)
+      w_resident: 35000000000,     // 35B params x 1B (FP8), all experts resident
+      w_decode_shared: 1490000000, // attn + deltanet + shared expert + router + lm_head / step
+      w_route_pertok: 1510000000,  // 10 active routed experts per decoding token
+      w_route_total: 32900000000,  // 218 routed experts total (saturation ceiling)
+      mtp: 1.7,                    // single MTP draft token, ~0.72-0.83 acceptance
     },
   },
 
@@ -398,7 +397,7 @@ function effective_bw(topo){
   const p3  = kv_pool_tokens(CONFIG.MODELS["35BA3B"], CONFIG.TOPOLOGIES["1xH200"]);
   console.assert(approx(p1, 2.770e6, 0.001), "27B/1xH200 pool ~2.770e6, got "+p1.toExponential(4));
   console.assert(approx(p2, 6.484e6, 0.001), "27B/TP2 pool ~6.484e6, got "+p2.toExponential(4));
-  console.assert(approx(p3, 5.068e6, 0.001), "35BA3B/1xH200 pool ~5.068e6, got "+p3.toExponential(4));
+  console.assert(approx(p3, 7.055e6, 0.001), "35BA3B/1xH200 pool ~7.055e6, got "+p3.toExponential(4));
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -444,10 +443,11 @@ function sampleReq(wl){
   const isSub = Math.random() < p_sub(wl);
   let length = isSub ? lognormal(wl.sub_median, wl.sub_sigma)
                      : lognormal(wl.user_median, wl.user_sigma);
-  const full = clip(length, wl.min_tokens, wl.cap);
   let prefix = isSub ? (wl.sub_shares_prefix ? wl.sys_user : wl.sys_sub) : wl.sys_user;
+  // a prompt always contains at least its shared system prefix, never > cap
+  const full = clip(length, Math.min(prefix, wl.cap), wl.cap);
   const isCold = Math.random() < wl.invalidation;
-  if (isCold) prefix = 0;
+  if (isCold) prefix = 0;   // cold: matches nothing (occupies full length)
   return { full, prefix, isCold };
 }
 // sample just a length (decode only needs full)
@@ -455,7 +455,8 @@ function sampleFull(wl){
   const isSub = Math.random() < p_sub(wl);
   let length = isSub ? lognormal(wl.sub_median, wl.sub_sigma)
                      : lognormal(wl.user_median, wl.user_sigma);
-  return clip(length, wl.min_tokens, wl.cap);
+  const prefix = isSub ? (wl.sub_shares_prefix ? wl.sys_user : wl.sys_sub) : wl.sys_user;
+  return clip(length, Math.min(prefix, wl.cap), wl.cap);
 }
 
 /* ============================================================================
@@ -545,7 +546,9 @@ function currentWL(){
     user_median: state.user_median*1000, user_sigma: state.user_sigma,
     sub_median: state.sub_median*1000, sub_sigma: state.sub_sigma,
     sub_ratio: state.sub_ratio,
-    sys_user: state.sys*1000, sys_sub: state.sys*1000,
+    // subagents use a lean 3k separate prefix by default (matches scenario_model.py);
+    // the "share prefix" toggle instead points them at the user prefix.
+    sys_user: state.sys*1000, sys_sub: 3000,
     sub_shares_prefix: state.sub_shares_prefix,
     invalidation: state.inval/100,
     cap: 180000, min_tokens: 1000,
