@@ -58,10 +58,18 @@ BASELINE_POOL_TOKENS_27B_1GPU = 2.77e6
 # mtp             : effective decode speedup from Multi-Token Prediction
 #
 # Dense model  => w_decode_shared = w_resident, w_route_* = 0 (reads all weights).
-# MoE model    => decode reads w_decode_shared + min(n*w_route_pertok, w_route_total).
+# MoE model    => decode reads w_decode_shared + routed-expert union bytes:
+#   union="linear"   : min(n*w_route_pertok, w_route_total)   -- no-overlap upper
+#                      bound on bytes (CONSERVATIVE: slow-side; default)
+#   union="coverage" : w_route_total * (1-(1-k/E)^n)          -- expected union
+#                      under uniform independent routing (OPTIMISTIC: real
+#                      routing is correlated, so coverage grows slower)
+# The two bracket reality; figures show both.
 #
-# NOTE: the 35B-A3B numbers are provisional pending architecture research and
-# are overwritten from research/model_35ba3b.json when that file exists.
+# All 35B-A3B constants come from the PUBLISHED Qwen/Qwen3.6-35B-A3B-FP8
+# config.json (40 layers = 30 DeltaNet + 10 full-attn, 2 KV heads x 256,
+# 256 experts / 8 routed + 1 shared, vocab 248,320). Full derivations and
+# the assumption ledger: research/model_35ba3b.md.
 # ============================================================================
 @dataclass
 class Model:
@@ -73,40 +81,47 @@ class Model:
     w_route_pertok: float
     w_route_total: float
     mtp: float = 1.7
-    provisional: bool = False
 
     @property
     def is_moe(self) -> bool:
         return self.w_route_total > 0
 
-    def w_decode(self, n: int) -> float:
+    def w_decode(self, n: int, union: str = "linear") -> float:
         """Weight bytes read per decode step with n concurrent decoders."""
-        return self.w_decode_shared + min(n * self.w_route_pertok, self.w_route_total)
+        if not self.is_moe:
+            return self.w_decode_shared
+        if union == "coverage":
+            frac_new = self.w_route_pertok / self.w_route_total   # = k/E
+            routed = self.w_route_total * (1.0 - (1.0 - frac_new) ** n)
+        else:
+            routed = min(n * self.w_route_pertok, self.w_route_total)
+        return self.w_decode_shared + routed
 
 
 MODELS = {
-    # Baseline dense sibling — numbers straight from the original study.
+    # Baseline dense sibling — numbers straight from the original study. The
+    # published Qwen3.6-27B config (64 layers, interval 4 -> 16 full-attn x
+    # 4 KV heads x 256) reproduces the baseline's 32 KiB/token exactly.
     "27B": Model(
-        name="Qwen 3.6 27B (dense)",
+        name="Qwen3.6-27B (dense)",
         kv_bpt=32 * KIB,                 # 16 attn layers x 4 KV heads x 256 x 2(K,V) x 1B
-        deltanet_state=75 * MIB,
-        w_resident=28.8 * GIB,
+        deltanet_state=75 * MIB,         # 48 DN layers x 48 vheads x 128x128 bf16 (+conv) = 75.7 MiB
+        w_resident=28.8 * GIB,           # baseline's stated as-deployed FP8 footprint
         w_decode_shared=28.8 * GIB,      # dense: every step reads all weights
         w_route_pertok=0.0,
         w_route_total=0.0,
         mtp=1.7,
     ),
-    # MoE model — Qwen3-Next-80B-A3B published config, scaled (expert count only)
-    # to 35B total / ~3B active. See research/model_35ba3b.md for provenance.
+    # MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
     "35BA3B": Model(
-        name="Qwen 3.6 35B-A3B (MoE, ~3B active)",
-        kv_bpt=12_288,                   # 12 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
-        deltanet_state=75_497_472,       # 36 DeltaNet layers x 32 vheads x 128x128 fp32 (=72 MiB)
-        w_resident=35_000_000_000,       # 35B params x 1B (FP8), all experts resident
-        w_decode_shared=1_490_000_000,   # attn + deltanet + shared expert + router + lm_head / step
-        w_route_pertok=1_510_000_000,    # 10 active routed experts per decoding token
-        w_route_total=32_900_000_000,    # 218 routed experts total (saturation ceiling)
-        mtp=1.7,                         # single MTP draft token, ~0.72-0.83 acceptance
+        name="Qwen3.6-35B-A3B (MoE, ~3B active)",
+        kv_bpt=10_240,                   # 10 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
+        deltanet_state=33_423_360,       # 30 DN layers x 32 vheads x 128x128 bf16 (+conv) = 31.9 MiB
+        w_resident=35_500_000_000,       # ~35.5B params x 1B FP8 (all experts + MTP module)
+        w_decode_shared=1_940_000_000,   # attn + deltanet + shared expert + router + lm_head / step
+        w_route_pertok=1_006_632_960,    # 8 routed experts x 3.146M x 40 layers, FP8
+        w_route_total=32_212_254_720,    # 256 routed experts (saturates at exactly n=32 linear)
+        mtp=1.7,                         # MTP module, speedup kept equal to baseline's fit
     ),
 }
 
@@ -213,8 +228,17 @@ def _warm_once(full, prefix, is_cold, pool_tokens, ram_gib, model: Model, wl: Wo
 
     Shared-prefix blocks are reserved once each (user + subagent) up front.
     A cold request occupies its FULL length (no dedup) and never counts as warm.
+
+    Every resident session additionally holds its constant Gated-DeltaNet
+    recurrent state (a warm hit needs the state, not just the attention KV), so
+    each session is charged `deltanet_state` in KV-token equivalents. The
+    baseline scripts omitted this charge; for the reference workload it costs
+    ~10-20% of warm capacity (state/kv_bpt = 2.4k tok-equiv for 27B, 3.3k for
+    35B-A3B, vs a median unique length of ~16k).
     """
     unique = np.where(is_cold, full, np.maximum(full - prefix, 0.0))
+    state_tok = model.deltanet_state / model.kv_bpt
+    gpu_cost = unique + state_tok
 
     # reserve the distinct prefix blocks once (only those actually in this draw)
     reserved = 0.0
@@ -223,7 +247,7 @@ def _warm_once(full, prefix, is_cold, pool_tokens, ram_gib, model: Model, wl: Wo
         reserved += wl.sys_sub
     gpu_budget = pool_tokens - reserved
 
-    cs = np.cumsum(unique)
+    cs = np.cumsum(gpu_cost)
     n_gpu = int(np.searchsorted(cs, gpu_budget))
     n_gpu = min(n_gpu, len(unique))
 
@@ -257,11 +281,15 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 # CONCURRENCY  (per-user / aggregate decode tok/s vs max_num_seqs)
 # ============================================================================
 def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
-                  n_iter=3000, seed=0):
+                  n_iter=3000, seed=0, union="linear"):
     """Per-user tok/s percentiles (p5,p50,p95) and aggregate p50 vs max_num_seqs.
 
-    For MoE, weight bytes read per step grow with the batch's expert union
-    (min(n*w_route_pertok, w_route_total)); KV bytes = sum of active contexts.
+    step_bytes(n) = weights (MoE: shared + expert union, see Model.w_decode)
+                  + KV read of all active contexts
+                  + DeltaNet recurrent-state read+write for every active
+                    sequence (2 x state x n; each decode step updates S).
+    The state term was omitted by the baseline decode model; at its mns=6 it is
+    <2% of step bytes, but at mns 64+ it is no longer negligible.
     """
     rng = np.random.default_rng(seed)
     bw = effective_bw(topo)
@@ -269,7 +297,8 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     for n in mns_range:
         full, _, _ = wl.sample(rng, (n_iter, n))
         kv_bytes = full.sum(axis=1) * model.kv_bpt
-        step_bytes = model.w_decode(n) + kv_bytes
+        state_bytes = 2.0 * n * model.deltanet_state
+        step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
         pu = model.mtp * bw / step_bytes
         a, b, c = np.percentile(pu, [5, 50, 95])
         p5.append(a); p50.append(b); p95.append(c)
@@ -278,3 +307,52 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     scale = topo.replicas
     return (np.array(p5), np.array(p50), np.array(p95),
             np.array(agg) * scale)
+
+
+# ============================================================================
+# SELF-CHECKS  (python scripts/scenario_model.py)
+# ============================================================================
+def _selfcheck():
+    m27, m35 = MODELS["27B"], MODELS["35BA3B"]
+    t1, tp2 = TOPOLOGIES["1xH200"], TOPOLOGIES["2xH200-TP2"]
+
+    # calibration: 27B/1xH200 reproduces the measured pool by construction
+    assert abs(kv_pool_tokens(m27, t1) - BASELINE_POOL_TOKENS_27B_1GPU) < 1, \
+        "27B/1xH200 pool must equal the measured 2.77M-token anchor"
+    assert ACT_RESERVE > 0, "activation reserve must be positive"
+
+    # 35B-A3B constants: internal identities from the published config
+    assert m35.kv_bpt == 10 * 2 * 256 * 2 * 1               # 10 KiB/token FP8
+    assert m35.w_route_pertok == 8 * (3 * 2048 * 512) * 40  # 8 routed experts
+    assert m35.w_route_total == 256 * (3 * 2048 * 512) * 40 # 256 experts
+    assert abs(m35.w_route_total / m35.w_route_pertok - 32) < 1e-9  # kink at n=32
+    active = m35.w_decode_shared + m35.w_route_pertok
+    assert 2.8e9 < active < 3.1e9, "active bytes/token should be ~3B (published)"
+    assert m35.w_resident > m35.w_route_total + m35.w_decode_shared - 509e6, \
+        "resident must cover all experts + shared (lm_head aside, embed/MTP extra)"
+
+    # decode monotonicity + union bracketing
+    mns = np.arange(1, 129)
+    wl = Workload()
+    for mdl in (m27, m35):
+        _, p50, _, agg = decode_curves(mdl, t1, wl, [1, 8, 64], n_iter=300)
+        assert p50[0] > p50[1] > p50[2] > 0
+        assert agg[2] > agg[0]
+    for n in (1, 8, 32, 64):
+        assert m35.w_decode(n, "coverage") <= m35.w_decode(n, "linear") + 1e-6
+
+    # warm capacity sanity: pool grows => capacity grows; state charge shrinks it
+    lo = warm_capacity(m35, t1, wl, n_iter=120)[1]
+    hi = warm_capacity(m35, tp2, wl, n_iter=120)[1]
+    assert 0 < lo < hi
+
+    print("selfcheck OK")
+    print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
+    for mk in MODELS:
+        for tk in TOPOLOGIES:
+            p = kv_pool_tokens(MODELS[mk], TOPOLOGIES[tk])
+            print(f"  pool {mk:7} {tk:12} = {p / 1e6:6.2f} M tokens")
+
+
+if __name__ == "__main__":
+    _selfcheck()

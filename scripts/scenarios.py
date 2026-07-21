@@ -145,16 +145,25 @@ def fig_mns():
         col = TOPO_COLOR[tk]
         # per-user: DP2 is identical to 1xH200 (each replica is one GPU) -> skip it
         if tk != "2xH200-DP2":
-            axL.plot(mns, p50, color=col, lw=2.2, label=TOPO_LABEL[tk])
+            axL.plot(mns, p50, color=col, lw=2.2, label=TOPO_LABEL[tk] + " (linear union)")
             axL.fill_between(mns, p5, p95, color=col, alpha=.12)
+            # optimistic bracket: expected expert union under uniform routing
+            _, p50c, _, _ = M.decode_curves(MODELS[mk], TOPOLOGIES[tk], wl, mns,
+                                            n_iter=1500, union="coverage")
+            axL.plot(mns, p50c, color=col, lw=1.4, ls="--",
+                     label=TOPO_LABEL[tk] + " (coverage union)")
         axR.plot(mns, agg / 1000, color=col, lw=2.2, label=TOPO_LABEL[tk])
     for t in (20, 30, 40):
         axL.axhline(t, ls="--", lw=.8, color="#bbb")
         axL.text(2, t + 1, f"{t} tok/s floor", fontsize=7, color=MUTED)
+    axL.axvline(32, ls=":", color=MUTED, lw=1)
+    axL.text(33, 5, "all 256 experts active\n(linear union, n=32)", fontsize=7, color=MUTED)
     axL.set_xlabel("max_num_seqs (concurrent decoders)")
     axL.set_ylabel("per-user decode speed (tok/s)")
-    axL.set_title("Per-user speed  -  band = p5-p95  (DP2 per-user ≡ 1xH200)")
-    axL.set_xlim(0, mns[-1]); axL.set_ylim(0, 260)
+    axL.set_title("Per-user speed  -  band = p5-p95  (DP2 per-user ≡ 1xH200)\n"
+                  "solid = conservative no-overlap expert union; dashed = expected union")
+    # cap the y-axis: the n=1 point is ~4.5 ktok/s and would crush the useful range
+    axL.set_xlim(0, mns[-1]); axL.set_ylim(0, 700)
     axL.legend(frameon=False, loc="upper right")
     axR.set_xlabel("max_num_seqs (concurrent decoders)")
     axR.set_ylabel("aggregate throughput (ktok/s)  [DP = system total]")
@@ -213,8 +222,6 @@ def fig_subagent_invalidation():
 
 
 if __name__ == "__main__":
-    if MODELS["35BA3B"].provisional:
-        print("NOTE: 35B-A3B constants are PROVISIONAL (pending architecture research).")
     res = fig_capacity()
     fig_sysprompt()
     fig_mns()

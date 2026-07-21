@@ -169,10 +169,10 @@ svg text{fill:var(--text-2)}
       <ul>
         <li><b>TP (tensor-parallel)</b> shares one weight copy across both GPUs, so the pooled KV cache more than doubles, and effective decode bandwidth scales by <span class="tnum">n_gpu × 0.90</span>.</li>
         <li><b>DP (data-parallel)</b> keeps a per-replica cache. Aggregate throughput doubles, but a returning user is only <em>warm on their home replica</em> — capacity here is reported per replica, not summed.</li>
-        <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts.</li>
+        <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts. The explorer uses the conservative no-overlap union bound (docs also show the optimistic expected-union bracket).</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
-        <li>Capacity is Monte-Carlo over a user+subagent length mixture; decode speed is per-step bandwidth ÷ (weights + live KV), sped up by MTP.</li>
-        <li><span class="prov">Note:</span> the 35B-A3B numbers come from the real <b>Qwen3-Next-80B-A3B</b> config scaled (expert count only) to 35B / ~3B active &mdash; see <code>research/model_35ba3b.md</code>. Edit the <code>CONFIG</code> block to revise.</li>
+        <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
+        <li><span class="prov">Note:</span> the 35B-A3B constants come from the <b>published Qwen3.6-35B-A3B config</b> (40 layers: 30 DeltaNet + 10 full-attention, 2 KV heads × 256, 256 experts / 8 routed) &mdash; derivations in <code>research/model_35ba3b.md</code>. Edit the <code>CONFIG</code> block to revise.</li>
       </ul>
     </div>
   </details>
@@ -185,7 +185,7 @@ svg text{fill:var(--text-2)}
         <div class="field">
           <label class="flabel">Model</label>
           <div class="seg" id="seg-model" data-key="model">
-            <button data-v="27B" aria-pressed="true">Qwen 3.6 27B</button>
+            <button data-v="27B" aria-pressed="true">Qwen3.6-27B</button>
             <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
           </div>
         </div>
@@ -297,7 +297,7 @@ svg text{fill:var(--text-2)}
     </div>
   </div>
 
-  <p class="foot">Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>. Constants live in the <code>CONFIG</code> block. 35B-A3B from Qwen3-Next config (see <code>research/model_35ba3b.md</code>).</p>
+  <p class="foot">Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>. Constants live in the <code>CONFIG</code> block. 35B-A3B from the published Qwen3.6-35B-A3B config (see <code>research/model_35ba3b.md</code>).</p>
 </div>
 
 <script>
@@ -323,25 +323,24 @@ const CONFIG = {
   // mtp: Multi-Token-Prediction decode speedup
   MODELS: {
     "27B": {
-      name: "Qwen 3.6 27B (dense)",
-      kv_bpt: 32 * KIB,            // 16 attn x 4 KV heads x 256 x 2 x 1B
-      deltanet_state: 75 * MIB,
-      w_resident: 28.8 * GIB,
+      name: "Qwen3.6-27B (dense)",
+      kv_bpt: 32 * KIB,            // 16 attn x 4 KV heads x 256 x 2 x 1B (published config)
+      deltanet_state: 75 * MIB,    // 48 DN layers x 48 vheads x 128x128 bf16 (+conv) = 75.7 MiB
+      w_resident: 28.8 * GIB,      // baseline's stated as-deployed FP8 footprint
       w_decode_shared: 28.8 * GIB, // dense: every step reads all weights
       w_route_pertok: 0.0,
       w_route_total: 0.0,
       mtp: 1.7,
-      provisional: false,
     },
-    "35BA3B": {                    // Qwen3-Next-80B-A3B config scaled to 35B; see research/model_35ba3b.md
-      name: "Qwen 3.6 35B-A3B (MoE, ~3B active)",
-      kv_bpt: 12288,               // 12 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
-      deltanet_state: 75497472,    // 36 DeltaNet layers x 32 vheads x 128x128 fp32 (=72 MiB)
-      w_resident: 35000000000,     // 35B params x 1B (FP8), all experts resident
-      w_decode_shared: 1490000000, // attn + deltanet + shared expert + router + lm_head / step
-      w_route_pertok: 1510000000,  // 10 active routed experts per decoding token
-      w_route_total: 32900000000,  // 218 routed experts total (saturation ceiling)
-      mtp: 1.7,                    // single MTP draft token, ~0.72-0.83 acceptance
+    "35BA3B": {                    // published Qwen3.6-35B-A3B config; see research/model_35ba3b.md
+      name: "Qwen3.6-35B-A3B (MoE, ~3B active)",
+      kv_bpt: 10240,               // 10 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
+      deltanet_state: 33423360,    // 30 DN layers x 32 vheads x 128x128 bf16 (+conv) = 31.9 MiB
+      w_resident: 35500000000,     // ~35.5B params x 1B FP8 (all experts + MTP module)
+      w_decode_shared: 1940000000, // attn + deltanet + shared expert + router + lm_head / step
+      w_route_pertok: 1006632960,  // 8 routed experts x 3.146M x 40 layers, FP8
+      w_route_total: 32212254720,  // 256 routed experts (saturates at exactly n=32 linear)
+      mtp: 1.7,                    // MTP module, speedup kept equal to baseline's fit
     },
   },
 
@@ -361,6 +360,8 @@ const CONFIG = {
 
 /* ---- model helpers ---- */
 function is_moe(m){ return m.w_route_total > 0; }
+// Conservative (no-overlap) expert-union bound, the study's planning default;
+// the expected-union "coverage" model is the optimistic bracket (see docs).
 function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_pertok, m.w_route_total); }
 
 /* ---- derived: activation reserve solved from the anchor ---- */
@@ -397,7 +398,7 @@ function effective_bw(topo){
   const p3  = kv_pool_tokens(CONFIG.MODELS["35BA3B"], CONFIG.TOPOLOGIES["1xH200"]);
   console.assert(approx(p1, 2.770e6, 0.001), "27B/1xH200 pool ~2.770e6, got "+p1.toExponential(4));
   console.assert(approx(p2, 6.484e6, 0.001), "27B/TP2 pool ~6.484e6, got "+p2.toExponential(4));
-  console.assert(approx(p3, 7.055e6, 0.001), "35BA3B/1xH200 pool ~7.055e6, got "+p3.toExponential(4));
+  console.assert(approx(p3, 8.417e6, 0.001), "35BA3B/1xH200 pool ~8.417e6, got "+p3.toExponential(4));
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -468,6 +469,11 @@ function warmOnce(pool, ram_gib, model, wl, draw){
   if (!wl.sub_shares_prefix) reserved += wl.sys_sub;
   const gpu_budget = pool - reserved;
 
+  // every resident session also holds its constant DeltaNet recurrent state
+  // (a warm hit needs the state, not just the attention KV) — charged in
+  // KV-token equivalents, mirroring _warm_once in scenario_model.py
+  const state_tok = model.deltanet_state / model.kv_bpt;
+
   // arrival-order fill of GPU cache
   const uniq = new Float64Array(draw);
   const cold = new Uint8Array(draw);
@@ -478,7 +484,7 @@ function warmOnce(pool, ram_gib, model, wl, draw){
     const u = r.isCold ? r.full : Math.max(r.full - r.prefix, 0);
     uniq[i] = u; cold[i] = r.isCold ? 1 : 0;
     if (!filledGpu){
-      cum += u;
+      cum += u + state_tok;
       if (cum > gpu_budget){ n_gpu = i; filledGpu = true; }   // searchsorted: first idx exceeding budget
     }
   }
@@ -516,7 +522,8 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   const scale = topo.replicas;
   const buf = new Float64Array(n_iter);
   for (let n=1; n<=nMax; n+=step){
-    const wd = w_decode(model, n);
+    // weights + DeltaNet recurrent-state read+write for every active sequence
+    const wd = w_decode(model, n) + 2*n*model.deltanet_state;
     for (let it=0; it<n_iter; it++){
       let kvsum = 0;
       for (let s=0;s<n;s++) kvsum += sampleFull(wl);

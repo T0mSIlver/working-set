@@ -41,8 +41,9 @@ The full write-up — setup, method, results, and recommendations — is in
 │   ├── real_capacity.py      # baseline: clean → fit log-normal → MC warm-fill
 │   ├── real_mns.py           # baseline: max_num_seqs speed/throughput tradeoff
 │   ├── warm_whisker.py       # baseline: warm capacity p5/p50/p95 whiskers
-│   ├── scenario_model.py     # extended study: shared capacity + decode model
-│   └── scenarios.py          # extended study: renders the scenario figures
+│   ├── scenario_model.py     # extended study: shared capacity + decode model (+ self-checks)
+│   ├── scenarios.py          # extended study: renders the scenario figures
+│   └── tables.py             # extended study: regenerates every number in scenarios.md
 ├── interactive/
 │   └── index.html            # self-contained interactive scenario explorer
 ├── research/
@@ -87,12 +88,14 @@ prompt-caching sweep (not one of these scripts).
 ### Extended-scenario study
 
 ```bash
-# renders scenario_capacity / sysprompt / mns / subagent_invalidation .png (no CSVs needed)
-python scripts/scenarios.py
+python scripts/scenario_model.py   # self-checks (calibration + published-config identities)
+python scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation .png
+python scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
 ```
 
 `scripts/scenario_model.py` is the shared model (calibrated to reproduce the
-baseline's measured 2.77M-token pool); `scripts/scenarios.py` renders the static
-figures; and `interactive/index.html` is a dependency-free page mirroring the same
-math with live sliders for the workload, model, and topology. See
-[docs/scenarios.md](docs/scenarios.md).
+baseline's measured 2.77M-token pool; 35B-A3B constants from the published
+Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`); `scripts/scenarios.py`
+renders the static figures; and `interactive/index.html` is a dependency-free page
+mirroring the same math with live sliders for the workload, model, and topology.
+See [docs/scenarios.md](docs/scenarios.md).
