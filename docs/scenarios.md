@@ -145,10 +145,12 @@ fp8_e4m3`), as tested in the baseline. The model exposes a switch
 (`with_kv_dtype(model, "fp16")` in Python; a Model-panel toggle in the explorer)
 that doubles KV bytes/token — halving the pool and adding decode read cost —
 while weights, the DeltaNet state, and the FP8-anchored reserve calibration stay
-fixed. Cross-check: the FP16 27B/1×H200 pool comes out at **1.39M tokens**, inside
-the baseline's *measured* FP16 interval [1.14M, 1.40M] — the FP16 path reproduces
-the original measurement without any new fitting. Reference-workload numbers
-under FP16 (from `tables.py`):
+fixed. Consistency check: the FP16 27B/1×H200 pool comes out at **1.39M tokens**,
+inside the baseline's *measured* FP16 interval [1.14M, 1.40M]. Note this is
+**partially circular** (the FP8 anchor was built as ~2× the FP16 estimate, so
+halving it lands near the measurement largely by construction) — it confirms
+internal consistency, not the model. Reference-workload numbers under FP16
+(from `tables.py`):
 
 | FP16 KV | pool | warm p50 (user) | per-user p50 @ mns 64 |
 | --- | --- | --- | --- |
@@ -336,28 +338,33 @@ reusable cached session; **"warm users"** counts only user-class sessions (subag
 sessions, ~9% of the mix at r = 0.1, are excluded — a *user* corresponds to one
 user-class session in this model):
 
-| Config | **Warm p5 (plan on this)** | Warm p50 | of which warm **users** (p50) | v@warm: p50 tok/s if *all* warm sessions decode at once | mns@40 (speed bound alone) |
+| Config | **Warm p5 (plan on this)** | Warm p50 | warm **users** p5 / p50 | v@warm: p50 tok/s if *all* warm sessions decode at once | mns@40 (speed bound alone) |
 | --- | --- | --- | --- | --- | --- |
-| 27B, 1×H200 | **76** | 94 | 86 | 48 | 118 |
-| 27B, TP2 | **195** | 222 | 202 | 41 | 228 |
-| 27B, DP2 | **2 × 76** (sticky) | 2 × 94 | 2 × 86 | 48 | 118 / replica |
-| 35B-A3B, 1×H200 | **250** | 280 | 255 | 49 | 355 |
-| 35B-A3B, TP2 | **632** | 678 | 616 | 41 | 695 |
-| 35B-A3B, DP2 | **2 × 250** (sticky) | 2 × 280 | 2 × 255 | 49 | 355 / replica |
+| 27B, 1×H200 | **76** | 94 | **69** / 86 | 48 | 118 |
+| 27B, TP2 | **195** | 222 | **177** / 202 | 41 | 228 |
+| 27B, DP2 | **2 × 76** (sticky) | 2 × 94 | **2 × 69** / 2 × 86 | 48 | 118 / replica |
+| 35B-A3B, 1×H200 | **250** | 280 | **228** / 255 | 49 | 355 |
+| 35B-A3B, TP2 | **632** | 678 | **574** / 616 | 41 | 695 |
+| 35B-A3B, DP2 | **2 × 250** (sticky) | 2 × 280 | **2 × 228** / 2 × 255 | 49 | 355 / replica |
 
 **In every configuration the cache binds first** (warm sessions < mns@40), and even
 in the worst case — every warm session decoding simultaneously — per-user p50 stays
-≥ 41 tok/s. So for agentic coding on this hardware:
+≥ 41 tok/s. Note the TP2 margin is thin (632–678 warm vs 695), and the roofline is
+uncalibrated — a few-percent modelling error flips that binding constraint. So for
+agentic coding on this hardware:
 
-- **Comfortable concurrent-user count ≈ warm *user* capacity**: ~86 (27B, 1×H200)
-  up to ~616 (35B-A3B, TP2) per node-pair, before CPU offload.
+- **Comfortable concurrent-user count ≈ warm *user* capacity at p5** (same
+  percentile as the planning column): ~69 (27B, 1×H200) up to ~574 (35B-A3B, TP2)
+  per node-pair, before CPU offload.
 - Real duty cycles < 100% don't raise these numbers — idle users still occupy cache.
   What raises them: CPU offload (600 GiB ≈ **2,400–2,800** warm 35B-A3B sessions —
   as *storage*; restore latency unmodelled), a bigger truly-shared prefix, or more
   subagent-like (short) traffic.
-- Oversubscribing beyond warm capacity degrades gracefully into cold-TTFT churn (LRU
-  eviction), not into slow decode — the baseline's N=10 cyclic-eviction collapse is
-  the failure mode to watch.
+- Oversubscribing beyond warm capacity turns the excess into cold-TTFT churn (LRU
+  eviction). We have NOT verified that this is graceful under load: cold prefills
+  interfere with active decodes, and the baseline's N=10 cyclic-eviction collapse
+  shows the cliff-shaped failure mode. Treat the warm count as the population to
+  stay under, not a soft target.
 
 **Suggested vLLM setup** (per the model above): `--kv-cache-dtype fp8_e4m3`;
 `--enable-prefix-caching`; `max_seq_len` 180k (caps worst-case cold prefill and pool
@@ -365,6 +372,38 @@ hogging); size `max_num_seqs` from the modelled speed ceilings above (mns@40) wh
 keeping expected active KV within the pool — the study does not model preemption, so
 treat large values as needing a measurement pass; TP2 (`--tensor-parallel-size 2`)
 preferred over two DP replicas for this workload; if DP, make routing session-sticky.
+
+## Statistical honesty: Monte-Carlo spread vs structural uncertainty
+
+The p5 framing is conservative **only within the model's fixed assumptions**: it
+says that under this workload distribution, this allocator arithmetic and these
+constants, 95% of random packing draws hold at least that many sessions. It is NOT
+a 95%-confidence forecast of production capacity — parameter and structural
+uncertainty are far larger than sampling spread. For the headline 35B-A3B TP2 case
+(p5 632, p50 678; MC estimator jitter ~1–3 sessions):
+
+| Structural assumption flipped (one at a time) | Δ warm sessions |
+| --- | --- |
+| +15% deployed-weight overhead | ~ −17 |
+| fp32 (not bf16) DeltaNet state | ~ −68 |
+| 10% (not 1%) invalidation | ~ −87 |
+| anchor at 2× the measured FP16 *lower* bound (2.278M, not 2.77M) | ~ −105 |
+| loss of global prefix sharing (per-tenant prefixes) | ~ −200 (proxy) |
+| FP16 KV instead of FP8 | ~ −320 |
+
+**Stacking** the first four plausible-adverse assumptions (low anchor + fp32 state
++ weight overhead + 10% invalidation) moves TP2 warm p5 from **632 to 403** (user
+class ~367) — a ~230-session structural downside against a 46-session p5-vs-p50
+cushion (regenerate: the "Structural-uncertainty stack" section of `tables.py`).
+The whiskers in the figures show *packing variability*, not forecast confidence.
+Until one exact-configuration measurement re-anchors the model, purchasing-grade
+planning should either use a stacked-conservative scenario like the 403 figure or
+apply an explicit structural haircut to the central p5.
+
+Related honesty note: the FP16-path "cross-check" (1.39M inside the measured
+FP16 interval) is **partially circular** — the FP8 anchor was constructed as
+roughly 2× the FP16 estimate, so halving it lands near the measurement largely by
+construction. It validates internal consistency, not the model.
 
 ## Outcomes
 
@@ -429,6 +468,23 @@ Ordered roughly by how much each could move the numbers:
     all. For DP, the shared CPU-offload buffer is split evenly across replicas — a
     simplification of real host-memory contention. Treat every N > 2 number as a
     shape, not a quote, until one multi-GPU measurement anchors it.
+13. **vLLM's hybrid-model allocator may not match the byte model.** We price
+    attention KV continuously plus one recurrent state per session; vLLM's hybrid
+    (attention + GDN) cache unifies page sizes, may pad recurrent state to
+    attention-page granularity, uses larger blocks (and only caches *full* blocks
+    for prefix reuse), and hybrid-model prefix caching + MTP is still maturing.
+    Allocator granularity could move 35B-A3B capacity more than the ±10% dtype
+    sensitivity — this is the single biggest reason to re-anchor on the real model.
+14. **Warm capacity is a packing limit, not a sustainable population.** The fill
+    leaves no headroom for the *next* turn: sessions grow turn over turn, active
+    decodes append KV, and a full pool answers growth with eviction or preemption.
+    A sustainable population sits meaningfully below the packing numbers quoted
+    here; a session-growth trace replay would bound the gap.
+15. **Global prefix sharing is an optimistic default.** The model stores one user
+    prefix for the whole cache; per-tenant prompts, template versioning, or cache
+    salts (deliberate isolation) split it into many equivalence classes. A rough
+    no-global-dedup proxy costs ~200 sessions on TP2. The sharing/isolation domain
+    is a policy decision, not a modelling detail.
 
 ## Reproducibility
 

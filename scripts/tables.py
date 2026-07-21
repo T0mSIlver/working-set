@@ -104,12 +104,12 @@ def main():
             model, topo = MODELS[mk], TOPOLOGIES[tk]
             # n_iter matches the warm-capacity table so both quote the same p50
             p5, warm, _ = M.warm_capacity(model, topo, w0, n_iter=1500)
-            warm_u = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")[1]
+            u5, u50, _ = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")
             _, v_at_warm, _, _ = M.decode_curves(model, topo, w0, [int(warm)], n_iter=1000)
             m40 = max_mns_at_floor(model, topo, w0, 40)
             per_cache = " (per replica)" if topo.kind == "dp" else ""
             print(f"  {mk:7} {tk:12} warm p5={p5:4.0f} p50={warm:4.0f} "
-                  f"(user {warm_u:4.0f}){per_cache}  "
+                  f"(user p5={u5:4.0f} p50={u50:4.0f}){per_cache}  "
                   f"v@warm={v_at_warm[0]:5.0f} tok/s  mns@40={m40:3d}")
 
     print("\n== Scaling to N x H200 (35B-A3B, FP8) ==")
@@ -164,6 +164,27 @@ def main():
         a = M.kv_pool_tokens(m, TOPOLOGIES[tk])
         b = M.kv_pool_tokens(m_ovh, TOPOLOGIES[tk])
         print(f"  {tk:12} raw={a / 1e6:.2f}M  +15%={b / 1e6:.2f}M  ({(b / a - 1) * 100:+.1f}%)")
+
+    print("\n== Structural-uncertainty stack (35B-A3B, TP2, warm p5) ==")
+    print("  MC sampling spread (p50->p5 ~ 46 sessions) is SMALL next to structural")
+    print("  unknowns. Stacking plausible adverse assumptions bounds the downside:")
+    print("  anchor at 2x the measured FP16 LOWER bound (2.278M), fp32 recurrent")
+    print("  state, +15% deployed-weight overhead, 10% invalidation.")
+    base_p5 = M.warm_capacity(m, TOPOLOGIES["2xH200-TP2"], w0, n_iter=1500)[0]
+    saved_anchor, saved_reserve = M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE
+    try:
+        M.BASELINE_POOL_TOKENS_27B_1GPU = 2 * 1.139e6
+        M.ACT_RESERVE = M._act_reserve()
+        m_stack = dataclasses.replace(m, deltanet_state=m.deltanet_state * 2,
+                                      w_resident=m.w_resident * 1.15)
+        w_stack = wl(invalidation=0.10)
+        s5 = M.warm_capacity(m_stack, TOPOLOGIES["2xH200-TP2"], w_stack, n_iter=1500)[0]
+        s5u = M.warm_capacity(m_stack, TOPOLOGIES["2xH200-TP2"], w_stack, n_iter=1500,
+                              which="user")[0]
+    finally:
+        M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE = saved_anchor, saved_reserve
+    print(f"  central p5 = {base_p5:.0f}   stacked-conservative p5 = {s5:.0f} "
+          f"(user-class {s5u:.0f})   downside = {base_p5 - s5:.0f} sessions")
 
 
 if __name__ == "__main__":
