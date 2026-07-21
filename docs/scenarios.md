@@ -129,6 +129,31 @@ KV/token is **3.2× smaller** than the 27B's because only 10 of its 40 layers ho
 growing KV cache. Provenance and full arithmetic:
 [`research/model_35ba3b.md`](../research/model_35ba3b.md).
 
+### KV-cache dtype switch (FP8 default / FP16)
+
+Every number in this study assumes the **FP8 KV cache** (`--kv-cache-dtype
+fp8_e4m3`), as tested in the baseline. The model exposes a switch
+(`with_kv_dtype(model, "fp16")` in Python; a Model-panel toggle in the explorer)
+that doubles KV bytes/token — halving the pool and adding decode read cost —
+while weights, the DeltaNet state, and the FP8-anchored reserve calibration stay
+fixed. Cross-check: the FP16 27B/1×H200 pool comes out at **1.39M tokens**, inside
+the baseline's *measured* FP16 interval [1.14M, 1.40M] — the FP16 path reproduces
+the original measurement without any new fitting. Reference-workload numbers
+under FP16 (from `tables.py`):
+
+| FP16 KV | pool | warm p50 (user) | per-user p50 @ mns 64 |
+| --- | --- | --- | --- |
+| 27B, 1×H200 | 1.39M | 49 (45) | 39 tok/s |
+| 27B, TP2 | 3.24M | 116 (105) | 71 tok/s |
+| 35B-A3B, 1×H200 | 4.21M | 148 (134) | 90 tok/s |
+| 35B-A3B, TP2 | 10.15M | 358 (326) | 162 tok/s |
+
+Warm capacity retains slightly *more* than half its FP8 value (the per-session
+state charge is dtype-independent, so it shrinks in token-equivalents as KV bytes
+grow). Note the 27B on one GPU drops below the 40 tok/s comfort floor at mns 64
+under FP16 — the quantitative version of the baseline's "FP8 KV doubles P"
+recommendation.
+
 Reference workload for all static figures: users ~ log-normal(median 31k, σ 0.81)
 behind a **15k** system prompt; subagents ~ log-normal(median 8k, σ 0.9) behind a
 leaner **3k** separate prefix; **1 subagent per 10 requests** (r = 0.1); **f = 1%**
