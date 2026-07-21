@@ -102,8 +102,9 @@ def main():
     for mk in MODELS_K:
         for tk in TOPOS_K:
             model, topo = MODELS[mk], TOPOLOGIES[tk]
-            warm = M.warm_capacity(model, topo, w0, n_iter=800)[1]
-            warm_u = M.warm_capacity(model, topo, w0, n_iter=800, which="user")[1]
+            # n_iter matches the warm-capacity table so both quote the same p50
+            warm = M.warm_capacity(model, topo, w0, n_iter=1500)[1]
+            warm_u = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")[1]
             _, v_at_warm, _, _ = M.decode_curves(model, topo, w0, [int(warm)], n_iter=1000)
             m40 = max_mns_at_floor(model, topo, w0, 40)
             per_cache = " (per replica)" if topo.kind == "dp" else ""

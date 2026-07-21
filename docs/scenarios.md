@@ -34,7 +34,7 @@ Model refinements over the first draft of this study (each moves numbers by 10�
 2. **Recurrent state is charged to the pool.** A warm hit on a hybrid model needs the
    constant Gated-DeltaNet state, not just the attention KV, so every resident session
    is charged `state / kv_bpt` token-equivalents (2.4k for 27B, 3.3k for 35B-A3B).
-   The baseline scripts omitted this; it costs ~10–20% of warm capacity.
+   The baseline scripts omitted this; it costs ~11% of warm capacity.
 3. **Recurrent-state bandwidth in decode.** Each decode step reads *and writes* every
    active sequence's DeltaNet state (2 × state × n bytes). Negligible at the
    baseline's `max_num_seqs = 6` (<2% of step bytes), no longer negligible at 64+.
@@ -64,8 +64,8 @@ Stated up front, with predicted direction; outcomes are in [§ Outcomes](#outcom
 - **H5 — Subagents.** A short-prompt request class (median 8k vs 31k) raises the warm
   session *count* at equal pool, at the cost of one extra shared prefix block.
 - **H6 — Invalidation.** A fraction *f* of requests matching no cached KV reduces warm
-  capacity roughly linearly and caps the warm-hit rate at **1 − f**; below ~5% it is
-  second-order.
+  capacity near-linearly (≈ 1.5 × *f*) and caps the warm-hit rate at **1 − f**; at the
+  assumed 1% the capacity cost is ~1.5%.
 - **H7 — Binding constraint.** For this workload, **warm-cache capacity binds before
   decode bandwidth**: the number of users whose sessions fit warm in the pool is
   smaller than the number of concurrent decoders the bandwidth could carry at
@@ -161,10 +161,10 @@ sessions on 1×H200 (~2,780 on TP2) — but see the offload limitation: this is
 
 ![System-prompt sweep](../figures/scenario_sysprompt.png)
 
-Warm p50 at 3k → 15k → 30k shared prefix (35B-A3B): **209 → 280 → 399** (1×H200),
-**506 → 678 → 964** (TP2). The naïve "a 30k system prompt wastes cache" is
-**backwards for warm capacity** — the prefix is stored once and every session dedups
-against it.
+Warm p50 at a 3k → 15k → 30k *user* prefix (35B-A3B; the subagent prefix stays at
+its lean 3k throughout the sweep): **209 → 280 → 399** (1×H200), **506 → 678 → 964**
+(TP2). The naïve "a 30k system prompt wastes cache" is **backwards for warm
+capacity** — the prefix is stored once and every session dedups against it.
 
 The real cost is the **miss path**: every request that can't match the prefix (the
 invalidation fraction *f*, plus true cold starts) re-prefills the whole thing — an
@@ -190,9 +190,12 @@ The gap between the two union models peaks around the linear-saturation kink
 mns 64, +1% at 120), so the conservative bound is tight in the high-concurrency
 region where the capacity decisions are made. Because decode reads only ~3B active
 parameters, per-user speed stays above the 40 tok/s comfort floor to **mns ≈ 355**
-(1×H200) and **≈ 695** (TP2) — far beyond what the pool can hold warm (H7).
-**TP2 ≈ 1.8× per-user speed** at equal mns; **DP2 doubles aggregate** (16.2 vs
-14.6 ktok/s at mns 64, system-wide) but leaves per-user speed at the 1×H200 curve.
+(1×H200) and **≈ 695** (TP2) — beyond what the pool can hold warm in every config,
+though the TP2 margin is thin (678 warm vs 695; a few-percent shift in either number
+could flip its binding constraint, unlike the ~27% margin elsewhere) (H7).
+**TP2 ≈ 1.8× per-user speed** at equal mns; **DP2 has the highest system aggregate**
+(16.2 ktok/s at mns 64, vs TP2's 14.6 and 1×H200's 8.1 — i.e. 2× its own replica)
+but leaves per-user speed at the 1×H200 curve.
 
 ### 4. Subagents and cache invalidation (H5, H6)
 
@@ -218,19 +221,19 @@ excluded — a *user* corresponds to one user-class session in this model):
 
 | Config | Warm sessions (p50) | of which warm **users** | v@warm: p50 tok/s if *all* warm sessions decode at once | mns@40 (speed bound alone) |
 | --- | --- | --- | --- | --- |
-| 27B, 1×H200 | 94 | **85** | 48 | 118 |
+| 27B, 1×H200 | 94 | **86** | 48 | 118 |
 | 27B, TP2 | 222 | **202** | 41 | 228 |
-| 27B, DP2 | 2 × 94 (sticky) | **2 × 85** | 48 | 118 / replica |
-| 35B-A3B, 1×H200 | 279 | **254** | 49 | 355 |
-| 35B-A3B, TP2 | 677 | **615** | 41 | 695 |
-| 35B-A3B, DP2 | 2 × 279 (sticky) | **2 × 254** | 49 | 355 / replica |
+| 27B, DP2 | 2 × 94 (sticky) | **2 × 86** | 48 | 118 / replica |
+| 35B-A3B, 1×H200 | 280 | **255** | 49 | 355 |
+| 35B-A3B, TP2 | 678 | **616** | 41 | 695 |
+| 35B-A3B, DP2 | 2 × 280 (sticky) | **2 × 255** | 49 | 355 / replica |
 
 **In every configuration the cache binds first** (warm sessions < mns@40), and even
 in the worst case — every warm session decoding simultaneously — per-user p50 stays
 ≥ 41 tok/s. So for agentic coding on this hardware:
 
-- **Comfortable concurrent-user count ≈ warm *user* capacity**: ~85 (27B, 1×H200)
-  up to ~615 (35B-A3B, TP2) per node-pair, before CPU offload.
+- **Comfortable concurrent-user count ≈ warm *user* capacity**: ~86 (27B, 1×H200)
+  up to ~616 (35B-A3B, TP2) per node-pair, before CPU offload.
 - Real duty cycles < 100% don't raise these numbers — idle users still occupy cache.
   What raises them: CPU offload (600 GiB ≈ **2,400–2,800** warm 35B-A3B sessions —
   as *storage*; restore latency unmodelled), a bigger truly-shared prefix, or more
