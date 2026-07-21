@@ -7,12 +7,17 @@ trade off against per-user decode speed for agentic coding workloads.
 The full write-up — setup, method, results, and recommendations — is in
 **[docs/writeup.md](docs/writeup.md)**.
 
+> **Extended study:** [docs/scenarios.md](docs/scenarios.md) carries the same
+> methodology to **2×H200** (tensor- vs data-parallel), the **35B-A3B MoE** model,
+> **subagent** workloads, **system-prompt size**, and a **cache-invalidation** rate —
+> with an interactive explorer at [`interactive/index.html`](interactive/index.html).
+
 ## Key findings
 
 - vLLM 0.19.0 mis-reports the KV cache size (`352k tokens`) due to a
   [known bug](https://github.com/vllm-project/vllm/issues/37121). Direct
   measurement puts the true capacity **P in [1139k, 1399k] tokens** — enough
-  to hold the full KV of **4–5 full-length (140k) sequences**.
+  to hold the full KV of **4–5 max-length (262k) sequences**.
 - The reported `Maximum concurrency 5.1×` (≈1337k tokens) *does* land inside
   the measured interval, so that figure looks correct even though the token
   count printed next to it does not.
@@ -29,13 +34,21 @@ The full write-up — setup, method, results, and recommendations — is in
 ├── README.md                 # this file
 ├── requirements.txt
 ├── docs/
-│   └── writeup.md            # full experiment write-up
+│   ├── writeup.md            # baseline experiment write-up
+│   └── scenarios.md          # extended-scenario study (2xH200, MoE, subagents, …)
 ├── scripts/                  # figure-generating scripts (matplotlib, Agg)
-│   ├── warm_capacity.py      # synthetic capacity/concurrency projections (no data needed)
-│   ├── real_capacity.py      # real-data: clean → fit log-normal → MC warm-fill
-│   ├── real_mns.py           # real-data: max_num_seqs speed/throughput tradeoff
-│   └── warm_whisker.py       # real-data: warm capacity p5/p50/p95 whiskers
-├── figures/                  # generated figures used in the write-up
+│   ├── warm_capacity.py      # baseline: synthetic capacity/concurrency projections
+│   ├── real_capacity.py      # baseline: clean → fit log-normal → MC warm-fill
+│   ├── real_mns.py           # baseline: max_num_seqs speed/throughput tradeoff
+│   ├── warm_whisker.py       # baseline: warm capacity p5/p50/p95 whiskers
+│   ├── scenario_model.py     # extended study: shared capacity + decode model (+ self-checks)
+│   ├── scenarios.py          # extended study: renders the scenario figures
+│   └── tables.py             # extended study: regenerates every number in scenarios.md
+├── interactive/
+│   └── index.html            # self-contained interactive scenario explorer
+├── research/
+│   └── model_35ba3b.md       # cited architecture parameterization for 35B-A3B
+├── figures/                  # generated figures used in the write-ups
 └── data/                     # provider CSVs (not committed — see data/README.md)
 ```
 
@@ -71,3 +84,19 @@ DATA_DIR=/path/to/csvs OUT_DIR=/tmp/figs python scripts/real_mns.py
 
 The experimental result `figures/prefix_cache_sweep.png` comes from the live
 prompt-caching sweep (not one of these scripts).
+
+### Extended-scenario study
+
+```bash
+python scripts/scenario_model.py   # self-checks (calibration + published-config identities)
+python scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation .png
+python scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
+```
+
+`scripts/scenario_model.py` is the shared model (calibrated to the baseline's
+2.77M-token FP8 anchor — projected from the measured FP16 pool, see
+docs/scenarios.md limitations; 35B-A3B constants from the published
+Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`); `scripts/scenarios.py`
+renders the static figures; and `interactive/index.html` is a dependency-free page
+mirroring the same math with live sliders for the workload, model, and topology.
+See [docs/scenarios.md](docs/scenarios.md).
