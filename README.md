@@ -17,7 +17,7 @@ The full write-up — setup, method, results, and recommendations — is in
 - vLLM 0.19.0 mis-reports the KV cache size (`352k tokens`) due to a
   [known bug](https://github.com/vllm-project/vllm/issues/37121). Direct
   measurement puts the true capacity **P in [1139k, 1399k] tokens** — enough
-  to hold the full KV of **4–5 full-length (140k) sequences**.
+  to hold the full KV of **4–5 max-length (262k) sequences**.
 - The reported `Maximum concurrency 5.1×` (≈1337k tokens) *does* land inside
   the measured interval, so that figure looks correct even though the token
   count printed next to it does not.
@@ -93,8 +93,9 @@ python scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns
 python scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
 ```
 
-`scripts/scenario_model.py` is the shared model (calibrated to reproduce the
-baseline's measured 2.77M-token pool; 35B-A3B constants from the published
+`scripts/scenario_model.py` is the shared model (calibrated to the baseline's
+2.77M-token FP8 anchor — projected from the measured FP16 pool, see
+docs/scenarios.md limitations; 35B-A3B constants from the published
 Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`); `scripts/scenarios.py`
 renders the static figures; and `interactive/index.html` is a dependency-free page
 mirroring the same math with live sliders for the workload, model, and topology.
