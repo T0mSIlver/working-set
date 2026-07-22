@@ -34,10 +34,9 @@ math with live sliders.
 
 Model refinements over the first draft of this study (each moves numbers by 10–20%):
 
-1. **Real Qwen3.6-35B-A3B constants.** The first draft proxied the model with a scaled
-   Qwen3-Next-80B-A3B config; the published 35B-A3B config differs materially
-   (40 layers not 48, 10 full-attention layers not 12, 256 experts not 512, 8 routed
-   not 10, vocab 248,320 not 151,936). See
+1. **Real Qwen3.6-35B-A3B constants.** The first draft used provisional proxy
+   constants; the published 35B-A3B config differs materially (40 layers, 10
+   full-attention layers, 256 experts with 8 routed, vocab 248,320). See
    [`research/model_35ba3b.md`](../research/model_35ba3b.md) for the derivation —
    notably, the published config lands on ~35B total with **no interpolation**.
 2. **Recurrent state is charged to the pool.** A warm hit on a hybrid model needs the
@@ -130,13 +129,22 @@ per_user      = MTP · BW_eff / step_bytes(n)      aggregate = n · per_user · 
 | Expert-union saturation (linear) | — | n = 32 (= 256 experts / 8 per token) |
 | KV pool, 1×H200 | 2.77M tok (measured anchor) | **8.42M tok** |
 | KV pool, 2×H200 TP2 | 6.48M tok | **20.30M tok** |
-| MTP decode speedup | 1.7× | 1.7× |
+| MTP decode speedup | 1.7× (α ≈ 47% per-draft acceptance) | 1.7× (transplanted fit) |
 
 Both columns now come from **published configs** (the 27B's 64-layer / 16-full-attn /
 4-KV-head config reproduces the baseline's 32 KiB/token exactly). The 35B-A3B's
 KV/token is **3.2× smaller** than the 27B's because only 10 of its 40 layers hold a
 growing KV cache. Provenance and full arithmetic:
 [`research/model_35ba3b.md`](../research/model_35ba3b.md).
+
+**MTP speedup ⇔ acceptance.** The 1.7× figure is the base speedup derived from the
+baseline's measured fit. Under the MTP-2 accept-until-reject model (two draft
+tokens per forward pass), `speedup = 1 + α + α²` where **α is the per-draft
+acceptance rate**; 1.7× ⇔ **α ≈ 47%**. That α is the underlying quantity — the
+speedup is computed from it, and a measured 87% acceptance would give ≈ 2.6×.
+The explorer exposes the speedup as a continuous knob (1.0× = MTP off) and
+displays the implied α next to it; in Python, `mtp_speedup(alpha)` in
+`scenario_model.py` maps acceptance to speedup.
 
 ### KV-cache dtype switch (FP8 default / FP16)
 
@@ -149,8 +157,9 @@ fixed. Consistency check: the FP16 27B/1×H200 pool comes out at **1.39M tokens*
 inside the baseline's *measured* FP16 interval [1.14M, 1.40M]. Note this is
 **partially circular** (the FP8 anchor was built as ~2× the FP16 estimate, so
 halving it lands near the measurement largely by construction) — it confirms
-internal consistency, not the model. Reference-workload numbers under FP16
-(from `tables.py`):
+internal consistency, not the model. The TP2 measured cross-check below is
+*not* circular: nothing about TP2 was fitted. Reference-workload numbers under
+FP16 (from `tables.py`):
 
 | FP16 KV | pool | warm p50 (user) | per-user p50 @ mns 64 |
 | --- | --- | --- | --- |
@@ -165,10 +174,81 @@ grow). Note the 27B on one GPU drops below the 40 tok/s comfort floor at mns 64
 under FP16 — the quantitative version of the baseline's "FP8 KV doubles P"
 recommendation.
 
+### Measured cross-check: 27B on 2×H200 TP2, FP16 KV (2026-07-22)
+
+The exact configuration in the second row of the table above was brought up on
+real hardware (27B, FP8 weights, FP16 KV cache, `--tensor-parallel-size 2`,
+`max_seq_len` 184,320 = 180×1024). vLLM's startup log:
+
+```
+INFO vllm.v1.worker.gpu_worker    : Available KV cache memory: 110.59 GiB
+INFO vllm.v1.core.kv_cache_utils  : GPU KV cache size: 3,233,564 tokens
+INFO vllm.v1.core.kv_cache_utils  : Maximum concurrency for 184,320 tokens per request: 17.54x
+```
+
+Three consistency checks, all passing:
+
+1. **Pool size.** The model predicts a TP2 FP16 pool of **3.242M tokens**
+   (table above, rounded to 3.24M); vLLM reports **3,233,564** — a **−0.26%**
+   difference. Equivalently, run backwards, the log implies a per-GPU
+   non-KV overhead of ~18.2 GiB versus the calibrated 18.0 GiB reserve —
+   the anchor-derived calibration now has an *independent* measured
+   counterpart (the reserve was solved from the 1-GPU FP8 anchor; nothing
+   about TP2 or FP16 was fitted).
+2. **Internal arithmetic.** 3,233,564 / 184,320 = **17.54** exactly, matching
+   the printed concurrency — unlike the baseline's vLLM 0.19.0 log, whose
+   token count contradicted its own concurrency figure (the known
+   mis-reporting bug), this log is self-consistent.
+3. **Hybrid-allocator overhead.** The workers report 2 × 110.59 = 221.2 GiB
+   available, but 3,233,564 tokens × 64 KiB/token accounts for only
+   197.4 GiB of attention KV. The ~11% gap (23.8 GiB) is consistent with the
+   hybrid allocator carving Gated-DeltaNet state pages from the same pool —
+   directionally matching this study's separate per-session state charge —
+   but its sizing is internal to the allocator: at 75 MiB/session it would
+   cover ~320 sessions' states, far more than the 17 concurrent max-length
+   sequences, suggesting a pre-allocation (e.g. sized to `max_num_seqs` and
+   page granularity) rather than per-live-session accounting. The gap's
+   *existence* supports charging state separately; its *magnitude* is not
+   something this model predicts.
+
+Caveats: this is a *startup-log* figure, not a fill-probe measurement like the
+baseline's (no warm/cold sweep was run at this config), and it exercises the
+27B path — the 35B-A3B remains unmeasured. With those caveats it independently
+validates the ingredients the TP2 projections stack on the anchor: the
+weights-counted-once TP arithmetic, the FP16 KV doubling, and the reserve's
+*transferability* to a second GPU (the reserve's absolute magnitude is defined
+by the anchor, so a globally-wrong anchor would shift both numbers together —
+this check cannot catch that; only a direct FP8 re-measurement can).
+
 Reference workload for all static figures: users ~ log-normal(median 31k, σ 0.81)
 behind a **15k** system prompt; subagents ~ log-normal(median 8k, σ 0.9) behind a
-leaner **3k** separate prefix; **1 subagent per 10 requests** (r = 0.1); **f = 1%**
+leaner **3k** separate prefix; subagent ratio **r = 0.1**; **f = 1%**
 invalidation; 180k `max_seq_len` cap; lengths floored at their own prefix.
+
+**What σ means here.** σ is the log-normal *shape* parameter — the standard
+deviation of ln(length), not of the length itself. The user-class values
+(median 31k, σ 0.81) were obtained by a maximum-likelihood `lognorm.fit` on the
+baseline's cleaned empirical prompt lengths (1,850 real requests; see
+`scripts/real_capacity.py` and the fit overlay in the baseline write-up), so σ
+is measured, not assumed (the subagent σ 0.9 *is* assumed — no subagent trace
+exists yet). Read it as a multiplicative spread: ~68% of prompts land within
+×/÷ e^σ ≈ 2.25 of the median (roughly 14k–70k), the p95 prompt is
+e^(1.645·σ) ≈ 3.8× the median (~118k), and the *mean* sits e^(σ²/2) ≈ 1.39×
+above the median (~43k). That last ratio is why σ matters for capacity: warm
+capacity ≈ pool / E[unique tokens], and the mean — not the median — sets
+E[unique]. Raising σ at a fixed median fattens the tail of huge, pool-hogging
+sessions (partly clipped by the `max_seq_len` cap) and lowers the warm count
+even though the "typical" prompt is unchanged.
+
+**What the subagent ratio means.** `r` counts **subagent requests per user
+request**, so the subagent share of the sampled mixture is r/(1+r) — r = 0.1
+means 1 subagent request for every 10 user requests, i.e. ~9% of sessions;
+r = 1 means half the mix. Subagents draw from their own, much shorter
+log-normal and dedup against their own lean 3k prefix (unless the share-prefix
+toggle points them at the user prefix), which is why raising r *increases* the
+warm-session count: more, smaller sessions pack into the same pool — but each
+warm subagent session is worth less than a warm user session, which is why the
+decision table also reports the user-class-only count.
 
 ## Scenario results
 
@@ -238,7 +318,8 @@ but leaves per-user speed at the 1×H200 curve.
 
 ![Subagent ratio and invalidation](../figures/scenario_subagent_invalidation.png)
 
-**Subagents.** Warm p50 (35B-A3B, TP2) rises with the subagent ratio: **640 (r=0) →
+**Subagents.** Warm p50 (35B-A3B, TP2) rises with the subagent ratio (r =
+subagent requests per user request; mixture share r/(1+r)): **640 (r=0) →
 678 (r=0.1) → 802 (r=0.5) → 918 (r=1)** — shorter prompts pack more sessions, at the
 cost of one extra shared prefix block (toggleable off if subagents share the user
 prefix). Note these are *more, smaller* sessions: per-session value is lower.
@@ -285,8 +366,8 @@ as the cap approaches the median. The cost is real truncation of long agentic
 sessions; 180k remains the recommended balance.
 
 CPU offload (35B-A3B, 1×H200, warm p50): **280 (0) → 504 (64 GiB) → 728 (128) →
-1,178 (256) → 2,081 (512) → 3,873 (1,024 GiB)** — near-linear at ~1.75 sessions per
-GiB (one mean session ≈ unique-KV + state ≈ 0.57 GiB). Offload is *storage*:
+1,178 (256) → 2,081 (512) → 3,873 (1,024 GiB)** — near-linear at ~3.5 sessions per
+GiB (one mean session ≈ unique-KV + state ≈ 0.28 GiB). Offload is *storage*:
 restore latency over PCIe is not modelled, so treat offloaded warmth as a weaker
 tier than GPU-resident warmth.
 
@@ -349,9 +430,10 @@ user-class session in this model):
 
 **In every configuration the cache binds first** (warm sessions < mns@40), and even
 in the worst case — every warm session decoding simultaneously — per-user p50 stays
-≥ 41 tok/s. Note the TP2 margin is thin (632–678 warm vs 695), and the roofline is
-uncalibrated — a few-percent modelling error flips that binding constraint. So for
-agentic coding on this hardware:
+≥ 41 tok/s. Note the TP2 margin is thin (632–678 warm vs 695 — a ~2% gap at p50,
+~9% at the p5 planning column), and the roofline is uncalibrated — a modelling
+error of that order flips the binding constraint. So for agentic coding on this
+hardware:
 
 - **Comfortable concurrent-user count ≈ warm *user* capacity at p5** (same
   percentile as the planning column): ~69 (27B, 1×H200) up to ~574 (35B-A3B, TP2)
@@ -395,6 +477,9 @@ uncertainty are far larger than sampling spread. For the headline 35B-A3B TP2 ca
 + weight overhead + 10% invalidation) moves TP2 warm p5 from **632 to 403** (user
 class ~367) — a ~230-session structural downside against a 46-session p5-vs-p50
 cushion (regenerate: the "Structural-uncertainty stack" section of `tables.py`).
+Note the stack is smaller than the −277 sum of the one-at-a-time rows: the
+effects interact (each assumption shrinks the pool the next one acts on, so
+marginal costs shrink as the stack deepens).
 The whiskers in the figures show *packing variability*, not forecast confidence.
 Until one exact-configuration measurement re-anchors the model, purchasing-grade
 planning should either use a stacked-conservative scenario like the 403 figure or
@@ -403,7 +488,12 @@ apply an explicit structural haircut to the central p5.
 Related honesty note: the FP16-path "cross-check" (1.39M inside the measured
 FP16 interval) is **partially circular** — the FP8 anchor was constructed as
 roughly 2× the FP16 estimate, so halving it lands near the measurement largely by
-construction. It validates internal consistency, not the model.
+construction. It validates internal consistency, not the model. The **TP2 FP16
+startup-log cross-check** (3.23M measured vs 3.24M predicted, § Measured
+cross-check) is the first *non-circular* validation: it tests the reserve, the
+TP weight-sharding arithmetic and the FP16 doubling against a configuration
+nothing was fitted to — though it is a log-reported figure on the 27B, not a
+fill probe, and it says nothing about the 35B-A3B path.
 
 ## Planning stance (owner decisions, 2026-07-21)
 
@@ -427,8 +517,10 @@ Recorded so the numbers below are read the way they were decided:
    number excludes the immature serving paths — **no CPU offload, no MTP speedup,
    no N > 2 TP** — on top of the stacked-adverse structural case. The excluded
    upside stays fully explorable: the interactive explorer has switches for the
-   structural assumption set (Central/Conservative), MTP (on/off), offload
-   (0–1024 GiB) and GPU count, so every tradeoff is playable rather than hidden.
+   structural assumption set (Central/Conservative), an MTP-speedup knob
+   (1.0× = off, up to 3.0×, with the implied per-draft acceptance shown),
+   offload (0–1024 GiB) and GPU count, so every tradeoff is playable rather
+   than hidden.
 
 **Conservative purchasing view** (stacked structural case + immature paths off;
 regenerate via the "Structural-uncertainty stack" section of `tables.py`):
@@ -467,7 +559,11 @@ Ordered roughly by how much each could move the numbers:
    its measured P as "KV + DeltaNet states", while this study treats the anchor
    as pure KV and charges state separately — double-counting the ~5 measured
    sessions' states (~12k token-equivalents, ~0.4% of the pool; negligible but
-   worth removing when the anchor is re-measured).
+   worth removing when the anchor is re-measured). *Partial mitigation:* the
+   TP2 FP16 startup log (§ Measured cross-check) independently lands within
+   0.3% of the model's prediction, implying the anchor-derived reserve is
+   about right — but it shares the anchor's 27B lineage, so a direct FP8
+   and 35B-A3B measurement would still move the most.
 2. **No prefill/decode interference.** The decode model prices bandwidth only; chunked
    prefill of cold 100k+ prompts steals decode bandwidth and adds TTFT queueing not
    modelled here. At high invalidation or cold-start rates this is first-order.

@@ -6,11 +6,8 @@ as used by `scripts/scenario_model.py` and the interactive explorer.
 
 **Status: this is a real published model.** All structural numbers below are taken
 from the published `Qwen/Qwen3.6-35B-A3B-FP8` `config.json` (cross-checked against an
-independent architecture overview). An earlier revision of this note proxied the model
-with Qwen3-Next-80B-A3B because the 3.6 release had not been checked; that proxy is now
-retired — it disagreed with the real config on layer count (48 vs **40**), full-attention
-layers (12 vs **10**), expert count (512 vs **256**), active experts (10 vs **8**) and
-vocabulary (151,936 vs **248,320**).
+independent architecture overview): 40 layers (30 Gated-DeltaNet + **10** full-attention),
+**256** experts with **8** routed per token, and a **248,320**-entry vocabulary.
 
 > Egress note: `huggingface.co/.../config.json` is reachable through this environment's
 > web-fetch path (the raw `resolve/` URLs 403 through the proxy). Values were read from
@@ -113,8 +110,7 @@ MTP module (~1 layer: attn + MoE)                       ≈ 0.84e9
 TOTAL                                                   ≈ 35.5e9  ✓ "~35B"
 ```
 
-**The published 256-expert config lands on ~35B total with no interpolation** — unlike
-the retired 80B proxy, which needed a fictitious "218 experts" fit.
+**The published 256-expert config lands on ~35B total with no interpolation.**
 
 Grouped for the bandwidth model (FP8, bytes = params):
 
@@ -137,25 +133,16 @@ still.
 
 ---
 
-## 5. What changed vs the retired Qwen3-Next-80B proxy
-
-| Quantity | 80B proxy (old) | Real Qwen3.6-35B-A3B | Effect |
-|---|---|---|---|
-| KV bytes/token (FP8) | 12 KiB | **10 KiB** | pool +20% |
-| DeltaNet state | 72 MiB (fp32) | **31.9 MiB (bf16)** | cheaper offload + pool charge |
-| Resident FP8 weights | 32.6 GiB (218-expert fit) | **33.1 GiB** (published 256 experts) | ~equal |
-| w_decode_shared | 1.49e9 B | **1.94e9 B** (larger vocab lm_head, real DN arithmetic) | slightly slower |
-| w_route_pertok | 1.51e9 B | **1.007e9 B** (8×, not 10×) | faster |
-| Expert saturation | n ≈ 22 | **n = 32** | kink moves right |
-| Vocabulary | 151,936 | **248,320** | lm_head 509M |
-
-## 6. Remaining assumptions (everything not from the published config)
+## 5. Remaining assumptions (everything not from the published config)
 
 - **FP8 KV cache** (`--kv-cache-dtype fp8_e4m3`) — a serving choice, same as the baseline.
 - **bf16 DeltaNet state** — inferred from the 27B/75 MiB consistency check (Section 3),
   not read from vLLM source; fp32 would double it (sensitivity case).
-- **MTP decode speedup 1.7×** — kept equal to the baseline's measured-fit value; the
-  35B-A3B ships an MTP module but its acceptance rate on our workload is unmeasured.
+- **MTP decode speedup 1.7×** — kept equal to the baseline's measured-fit value,
+  which under the MTP-2 accept-until-reject model (`speedup = 1 + α + α²`, two
+  draft tokens) corresponds to a **per-draft acceptance α ≈ 47%**. The 35B-A3B
+  ships an MTP module but its acceptance rate on our workload is unmeasured
+  (a measured 87% acceptance would give ≈ 2.6×).
 - **MTP module weight reads during decode are ignored** (folded into the 1.7×), as in
   the baseline.
 - **DeltaNet per-layer minor params** (A, dt_bias, norms) rounded away; MTP module size
