@@ -92,8 +92,8 @@ def main():
         print(f"  f={f * 100:4.1f}%  {p50:5.0f}")
 
     print("\n== Serving-capacity planning table (conservative linear union) ==")
-    print("  warm      = reusable sessions cached between turns (p50, one cache)")
-    print("  warm_user = user-class sessions only (the 'distinct users kept warm' number)")
+    print("  warm p5   = THE planning number: sessions kept warm in >=95% of draws")
+    print("  warm p50  = median; warm_user = user-class sessions only (distinct users)")
     print("  v@warm    = per-user p50 tok/s if ALL warm sessions decode at once (100% duty)")
     print("  mns@40    = max concurrent decoders at >=40 tok/s p50 (speed bound alone)")
     print("  -> the binding constraint is min(warm, mns@40); duty<100% relaxes only mns@40")
@@ -103,13 +103,39 @@ def main():
         for tk in TOPOS_K:
             model, topo = MODELS[mk], TOPOLOGIES[tk]
             # n_iter matches the warm-capacity table so both quote the same p50
-            warm = M.warm_capacity(model, topo, w0, n_iter=1500)[1]
-            warm_u = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")[1]
+            p5, warm, _ = M.warm_capacity(model, topo, w0, n_iter=1500)
+            u5, u50, _ = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")
             _, v_at_warm, _, _ = M.decode_curves(model, topo, w0, [int(warm)], n_iter=1000)
             m40 = max_mns_at_floor(model, topo, w0, 40)
             per_cache = " (per replica)" if topo.kind == "dp" else ""
-            print(f"  {mk:7} {tk:12} warm={warm:4.0f} (user {warm_u:4.0f}){per_cache}  "
+            print(f"  {mk:7} {tk:12} warm p5={p5:4.0f} p50={warm:4.0f} "
+                  f"(user p5={u5:4.0f} p50={u50:4.0f}){per_cache}  "
                   f"v@warm={v_at_warm[0]:5.0f} tok/s  mns@40={m40:3d}")
+
+    print("\n== Scaling to N x H200 (35B-A3B, FP8) ==")
+    print("  TP: one engine, ONE shared cache | DP: N replicas, cache splits (sticky routing)")
+    print("  warm p5 = the planning number (95% of draws hold at least this many)")
+    for n in (1, 2, 4, 8):
+        row = []
+        for kind in ("tp", "dp"):
+            t = M.topology(kind, n)
+            p5, p50, _ = M.warm_capacity(MODELS["35BA3B"], t, w0, n_iter=max(200, 1500 // n), draw=2000 + 1500 * n)
+            sys_p5 = p5 * t.replicas
+            row.append(f"{kind.upper()}: cache p5={p5:5.0f} system p5={sys_p5:5.0f} (p50 {p50:.0f})")
+        print(f"  N={n}  " + "  |  ".join(row))
+
+    print("\n== max_seq_len cap sweep (35B-A3B, TP2, warm p5/p50) ==")
+    print("  lower cap truncates the log-normal tail -> smaller worst-case sessions")
+    for cap in (60_000, 120_000, 180_000, 262_144):
+        p5, p50, _ = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["2xH200-TP2"],
+                                     wl(cap=cap), n_iter=1200)
+        print(f"  cap={cap // 1000:3d}k  {p5:5.0f} / {p50:5.0f}")
+
+    print("\n== CPU offload sweep (35B-A3B, 1xH200, warm p50) ==")
+    for gib in (0, 64, 128, 256, 512, 1024):
+        p50 = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["1xH200"], w0,
+                              ram_gib=gib, n_iter=300, draw=16_000)[1]
+        print(f"  {gib:4d} GiB  {p50:5.0f}")
 
     print("\n== KV dtype switch: FP16 KV cache (default everywhere else: FP8) ==")
     print("  pool halves; warm capacity falls slightly less (state charge is dtype-independent)")
@@ -138,6 +164,32 @@ def main():
         a = M.kv_pool_tokens(m, TOPOLOGIES[tk])
         b = M.kv_pool_tokens(m_ovh, TOPOLOGIES[tk])
         print(f"  {tk:12} raw={a / 1e6:.2f}M  +15%={b / 1e6:.2f}M  ({(b / a - 1) * 100:+.1f}%)")
+
+    print("\n== Structural-uncertainty stack (35B-A3B, warm p5) ==")
+    print("  MC sampling spread (p50->p5 ~ 46 sessions) is SMALL next to structural")
+    print("  unknowns. Stacking plausible adverse assumptions bounds the downside:")
+    print("  anchor at 2x the measured FP16 LOWER bound (2.278M), fp32 recurrent")
+    print("  state, +15% deployed-weight overhead, 10% invalidation.")
+    base_p5 = M.warm_capacity(m, TOPOLOGIES["2xH200-TP2"], w0, n_iter=1500)[0]
+    saved_anchor, saved_reserve = M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE
+    try:
+        M.BASELINE_POOL_TOKENS_27B_1GPU = 2 * 1.139e6
+        M.ACT_RESERVE = M._act_reserve()
+        m_stack = dataclasses.replace(m, deltanet_state=m.deltanet_state * 2,
+                                      w_resident=m.w_resident * 1.15)
+        w_stack = wl(invalidation=0.10)
+        m_nomtp = dataclasses.replace(m_stack, mtp=1.0)   # MTP = immature path, excluded
+        for tk in ["1xH200", "2xH200-TP2"]:
+            s5, s50, _ = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500)
+            s5u = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500,
+                                  which="user")[0]
+            _, v, _, _ = M.decode_curves(m_nomtp, TOPOLOGIES[tk], w_stack, [int(s5)],
+                                         n_iter=800)
+            print(f"  {tk:12} stacked p5={s5:4.0f} p50={s50:4.0f} (user p5 {s5u:4.0f})  "
+                  f"v@p5warm MTP-off={v[0]:3.0f} tok/s")
+    finally:
+        M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE = saved_anchor, saved_reserve
+    print(f"  (central TP2 p5 = {base_p5:.0f}; stacked downside ~{base_p5 - 403:.0f} sessions)")
 
 
 if __name__ == "__main__":

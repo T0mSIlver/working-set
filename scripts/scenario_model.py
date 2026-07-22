@@ -154,19 +154,56 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
 
 
 # ============================================================================
-# TOPOLOGY
+# TOPOLOGY  — arbitrary numbers of H200s, tensor- or data-parallel
 # ============================================================================
 @dataclass
 class Topology:
     name: str
     n_gpu: int
     kind: str            # "single" | "tp" | "dp"
-    replicas: int        # independent KV caches (1 for single/tp, 2 for dp2)
+    replicas: int        # independent KV caches (1 for single/tp, n for dp)
 
+
+def topology(kind: str, n_gpu: int) -> Topology:
+    """Build a topology for `n_gpu` H200s.
+
+    kind="tp" : ONE engine — weights sharded (stored once), ONE shared prefix
+                cache, bandwidth = n x HBM x tp_efficiency(n).
+    kind="dp" : n independent 1-GPU replicas — aggregate serving scales by n,
+                but the prefix cache SPLITS (system-wide warm capacity is
+                n x per-replica, and only with session-sticky routing).
+    n_gpu=1 collapses both to the single-GPU baseline.
+    """
+    if n_gpu < 1 or int(n_gpu) != n_gpu:
+        raise ValueError(f"n_gpu must be a positive integer, got {n_gpu!r}")
+    n_gpu = int(n_gpu)
+    if n_gpu == 1:
+        return Topology("1xH200", 1, "single", 1)
+    if kind == "tp":
+        return Topology(f"{n_gpu}xH200 tensor-par", n_gpu, "tp", 1)
+    if kind == "dp":
+        return Topology(f"{n_gpu}xH200 data-par", n_gpu, "dp", n_gpu)
+    raise ValueError(f"kind must be 'tp' or 'dp', got {kind!r}")
+
+
+def tp_efficiency(n_gpu: int) -> float:
+    """Aggregate-bandwidth efficiency of TP over n GPUs.
+
+    ASSUMPTION: the baseline's 0.90 haircut is applied PER DOUBLING
+    (0.90^log2(n)): TP2 -> 0.90 (the original assumption, unchanged),
+    TP4 -> 0.81, TP8 -> 0.73. Real efficiency depends on interconnect and
+    kernel overlap; treat >2 GPUs as a projection needing measurement.
+    """
+    if n_gpu <= 1:
+        return 1.0
+    return TP_EFFICIENCY ** np.log2(n_gpu)
+
+
+# legacy named topologies (the baseline study's three configurations)
 TOPOLOGIES = {
-    "1xH200":     Topology("1xH200",              1, "single", 1),
-    "2xH200-TP2": Topology("2xH200 tensor-par",   2, "tp",     1),
-    "2xH200-DP2": Topology("2xH200 data-par",     2, "dp",     2),
+    "1xH200":     topology("tp", 1),
+    "2xH200-TP2": topology("tp", 2),
+    "2xH200-DP2": topology("dp", 2),
 }
 
 
@@ -183,8 +220,8 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     """KV-cache capacity of ONE cache (tokens), from the transparent memory model.
 
     single : VRAM - weights - reserve
-    tp     : both GPUs act as one engine; weights sharded (counted once),
-             reserve per GPU -> pool roughly (2*VRAM - weights - 2*reserve)
+    tp     : n GPUs act as one engine; weights sharded (counted once),
+             reserve per GPU -> pool = (n*VRAM - weights - n*reserve)
     dp     : each replica is a 1xH200 engine; this returns the PER-REPLICA pool
     """
     if topo.kind == "tp":
@@ -197,7 +234,7 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
 def effective_bw(topo: Topology) -> float:
     """Effective decode bandwidth seen by ONE engine/replica."""
     if topo.kind == "tp":
-        return topo.n_gpu * HBM_BW * TP_EFFICIENCY
+        return topo.n_gpu * HBM_BW * tp_efficiency(topo.n_gpu)
     return HBM_BW  # single, or per-replica of dp
 
 
@@ -303,6 +340,10 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 
     which="all" counts every reusable session; which="user" counts only
     user-class sessions (the 'distinct users kept warm' planning number).
+
+    ram_gib is the CPU-offload buffer available to THIS cache. A DP deployment
+    shares the host buffer across its replicas, so DP callers must pass
+    system_ram / topo.replicas (the explorer does this via ramPerCache()).
     """
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)
@@ -393,6 +434,23 @@ def _selfcheck():
     _, p16, _, _ = decode_curves(with_kv_dtype(m35, "fp16"), t1, wl, [64], n_iter=300)
     _, p8, _, _ = decode_curves(m35, t1, wl, [64], n_iter=300)
     assert p16[0] < p8[0], "FP16 KV must decode slower (double KV read)"
+
+    # arbitrary-N topologies: TP2 matches the legacy constants; pools grow
+    # monotonically with n; DP keeps the per-replica pool at the 1-GPU value
+    assert abs(tp_efficiency(2) - TP_EFFICIENCY) < 1e-12
+    assert tp_efficiency(1) == 1.0 and tp_efficiency(8) < tp_efficiency(4) < tp_efficiency(2)
+    assert topology("tp", 2) == TOPOLOGIES["2xH200-TP2"]
+    pools = [kv_pool_tokens(m35, topology("tp", n)) for n in (1, 2, 4, 8)]
+    assert pools == sorted(pools) and pools[0] < pools[-1]
+    for n in (2, 4, 8):
+        dp = topology("dp", n)
+        assert dp.replicas == n
+        assert abs(kv_pool_tokens(m35, dp) - kv_pool_tokens(m35, t1)) < 1
+    for bad in (0, -1, 1.5):
+        try:
+            topology("tp", bad); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
 
     # warm capacity sanity: pool grows => capacity grows
     lo = warm_capacity(m35, t1, wl, n_iter=120)[1]
