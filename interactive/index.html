@@ -187,8 +187,9 @@ svg text{fill:var(--text-2)}
         <li><b>DP (data-parallel, any N)</b> keeps N per-replica caches. Aggregate throughput scales ~N×, but a returning user is only <em>warm on their home replica</em> (sticky routing), and a shared CPU-offload buffer splits N ways.</li>
         <li><b>Monte-Carlo jitter:</b> every render redraws the workload, so repeated runs (and neighbouring slider positions) can differ by a few sessions — that is sampling noise, not a real effect. The Python sweeps in <code>tables.py</code> use a fixed seed instead and are smooth. Real non-linearities (the expert-union kink at n=32, the cap's tail-truncation, the prefix floor) are explained in docs/scenarios.md.</li>
         <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts. The explorer uses the conservative no-overlap union bound (docs also show the optimistic expected-union bracket).</li>
-        <li><b>Structural assumptions &amp; MTP switches:</b> "Conservative" applies the stacked-adverse case from the docs (low anchor, fp32 state, +15% weights — add 10% invalidation manually for the full 403-session TP2 case); the MTP toggle shows what the immature speculative-decode path buys. The purchasing base excludes MTP, CPU offload and N&gt;2 TP; these controls exist so that headroom stays visible, not hidden.</li>
+        <li><b>Structural assumptions &amp; MTP knob:</b> "Conservative" applies the stacked-adverse case from the docs (low anchor, fp32 state, +15% weights — add 10% invalidation manually for the full 403-session TP2 case); the MTP slider sets the speculative-decode speedup (1.0× = off) and shows the implied per-draft acceptance α it is computed from (speedup = 1 + α + α²; 1.7× ⇔ α ≈ 47%, the measured fit). The purchasing base excludes MTP, CPU offload and N&gt;2 TP; these controls exist so that headroom stays visible, not hidden.</li>
         <li><b>KV dtype:</b> all constants assume the FP8 KV cache (<code>--kv-cache-dtype fp8_e4m3</code>), as tested in the baseline. The FP16 switch doubles KV bytes/token (half the pool, heavier decode reads); weights and the DeltaNet state are unaffected, and the activation-reserve calibration stays pinned to the FP8 anchor. Sanity: FP16 + 27B + 1×H200 gives a 1.39M-token pool, inside the baseline's measured [1.14M, 1.40M].</li>
+        <li><b>Measured cross-check (2026-07-22):</b> a real 27B + FP16-KV + TP2 bring-up reported <span class="tnum">3,233,564</span> KV tokens at startup (110.59 GiB per worker; 17.54× concurrency at 184,320 tokens) — within 0.3% of this model's 3.24M prediction, with nothing about TP2 or FP16 fitted. First non-circular validation of the reserve + TP arithmetic + FP16 doubling; see docs/scenarios.md § Measured cross-check.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
         <li><span class="prov">Note:</span> the 35B-A3B constants come from the <b>published Qwen3.6-35B-A3B config</b> (40 layers: 30 DeltaNet + 10 full-attention, 2 KV heads × 256, 256 experts / 8 routed) &mdash; derivations in <code>research/model_35ba3b.md</code>. Edit the <code>CONFIG</code> block to revise.</li>
@@ -225,11 +226,9 @@ svg text{fill:var(--text-2)}
           <div class="hint" id="assume-hint" style="display:none">Stacked-adverse constants active. Set invalidation to 10% to reproduce the docs' 403-session TP2 case.</div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Multi-Token Prediction speculative decoding (~1.7× decode speedup, transplanted from the 27B's fit). MTP together with hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps it OFF; toggle it on to see the headroom it would buy.">MTP speculative decode</span></label>
-          <div class="seg" id="seg-mtp" data-key="mtp">
-            <button data-v="on" aria-pressed="true">On · 1.7×</button>
-            <button data-v="off" aria-pressed="false">Off · 1.0×</button>
-          </div>
+          <label class="flabel"><span class="tip" data-tip="Multi-Token Prediction speculative decoding. The base quantity is the per-draft acceptance α (with 2 draft tokens, speedup = 1 + α + α²) — shown under the slider. 1.7× is the 27B's measured fit (α ≈ 47%); a measured 87% acceptance would be ≈ 2.6×. MTP + hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps this at 1.0× (off).">MTP decode speedup</span> <span class="val"><span id="v-mtp">1.70</span>×</span></label>
+          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
+          <div class="hint" id="mtp-accept"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="How many H200s the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas.">H200 GPUs</span> <span class="val"><span id="v-ngpu">1</span>×</span></label>
@@ -259,7 +258,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-user_median" min="5" max="120" step="1" value="31">
         </div>
         <div class="field">
-          <label class="flabel">User prompt sigma <span class="val" id="v-user_sigma">0.81</span></label>
+          <label class="flabel"><span class="tip" data-tip="Log-normal shape parameter — the std-dev of ln(length), a MULTIPLICATIVE spread. Fitted by maximum likelihood on 1,850 real request lengths (σ = 0.81): ~68% of prompts within ×/÷ e^σ ≈ 2.3 of the median, p95 ≈ 3.8× the median, mean ≈ 1.39× the median. The mean (not the median) drives warm capacity, so higher σ = fatter tail of huge pool-hogging sessions = fewer warm.">User prompt sigma</span> <span class="val" id="v-user_sigma">0.81</span></label>
           <input type="range" id="s-user_sigma" min="0.30" max="1.40" step="0.01" value="0.81">
         </div>
         <div class="field">
@@ -267,14 +266,14 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-sub_median" min="1" max="60" step="1" value="8">
         </div>
         <div class="field">
-          <label class="flabel">Subagent prompt sigma <span class="val" id="v-sub_sigma">0.90</span></label>
+          <label class="flabel"><span class="tip" data-tip="Same log-normal shape parameter for the subagent class — assumed 0.90, not fitted (no subagent trace has been collected yet).">Subagent prompt sigma</span> <span class="val" id="v-sub_sigma">0.90</span></label>
           <input type="range" id="s-sub_sigma" min="0.30" max="1.40" step="0.01" value="0.90">
         </div>
       </div>
 
       <div class="ctl-group">
         <div class="field">
-          <label class="flabel">Subagent ratio <span class="val" id="v-sub_ratio">0.10 · 1 per 10</span></label>
+          <label class="flabel"><span class="tip" data-tip="Subagent requests per USER request. r = 0.10 means 1 subagent request per 10 user requests, so subagents make up r/(1+r) ≈ 9% of sampled sessions (r = 1 → half the mix). Subagents draw much shorter prompts behind their own lean 3k prefix, so raising r packs more — but smaller, lower-value — sessions warm; the user-count readout excludes them.">Subagent ratio</span> <span class="val" id="v-sub_ratio">0.10 · 1 per 10</span></label>
           <input type="range" id="s-sub_ratio" min="0" max="1.0" step="0.05" value="0.10">
         </div>
         <div class="field" style="margin-top:2px">
@@ -458,6 +457,10 @@ function effective_bw(topo){
   console.assert(approx(p1, 2.770e6, 0.001), "27B/1xH200 pool ~2.770e6, got "+p1.toExponential(4));
   console.assert(approx(p2, 6.484e6, 0.001), "27B/TP2 pool ~6.484e6, got "+p2.toExponential(4));
   console.assert(approx(p3, 8.417e6, 0.001), "35BA3B/1xH200 pool ~8.417e6, got "+p3.toExponential(4));
+  // measured cross-check: 27B + FP16 KV + TP2 reported 3,233,564 tokens (vLLM startup log)
+  const m27fp16 = { ...CONFIG.MODELS["27B"], kv_bpt: CONFIG.MODELS["27B"].kv_bpt*2 };
+  const pMeas = kv_pool_tokens(m27fp16, CONFIG.TOPOLOGIES["2xH200-TP2"]);
+  console.assert(approx(pMeas, 3233564, 0.01), "27B/TP2/FP16 pool should match measured 3,233,564, got "+pMeas.toExponential(4));
   // published-config identities (mirror scenario_model.py _selfcheck)
   const m35 = CONFIG.MODELS["35BA3B"];
   console.assert(m35.kv_bpt === 10*2*256*2*1, "35BA3B kv_bpt = 10 KiB/token");
@@ -606,7 +609,7 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
    ========================================================================== */
 const state = {
   model: "27B", ngpu: 1, par: "tp", ram: 0, kv: "fp8", cap: 180,
-  assume: "central", mtp: "on",
+  assume: "central", mtp: 1.7,
   user_median: 31, user_sigma: 0.81,
   sub_median: 8, sub_sigma: 0.90,
   sub_ratio: 0.10, sub_shares_prefix: false,
@@ -902,8 +905,8 @@ function removeCross(svg){ const e=svg.querySelector('.xcross'); if(e) e.remove(
    ========================================================================== */
 let lastDC=null, lastWarmCur=null, lastWarmAll=null;
 
-// active model with the KV-dtype, structural-assumption and MTP switches
-// applied. FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py). The
+// active model with the KV-dtype, structural-assumption and MTP-speedup
+// knobs applied. FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py). The
 // "conservative" structural set = stacked-adverse case from docs/scenarios.md:
 // fp32 DeltaNet state (2x), +15% deployed-weight overhead (35B-A3B only —
 // the 27B's 28.8 GiB is already an as-deployed figure), and a low calibration
@@ -915,7 +918,7 @@ function activeModel(){
     m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [conservative]" };
     if (state.model === "35BA3B") m = { ...m, w_resident: m.w_resident*1.15 };
   }
-  if (state.mtp === "off") m = { ...m, mtp: 1.0 };
+  m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
   return m;
 }
 
@@ -1050,6 +1053,7 @@ document.querySelectorAll('.seg').forEach(seg=>{
 // sliders
 const sliderMap=[
   ['s-ngpu','ngpu',v=>parseInt(v,10)],
+  ['s-mtp','mtp',v=>parseFloat(v)],
   ['s-ram','ram',v=>parseInt(v,10)],
   ['s-cap','cap',v=>parseInt(v,10)],
   ['s-user_median','user_median',v=>parseFloat(v)],
@@ -1070,6 +1074,13 @@ document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
 
 function syncLabels(){
   document.getElementById('v-ngpu').textContent=fmt(state.ngpu,0);
+  document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);
+  // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
+  // per-draft acceptance — the base quantity the speedup is computed from
+  const acc = state.mtp<=1 ? 0 : (Math.sqrt(4*state.mtp-3)-1)/2;
+  document.getElementById('mtp-accept').textContent =
+    state.mtp<=1 ? 'MTP off — implied per-draft acceptance α = 0%.'
+    : `Implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}% (speedup = 1 + α + α², 2 draft tokens; the 1.7× measured fit ⇔ 47%).`;
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
   document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
@@ -1078,7 +1089,7 @@ function syncLabels(){
   document.getElementById('v-sub_median').textContent=fmt(state.sub_median,0);
   document.getElementById('v-sub_sigma').textContent=state.sub_sigma.toFixed(2);
   const r=state.sub_ratio;
-  const perTxt = r>0 ? ` · 1 per ${fmt(1/r,0)}` : ' · none';
+  const perTxt = r>0 ? ` · 1 per ${fmt(1/r,0)} · ${fmt(100*r/(1+r),0)}% of mix` : ' · none';
   document.getElementById('v-sub_ratio').textContent=r.toFixed(2)+perTxt;
   document.getElementById('v-sys').textContent=fmt(state.sys,0);
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);

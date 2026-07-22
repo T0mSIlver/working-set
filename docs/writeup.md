@@ -45,13 +45,13 @@
 ## **Projections:**
 
 ### **Supplementary hypotheses**
-- MTP2 speeds up decode by 70% so about 47% per-draft acceptance (conservative compared to Quentin's tests at 87%).
+- MTP2 speeds up decode by 70% so about 47% per-draft acceptance (conservative compared to Quentin's tests at 87%). The relation: with 2 draft tokens accepted until first rejection, `speedup = 1 + α + α²`, so 1.7× ⇔ α ≈ 0.47 (87% acceptance would give ≈ 2.6×).
 
 ### **FP8 quantization:**
 - FP8 KV `--kv-cache-dtype fp8_e4m3` -> 2 x P with minimal performance impact [as reported by vLLM](https://vllm.ai/blog/2026-04-22-fp8-kvcache)
 
 ### **Distribution of prompt length:**
-- Monte-Carlo simulation of the prompt pool fill: two distributions were used for capcity calculations sampling. Bootstrapping from my own personal data (1188 responses from watsonX and 662 responses from IGP, mainly collected through my usage of coding agents), and parametric sampling from a log-normal distribution fitted to the real data (median=31k, std. dev.=0.81).
+- Monte-Carlo simulation of the prompt pool fill: two distributions were used for capcity calculations sampling. Bootstrapping from my own personal data (1188 responses from watsonX and 662 responses from IGP, mainly collected through my usage of coding agents), and parametric sampling from a log-normal distribution fitted to the real data by maximum likelihood (`scipy.stats.lognorm.fit`, `scripts/real_capacity.py`): median = 31k, σ = 0.81 — where σ is the log-normal *shape* parameter (the standard deviation of ln(length), a multiplicative spread of ×/÷ e^0.81 ≈ 2.25 around the median), not the standard deviation of the lengths themselves.
 ![Distribution](../figures/real_dist_fit.png)
 
 ### **`max_num_seqs` scaling**

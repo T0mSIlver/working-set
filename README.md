@@ -24,6 +24,10 @@ The full write-up — setup, method, results, and recommendations — is in
 - Lowering `max_seq_len` to 180k, enabling FP8 KV cache, and CPU/RAM offload
   each expand how many sessions can be kept warm; sharing a stable prefix
   across agent turns is the biggest production win.
+- A 2×H200 tensor-parallel bring-up of the 27B (FP8 weights, FP16 KV) reported
+  **3,233,564** KV-cache tokens at startup — within 0.3% of the extended
+  model's prediction, its first non-circular validation (see
+  [docs/scenarios.md](docs/scenarios.md), § Measured cross-check).
 
 ![Cache hit-rate sweep](figures/prefix_cache_sweep.png)
 
