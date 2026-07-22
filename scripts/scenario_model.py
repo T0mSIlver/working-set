@@ -47,6 +47,14 @@ TP_EFFICIENCY  = 0.90       # tensor-parallel comm/overhead haircut on aggregate
 # is ever measured directly, update this one constant.
 BASELINE_POOL_TOKENS_27B_1GPU = 2.77e6
 
+# Measured cross-check (2026-07-22): 27B, FP8 weights, FP16 KV, TP2,
+# max_seq_len 184,320. vLLM startup log reported "GPU KV cache size:
+# 3,233,564 tokens" (110.59 GiB available per worker; 17.54x concurrency
+# = 3,233,564 / 184,320 exactly). Nothing about TP2 or FP16 was fitted, so
+# this is an independent check on the reserve + TP arithmetic + FP16
+# doubling; _selfcheck asserts the model reproduces it within 1%.
+MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
+
 # ============================================================================
 # MODELS
 # ----------------------------------------------------------------------------
@@ -132,6 +140,20 @@ MODELS = {
         mtp=1.7,                         # MTP module, speedup kept equal to baseline's fit
     ),
 }
+
+# ---- MTP speedup <-> per-draft acceptance ------------------------------------
+# MTP-2 decodes with k=2 draft tokens, accepted i.i.d. until the first
+# rejection: expected tokens/forward = 1 + a + a^2. The study's 1.7x default
+# is the baseline's measured fit and corresponds to a per-draft acceptance
+# a ~ 47%; a measured 87% acceptance would give ~2.6x. The acceptance is the
+# base quantity — the speedup is derived from it.
+def mtp_speedup(acceptance: float, k: int = 2) -> float:
+    """Expected decode speedup from MTP with k draft tokens at per-draft
+    acceptance `acceptance` (accept-until-first-rejection)."""
+    if not 0.0 <= acceptance <= 1.0:
+        raise ValueError(f"acceptance must be in [0, 1], got {acceptance!r}")
+    return float(sum(acceptance ** i for i in range(k + 1)))
+
 
 # ---- KV-cache dtype switch --------------------------------------------------
 # All MODELS constants assume the FP8 KV cache (`--kv-cache-dtype fp8_e4m3`),
@@ -430,6 +452,14 @@ def _selfcheck():
     assert abs(kv_pool_tokens(m27_16, t1) - kv_pool_tokens(m27, t1) / 2) < 1
     assert 1.139e6 <= kv_pool_tokens(m27_16, t1) <= 1.399e6, \
         "FP16 27B pool should fall in the measured [1139k, 1399k] interval"
+    # non-circular cross-check: the 27B/TP2/FP16 pool must reproduce the
+    # vLLM-reported 3,233,564 tokens (2xH200 startup log) within 1%
+    pool_tp2_16 = kv_pool_tokens(m27_16, tp2)
+    assert abs(pool_tp2_16 / MEASURED_POOL_TOKENS_27B_TP2_FP16 - 1) < 0.01, \
+        f"TP2 FP16 pool {pool_tp2_16:.0f} should match the measured 3,233,564"
+    # MTP acceptance <-> speedup: the 1.7x default corresponds to a ~ 47%
+    assert abs(mtp_speedup(0.4747) - 1.7) < 1e-3
+    assert mtp_speedup(0.0) == 1.0 and abs(mtp_speedup(0.87) - 2.627) < 1e-3
     assert with_kv_dtype(m27, "fp8") is m27          # fp8 = identity
     _, p16, _, _ = decode_curves(with_kv_dtype(m35, "fp16"), t1, wl, [64], n_iter=300)
     _, p8, _, _ = decode_curves(m35, t1, wl, [64], n_iter=300)
