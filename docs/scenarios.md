@@ -5,6 +5,15 @@ hardware / vLLM configuration — where "comfortably" means a returning user's n
 request hits the warm prefix cache (TTFT of seconds, not a full re-prefill) **and**
 their decode speed stays above a 40 tok/s comfort floor (20 tok/s as the hard floor)?
 
+**Primary metric and working hypothesis.** The study's central simplification: **a
+request served from a warm session is a request served well and comfortably**, while
+a cold request must re-prefill its entire context — a burst of prefill work that
+briefly steals GPU bandwidth from *every* active user (thrash). We therefore size
+deployments by **how many sessions stay warm**, and we plan on the **p5** of that
+count (the conservative tail: 95% of Monte-Carlo draws hold at least that many),
+not the median. Decode-speed results exist mainly to *verify* that speed is not the
+binding constraint — they are not the planning number.
+
 This extends the [baseline study](writeup.md) along five axes, keeping the **same
 methodology** (transparent memory model + Monte-Carlo pool fill + a bandwidth-bound
 decode model). All numbers come from one shared model,
@@ -136,10 +145,12 @@ fp8_e4m3`), as tested in the baseline. The model exposes a switch
 (`with_kv_dtype(model, "fp16")` in Python; a Model-panel toggle in the explorer)
 that doubles KV bytes/token — halving the pool and adding decode read cost —
 while weights, the DeltaNet state, and the FP8-anchored reserve calibration stay
-fixed. Cross-check: the FP16 27B/1×H200 pool comes out at **1.39M tokens**, inside
-the baseline's *measured* FP16 interval [1.14M, 1.40M] — the FP16 path reproduces
-the original measurement without any new fitting. Reference-workload numbers
-under FP16 (from `tables.py`):
+fixed. Consistency check: the FP16 27B/1×H200 pool comes out at **1.39M tokens**,
+inside the baseline's *measured* FP16 interval [1.14M, 1.40M]. Note this is
+**partially circular** (the FP8 anchor was built as ~2× the FP16 estimate, so
+halving it lands near the measurement largely by construction) — it confirms
+internal consistency, not the model. Reference-workload numbers under FP16
+(from `tables.py`):
 
 | FP16 KV | pool | warm p50 (user) | per-user p50 @ mns 64 |
 | --- | --- | --- | --- |
@@ -177,6 +188,7 @@ Warm **reusable** sessions in one KV cache (p5 / **p50** / p95), reference workl
 (280 vs 94; 678 vs 222) — driven by 10 vs 32 KiB/token. (2) **TP2** gives **2.3–2.4×**
 the single-GPU pool (20.30 vs 8.42M tokens): the second weight copy it avoids becomes
 KV. (3) **DP2's per-cache capacity is unchanged**; system-wide it holds 2 × 280 = 560
+(p50 — the p5 planning view in §5 reads 502 vs TP2's 633)
 warm sessions across two caches — **less than TP2's 678 in one cache** — and needs
 sticky routing. With 600 GiB of CPU offload the 35B-A3B reaches **~2,400** warm
 sessions on 1×H200 (~2,780 on TP2) — but see the offload limitation: this is
@@ -237,35 +249,122 @@ warm-hit rate is capped at **1 − f**. Modelled as always-cold requests, *not* 
 global flush (which would also evict other sessions — a harsher variant we did not
 adopt).
 
+### 5. Scaling to N × H200
+
+![Warm-session scaling with hardware](../figures/scenario_scaling.png)
+
+The model now takes an **arbitrary GPU count** with a TP/DP switch
+(`topology(kind, n)`). Warm p5, 35B-A3B, reference workload:
+
+| N × H200 | TP — one shared cache (p5) | DP — system total (p5, sticky) |
+| --- | --- | --- |
+| 1 | 249 | 249 |
+| 2 | **633** | 502 |
+| 4 | **1,400** | 1,004 |
+| 8 | **2,974** | 2,016 |
+
+TP scales **superlinearly per cache** (each added GPU contributes its full VRAM
+while the single weight copy amortizes) and beats DP's sticky-routed system total
+at every N. The TP bandwidth haircut is assumed **0.90 per GPU-count doubling**
+(0.81 at N=4, 0.73 at N=8) — beyond 2 GPUs this is a projection, and NVLink domain
+size / interconnect will decide whether large-N TP is realistic (see limitations).
+
+### 6. The remaining knobs: max_seq_len cap and CPU offload
+
+Both are now continuous knobs in the model and the explorer. `max_seq_len` sweep
+(35B-A3B, TP2, warm p5/p50):
+
+| cap | 60k | 120k | 180k | 262k (model max) |
+| --- | --- | --- | --- | --- |
+| warm p5 / p50 | 860 / 898 | 672 / 714 | 632 / 678 | 617 / 664 |
+
+Lowering the cap **truncates the log-normal tail**: the few huge sessions that hog
+the pool get clipped, so capacity *rises* as the cap falls — slowly at first
+(262k → 180k: +2%) then steeply (120k → 60k: +28%), because tail mass grows fast
+as the cap approaches the median. The cost is real truncation of long agentic
+sessions; 180k remains the recommended balance.
+
+CPU offload (35B-A3B, 1×H200, warm p50): **280 (0) → 504 (64 GiB) → 728 (128) →
+1,178 (256) → 2,081 (512) → 3,873 (1,024 GiB)** — near-linear at ~1.75 sessions per
+GiB (one mean session ≈ unique-KV + state ≈ 0.57 GiB). Offload is *storage*:
+restore latency over PCIe is not modelled, so treat offloaded warmth as a weaker
+tier than GPU-resident warmth.
+
+## Why some knobs act non-linearly (or non-monotonically)
+
+Two separate causes; distinguishing them matters when reading sweeps.
+
+**Inherent to the metric** (real effects, reproducible):
+
+- **Piecewise-linear kinks.** The conservative expert-union model is
+  `min(n·w_pertok, w_total)` — decode cost has a hard kink at n = 32 where all 256
+  experts are active; beyond it, extra concurrency adds only KV/state bytes.
+- **Tail truncation (the cap).** Warm capacity responds to `max_seq_len` through
+  the log-normal *tail mass* above the cap, which shrinks super-exponentially as
+  the cap rises: big gains from 120k → 60k, almost nothing from 262k → 180k.
+- **Floors and reservations (the prefix).** Prompts are floored at their prefix and
+  dedup against it, so a bigger shared prefix *reduces* per-session unique cost
+  (convex gain in capacity) while linearly growing the one-off reserved block and
+  the miss tax — opposing terms with different shapes.
+- **Harmonic responses.** Capacity ≈ pool / (E[unique] + state/kv_bpt): doubling KV
+  bytes/token (FP16) does *not* halve capacity, because the state charge shrinks in
+  token-equivalents at the same time (148 vs "half of 280" = 140).
+- **Amortized fixed costs (TP scaling).** pool(N) = N·VRAM − W − N·reserve: the
+  −W intercept makes per-cache capacity superlinear in N.
+- **Cold sessions cost more than warm ones.** An invalidating request occupies its
+  *full* length (no dedup), so capacity falls ~1.5× faster than f itself.
+
+**Monte-Carlo artifacts** (sampling noise, not real):
+
+- The warm count is an **order statistic of a discrete count** over heavy-tailed
+  log-normal draws: finite `n_iter` leaves ±1–3 sessions of jitter on p5/p50, so a
+  truly monotonic knob can look locally non-monotonic between adjacent sweep
+  points (we saw 279 vs 280 across runs at different `n_iter`).
+- The Python sweeps in `tables.py` call `warm_capacity(seed=0)` at every sweep
+  point — **common random numbers**: neighbouring points share the same underlying
+  draws, so sweep curves are smooth and differences between points are real. The
+  **explorer uses an unseeded RNG**, so repeated renders of the same settings
+  wobble by a few sessions; that wobble is noise, not signal.
+- The flip side of a fixed seed: each Python table is **one random realization** —
+  its point values carry the same ±1–3 session uncertainty even though the sweep
+  *shape* is trustworthy. The p5–p95 whiskers, not the point estimates, carry the
+  spread.
+
 ## Serving capacity — the decision table (H7)
 
 The two candidate constraints per configuration, reference workload, conservative
-union model. "Warm sessions" counts every reusable cached session; **"warm users"**
-counts only user-class sessions (subagent sessions, ~9% of the mix at r = 0.1, are
-excluded — a *user* corresponds to one user-class session in this model):
+union model. **Warm p5 is the planning column.** "Warm sessions" counts every
+reusable cached session; **"warm users"** counts only user-class sessions (subagent
+sessions, ~9% of the mix at r = 0.1, are excluded — a *user* corresponds to one
+user-class session in this model):
 
-| Config | Warm sessions (p50) | of which warm **users** | v@warm: p50 tok/s if *all* warm sessions decode at once | mns@40 (speed bound alone) |
-| --- | --- | --- | --- | --- |
-| 27B, 1×H200 | 94 | **86** | 48 | 118 |
-| 27B, TP2 | 222 | **202** | 41 | 228 |
-| 27B, DP2 | 2 × 94 (sticky) | **2 × 86** | 48 | 118 / replica |
-| 35B-A3B, 1×H200 | 280 | **255** | 49 | 355 |
-| 35B-A3B, TP2 | 678 | **616** | 41 | 695 |
-| 35B-A3B, DP2 | 2 × 280 (sticky) | **2 × 255** | 49 | 355 / replica |
+| Config | **Warm p5 (plan on this)** | Warm p50 | warm **users** p5 / p50 | v@warm: p50 tok/s if *all* warm sessions decode at once | mns@40 (speed bound alone) |
+| --- | --- | --- | --- | --- | --- |
+| 27B, 1×H200 | **76** | 94 | **69** / 86 | 48 | 118 |
+| 27B, TP2 | **195** | 222 | **177** / 202 | 41 | 228 |
+| 27B, DP2 | **2 × 76** (sticky) | 2 × 94 | **2 × 69** / 2 × 86 | 48 | 118 / replica |
+| 35B-A3B, 1×H200 | **250** | 280 | **228** / 255 | 49 | 355 |
+| 35B-A3B, TP2 | **632** | 678 | **574** / 616 | 41 | 695 |
+| 35B-A3B, DP2 | **2 × 250** (sticky) | 2 × 280 | **2 × 228** / 2 × 255 | 49 | 355 / replica |
 
 **In every configuration the cache binds first** (warm sessions < mns@40), and even
 in the worst case — every warm session decoding simultaneously — per-user p50 stays
-≥ 41 tok/s. So for agentic coding on this hardware:
+≥ 41 tok/s. Note the TP2 margin is thin (632–678 warm vs 695), and the roofline is
+uncalibrated — a few-percent modelling error flips that binding constraint. So for
+agentic coding on this hardware:
 
-- **Comfortable concurrent-user count ≈ warm *user* capacity**: ~86 (27B, 1×H200)
-  up to ~616 (35B-A3B, TP2) per node-pair, before CPU offload.
+- **Comfortable concurrent-user count ≈ warm *user* capacity at p5** (same
+  percentile as the planning column): ~69 (27B, 1×H200) up to ~574 (35B-A3B, TP2)
+  per node-pair, before CPU offload.
 - Real duty cycles < 100% don't raise these numbers — idle users still occupy cache.
   What raises them: CPU offload (600 GiB ≈ **2,400–2,800** warm 35B-A3B sessions —
   as *storage*; restore latency unmodelled), a bigger truly-shared prefix, or more
   subagent-like (short) traffic.
-- Oversubscribing beyond warm capacity degrades gracefully into cold-TTFT churn (LRU
-  eviction), not into slow decode — the baseline's N=10 cyclic-eviction collapse is
-  the failure mode to watch.
+- Oversubscribing beyond warm capacity turns the excess into cold-TTFT churn (LRU
+  eviction). We have NOT verified that this is graceful under load: cold prefills
+  interfere with active decodes, and the baseline's N=10 cyclic-eviction collapse
+  shows the cliff-shaped failure mode. Treat the warm count as the population to
+  stay under, not a soft target.
 
 **Suggested vLLM setup** (per the model above): `--kv-cache-dtype fp8_e4m3`;
 `--enable-prefix-caching`; `max_seq_len` 180k (caps worst-case cold prefill and pool
@@ -273,6 +372,75 @@ hogging); size `max_num_seqs` from the modelled speed ceilings above (mns@40) wh
 keeping expected active KV within the pool — the study does not model preemption, so
 treat large values as needing a measurement pass; TP2 (`--tensor-parallel-size 2`)
 preferred over two DP replicas for this workload; if DP, make routing session-sticky.
+
+## Statistical honesty: Monte-Carlo spread vs structural uncertainty
+
+The p5 framing is conservative **only within the model's fixed assumptions**: it
+says that under this workload distribution, this allocator arithmetic and these
+constants, 95% of random packing draws hold at least that many sessions. It is NOT
+a 95%-confidence forecast of production capacity — parameter and structural
+uncertainty are far larger than sampling spread. For the headline 35B-A3B TP2 case
+(p5 632, p50 678; MC estimator jitter ~1–3 sessions):
+
+| Structural assumption flipped (one at a time) | Δ warm sessions |
+| --- | --- |
+| +15% deployed-weight overhead | ~ −17 |
+| fp32 (not bf16) DeltaNet state | ~ −68 |
+| 10% (not 1%) invalidation | ~ −87 |
+| anchor at 2× the measured FP16 *lower* bound (2.278M, not 2.77M) | ~ −105 |
+| loss of global prefix sharing (per-tenant prefixes) | ~ −200 (proxy) |
+| FP16 KV instead of FP8 | ~ −320 |
+
+**Stacking** the first four plausible-adverse assumptions (low anchor + fp32 state
++ weight overhead + 10% invalidation) moves TP2 warm p5 from **632 to 403** (user
+class ~367) — a ~230-session structural downside against a 46-session p5-vs-p50
+cushion (regenerate: the "Structural-uncertainty stack" section of `tables.py`).
+The whiskers in the figures show *packing variability*, not forecast confidence.
+Until one exact-configuration measurement re-anchors the model, purchasing-grade
+planning should either use a stacked-conservative scenario like the 403 figure or
+apply an explicit structural haircut to the central p5.
+
+Related honesty note: the FP16-path "cross-check" (1.39M inside the measured
+FP16 interval) is **partially circular** — the FP8 anchor was constructed as
+roughly 2× the FP16 estimate, so halving it lands near the measurement largely by
+construction. It validates internal consistency, not the model.
+
+## Planning stance (owner decisions, 2026-07-21)
+
+Recorded so the numbers below are read the way they were decided:
+
+1. **Measurement: deferred.** No re-anchoring measurement is scheduled yet; the
+   study stays a projection-anchored **hypothesis generator and configuration
+   ranker**. The single biggest trust upgrade remains one exact-configuration
+   35B-A3B measurement (limitation 13).
+2. **"Comfortable capacity" is defined as measured SLO capacity** — the largest
+   replayed population meeting explicit p95 TTFT and inter-token-latency targets.
+   This model **cannot produce that number**; until the replay exists, every
+   figure here ranks configurations and bounds scenarios, and none is a
+   user-count commitment.
+3. **Prefix domain: global sharing** is the modelled policy (one shared user
+   prefix per cache). Prerequisites this creates: byte-stable prompt versioning
+   across all users, and security acceptance of cross-user prefix-cache sharing
+   (no per-tenant cache salts). If either fails, subtract the ~200-session
+   tenant-split proxy (limitation 15).
+4. **Reporting: conservative base, visible headroom.** The purchasing-facing
+   number excludes the immature serving paths — **no CPU offload, no MTP speedup,
+   no N > 2 TP** — on top of the stacked-adverse structural case. The excluded
+   upside stays fully explorable: the interactive explorer has switches for the
+   structural assumption set (Central/Conservative), MTP (on/off), offload
+   (0–1024 GiB) and GPU count, so every tradeoff is playable rather than hidden.
+
+**Conservative purchasing view** (stacked structural case + immature paths off;
+regenerate via the "Structural-uncertainty stack" section of `tables.py`):
+
+| Config | Warm p5 (stacked) | user-class p5 | v@p5-warm, MTP off |
+| --- | --- | --- | --- |
+| 35B-A3B, 1×H200 | **144** | **130** | 43 tok/s |
+| 35B-A3B, TP2 | **403** | **367** | 34 tok/s |
+
+Note the MTP-off stress speed on TP2 (34 tok/s) sits between the 20 tok/s hard
+floor and the 40 tok/s comfort floor: without the speculative-decoding path, the
+comfort margin at full warm load depends on duty cycle < 100%.
 
 ## Outcomes
 
@@ -331,6 +499,29 @@ Ordered roughly by how much each could move the numbers:
 11. **Decode is a pure HBM roofline.** Expert-dispatch overhead, attention/DeltaNet
     compute, TP collectives, and scheduler overhead are not priced, so all tok/s
     figures are upper bounds pending calibration against the real 35B-A3B.
+12. **N > 2 GPUs is a projection.** The TP haircut (0.90 per GPU-count doubling) is
+    an extrapolated assumption — real large-N TP depends on NVLink domain size,
+    interconnect, and kernel overlap, and pipeline parallelism is not modelled at
+    all. For DP, the shared CPU-offload buffer is split evenly across replicas — a
+    simplification of real host-memory contention. Treat every N > 2 number as a
+    shape, not a quote, until one multi-GPU measurement anchors it.
+13. **vLLM's hybrid-model allocator may not match the byte model.** We price
+    attention KV continuously plus one recurrent state per session; vLLM's hybrid
+    (attention + GDN) cache unifies page sizes, may pad recurrent state to
+    attention-page granularity, uses larger blocks (and only caches *full* blocks
+    for prefix reuse), and hybrid-model prefix caching + MTP is still maturing.
+    Allocator granularity could move 35B-A3B capacity more than the ±10% dtype
+    sensitivity — this is the single biggest reason to re-anchor on the real model.
+14. **Warm capacity is a packing limit, not a sustainable population.** The fill
+    leaves no headroom for the *next* turn: sessions grow turn over turn, active
+    decodes append KV, and a full pool answers growth with eviction or preemption.
+    A sustainable population sits meaningfully below the packing numbers quoted
+    here; a session-growth trace replay would bound the gap.
+15. **Global prefix sharing is an optimistic default.** The model stores one user
+    prefix for the whole cache; per-tenant prompts, template versioning, or cache
+    salts (deliberate isolation) split it into many equivalence classes. A rough
+    no-global-dedup proxy costs ~200 sessions on TP2. The sharing/isolation domain
+    is a policy decision, not a modelling detail.
 
 ## Reproducibility
 
