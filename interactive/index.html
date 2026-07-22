@@ -258,7 +258,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-user_median" min="5" max="120" step="1" value="31">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Log-normal shape parameter — the std-dev of ln(length), a MULTIPLICATIVE spread. Fitted by maximum likelihood on 1,850 real request lengths (σ = 0.81): ~68% of prompts within ×/÷ e^σ ≈ 2.3 of the median, p95 ≈ 3.8× the median, mean ≈ 1.39× the median. The mean (not the median) drives warm capacity, so higher σ = fatter tail of huge pool-hogging sessions = fewer warm.">User prompt sigma</span> <span class="val" id="v-user_sigma">0.81</span></label>
+          <label class="flabel"><span class="tip" data-tip="Log-normal shape parameter — the std-dev of ln(length), a MULTIPLICATIVE spread. Fitted by maximum likelihood on 1,850 real request lengths (σ = 0.81): ~68% of prompts within ×/÷ e^σ ≈ 2.25 of the median, p95 ≈ 3.8× the median, mean ≈ 1.39× the median. The mean (not the median) drives warm capacity, so higher σ = fatter tail of huge pool-hogging sessions = fewer warm.">User prompt sigma</span> <span class="val" id="v-user_sigma">0.81</span></label>
           <input type="range" id="s-user_sigma" min="0.30" max="1.40" step="0.01" value="0.81">
         </div>
         <div class="field">
@@ -996,6 +996,9 @@ function renderTiles(model,topo,wl,dc,warm){
   const aggOp=nOp*puOp*topo.replicas/1000;
   const floorClass = puOp>=40?'good':(puOp>=20?'warn':'crit');
   const dp = topo.kind==="dp";
+  // "distinct users" ≈ warm × (1−p_sub) — an expected-share approximation of
+  // scenario_model.py's exact which="user" count; accurate near the reference
+  // workload, drifts at extreme subagent ratios
   const tiles=[
     {k:"Warm sessions · p5", hero:true, v:fmt(warm.p5,0), u:dp?"per replica":"sessions",
      sub: dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`

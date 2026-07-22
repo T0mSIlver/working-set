@@ -201,16 +201,24 @@ Three consistency checks, all passing:
    mis-reporting bug), this log is self-consistent.
 3. **Hybrid-allocator overhead.** The workers report 2 × 110.59 = 221.2 GiB
    available, but 3,233,564 tokens × 64 KiB/token accounts for only
-   197.4 GiB of attention KV. The ~11% gap is the Gated-DeltaNet state
-   pages the hybrid allocator carves from the same pool — qualitatively
-   matching this study's separate per-session state charge (and easing
-   limitation 13's allocator-granularity worry).
+   197.4 GiB of attention KV. The ~11% gap (23.8 GiB) is consistent with the
+   hybrid allocator carving Gated-DeltaNet state pages from the same pool —
+   directionally matching this study's separate per-session state charge —
+   but its sizing is internal to the allocator: at 75 MiB/session it would
+   cover ~320 sessions' states, far more than the 17 concurrent max-length
+   sequences, suggesting a pre-allocation (e.g. sized to `max_num_seqs` and
+   page granularity) rather than per-live-session accounting. The gap's
+   *existence* supports charging state separately; its *magnitude* is not
+   something this model predicts.
 
 Caveats: this is a *startup-log* figure, not a fill-probe measurement like the
 baseline's (no warm/cold sweep was run at this config), and it exercises the
-27B path — the 35B-A3B remains unmeasured. But it independently validates the
-three ingredients the TP2 projections stack on the anchor: the reserve
-magnitude, the weights-counted-once TP arithmetic, and the FP16 KV doubling.
+27B path — the 35B-A3B remains unmeasured. With those caveats it independently
+validates the ingredients the TP2 projections stack on the anchor: the
+weights-counted-once TP arithmetic, the FP16 KV doubling, and the reserve's
+*transferability* to a second GPU (the reserve's absolute magnitude is defined
+by the anchor, so a globally-wrong anchor would shift both numbers together —
+this check cannot catch that; only a direct FP8 re-measurement can).
 
 Reference workload for all static figures: users ~ log-normal(median 31k, σ 0.81)
 behind a **15k** system prompt; subagents ~ log-normal(median 8k, σ 0.9) behind a
@@ -224,7 +232,7 @@ baseline's cleaned empirical prompt lengths (1,850 real requests; see
 `scripts/real_capacity.py` and the fit overlay in the baseline write-up), so σ
 is measured, not assumed (the subagent σ 0.9 *is* assumed — no subagent trace
 exists yet). Read it as a multiplicative spread: ~68% of prompts land within
-×/÷ e^σ ≈ 2.3 of the median (roughly 14k–70k), the p95 prompt is
+×/÷ e^σ ≈ 2.25 of the median (roughly 14k–70k), the p95 prompt is
 e^(1.645·σ) ≈ 3.8× the median (~118k), and the *mean* sits e^(σ²/2) ≈ 1.39×
 above the median (~43k). That last ratio is why σ matters for capacity: warm
 capacity ≈ pool / E[unique tokens], and the mean — not the median — sets
@@ -358,8 +366,8 @@ as the cap approaches the median. The cost is real truncation of long agentic
 sessions; 180k remains the recommended balance.
 
 CPU offload (35B-A3B, 1×H200, warm p50): **280 (0) → 504 (64 GiB) → 728 (128) →
-1,178 (256) → 2,081 (512) → 3,873 (1,024 GiB)** — near-linear at ~1.75 sessions per
-GiB (one mean session ≈ unique-KV + state ≈ 0.57 GiB). Offload is *storage*:
+1,178 (256) → 2,081 (512) → 3,873 (1,024 GiB)** — near-linear at ~3.5 sessions per
+GiB (one mean session ≈ unique-KV + state ≈ 0.28 GiB). Offload is *storage*:
 restore latency over PCIe is not modelled, so treat offloaded warmth as a weaker
 tier than GPU-resident warmth.
 
@@ -422,9 +430,10 @@ user-class session in this model):
 
 **In every configuration the cache binds first** (warm sessions < mns@40), and even
 in the worst case — every warm session decoding simultaneously — per-user p50 stays
-≥ 41 tok/s. Note the TP2 margin is thin (632–678 warm vs 695), and the roofline is
-uncalibrated — a few-percent modelling error flips that binding constraint. So for
-agentic coding on this hardware:
+≥ 41 tok/s. Note the TP2 margin is thin (632–678 warm vs 695 — a ~2% gap at p50,
+~9% at the p5 planning column), and the roofline is uncalibrated — a modelling
+error of that order flips the binding constraint. So for agentic coding on this
+hardware:
 
 - **Comfortable concurrent-user count ≈ warm *user* capacity at p5** (same
   percentile as the planning column): ~69 (27B, 1×H200) up to ~574 (35B-A3B, TP2)
@@ -468,6 +477,9 @@ uncertainty are far larger than sampling spread. For the headline 35B-A3B TP2 ca
 + weight overhead + 10% invalidation) moves TP2 warm p5 from **632 to 403** (user
 class ~367) — a ~230-session structural downside against a 46-session p5-vs-p50
 cushion (regenerate: the "Structural-uncertainty stack" section of `tables.py`).
+Note the stack is smaller than the −277 sum of the one-at-a-time rows: the
+effects interact (each assumption shrinks the pool the next one acts on, so
+marginal costs shrink as the stack deepens).
 The whiskers in the figures show *packing variability*, not forecast confidence.
 Until one exact-configuration measurement re-anchors the model, purchasing-grade
 planning should either use a stacked-conservative scenario like the 403 figure or
