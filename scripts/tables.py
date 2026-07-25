@@ -4,6 +4,8 @@ Run:  python scripts/tables.py
 All tables print in the order they appear in the doc, so the doc can be
 diffed against this output after any model change.
 """
+import dataclasses
+
 import numpy as np
 
 import scenario_model as M
@@ -119,6 +121,27 @@ def main():
                   f"(user p5={u5:4.0f} p50={u50:4.0f}){per_cache}  "
                   f"v@warm={v_at_warm[0]:5.0f} tok/s  mns@40={m40:3d}")
 
+    print("\n== Binding order WITHOUT MTP (speculative decoding off, mtp=1.0) ==")
+    print("  the decision table's 'cache binds first' is CONDITIONAL on the 1.7x MTP")
+    print("  speedup. Turn MTP off and the speed bound tightens by exactly 1.7x while")
+    print("  capacity is unchanged (MTP is a decode-path speedup, not a memory one):")
+    print("  mns@40 = max decoders at >=40 tok/s p50; binds = min(warm, mns@40)")
+    for mk in MODELS_K:
+        for tk in TOPOS_K:
+            model, topo = MODELS[mk], TOPOLOGIES[tk]
+            no_mtp = dataclasses.replace(model, mtp=1.0)
+            _, warm, _ = M.warm_capacity(model, topo, w0, n_iter=1500)
+            _, u50, _ = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")
+            _, warm_gpu, _ = M.warm_capacity(model, topo, w0, n_iter=1500, which="gpu")
+            m40_on = max_mns_at_floor(model, topo, w0, 40)
+            m40_off = max_mns_at_floor(no_mtp, topo, w0, 40)
+            _, v_off, _, _ = M.decode_curves(no_mtp, topo, w0, [int(warm_gpu)],
+                                             n_iter=1000)
+            binds = "cache" if m40_off >= warm else "BANDWIDTH"
+            print(f"  {mk:7} {tk:12} warm p50={warm:4.0f} (users {u50:4.0f})  "
+                  f"mns@40 {m40_on:4d} -> {m40_off:4d} no-MTP  "
+                  f"v@warm {v_off[0]:5.1f} tok/s  binds: {binds}")
+
     print("\n== Scaling to N x H200 (35B-A3B, FP8) ==")
     print("  TP: one engine, ONE shared cache | DP: N replicas, cache splits (sticky routing)")
     print("  warm p5 = the planning number (95% of draws hold at least this many)")
@@ -178,7 +201,6 @@ def main():
 
     print("\n== Sensitivity: fp32 DeltaNet state (35B-A3B, warm p50) ==")
     m = MODELS["35BA3B"]
-    import dataclasses
     m_fp32 = dataclasses.replace(m, deltanet_state=m.deltanet_state * 2)
     for tk in ["1xH200", "2xH200-TP2"]:
         a = M.warm_capacity(m, TOPOLOGIES[tk], w0, n_iter=800)[1]
