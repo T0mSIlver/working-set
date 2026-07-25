@@ -94,7 +94,9 @@ def main():
     print("\n== Serving-capacity planning table (conservative linear union) ==")
     print("  warm p5   = THE planning number: sessions kept warm in >=95% of draws")
     print("  warm p50  = median; warm_user = user-class sessions only (distinct users)")
-    print("  v@warm    = per-user p50 tok/s if ALL warm sessions decode at once (100% duty)")
+    print("  v@warm    = per-user p50 tok/s if ALL GPU-resident warm sessions decode")
+    print("              at once (100% duty); offloaded sessions cannot decode, so the")
+    print("              concurrency comes from which='gpu' (identical here: 0 offload)")
     print("  mns@40    = max concurrent decoders at >=40 tok/s p50 (speed bound alone)")
     print("  -> the binding constraint is min(warm, mns@40); duty<100% relaxes only mns@40")
     mc = mean_context(w0)
@@ -105,7 +107,12 @@ def main():
             # n_iter matches the warm-capacity table so both quote the same p50
             p5, warm, _ = M.warm_capacity(model, topo, w0, n_iter=1500)
             u5, u50, _ = M.warm_capacity(model, topo, w0, n_iter=1500, which="user")
-            _, v_at_warm, _, _ = M.decode_curves(model, topo, w0, [int(warm)], n_iter=1000)
+            # decode concurrency is ALWAYS the GPU-resident count, by
+            # construction rather than by "this table happens to run at
+            # ram_gib=0" (where which="gpu" and which="all" coincide exactly)
+            _, warm_gpu, _ = M.warm_capacity(model, topo, w0, n_iter=1500, which="gpu")
+            _, v_at_warm, _, _ = M.decode_curves(model, topo, w0, [int(warm_gpu)],
+                                                 n_iter=1000)
             m40 = max_mns_at_floor(model, topo, w0, 40)
             per_cache = " (per replica)" if topo.kind == "dp" else ""
             print(f"  {mk:7} {tk:12} warm p5={p5:4.0f} p50={warm:4.0f} "

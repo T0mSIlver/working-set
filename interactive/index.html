@@ -580,17 +580,22 @@ function warmOnce(pool, ram_gib, model, wl){
   return { warm, warmGpu };
 }
 
-// Returns {all, gpu}, each [p5,p50,p95]. `all` counts offloaded sessions as
-// warm storage (the capacity view); `gpu` counts only HBM-resident sessions
-// (the decode view). Mirrors warm_capacity(which=...) in scenario_model.py.
+// Returns {all, gpu, off}, each [p5,p50,p95]. `all` counts offloaded sessions
+// as warm storage (the capacity view); `gpu` counts only HBM-resident sessions
+// (the decode view); `off` is the offloaded count taken PER DRAW (all-gpu
+// within the same fill) and then percentiled, so it is a statistic of the
+// offloaded population rather than a difference of marginal percentiles.
+// Mirrors warm_capacity(which=...) in scenario_model.py.
 function warmCapacity(model, topo, wl, ram_gib, n_iter){
   const pool = kv_pool_tokens(model, topo);
-  const all = new Float64Array(n_iter), gpu = new Float64Array(n_iter);
+  const all = new Float64Array(n_iter), gpu = new Float64Array(n_iter),
+        off = new Float64Array(n_iter);
   for (let i=0;i<n_iter;i++){
     const r = warmOnce(pool, ram_gib, model, wl);
-    all[i] = r.warm; gpu[i] = r.warmGpu;
+    all[i] = r.warm; gpu[i] = r.warmGpu; off[i] = r.warm - r.warmGpu;
   }
-  return { all: percentiles(all, [5,50,95]), gpu: percentiles(gpu, [5,50,95]) };
+  return { all: percentiles(all, [5,50,95]), gpu: percentiles(gpu, [5,50,95]),
+           off: percentiles(off, [5,50,95]) };
 }
 
 /* ============================================================================
@@ -873,7 +878,19 @@ function renderChartD(dc){
 /* ============================================================================
    TOOLTIP / crosshair for C and D
    ========================================================================== */
-// markFn(bi, dc) -> [{v, color, r}] : the plotted series values the crosshair
+// Value of a plotted series at an arbitrary x, read off the SAME straight
+// segments the chart draws (the sweep samples every DECODE_STEP seqs, so the
+// curve between samples IS a line). Clamped to the sampled range at the ends.
+function interpAt(dc, key, x){
+  const ns=dc.ns, arr=dc[key], last=ns.length-1;
+  if(x<=ns[0]) return arr[0];
+  if(x>=ns[last]) return arr[last];
+  let i=last-1;
+  for(let j=0;j<last;j++){ if(ns[j+1]>=x){ i=j; break; } }
+  const t=(x-ns[i])/(ns[i+1]-ns[i]);
+  return arr[i] + t*(arr[i+1]-arr[i]);
+}
+// markFn(n, dc) -> [{v, color, r}] : the plotted series values the crosshair
 // crosses at this x. The FIRST entry is the tooltip's anchor point, so the
 // readout sits next to where the bar actually meets the curve.
 function setupHover(chartId, ttId, getGeom, fmtFn, markFn){
@@ -888,15 +905,18 @@ function setupHover(chartId, ttId, getGeom, fmtFn, markFn){
     // invert to data n
     const nData = 1 + (vx-geom.mL)/geom.pw*(geom.xmax-1);
     if(vx<geom.mL || vx>geom.mL+geom.pw){ tt.style.opacity=0; removeCross(svg); return; }
-    // nearest sample index
-    const dc=geom.dc; let bi=0, bd=1e18;
-    for(let i=0;i<dc.ns.length;i++){ const d=Math.abs(dc.ns[i]-nData); if(d<bd){bd=d;bi=i;} }
-    const n=dc.ns[bi];
+    // Track the pointer instead of snapping to the sweep's sample points (which
+    // made the bar and the readout jump in DECODE_STEP-sized hops). max_num_seqs
+    // is an integer setting, so the bar lands on the nearest whole seq and every
+    // series is INTERPOLATED along its drawn segment at that x — the readout is
+    // then exactly what the eye reads off the curve under the bar.
+    const dc=geom.dc;
+    const n=clip(Math.round(nData), 1, geom.xmax);
     const px=geom.sx(n);
     // crosshair + a dot on every curve it crosses
-    const marks=(markFn?markFn(bi,dc):[]).map(m=>({...m, y:geom.sy(m.v)}));
+    const marks=(markFn?markFn(n,dc):[]).map(m=>({...m, y:geom.sy(m.v)}));
     drawCross(svg, px, geom, marks);
-    tt.innerHTML = fmtFn(bi, dc);
+    tt.innerHTML = fmtFn(n, dc);
     // Position in CHARTBOX-relative px, anchored on the intersection point and
     // clamped inside the box: the card clips overflow, so a tooltip placed
     // above the plot (the old transform) was cut off or invisible entirely.
@@ -987,8 +1007,8 @@ function computeAndRender(draft){
   // g5/g95 = the HBM-resident subset (excludes CPU-offloaded sessions), which
   // is what any decode-concurrency readout must use.
   const wc=warmCapacity(model,topo,wl,ramPerCache(topo),warmIter);
-  const [p5,p50,p95]=wc.all, [g5,g50,g95]=wc.gpu;
-  lastWarmCur={p5,p50,p95, g5,g50,g95, system5:p5*topo.replicas, topo};
+  const [p5,p50,p95]=wc.all, [g5,g50,g95]=wc.gpu, [o5,o50,o95]=wc.off;
+  lastWarmCur={p5,p50,p95, g5,g50,g95, o5,o50,o95, system5:p5*topo.replicas, topo};
 
   // Chart B: warm p5 vs number of GPUs (TP one cache vs DP system total),
   // under the SAME offload setting as the current config (TP: whole buffer to
@@ -1045,7 +1065,10 @@ function renderTiles(model,topo,wl,dc,warm){
   const aggOp=nOp*puOp*topo.replicas/1000;
   const floorClass = puOp>=40?'good':(puOp>=20?'warn':'crit');
   const dp = topo.kind==="dp";
-  const offl = Math.max(0, warm.p5-warm.g5);   // p5-warm sessions living in RAM
+  // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
+  // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
+  // different draws and is not a count of anything.
+  const offl = warm.o5;
   // "distinct users" ≈ warm × (1−p_sub) — an expected-share approximation of
   // scenario_model.py's exact which="user" count; accurate near the reference
   // workload, drifts at extreme subagent ratios
@@ -1053,7 +1076,7 @@ function renderTiles(model,topo,wl,dc,warm){
     {k:"Warm sessions · p5", hero:true, v:fmt(warm.p5,0), u:dp?"per replica":"sessions",
      sub: (dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`
               : `the planning number — 95% of draws hold at least this many · ≈ ${fmt(warm.p5*(1-p_sub(wl)),0)} distinct users`)
-          + (offl>=1 ? ` · ${fmt(warm.g5,0)} in HBM + ${fmt(offl,0)} offloaded (storage)` : ''),
+          + (offl>=1 ? ` · by tier, p5 each: ${fmt(warm.g5,0)} HBM-resident · ${fmt(offl,0)} offloaded (storage)` : ''),
      tip:"THE number this study is built to produce. A warm session's KV + recurrent state sit in cache, so its next request prefills only the new turn — served well and comfortably. A cold request re-prefills everything and briefly thrashes the GPU for every active user. p5 = conservative tail: 95% of draws keep at least this many warm. With CPU offload on, this counts both HBM-resident and host-RAM sessions — the RAM tier is storage, and must be restored over PCIe before it can decode."},
     {k:"Warm p50 / p95", v:fmt(warm.p50,0), u:"sessions", sub:`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
      tip:"Same metric, median (p50) and optimistic (p95) draws. Plan on p5; use p50 to compare configurations."},
@@ -1061,11 +1084,12 @@ function renderTiles(model,topo,wl,dc,warm){
      tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
     {k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
      tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
-    {k:"Per-user, all p5 warm active", v:fmt(puOp,1), u:"tok/s",
-     sub:`at n = ${nOp} concurrent${offl>=1?' (HBM-resident only)':''}`, cls:floorClass,
+    {k:"Per-user, all GPU-resident p5 warm active", v:fmt(puOp,1), u:"tok/s",
+     sub:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥40 tok/s (comfortable), amber ≥20 (floor). If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
-    {k:"Aggregate, all p5 warm active", v:fmt(aggOp,1), u:"ktok/s", sub:`×${topo.replicas} replica${topo.replicas>1?'s':''}`,
-     tip:"System-wide token throughput at that same stress point (summed over DP replicas). A capacity ceiling for batch/offline work, not a latency promise."},
+    {k:"Aggregate, all GPU-resident p5 warm active", v:fmt(aggOp,1), u:"ktok/s",
+     sub:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
+     tip:"System-wide token throughput at that same stress point — the GPU-resident p5-warm sessions all decoding at once, summed over DP replicas. A capacity ceiling for batch/offline work, not a latency promise."},
   ];
   const good=cssv('--good'),warn=cssv('--warn'),crit=cssv('--crit');
   const colMap={good,warn,crit};
@@ -1182,22 +1206,22 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{
 });
 
 /* ---- hover setup ---- */
-setupHover('chartC','ttC',()=>chartCGeom,(bi,dc)=>{
+setupHover('chartC','ttC',()=>chartCGeom,(n,dc)=>{
   const s1=cssv('--s1');
-  return `<div class="tth tnum">max_num_seqs = ${dc.ns[bi]}</div>`+
-    `<div class="row"><span class="sw" style="background:${s1}"></span>p50 <b class="tnum">${fmt(dc.p50[bi],1)}</b> tok/s</div>`+
-    `<div class="row"><span class="sw" style="background:${s1};opacity:.4"></span>p5–p95 <b class="tnum">${fmt(dc.p5[bi],1)}–${fmt(dc.p95[bi],1)}</b> tok/s</div>`;
-}, (bi,dc)=>{
+  return `<div class="tth tnum">max_num_seqs = ${n}</div>`+
+    `<div class="row"><span class="sw" style="background:${s1}"></span>p50 <b class="tnum">${fmt(interpAt(dc,'p50',n),1)}</b> tok/s</div>`+
+    `<div class="row"><span class="sw" style="background:${s1};opacity:.4"></span>p5–p95 <b class="tnum">${fmt(interpAt(dc,'p5',n),1)}–${fmt(interpAt(dc,'p95',n),1)}</b> tok/s</div>`;
+}, (n,dc)=>{
   const s1=cssv('--s1');
-  return [{v:dc.p50[bi], color:s1, r:4},           // anchor: the p50 curve
-          {v:dc.p95[bi], color:s1, r:2.4},
-          {v:dc.p5[bi],  color:s1, r:2.4}];
+  return [{v:interpAt(dc,'p50',n), color:s1, r:4},   // anchor: the p50 curve
+          {v:interpAt(dc,'p95',n), color:s1, r:2.4},
+          {v:interpAt(dc,'p5', n), color:s1, r:2.4}];
 });
-setupHover('chartD','ttD',()=>chartDGeom,(bi,dc)=>{
+setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
   const s3=cssv('--s3');
-  return `<div class="tth tnum">max_num_seqs = ${dc.ns[bi]}</div>`+
-    `<div class="row"><span class="sw" style="background:${s3}"></span>aggregate <b class="tnum">${fmt(dc.agg[bi]/1000,2)}</b> ktok/s</div>`;
-}, (bi,dc)=>[{v:dc.agg[bi], color:cssv('--s3'), r:4}]);
+  return `<div class="tth tnum">max_num_seqs = ${n}</div>`+
+    `<div class="row"><span class="sw" style="background:${s3}"></span>aggregate <b class="tnum">${fmt(interpAt(dc,'agg',n)/1000,2)}</b> ktok/s</div>`;
+}, (n,dc)=>[{v:interpAt(dc,'agg',n), color:cssv('--s3'), r:4}]);
 
 /* ---- init ---- */
 syncLabels();
