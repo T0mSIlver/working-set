@@ -911,7 +911,11 @@ function setupHover(chartId, ttId, getGeom, fmtFn, markFn){
     // series is INTERPOLATED along its drawn segment at that x — the readout is
     // then exactly what the eye reads off the curve under the bar.
     const dc=geom.dc;
-    const n=clip(Math.round(nData), 1, geom.xmax);
+    // clamp to the LAST SAMPLED n, not the axis max: the sweep ends at 119
+    // (117 in draft mode) while the axis runs to 120, and interpAt clamps Y
+    // to the last sample — so an X past it would pair X=120 with Y(119).
+    const nMax=dc.ns[dc.ns.length-1];
+    const n=clip(Math.round(nData), 1, nMax);
     const px=geom.sx(n);
     // crosshair + a dot on every curve it crosses
     const marks=(markFn?markFn(n,dc):[]).map(m=>({...m, y:geom.sy(m.v)}));

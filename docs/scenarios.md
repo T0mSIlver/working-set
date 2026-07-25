@@ -403,7 +403,8 @@ of scale.** The share of *user* draws truncated at the cap climbs from 1.5% at a
 sweep with the cap removed (everything else identical) makes the decline
 *steeper* than 1/median instead — 5.5× fewer users for 4.5× the context, with
 p5/p50 at 140k dropping from 19/23 to **9/15** —
-because the shared 15k prefix is subtracted from every session, so unique tokens
+because each session's dedup'd prefix (15k shared for user sessions, 3k for
+subagents) is a fixed subtraction, so unique tokens
 grow faster than the median does (6.0× for a 4.5× median). Read this row as "the
 answer at a 180k cap", not as a property of the context length alone; §6's cap
 sweep is the other half of the same effect.
