@@ -478,8 +478,29 @@ user-class session in this model):
 in the worst case — every warm session decoding simultaneously — per-user p50 stays
 ≥ 41 tok/s. Note the TP2 margin is thin (632–678 warm vs 695 — a ~2% gap at p50,
 ~9% at the p5 planning column), and the roofline is uncalibrated — a modelling
-error of that order flips the binding constraint. So for agentic coding on this
-hardware:
+error of that order flips the binding constraint.
+
+**That ordering is conditional on MTP.** The 1.7× speculative-decode speedup
+multiplies the speed bound but not the memory bound, so switching it off divides
+mns@40 by exactly 1.7 while warm capacity stays put — and the binding constraint
+flips in *every* configuration, not just the marginal ones:
+
+| no MTP (mtp = 1.0) | warm p50 (users) | mns@40 with MTP → without | v@warm | binds |
+| --- | --- | --- | --- | --- |
+| 27B, 1×H200 | 94 (86) | 118 → **60** | 28.4 tok/s | bandwidth |
+| 27B, TP2 | 222 (202) | 228 → **126** | 24.2 tok/s | bandwidth |
+| 35B-A3B, 1×H200 | 280 (255) | 355 → **179** | 28.6 tok/s | bandwidth |
+| 35B-A3B, TP2 | 678 (616) | 695 → **380** | 24.2 tok/s | bandwidth |
+
+So "the cache binds before bandwidth" is a claim about a serving stack **with
+working MTP**, and MTP + hybrid-model prefix caching is exactly the immature path
+the conservative purchasing view excludes (§ Limitations). Without it the 27B on
+one H200 supports 60 concurrent decoders at the 40 tok/s comfort floor against 86
+warm users — bandwidth binds, and the surplus warm capacity buys queueing headroom
+rather than concurrency. Regenerate with the "Binding order WITHOUT MTP" table in
+`tables.py`.
+
+So for agentic coding on this hardware:
 
 - **Comfortable concurrent-user count ≈ warm *user* capacity at p5** (same
   percentile as the planning column): ~69 (27B, 1×H200) up to ~574 (35B-A3B, TP2)
@@ -590,7 +611,7 @@ comfort margin at full warm load depends on duty cycle < 100%.
 | H4 bigger shared prefix ⇒ more warm | **Supported** (506 → 964 at 3k → 30k, TP2) — but fragile to prefix drift |
 | H5 subagents raise warm count | **Supported** (640 → 918 across r = 0 → 1) |
 | H6 invalidation ≈ linear, ceiling 1 − f | **Supported** (−1.5% at f = 1%, −14% at 10%) |
-| H7 cache binds before bandwidth | **Supported in all 6 configs** (warm < mns@40; v@warm ≥ 41 tok/s) |
+| H7 cache binds before bandwidth | **Supported in all 6 configs — with MTP** (warm < mns@40; v@warm ≥ 41 tok/s). **Reversed in all 6 without it** (mns@40 ÷ 1.7: 118 → 60 on the 27B / 1×H200) |
 
 ## Limitations
 

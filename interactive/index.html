@@ -76,26 +76,35 @@ details.assump .body b{color:var(--text); font-weight:600}
 .panel{background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow);}
 .section-h{font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:650; margin:0 0 2px;}
 
-/* control panel */
-.controls{padding:16px 18px; margin:14px 0;}
-.ctl-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px 26px; margin-top:12px;}
-.ctl-group{display:flex; flex-direction:column; gap:13px}
-.field label.flabel{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px; color:var(--text-2); margin-bottom:5px; gap:8px}
+/* control panel — ONE flowing grid, not three fixed columns: the groups used to
+   be independent vertical stacks of 8/4/4 fields, so two thirds of the panel
+   was dead space next to the tallest column. `display:contents` drops the group
+   boxes out of layout and lets every field flow into the same auto-fit grid;
+   the group names survive as full-width hairline-ruled subheads. */
+.controls{padding:13px 15px 14px; margin:12px 0;}
+.ctl-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(238px,1fr));
+  gap:10px 22px; margin-top:8px; align-items:start;}
+.ctl-group{display:contents}
+.ctl-sec{grid-column:1/-1; font-size:10.5px; text-transform:uppercase; letter-spacing:.055em;
+  color:var(--muted); font-weight:650; margin:7px 0 -1px; padding-top:8px;
+  border-top:1px solid var(--border);}
+.ctl-sec:first-child{border-top:0; padding-top:0; margin-top:0}
+.field label.flabel{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px; color:var(--text-2); margin-bottom:3px; gap:8px}
 .field label.flabel .val{color:var(--text); font-weight:620; font-size:12.5px}
-.field .hint{font-size:11px; color:var(--muted); margin-top:3px}
+.field .hint{font-size:11px; color:var(--muted); margin-top:2px; line-height:1.45}
 
 /* segmented control */
-.seg{display:inline-flex; background:var(--control); border-radius:9px; padding:3px; gap:2px; flex-wrap:wrap;}
+.seg{display:inline-flex; background:var(--control); border-radius:8px; padding:2.5px; gap:2px; flex-wrap:wrap;}
 .seg button{
   border:0; background:transparent; color:var(--text-2); font:inherit; font-size:12px;
-  padding:6px 11px; border-radius:6px; cursor:pointer; white-space:nowrap; font-weight:520;
+  padding:5px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; font-weight:520;
 }
 .seg button[aria-pressed="true"]{background:var(--control-active); color:var(--text); box-shadow:var(--shadow); font-weight:600}
 
 /* sliders */
 input[type=range]{
   -webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:3px;
-  background:var(--grid); outline:none; margin:5px 0;
+  background:var(--grid); outline:none; margin:4px 0 2px;
 }
 input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none; appearance:none; width:15px; height:15px; border-radius:50%;
@@ -206,6 +215,7 @@ svg text{fill:var(--text-2)}
     <div class="section-h">Scenario controls</div>
     <div class="ctl-grid">
       <div class="ctl-group">
+        <div class="ctl-sec">Model &amp; hardware</div>
         <div class="field">
           <label class="flabel">Model</label>
           <div class="seg" id="seg-model" data-key="model">
@@ -257,6 +267,7 @@ svg text{fill:var(--text-2)}
       </div>
 
       <div class="ctl-group">
+        <div class="ctl-sec">Prompt-length distribution</div>
         <div class="field">
           <label class="flabel">User prompt median <span class="val"><span id="v-user_median">31</span>k</span></label>
           <input type="range" id="s-user_median" min="5" max="120" step="1" value="31">
@@ -276,6 +287,7 @@ svg text{fill:var(--text-2)}
       </div>
 
       <div class="ctl-group">
+        <div class="ctl-sec">Request mixture &amp; caching</div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Subagent requests per USER request. r = 0.10 means 1 subagent request per 10 user requests, so subagents make up r/(1+r) ≈ 9% of sampled sessions (r = 1 → half the mix). Subagents draw much shorter prompts behind their own lean 3k prefix, so raising r packs more — but smaller, lower-value — sessions warm; the user-count readout excludes them.">Subagent ratio</span> <span class="val" id="v-sub_ratio">0.10 · 1 per 10</span></label>
           <input type="range" id="s-sub_ratio" min="0" max="1.0" step="0.05" value="0.10">
@@ -330,20 +342,22 @@ svg text{fill:var(--text-2)}
 
     <div class="panel card">
       <p class="ct">C · Per-user decode speed vs max_num_seqs</p>
-      <p class="cs">p50 line, p5–p95 band. Shaded span = GPU-resident warm capacity zone; lines = 40 (comfort) / 50 tok/s.</p>
+      <p class="cs">p50 line, p5–p95 band, <b>log</b> speed axis. Shaded span = GPU-resident warm capacity zone; lines = 40 (comfort) / 50 tok/s. The x-axis rescales with the config so the all-warm-decoding point always fits.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>p50 per-user</span>
         <span class="li"><span class="sw" style="background:var(--s1);opacity:.28"></span>p5–p95</span>
         <span class="li"><span class="sw" style="background:var(--s3);opacity:.4"></span>capacity zone</span>
+        <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
       </div>
       <div class="chartbox"><div id="chartC"></div><div class="tt" id="ttC"></div></div>
     </div>
 
     <div class="panel card">
       <p class="ct">D · Aggregate throughput vs max_num_seqs</p>
-      <p class="cs">System p50 tok/s (×replicas for DP).</p>
+      <p class="cs">System p50 tok/s (×replicas for DP). Same auto-scaled axis as C.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>aggregate p50</span>
+        <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
       </div>
       <div class="chartbox"><div id="chartD"></div><div class="tt" id="ttD"></div></div>
     </div>
@@ -406,9 +420,17 @@ const CONFIG = {
 
   // ---- MONTE-CARLO sizes (full quality) ----
   WARM_ITER: 700,
-  DECODE_ITER: 600, DECODE_NMAX: 120, DECODE_STEP: 2,
+  // The decode x-axis is DYNAMIC: it must always reach the stress point this
+  // study cares about — every GPU-resident warm session decoding at once — which
+  // is ~94 seqs for the 27B on one H200 but ~680 for the 35B-A3B on TP2. NMIN
+  // keeps small configs on a familiar axis; HEADROOM leaves room past warm p95.
+  DECODE_ITER: 600, DECODE_NMIN: 120, DECODE_HEADROOM: 1.15, DECODE_SAMPLES: 60,
+  // Cost is O(iter x samples x nMax): a fixed sample COUNT (not a fixed step)
+  // keeps the curve smooth at any range, and iterations are traded down as the
+  // range grows so a TP2 sweep costs about what the 120-seq one always did.
+  DECODE_ITER_MIN: 120,
   // draft (while dragging) — lighter for responsiveness
-  DRAFT: { WARM_ITER: 220, DECODE_ITER: 200, DECODE_STEP: 4 },
+  DRAFT: { WARM_ITER: 220, DECODE_ITER: 200, DECODE_SAMPLES: 30, DECODE_ITER_MIN: 60 },
 };
 
 /* ---- model helpers ---- */
@@ -601,6 +623,24 @@ function warmCapacity(model, topo, wl, ram_gib, n_iter){
 /* ============================================================================
    CONCURRENCY — decode tok/s vs max_num_seqs  (mirrors decode_curves)
    ========================================================================== */
+// Size the decode sweep for the current config. `gpuP95` is the top of the
+// GPU-resident warm band, so the axis always contains the "every warm session
+// decodes at once" stress point with headroom to spare. Sampling a fixed
+// COUNT of points (rather than a fixed step) keeps the curve equally smooth at
+// any range; iterations shrink as the range grows so total work stays near the
+// old 120-seq cost. Percentiles hold up: each draw at concurrency n already
+// averages n contexts, so the sampling distribution tightens as n rises.
+function decodePlan(gpuP95, draft){
+  const q = draft ? CONFIG.DRAFT : CONFIG;
+  const nMax = Math.max(CONFIG.DECODE_NMIN,
+                        Math.ceil(gpuP95 * CONFIG.DECODE_HEADROOM));
+  const step = Math.max(1, Math.round(nMax / q.DECODE_SAMPLES));
+  const iter = Math.max(q.DECODE_ITER_MIN,
+                        Math.min(q.DECODE_ITER,
+                                 Math.round(q.DECODE_ITER * CONFIG.DECODE_NMIN / nMax)));
+  return { nMax, step, iter };
+}
+
 function decodeCurves(model, topo, wl, nMax, step, n_iter){
   const bw = effective_bw(topo);
   const ns=[], p5=[], p50=[], p95=[], agg=[];
@@ -670,8 +710,25 @@ function cssv(name){ return getComputedStyle(document.documentElement).getProper
 function fmt(x, d){ return x.toLocaleString("en-US",{maximumFractionDigits:d??0, minimumFractionDigits:d??0}); }
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;"); }
 
-// generic scale
+// generic scales
 function linScale(d0,d1,r0,r1){ const m=(r1-r0)/(d1-d0||1); return x=>r0+(x-d0)*m; }
+// log10 scale; affine in ln(x), so a straight screen segment between two
+// samples is exactly the geometric interpolation of their values (see interpAt)
+function logScale(d0,d1,r0,r1){
+  const l0=Math.log(d0), m=(r1-r0)/((Math.log(d1)-l0)||1);
+  return x=>r0+(Math.log(Math.max(x,d0*1e-9))-l0)*m;
+}
+// 1-2-5 decade ticks inside [lo,hi]; falls back to a finer set for narrow ranges
+function logTicks(lo,hi){
+  const build=ms=>{
+    const out=[];
+    for(let e=Math.floor(Math.log10(lo)); e<=Math.ceil(Math.log10(hi)); e++)
+      for(const m of ms){ const v=m*Math.pow(10,e); if(v>=lo&&v<=hi) out.push(v); }
+    return out;
+  };
+  const coarse=build([1,2,5]);
+  return coarse.length>=4 ? coarse : build([1,1.5,2,3,5,7]);
+}
 
 // build an svg element from an html string
 function svgEl(inner, vbW, vbH){
@@ -783,17 +840,39 @@ function renderChartB(sc){
   document.getElementById('chartB').innerHTML = svgEl(g,W,H);
 }
 
+// Round, human-readable x ticks for a dynamic 1..nMax axis (~4 intervals).
+function xTicks(nMax){
+  const raw=nMax/4;
+  const pow=Math.pow(10, Math.floor(Math.log10(raw)));
+  const step=([1,2,2.5,5,10].find(m=>raw<=m*pow) ?? 10)*pow;
+  const out=[1];
+  for(let t=step;t<=nMax+1e-9;t+=step){
+    const v=Math.round(t);
+    if(v-out[out.length-1] >= step*0.6) out.push(v);   // never crowd the "1"
+  }
+  return out;
+}
+
 /* ---- Chart C: per-user decode with band + capacity zone ---- */
 let chartCGeom=null;
-function renderChartC(dc, zone){
+function renderChartC(dc, zone, stress){
   const W=560,H=300, mL=46,mR=16,mT=14,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
-  const xmax=CONFIG.DECODE_NMAX;
-  let ymax=0; dc.p95.forEach(v=>{ if(v>ymax)ymax=v; });
-  // floor keeps both threshold markers (40 / 50 tok/s) on-scale at any setting
-  ymax=Math.max(ymax*1.1, 55);
+  // axis ends at the last SAMPLED n, so the curve reaches the right edge and
+  // the hover clamp (which also uses the last sample) agrees with the axis
+  const xmax=dc.ns[dc.ns.length-1];
+  // LOG y-scale. Per-user speed is a roofline hyperbola: once the axis reaches
+  // the all-warm-decoding point it spans two orders of magnitude (~4,500 tok/s
+  // at n=1 vs ~34 at n=800 on TP2), and a linear axis presses everything that
+  // matters — the 40/50 floors, the capacity zone — flat onto the baseline.
+  let yhi=0, ylo=Infinity;
+  dc.p95.forEach(v=>{ if(v>yhi)yhi=v; });
+  dc.p5.forEach(v=>{ if(v<ylo)ylo=v; });
+  // always keep both threshold markers in frame, whatever the curve does
+  ylo=Math.min(ylo, 38)/1.15;
+  yhi=Math.max(yhi, 60)*1.10;
   const sx=linScale(1,xmax,mL,mL+pw);
-  const sy=linScale(0,ymax,mT+ph,mT);
+  const sy=logScale(ylo,yhi,mT+ph,mT);
   const s1=cssv('--s1'), s3=cssv('--s3'), grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
   let g='';
   // capacity operating zone (vertical span from warm p5..p95 of current topo)
@@ -804,15 +883,14 @@ function renderChartC(dc, zone){
       g+=`<text class="axtick" x="${(zx0+zx1)/2}" y="${mT+11}" text-anchor="middle" fill="${s3}">capacity zone</text>`;
     }
   }
-  // y grid
-  const nt=5;
-  for(let i=0;i<=nt;i++){
-    const v=ymax*i/nt, Y=sy(v);
+  // y grid (log decades, 1-2-5 or finer when the range is narrow)
+  logTicks(ylo,yhi).forEach(v=>{
+    const Y=sy(v);
     g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
     g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${fmt(v,0)}</text>`;
-  }
-  // x ticks
-  [1,30,60,90,120].forEach(t=>{
+  });
+  // x ticks (dynamic range)
+  xTicks(xmax).forEach(t=>{
     const X=sx(t);
     g+=`<text class="axtick" x="${X}" y="${mT+ph+15}" text-anchor="middle">${t}</text>`;
   });
@@ -823,7 +901,7 @@ function renderChartC(dc, zone){
   // "no one notices the model is shared" mark (the 20 tok/s hard floor is
   // deliberately not drawn — planning happens against 40).
   [40,50].forEach(f=>{
-    if(f<=ymax){ const Y=sy(f);
+    if(f>=ylo && f<=yhi){ const Y=sy(f);
       g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${muted}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>`;
       g+=`<text class="axtick" x="${mL+pw-2}" y="${Y-3}" text-anchor="end" fill="${muted}">${f}</text>`;
     }
@@ -838,17 +916,29 @@ function renderChartC(dc, zone){
   let ln=`M ${sx(dc.ns[0])} ${sy(dc.p50[0])}`;
   for(let i=1;i<dc.ns.length;i++) ln+=` L ${sx(dc.ns[i])} ${sy(dc.p50[i])}`;
   g+=`<path d="${ln}" fill="none" stroke="${s1}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // THE stress point: every GPU-resident p5-warm session decoding at once. This
+  // is the tile's headline number and the docs' v@warm column, so the axis is
+  // sized to always contain it — mark it where it lands on the p50 curve.
+  if(stress && stress.n>=1 && stress.n<=xmax){
+    const X=sx(stress.n), Y=sy(clip(stress.pu,ylo,yhi));
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${s3}" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+    g+=`<circle cx="${X}" cy="${Y}" r="4.5" fill="${s3}" stroke="${cssv('--surface')}" stroke-width="1.5"/>`;
+    const flip = X > mL+pw*0.62;    // keep the label inside the plot
+    g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s3}">all warm decoding · ${fmt(stress.pu,0)} tok/s</text>`;
+  }
   document.getElementById('chartC').innerHTML = svgEl(g,W,H);
-  chartCGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax,ymax, sxDom:[1,xmax], syDom:[0,ymax], dc,
+  // ylog tells the hover to interpolate GEOMETRICALLY between samples, matching
+  // the straight segments actually drawn on a log axis (see interpAt)
+  chartCGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax, ylo,yhi, ylog:true, sxDom:[1,xmax], dc,
     sx:(x)=>sx(x), sy:(y)=>sy(y) };
 }
 
 /* ---- Chart D: aggregate ---- */
 let chartDGeom=null;
-function renderChartD(dc){
+function renderChartD(dc, stress){
   const W=560,H=300, mL=54,mR=16,mT=14,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
-  const xmax=CONFIG.DECODE_NMAX;
+  const xmax=dc.ns[dc.ns.length-1];   // dynamic, same range as chart C
   let ymax=0; dc.agg.forEach(v=>{ if(v>ymax)ymax=v; });
   ymax=Math.max(ymax*1.1, 1);
   const sx=linScale(1,xmax,mL,mL+pw);
@@ -861,7 +951,7 @@ function renderChartD(dc){
     g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
     g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${fmt(v/1000,1)}k</text>`;
   }
-  [1,30,60,90,120].forEach(t=>{
+  xTicks(xmax).forEach(t=>{
     const X=sx(t);
     g+=`<text class="axtick" x="${X}" y="${mT+ph+15}" text-anchor="middle">${t}</text>`;
   });
@@ -871,6 +961,14 @@ function renderChartD(dc){
   let ln=`M ${sx(dc.ns[0])} ${sy(dc.agg[0])}`;
   for(let i=1;i<dc.ns.length;i++) ln+=` L ${sx(dc.ns[i])} ${sy(dc.agg[i])}`;
   g+=`<path d="${ln}" fill="none" stroke="${s3}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // same stress point as chart C: system throughput when all warm decode at once
+  if(stress && stress.n>=1 && stress.n<=xmax){
+    const X=sx(stress.n), Y=sy(clip(stress.agg,0,ymax));
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${s3}" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.75"/>`;
+    g+=`<circle cx="${X}" cy="${Y}" r="4.5" fill="${s3}" stroke="${cssv('--surface')}" stroke-width="1.5"/>`;
+    const flip = X > mL+pw*0.62;
+    g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s3}">all warm decoding · ${fmt(stress.agg/1000,1)} ktok/s</text>`;
+  }
   document.getElementById('chartD').innerHTML = svgEl(g,W,H);
   chartDGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax,ymax, dc, sx:(x)=>sx(x), sy:(y)=>sy(y) };
 }
@@ -881,16 +979,21 @@ function renderChartD(dc){
 // Value of a plotted series at an arbitrary x, read off the SAME straight
 // segments the chart draws (the sweep samples every DECODE_STEP seqs, so the
 // curve between samples IS a line). Clamped to the sampled range at the ends.
-function interpAt(dc, key, x){
+// `log` = the chart plots this series on a log y-axis, where the drawn segment
+// is the GEOMETRIC interpolation of its endpoints — interpolate the same way or
+// the readout would not be the value the segment shows.
+function interpAt(dc, key, x, log){
   const ns=dc.ns, arr=dc[key], last=ns.length-1;
   if(x<=ns[0]) return arr[0];
   if(x>=ns[last]) return arr[last];
   let i=last-1;
   for(let j=0;j<last;j++){ if(ns[j+1]>=x){ i=j; break; } }
   const t=(x-ns[i])/(ns[i+1]-ns[i]);
+  if(log && arr[i]>0 && arr[i+1]>0)
+    return Math.exp(Math.log(arr[i]) + t*(Math.log(arr[i+1])-Math.log(arr[i])));
   return arr[i] + t*(arr[i+1]-arr[i]);
 }
-// markFn(n, dc) -> [{v, color, r}] : the plotted series values the crosshair
+// markFn(n, dc, geom) -> [{v, color, r}] : the plotted series values the crosshair
 // crosses at this x. The FIRST entry is the tooltip's anchor point, so the
 // readout sits next to where the bar actually meets the curve.
 function setupHover(chartId, ttId, getGeom, fmtFn, markFn){
@@ -918,9 +1021,9 @@ function setupHover(chartId, ttId, getGeom, fmtFn, markFn){
     const n=clip(Math.round(nData), 1, nMax);
     const px=geom.sx(n);
     // crosshair + a dot on every curve it crosses
-    const marks=(markFn?markFn(n,dc):[]).map(m=>({...m, y:geom.sy(m.v)}));
+    const marks=(markFn?markFn(n,dc,geom):[]).map(m=>({...m, y:geom.sy(m.v)}));
     drawCross(svg, px, geom, marks);
-    tt.innerHTML = fmtFn(n, dc);
+    tt.innerHTML = fmtFn(n, dc, geom);
     // Position in CHARTBOX-relative px, anchored on the intersection point and
     // clamped inside the box: the card clips overflow, so a tooltip placed
     // above the plot (the old transform) was cut off or invisible entirely.
@@ -969,7 +1072,7 @@ function removeCross(svg){ const e=svg.querySelector('.xcross'); if(e) e.remove(
 /* ============================================================================
    RENDER pipeline
    ========================================================================== */
-let lastDC=null, lastWarmCur=null, lastWarmAll=null;
+let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null;
 
 // active model with the KV-dtype, structural-assumption and MTP-speedup
 // knobs applied. FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py). The
@@ -1001,8 +1104,6 @@ function computeAndRender(draft){
   const wl=currentWL();
   const q = draft ? CONFIG.DRAFT : null;
   const warmIter = q? q.WARM_ITER : CONFIG.WARM_ITER;
-  const decIter  = q? q.DECODE_ITER : CONFIG.DECODE_ITER;
-  const decStep  = q? q.DECODE_STEP : CONFIG.DECODE_STEP;
 
   // Chart A (analytic, cheap)
   renderChartA();
@@ -1033,14 +1134,27 @@ function computeAndRender(draft){
   lastWarmAll=sc;
   renderChartB(sc);
 
-  // Decode curves for current topo
-  const dc=decodeCurves(model,topo,wl,CONFIG.DECODE_NMAX,decStep,decIter);
+  // Decode curves for current topo, over an axis sized to reach the stress
+  // point (all GPU-resident warm sessions decoding at once).
+  const plan=decodePlan(lastWarmCur.g95, draft);
+  const dc=decodeCurves(model,topo,wl,plan.nMax,plan.step,plan.iter);
   lastDC=dc;
+  // the stress point itself: shared by both charts and both tiles, so it is
+  // computed once here rather than three times with three different draws
+  lastStress=stressPoint(model,topo,wl,lastWarmCur);
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
-  renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95});
-  renderChartD(dc);
+  renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress);
+  renderChartD(dc, lastStress);
 
-  renderTiles(model,topo,wl,dc,lastWarmCur);
+  renderTiles(model,topo,wl,dc,lastWarmCur,lastStress);
+}
+
+// The study's worst case: every GPU-resident p5-warm session decoding at once.
+// Computed directly at that n, so it is never clamped to the sweep's range.
+function stressPoint(model, topo, wl, warm){
+  const n=Math.max(1,Math.round(warm.g5));
+  const pu=decodeAtN(model,topo,wl,n,400);
+  return { n, pu, agg:n*pu*topo.replicas };
 }
 
 // per-user p50 tok/s at an arbitrary concurrency n (not limited to the sweep range)
@@ -1056,17 +1170,16 @@ function decodeAtN(model, topo, wl, n, n_iter){
   return percentiles(buf, [50])[0];
 }
 
-function renderTiles(model,topo,wl,dc,warm){
+function renderTiles(model,topo,wl,dc,warm,stress){
   const pool=kv_pool_tokens(model,topo);
   const ceiling=(1-wl.invalidation)*100;
-  // Stress point: every GPU-RESIDENT p5-warm session decoding at once (computed
-  // directly at that n — NOT clamped to the decode sweep's 120-seq range).
-  // CPU-offloaded sessions are storage: their KV lives in host RAM, so they
-  // cannot decode until they are restored over PCIe. Raising the offload slider
-  // must therefore NOT change per-user decode speed — only warm STORAGE.
-  const nOp=Math.max(1,Math.round(warm.g5));
-  const puOp=decodeAtN(model,topo,wl,nOp,400);
-  const aggOp=nOp*puOp*topo.replicas/1000;
+  // Stress point (computed once in stressPoint(), marked on charts C and D):
+  // every GPU-RESIDENT p5-warm session decoding at once. CPU-offloaded sessions
+  // are storage — their KV lives in host RAM, so they cannot decode until they
+  // are restored over PCIe. Raising the offload slider must therefore NOT change
+  // per-user decode speed, only warm STORAGE.
+  const st=stress || stressPoint(model,topo,wl,warm);
+  const nOp=st.n, puOp=st.pu, aggOp=st.agg/1000;
   const floorClass = puOp>=40?'good':(puOp>=20?'warn':'crit');
   const dp = topo.kind==="dp";
   // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
@@ -1172,7 +1285,9 @@ function syncLabels(){
   document.getElementById('v-sub_median').textContent=fmt(state.sub_median,0);
   document.getElementById('v-sub_sigma').textContent=state.sub_sigma.toFixed(2);
   const r=state.sub_ratio;
-  const perTxt = r>0 ? ` · 1 per ${fmt(1/r,0)} · ${fmt(100*r/(1+r),0)}% of mix` : ' · none';
+  // keep this readout short — it shares one grid cell with its label; the
+  // r/(1+r) mix share is spelled out in the control's tooltip
+  const perTxt = r>0 ? ` · 1 per ${fmt(1/r,0)}` : ' · none';
   document.getElementById('v-sub_ratio').textContent=r.toFixed(2)+perTxt;
   document.getElementById('v-sys').textContent=fmt(state.sys,0);
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
@@ -1196,30 +1311,30 @@ themeBtn.addEventListener('click',()=>{
   applyThemeLabel();
   // re-render charts with new theme colors
   if(lastWarmAll){ renderChartA(); renderChartB(lastWarmAll);
-    if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95}); renderChartD(lastDC);
-      renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur);
+    if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress); renderChartD(lastDC,lastStress);
+      renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress);
     }
   }
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{
   if(!document.documentElement.getAttribute('data-theme')){ applyThemeLabel();
     if(lastWarmAll){ renderChartA(); renderChartB(lastWarmAll);
-      if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95}); renderChartD(lastDC);
-        renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur); } }
+      if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress); renderChartD(lastDC,lastStress);
+        renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress); } }
   }
 });
 
 /* ---- hover setup ---- */
-setupHover('chartC','ttC',()=>chartCGeom,(n,dc)=>{
-  const s1=cssv('--s1');
+setupHover('chartC','ttC',()=>chartCGeom,(n,dc,g)=>{
+  const s1=cssv('--s1'), L=g.ylog;
   return `<div class="tth tnum">max_num_seqs = ${n}</div>`+
-    `<div class="row"><span class="sw" style="background:${s1}"></span>p50 <b class="tnum">${fmt(interpAt(dc,'p50',n),1)}</b> tok/s</div>`+
-    `<div class="row"><span class="sw" style="background:${s1};opacity:.4"></span>p5–p95 <b class="tnum">${fmt(interpAt(dc,'p5',n),1)}–${fmt(interpAt(dc,'p95',n),1)}</b> tok/s</div>`;
-}, (n,dc)=>{
-  const s1=cssv('--s1');
-  return [{v:interpAt(dc,'p50',n), color:s1, r:4},   // anchor: the p50 curve
-          {v:interpAt(dc,'p95',n), color:s1, r:2.4},
-          {v:interpAt(dc,'p5', n), color:s1, r:2.4}];
+    `<div class="row"><span class="sw" style="background:${s1}"></span>p50 <b class="tnum">${fmt(interpAt(dc,'p50',n,L),1)}</b> tok/s</div>`+
+    `<div class="row"><span class="sw" style="background:${s1};opacity:.4"></span>p5–p95 <b class="tnum">${fmt(interpAt(dc,'p5',n,L),1)}–${fmt(interpAt(dc,'p95',n,L),1)}</b> tok/s</div>`;
+}, (n,dc,g)=>{
+  const s1=cssv('--s1'), L=g.ylog;
+  return [{v:interpAt(dc,'p50',n,L), color:s1, r:4},   // anchor: the p50 curve
+          {v:interpAt(dc,'p95',n,L), color:s1, r:2.4},
+          {v:interpAt(dc,'p5', n,L), color:s1, r:2.4}];
 });
 setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
   const s3=cssv('--s3');
