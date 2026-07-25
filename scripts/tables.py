@@ -123,8 +123,11 @@ def main():
 
     print("\n== Binding order WITHOUT MTP (speculative decoding off, mtp=1.0) ==")
     print("  the decision table's 'cache binds first' is CONDITIONAL on the 1.7x MTP")
-    print("  speedup. Turn MTP off and the speed bound tightens by exactly 1.7x while")
-    print("  capacity is unchanged (MTP is a decode-path speedup, not a memory one):")
+    print("  speedup. MTP scales SPEED, not memory: at a FIXED concurrency, turning it")
+    print("  off divides per-user tok/s by exactly 1.7 and leaves capacity untouched.")
+    print("  The 40 tok/s CROSSING moves further than 1.7x (1.8-2.0x below) because it")
+    print("  lands at a lower n, where the fixed per-step weight read is a bigger share")
+    print("  of the bytes moved, so each seq removed buys back less speed.")
     print("  mns@40 = max decoders at >=40 tok/s p50; binds = min(warm, mns@40)")
     for mk in MODELS_K:
         for tk in TOPOS_K:

@@ -88,7 +88,10 @@ details.assump .body b{color:var(--text); font-weight:600}
 .ctl-sec{grid-column:1/-1; font-size:10.5px; text-transform:uppercase; letter-spacing:.055em;
   color:var(--muted); font-weight:650; margin:7px 0 -1px; padding-top:8px;
   border-top:1px solid var(--border);}
-.ctl-sec:first-child{border-top:0; padding-top:0; margin-top:0}
+/* every .ctl-sec is the first child of its own (display:contents) group, so
+   `:first-child` would match all three and no rule would ever draw — scope it
+   to the FIRST GROUP instead, leaving the other two headings ruled */
+.ctl-group:first-child > .ctl-sec{border-top:0; padding-top:0; margin-top:0}
 .field label.flabel{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px; color:var(--text-2); margin-bottom:3px; gap:8px}
 .field label.flabel .val{color:var(--text); font-weight:620; font-size:12.5px}
 .field .hint{font-size:11px; color:var(--muted); margin-top:2px; line-height:1.45}
@@ -425,12 +428,20 @@ const CONFIG = {
   // is ~94 seqs for the 27B on one H200 but ~680 for the 35B-A3B on TP2. NMIN
   // keeps small configs on a familiar axis; HEADROOM leaves room past warm p95.
   DECODE_ITER: 600, DECODE_NMIN: 120, DECODE_HEADROOM: 1.15, DECODE_SAMPLES: 60,
-  // Cost is O(iter x samples x nMax): a fixed sample COUNT (not a fixed step)
-  // keeps the curve smooth at any range, and iterations are traded down as the
-  // range grows so a TP2 sweep costs about what the 120-seq one always did.
-  DECODE_ITER_MIN: 120,
+  // Sweep cost is O(iter x nMax) (see decodeCurves' shared draw), so iterations
+  // are capped by a WORK budget rather than a flat floor: every realistic config
+  // keeps the full 600, and only a pathologically wide axis tapers toward the
+  // minimum. A fixed sample COUNT keeps the curve smooth at any range.
+  DECODE_BUDGET: 1_400_000, DECODE_ITER_MIN: 40,
+  // Warm-fill work budget (draws per warmCapacity call). A fill samples one
+  // request per resident session, so pool size — not iteration count — sets the
+  // cost; these caps keep the widest legal config interactive. SCAN is chart B's
+  // 12-point survey, which is coarse by design.
+  WARM_BUDGET: 600_000, WARM_BUDGET_SCAN: 120_000, WARM_ITER_MIN: 8,
   // draft (while dragging) — lighter for responsiveness
-  DRAFT: { WARM_ITER: 220, DECODE_ITER: 200, DECODE_SAMPLES: 30, DECODE_ITER_MIN: 60 },
+  DRAFT: { WARM_ITER: 220, DECODE_ITER: 200, DECODE_SAMPLES: 30,
+           DECODE_BUDGET: 400_000, DECODE_ITER_MIN: 30,
+           WARM_BUDGET: 200_000, WARM_BUDGET_SCAN: 35_000 },
 };
 
 /* ---- model helpers ---- */
@@ -541,8 +552,10 @@ function percentiles(arr, ps){
    ========================================================================== */
 function p_sub(wl){ return wl.sub_ratio / (1 + wl.sub_ratio); }
 
-// sample one request -> {full, prefix, isCold}
-function sampleReq(wl){
+// sample one request into `out` -> {full, prefix, isCold}. A warm fill draws
+// one request per resident session — millions per render at large pools — so
+// the hot path writes into a caller-owned object instead of allocating one.
+function sampleReqInto(wl, out){
   const isSub = Math.random() < p_sub(wl);
   let length = isSub ? lognormal(wl.sub_median, wl.sub_sigma)
                      : lognormal(wl.user_median, wl.user_sigma);
@@ -551,8 +564,10 @@ function sampleReq(wl){
   const full = clip(length, Math.min(prefix, wl.cap), wl.cap);
   const isCold = Math.random() < wl.invalidation;
   if (isCold) prefix = 0;   // cold: matches nothing (occupies full length)
-  return { full, prefix, isCold };
+  out.full=full; out.prefix=prefix; out.isCold=isCold;
+  return out;
 }
+function sampleReq(wl){ return sampleReqInto(wl, {full:0, prefix:0, isCold:false}); }
 // sample just a length (decode only needs full)
 function sampleFull(wl){
   const isSub = Math.random() < p_sub(wl);
@@ -565,6 +580,7 @@ function sampleFull(wl){
 /* ============================================================================
    CAPACITY — warm reusable sessions in one cache  (mirrors _warm_once)
    ========================================================================== */
+const _warmReq = {full:0, prefix:0, isCold:false};   // warmOnce scratch
 function warmOnce(pool, ram_gib, model, wl){
   // reserve one block per distinct prefix a request class can actually use
   let reserved = wl.sys_user;
@@ -579,11 +595,16 @@ function warmOnce(pool, ram_gib, model, wl){
 
   // arrival-order STREAMING fill (GPU, then optional CPU offload) — samples
   // until both budgets are exhausted, so results are never draw-capped.
-  // SAFETY guards against runaway budgets; hitting it means a censored result.
+  // SAFETY guards against runaway budgets; hitting it CENSORS the result (the
+  // budgets still had room), which is reported up so the readout can say "at
+  // least this many" instead of quietly under-reporting. Reachable: a 40k
+  // shared prefix at a 5k median makes every session cost only its recurrent
+  // state, so a TP8 pool plus 1 TiB of offload holds >60k of them.
   const SAFETY = 60000;
   let warm = 0, warmGpu = 0, gpu = 0, ram = 0, gpuFull = false, done = false, i = 0;
+  const r = _warmReq;                       // scratch, refilled every iteration
   for (; i<SAFETY && !done; i++){
-    const r = sampleReq(wl);
+    sampleReqInto(wl, r);
     const u = r.isCold ? r.full : Math.max(r.full - r.prefix, 0);
     if (!gpuFull){
       gpu += u + state_tok;
@@ -596,10 +617,13 @@ function warmOnce(pool, ram_gib, model, wl){
     } else done = true;
   }
   if (!done) console.warn("warmOnce: SAFETY cap reached — result censored");
+  // censored = the fill ran out of DRAWS, not budget: counts are lower bounds
   // warm    = warm STORAGE (HBM + offloaded to host RAM)
   // warmGpu = HBM-resident only — the ONLY sessions that can decode without a
   //           PCIe restore first, so decode concurrency is computed over these
-  return { warm, warmGpu };
+  // drawn   = requests sampled to fill both budgets — the cost of this fill,
+  //           used to size the iteration count (see warmCapacity)
+  return { warm, warmGpu, drawn:i, censored:!done };
 }
 
 // Returns {all, gpu, off}, each [p5,p50,p95]. `all` counts offloaded sessions
@@ -608,16 +632,31 @@ function warmOnce(pool, ram_gib, model, wl){
 // within the same fill) and then percentiled, so it is a statistic of the
 // offloaded population rather than a difference of marginal percentiles.
 // Mirrors warm_capacity(which=...) in scenario_model.py.
-function warmCapacity(model, topo, wl, ram_gib, n_iter){
+function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
   const pool = kv_pool_tokens(model, topo);
-  const all = new Float64Array(n_iter), gpu = new Float64Array(n_iter),
-        off = new Float64Array(n_iter);
-  for (let i=0;i<n_iter;i++){
-    const r = warmOnce(pool, ram_gib, model, wl);
+  // One fill costs one draw per resident session, so a big pool full of small
+  // sessions (a 91M-token TP8 pool at a 5k median holds ~30k of them) makes a
+  // 700-iteration run a multi-second freeze. Probe one fill for its true cost,
+  // then spend at most `budget` draws. This only bites above a few thousand
+  // sessions per fill — where the count's relative spread is ~1/sqrt(count),
+  // i.e. under 1%, so a dozen fills already pin p5/p50/p95 to a fraction of a
+  // percent. Ordinary configs (~100 sessions) keep every requested iteration.
+  const first = warmOnce(pool, ram_gib, model, wl);
+  const cap = Math.round((budget ?? CONFIG.WARM_BUDGET) / Math.max(1, first.drawn));
+  // A censored fill is pinned at the draw cap, so every repeat returns the same
+  // floor: sampling it many times buys no distribution, only cost.
+  const floor = first.censored ? 3 : CONFIG.WARM_ITER_MIN;
+  const iters = Math.max(Math.min(n_iter, floor), Math.min(n_iter, cap));
+  const all = new Float64Array(iters), gpu = new Float64Array(iters),
+        off = new Float64Array(iters);
+  let censored = false;
+  for (let i=0;i<iters;i++){
+    const r = i===0 ? first : warmOnce(pool, ram_gib, model, wl);
     all[i] = r.warm; gpu[i] = r.warmGpu; off[i] = r.warm - r.warmGpu;
+    censored = censored || r.censored;
   }
   return { all: percentiles(all, [5,50,95]), gpu: percentiles(gpu, [5,50,95]),
-           off: percentiles(off, [5,50,95]) };
+           off: percentiles(off, [5,50,95]), censored };
 }
 
 /* ============================================================================
@@ -625,38 +664,51 @@ function warmCapacity(model, topo, wl, ram_gib, n_iter){
    ========================================================================== */
 // Size the decode sweep for the current config. `gpuP95` is the top of the
 // GPU-resident warm band, so the axis always contains the "every warm session
-// decodes at once" stress point with headroom to spare. Sampling a fixed
-// COUNT of points (rather than a fixed step) keeps the curve equally smooth at
-// any range; iterations shrink as the range grows so total work stays near the
-// old 120-seq cost. Percentiles hold up: each draw at concurrency n already
-// averages n contexts, so the sampling distribution tightens as n rises.
+// decodes at once" stress point with headroom to spare. A fixed sample COUNT
+// (rather than a fixed step) keeps the curve equally smooth at any range, and
+// iterations taper as the range grows. Percentiles hold up: each draw at
+// concurrency n already averages n contexts, so its spread tightens as n rises.
 function decodePlan(gpuP95, draft){
   const q = draft ? CONFIG.DRAFT : CONFIG;
   const nMax = Math.max(CONFIG.DECODE_NMIN,
                         Math.ceil(gpuP95 * CONFIG.DECODE_HEADROOM));
   const step = Math.max(1, Math.round(nMax / q.DECODE_SAMPLES));
   const iter = Math.max(q.DECODE_ITER_MIN,
-                        Math.min(q.DECODE_ITER,
-                                 Math.round(q.DECODE_ITER * CONFIG.DECODE_NMIN / nMax)));
+                        Math.min(q.DECODE_ITER, Math.round(q.DECODE_BUDGET / nMax)));
   return { nMax, step, iter };
 }
 
 function decodeCurves(model, topo, wl, nMax, step, n_iter){
-  const bw = effective_bw(topo);
-  const ns=[], p5=[], p50=[], p95=[], agg=[];
-  const scale = topo.replicas;
+  const bw = effective_bw(topo), scale = topo.replicas;
+  const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);
+  const K=ns.length, last=ns[K-1];
+  // ONE pool of contexts per iteration, read CUMULATIVELY: the sample for
+  // concurrency n is the running sum of the pool's first n contexts. Drawing
+  // each sampled n its own pool costs O(iter x K x nMax) — 69M draws and a
+  // 3.5 s synchronous freeze at the widest legal axis — while the running sum
+  // costs O(iter x nMax), ~K times less, for the same statistics: every n
+  // still sees n i.i.d. contexts, so its marginal distribution is unchanged.
+  // Neighbouring n now share draws (common random numbers), which only makes
+  // the curve smoother. scenario_model.py redraws per n; that is a difference
+  // in MC noise structure, not in the model.
+  const kvsum = Array.from({length:K}, ()=>new Float64Array(n_iter));
+  for (let it=0; it<n_iter; it++){
+    let sum=0, k=0;
+    for (let s=1; s<=last; s++){
+      sum += sampleFull(wl);
+      if (ns[k]===s) kvsum[k++][it]=sum;
+    }
+  }
+  const p5=[], p50=[], p95=[], agg=[];
   const buf = new Float64Array(n_iter);
-  for (let n=1; n<=nMax; n+=step){
+  for (let k=0;k<K;k++){
+    const n=ns[k];
     // weights + DeltaNet recurrent-state read+write for every active sequence
     const wd = w_decode(model, n) + 2*n*model.deltanet_state;
-    for (let it=0; it<n_iter; it++){
-      let kvsum = 0;
-      for (let s=0;s<n;s++) kvsum += sampleFull(wl);
-      const step_bytes = wd + kvsum*model.kv_bpt;
-      buf[it] = model.mtp * bw / step_bytes;
-    }
+    const col=kvsum[k];
+    for (let it=0; it<n_iter; it++) buf[it] = model.mtp * bw / (wd + col[it]*model.kv_bpt);
     const [a,b,c] = percentiles(buf, [5,50,95]);
-    ns.push(n); p5.push(a); p50.push(b); p95.push(c);
+    p5.push(a); p50.push(b); p95.push(c);
     agg.push(n*b*scale);
   }
   return { ns, p5, p50, p95, agg };
@@ -977,7 +1029,8 @@ function renderChartD(dc, stress){
    TOOLTIP / crosshair for C and D
    ========================================================================== */
 // Value of a plotted series at an arbitrary x, read off the SAME straight
-// segments the chart draws (the sweep samples every DECODE_STEP seqs, so the
+// segments the chart draws (the sweep samples ~60 points across the dynamic
+// axis — decodePlan() picks the stride — so the
 // curve between samples IS a line). Clamped to the sampled range at the ends.
 // `log` = the chart plots this series on a log y-axis, where the drawn segment
 // is the GEOMETRIC interpolation of its endpoints — interpolate the same way or
@@ -1009,7 +1062,7 @@ function setupHover(chartId, ttId, getGeom, fmtFn, markFn){
     const nData = 1 + (vx-geom.mL)/geom.pw*(geom.xmax-1);
     if(vx<geom.mL || vx>geom.mL+geom.pw){ tt.style.opacity=0; removeCross(svg); return; }
     // Track the pointer instead of snapping to the sweep's sample points (which
-    // made the bar and the readout jump in DECODE_STEP-sized hops). max_num_seqs
+    // made the bar and the readout jump one sample stride at a time). max_num_seqs
     // is an integer setting, so the bar lands on the nearest whole seq and every
     // series is INTERPOLATED along its drawn segment at that x — the readout is
     // then exactly what the eye reads off the curve under the bar.
@@ -1102,8 +1155,8 @@ function computeAndRender(draft){
   const model=activeModel();
   const topo=currentTopo();
   const wl=currentWL();
-  const q = draft ? CONFIG.DRAFT : null;
-  const warmIter = q? q.WARM_ITER : CONFIG.WARM_ITER;
+  const q = draft ? CONFIG.DRAFT : CONFIG;
+  const warmIter = q.WARM_ITER;
 
   // Chart A (analytic, cheap)
   renderChartA();
@@ -1111,26 +1164,37 @@ function computeAndRender(draft){
   // current configuration: warm capacity of ONE cache (DP: per replica).
   // g5/g95 = the HBM-resident subset (excludes CPU-offloaded sessions), which
   // is what any decode-concurrency readout must use.
-  const wc=warmCapacity(model,topo,wl,ramPerCache(topo),warmIter);
+  const wc=warmCapacity(model,topo,wl,ramPerCache(topo),warmIter,q.WARM_BUDGET);
   const [p5,p50,p95]=wc.all, [g5,g50,g95]=wc.gpu, [o5,o50,o95]=wc.off;
-  lastWarmCur={p5,p50,p95, g5,g50,g95, o5,o50,o95, system5:p5*topo.replicas, topo};
+  lastWarmCur={p5,p50,p95, g5,g50,g95, o5,o50,o95, censored:wc.censored,
+               system5:p5*topo.replicas, topo};
 
   // Chart B: warm p5 vs number of GPUs (TP one cache vs DP system total),
   // under the SAME offload setting as the current config (TP: whole buffer to
   // the one cache; DP: buffer split across the N replicas). Larger pools hold
   // more sessions, so fewer MC iterations suffice per point.
+  // Chart B is 12 warm fills — by far the most expensive panel at large pools.
+  // While a slider is being DRAGGED we keep the last settled scan and only move
+  // its "you" marker; the full scan runs when the drag settles (scheduleFull's
+  // 120 ms debounce). Everything else still updates live.
   const scaleNs=[1,2,3,4,6,8];
-  const dpIt=Math.max(60, Math.round(warmIter/4));
-  const tp5=[],tp95=[],dp5=[];
-  for(const n of scaleNs){
-    const it=Math.max(80, Math.round(warmIter/n));
-    const [a,,c]=warmCapacity(model,makeTopo("tp",n),wl,state.ram,it).all;
-    tp5.push(a); tp95.push(c);
-    const [r5]=warmCapacity(model,makeTopo("dp",n),wl,state.ram/n,dpIt).all;
-    dp5.push(r5*n);
+  let sc;
+  if (draft && lastWarmAll && lastWarmAll.ns.length===scaleNs.length){
+    sc=lastWarmAll;                       // reuse the last settled scan
+  } else {
+    const dpIt=Math.max(60, Math.round(warmIter/4));
+    const scanB=q.WARM_BUDGET_SCAN;
+    const tp5=[],tp95=[],dp5=[];
+    for(const n of scaleNs){
+      const it=Math.max(80, Math.round(warmIter/n));
+      const [a,,c]=warmCapacity(model,makeTopo("tp",n),wl,state.ram,it,scanB).all;
+      tp5.push(a); tp95.push(c);
+      const [r5]=warmCapacity(model,makeTopo("dp",n),wl,state.ram/n,dpIt,scanB).all;
+      dp5.push(r5*n);
+    }
+    sc={ns:scaleNs, tp5, tp95, dp5};
   }
-  const sc={ns:scaleNs, tp5, tp95, dp5,
-            cur:{n:state.ngpu, par:state.par, p5system:lastWarmCur.system5}};
+  sc={...sc, cur:{n:state.ngpu, par:state.par, p5system:lastWarmCur.system5}};
   lastWarmAll=sc;
   renderChartB(sc);
 
@@ -1141,7 +1205,7 @@ function computeAndRender(draft){
   lastDC=dc;
   // the stress point itself: shared by both charts and both tiles, so it is
   // computed once here rather than three times with three different draws
-  lastStress=stressPoint(model,topo,wl,lastWarmCur);
+  lastStress=stressPoint(dc,topo,lastWarmCur);
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
   renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress);
   renderChartD(dc, lastStress);
@@ -1150,24 +1214,14 @@ function computeAndRender(draft){
 }
 
 // The study's worst case: every GPU-resident p5-warm session decoding at once.
-// Computed directly at that n, so it is never clamped to the sweep's range.
-function stressPoint(model, topo, wl, warm){
+// Read off the decode sweep at that concurrency — the axis is sized to contain
+// it by construction (decodePlan), so this is never an extrapolation, it costs
+// nothing, and the tile can no longer disagree with the point chart C marks
+// (both are the p50 curve at the same x, interpolated the same way).
+function stressPoint(dc, topo, warm){
   const n=Math.max(1,Math.round(warm.g5));
-  const pu=decodeAtN(model,topo,wl,n,400);
+  const pu=interpAt(dc,'p50',n,true);
   return { n, pu, agg:n*pu*topo.replicas };
-}
-
-// per-user p50 tok/s at an arbitrary concurrency n (not limited to the sweep range)
-function decodeAtN(model, topo, wl, n, n_iter){
-  const bw = effective_bw(topo);
-  const wd = w_decode(model, n) + 2*n*model.deltanet_state;
-  const buf = new Float64Array(n_iter);
-  for (let it=0; it<n_iter; it++){
-    let kvsum = 0;
-    for (let s=0;s<n;s++) kvsum += sampleFull(wl);
-    buf[it] = model.mtp * bw / (wd + kvsum*model.kv_bpt);
-  }
-  return percentiles(buf, [50])[0];
 }
 
 function renderTiles(model,topo,wl,dc,warm,stress){
@@ -1178,7 +1232,7 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // are storage — their KV lives in host RAM, so they cannot decode until they
   // are restored over PCIe. Raising the offload slider must therefore NOT change
   // per-user decode speed, only warm STORAGE.
-  const st=stress || stressPoint(model,topo,wl,warm);
+  const st=stress || stressPoint(dc,topo,warm);
   const nOp=st.n, puOp=st.pu, aggOp=st.agg/1000;
   const floorClass = puOp>=40?'good':(puOp>=20?'warn':'crit');
   const dp = topo.kind==="dp";
@@ -1190,7 +1244,10 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // scenario_model.py's exact which="user" count; accurate near the reference
   // workload, drifts at extreme subagent ratios
   const tiles=[
-    {k:"Warm sessions · p5", hero:true, v:fmt(warm.p5,0), u:dp?"per replica":"sessions",
+    // a censored fill ran out of draws before it ran out of budget, so the count
+    // is a floor, not an estimate — say so rather than quietly under-reporting
+    {k:"Warm sessions · p5", hero:true, v:(warm.censored?"≥ ":"")+fmt(warm.p5,0),
+     u:dp?"per replica":"sessions",
      sub: (dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`
               : `the planning number — 95% of draws hold at least this many · ≈ ${fmt(warm.p5*(1-p_sub(wl)),0)} distinct users`)
           + (offl>=1 ? ` · by tier, p5 each: ${fmt(warm.g5,0)} HBM-resident · ${fmt(offl,0)} offloaded (storage)` : ''),
