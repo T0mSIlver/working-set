@@ -132,10 +132,30 @@ def main():
         print(f"  cap={cap // 1000:3d}k  {p5:5.0f} / {p50:5.0f}")
 
     print("\n== CPU offload sweep (35B-A3B, 1xH200, warm p50) ==")
+    print("  offload is STORAGE ONLY: it adds warm sessions in host RAM, but the")
+    print("  GPU-resident count -- the only sessions that can decode without a")
+    print("  PCIe restore, and therefore the basis of every decode figure -- is flat")
     for gib in (0, 64, 128, 256, 512, 1024):
-        p50 = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["1xH200"], w0,
-                              ram_gib=gib, n_iter=300, draw=16_000)[1]
-        print(f"  {gib:4d} GiB  {p50:5.0f}")
+        kw = dict(ram_gib=gib, n_iter=300, draw=16_000)
+        p50 = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["1xH200"], w0, **kw)[1]
+        g50 = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["1xH200"], w0,
+                              which="gpu", **kw)[1]
+        print(f"  {gib:4d} GiB  warm(storage) {p50:5.0f}   GPU-resident {g50:5.0f}")
+
+    print("\n== Median-context sweep (27B dense, FP8 KV, 1xH200) ==")
+    print("  sweeps the USER prompt median (subagents stay at their 8k median);")
+    print("  'warm users' = which='user', the distinct-user planning count")
+    med_ks = (31, 45, 60, 80, 100, 140)
+    rows = []
+    for k in med_ks:
+        p5, p50, _ = M.warm_capacity(MODELS["27B"], TOPOLOGIES["1xH200"],
+                                     wl(user_median=k * 1000), n_iter=1500,
+                                     which="user")
+        rows.append((k, p5, p50))
+    print("  median context |" + "".join(f" {k:4d}k |" for k, _, _ in rows))
+    print("  warm users p50 |" + "".join(f" {p50:5.0f} |" for _, _, p50 in rows))
+    print("  warm users p5  |" + "".join(f" {p5:5.0f} |" for _, p5, _ in rows))
+    print("  p5 / p50       |" + "".join(f" {p5 / p50:5.2f} |" for _, p5, p50 in rows))
 
     print("\n== KV dtype switch: FP16 KV cache (default everywhere else: FP8) ==")
     print("  pool halves; warm capacity falls slightly less (state charge is dtype-independent)")

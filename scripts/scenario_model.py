@@ -313,8 +313,15 @@ class Workload:
 def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
                model: Model, wl: Workload):
     """Fill one KV cache (+ optional CPU offload) in arrival order; count the
-    resident sessions that are *reusable* (i.e. not cold/unmatchable), total
-    and user-class only. Returns (n_warm_all, n_warm_user).
+    resident sessions that are *reusable* (i.e. not cold/unmatchable), total,
+    user-class only, and GPU-resident only.
+    Returns (n_warm_all, n_warm_user, n_warm_gpu, censored).
+
+    CPU offload is *storage*: an offloaded session's KV lives in host RAM and
+    cannot decode until it is restored over PCIe (see docs/scenarios.md
+    limitations). So `n_warm_gpu` — HBM-resident sessions only — is the count
+    that any decode-concurrency figure must be built on; `n_warm_all` is the
+    capacity/storage view and is unaffected by that distinction.
 
     Shared-prefix blocks are reserved once per request class present in the
     mixture. A cold request occupies its FULL length (no dedup) and never
@@ -353,31 +360,42 @@ def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
         n_res = n_gpu + min(n_cpu, len(rem))
     warm = ~is_cold[:n_res]
     censored = n_res >= len(unique)   # budget not exhausted by this draw
-    return int(warm.sum()), int((warm & ~is_sub[:n_res]).sum()), censored
+    return (int(warm.sum()), int((warm & ~is_sub[:n_res]).sum()),
+            int((~is_cold[:n_gpu]).sum()), censored)
 
 
 def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
                   n_iter=4000, draw=2000, seed=0, which="all"):
     """Monte-Carlo warm *reusable* capacity for ONE cache. Returns (p5,p50,p95).
 
-    which="all" counts every reusable session; which="user" counts only
-    user-class sessions (the 'distinct users kept warm' planning number).
+    which="all"  counts every reusable session, GPU-resident + CPU-offloaded
+                 (the capacity / storage view);
+    which="user" counts only user-class sessions (the 'distinct users kept
+                 warm' planning number);
+    which="gpu"  counts only sessions whose KV is resident in GPU HBM — the
+                 DECODE view. Offloaded sessions are storage: they must be
+                 restored over PCIe before they can decode, so any per-user or
+                 aggregate decode figure must be computed at a concurrency
+                 taken from which="gpu", never which="all". With ram_gib=0 the
+                 two coincide.
 
     ram_gib is the CPU-offload buffer available to THIS cache. A DP deployment
     shares the host buffer across its replicas, so DP callers must pass
     system_ram / topo.replicas (the explorer does this via ramPerCache()).
     """
+    if which not in ("all", "user", "gpu"):
+        raise ValueError(f"which must be 'all', 'user' or 'gpu', got {which!r}")
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)
     counts = np.empty(n_iter)
     for i in range(n_iter):
         full, prefix, cold, sub = wl.sample(rng, draw)
-        n_all, n_user, censored = _warm_once(full, prefix, cold, sub, pool,
-                                             ram_gib, model, wl)
+        n_all, n_user, n_gpu, censored = _warm_once(full, prefix, cold, sub,
+                                                    pool, ram_gib, model, wl)
         if censored:
             raise ValueError(f"draw={draw} too small: budget not exhausted "
                              "(censored result); re-run with a larger draw")
-        counts[i] = n_user if which == "user" else n_all
+        counts[i] = {"all": n_all, "user": n_user, "gpu": n_gpu}[which]
     return np.percentile(counts, [5, 50, 95])
 
 
@@ -492,6 +510,15 @@ def _selfcheck():
     assert warm_capacity(m35_nostate, t1, wl, n_iter=120)[1] > lo
     # user-class count must be below the all-sessions count
     assert warm_capacity(m35, t1, wl, n_iter=120, which="user")[1] < lo
+    # CPU offload is STORAGE ONLY: it adds warm sessions in host RAM but must
+    # leave the GPU-resident count (the decode-concurrency basis) untouched.
+    kw = dict(n_iter=60, draw=16_000)
+    g_off = warm_capacity(m35, t1, wl, ram_gib=600, which="gpu", **kw)
+    g_non = warm_capacity(m35, t1, wl, ram_gib=0, which="gpu", **kw)
+    a_off = warm_capacity(m35, t1, wl, ram_gib=600, which="all", **kw)
+    assert np.array_equal(g_off, g_non), \
+        "CPU offload must not change the GPU-resident warm count"
+    assert a_off[1] > g_off[1], "offload must add warm STORAGE beyond HBM"
 
     print("selfcheck OK")
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
