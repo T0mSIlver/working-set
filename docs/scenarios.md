@@ -103,7 +103,10 @@ arrival order with each session's **unique** tokens `max(clip(L, cap) − prefix
 **plus its recurrent-state charge** `state / KV_bpt`; a **cold** session contributes
 its *full* length and is subtracted from the warm count. CPU offload adds sessions at
 `unique·KV_bpt + state` bytes each until the RAM buffer is full. We report p5/p50/p95
-over the draws.
+over the draws for three counts: every warm session (`which="all"`, the storage view),
+user-class sessions only (`which="user"`), and HBM-resident sessions only
+(`which="gpu"` — the count decode figures are built on, since an offloaded session
+cannot decode until it is restored).
 
 ### Decode speed (bandwidth-bound, MoE-aware)
 
@@ -371,6 +374,33 @@ GiB (one mean session ≈ unique-KV + state ≈ 0.28 GiB). Offload is *storage*:
 restore latency over PCIe is not modelled, so treat offloaded warmth as a weaker
 tier than GPU-resident warmth.
 
+Because it is storage, **offload changes no decode number**. Only sessions whose
+KV is resident in HBM can decode; an offloaded one has to be restored first. The
+GPU-resident count stays flat across the whole sweep (**280** at every buffer
+size above), and every decode-side figure — the `v@warm` column of the decision
+table, the explorer's per-user/aggregate stress tiles, chart C's capacity zone —
+is computed at a concurrency taken from `warm_capacity(..., which="gpu")`, never
+from the offload-inflated storage count.
+
+### 7. Median context per request
+
+The single workload knob with the steepest effect on capacity. Reference config
+(27B dense, FP8 KV, 1×H200), sweeping the *user* prompt median while subagents
+stay at their 8k median; **warm users** = the distinct-user count (`which="user"`):
+
+| median context per request | 31k | 45k | 60k | 80k | 100k | 140k |
+| --- | --- | --- | --- | --- | --- | --- |
+| warm users (p50) | 86 | 56 | 42 | 33 | 28 | 23 |
+| warm users (p5 — plan on this) | 69 | 45 | 34 | 27 | 23 | 19 |
+
+Warm capacity ≈ pool / E[unique tokens per session], so it falls **roughly as
+1/median**: 4.5× the context (31k → 140k) costs 3.7× the users. The gap from
+exact 1/median is the fixed per-session recurrent-state charge and the shared
+prefix, both of which amortize better at long contexts. The p5 planning column
+runs a consistent **17–20% below p50** across the sweep (ratio 0.80 at 31k
+drifting to 0.83 at 140k — longer contexts mean fewer, chunkier sessions and a
+relatively tighter count distribution).
+
 ## Why some knobs act non-linearly (or non-monotonically)
 
 Two separate causes; distinguishing them matters when reading sweeps.
@@ -591,7 +621,13 @@ Ordered roughly by how much each could move the numbers:
 10. **CPU offload is priced as storage only.** Offloaded sessions count as warm, but
     the PCIe transfer to restore them on the next turn (≈ 0.1–0.3 s per 100k-token
     session at 32–64 GB/s, plus contention) is not modelled, so offload-inflated
-    counts are weaker "comfortable" claims than GPU-resident ones.
+    counts are weaker "comfortable" claims than GPU-resident ones. They are also
+    excluded from every *decode* figure — decode concurrency comes from
+    `which="gpu"` (HBM-resident) counts alone — so raising the offload buffer
+    never moves per-user tok/s. The corollary the model does not price: a
+    workload that keeps hitting the offloaded tier pays restore bandwidth that
+    competes with decode, so real per-user speed under heavy offload would be
+    *worse* than the flat line here, never better.
 11. **Decode is a pure HBM roofline.** Expert-dispatch overhead, attention/DeltaNet
     compute, TP collectives, and scheduler overhead are not priced, so all tok/s
     figures are upper bounds pending calibration against the real 35B-A3B.
