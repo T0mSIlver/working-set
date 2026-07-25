@@ -386,20 +386,35 @@ from the offload-inflated storage count.
 
 The single workload knob with the steepest effect on capacity. Reference config
 (27B dense, FP8 KV, 1×H200), sweeping the *user* prompt median while subagents
-stay at their 8k median; **warm users** = the distinct-user count (`which="user"`):
+stay at their 8k median and **`max_seq_len` stays fixed at the reference 180k**;
+**warm users** = the distinct-user count (`which="user"`):
 
 | median context per request | 31k | 45k | 60k | 80k | 100k | 140k |
 | --- | --- | --- | --- | --- | --- | --- |
 | warm users (p50) | 86 | 56 | 42 | 33 | 28 | 23 |
 | warm users (p5 — plan on this) | 69 | 45 | 34 | 27 | 23 | 19 |
 
-Warm capacity ≈ pool / E[unique tokens per session], so it falls **roughly as
-1/median**: 4.5× the context (31k → 140k) costs 3.7× the users. The gap from
-exact 1/median is the fixed per-session recurrent-state charge and the shared
-prefix, both of which amortize better at long contexts. The p5 planning column
-runs a consistent **17–20% below p50** across the sweep (ratio 0.80 at 31k
-drifting to 0.83 at 140k — longer contexts mean fewer, chunkier sessions and a
-relatively tighter count distribution).
+Warm capacity ≈ pool / E[unique tokens per session], and across this sweep it
+falls **more slowly than 1/median**: 4.5× the context (31k → 140k) costs only
+3.7× the users. **That flattening is mostly the fixed 180k cap, not an economy
+of scale.** The share of *user* draws truncated at the cap climbs from 1.5% at a
+31k median to **37.8% at 140k**, which holds mean unique tokens per session to
+104k instead of the 164k an uncapped log-normal would produce. Re-running the
+sweep with the cap removed (everything else identical) makes the decline
+*steeper* than 1/median instead — 5.5× fewer users for 4.5× the context, with
+p5/p50 at 140k dropping from 19/23 to **9/15** —
+because the shared 15k prefix is subtracted from every session, so unique tokens
+grow faster than the median does (6.0× for a 4.5× median). Read this row as "the
+answer at a 180k cap", not as a property of the context length alone; §6's cap
+sweep is the other half of the same effect.
+
+The same cause drives the p5 column. It runs **17–20% below p50** here (ratio
+0.80 at 31k drifting to 0.83 at 140k), i.e. the count distribution *tightens* as
+contexts grow — but that is cap clipping removing the heavy-tail draws that
+generate count variance, not a stability that survives to production. Uncapped,
+the ratio moves the other way (0.78 at 31k → **0.60** at 140k): the spread
+widens with the median, exactly as a log-normal should. A deployment that raises
+`max_seq_len` along with its context lengths inherits the uncapped behaviour.
 
 ## Why some knobs act non-linearly (or non-monotonically)
 

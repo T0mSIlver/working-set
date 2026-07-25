@@ -372,6 +372,11 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
                  (the capacity / storage view);
     which="user" counts only user-class sessions (the 'distinct users kept
                  warm' planning number);
+    which="offload" counts the CPU-offloaded reusable sessions, taken PER DRAW
+                 (all - gpu inside the same fill) and percentiled afterwards.
+                 Percentile the difference, never difference the percentiles:
+                 p5(all) - p5(gpu) mixes draws and counts nothing. 0 at
+                 ram_gib=0;
     which="gpu"  counts only sessions whose KV is resident in GPU HBM — the
                  DECODE view. Offloaded sessions are storage: they must be
                  restored over PCIe before they can decode, so any per-user or
@@ -383,8 +388,9 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     shares the host buffer across its replicas, so DP callers must pass
     system_ram / topo.replicas (the explorer does this via ramPerCache()).
     """
-    if which not in ("all", "user", "gpu"):
-        raise ValueError(f"which must be 'all', 'user' or 'gpu', got {which!r}")
+    valid = ("all", "user", "gpu", "offload")
+    if which not in valid:
+        raise ValueError(f"which must be one of {valid}, got {which!r}")
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)
     counts = np.empty(n_iter)
@@ -395,7 +401,8 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
         if censored:
             raise ValueError(f"draw={draw} too small: budget not exhausted "
                              "(censored result); re-run with a larger draw")
-        counts[i] = {"all": n_all, "user": n_user, "gpu": n_gpu}[which]
+        counts[i] = {"all": n_all, "user": n_user, "gpu": n_gpu,
+                     "offload": n_all - n_gpu}[which]
     return np.percentile(counts, [5, 50, 95])
 
 
@@ -519,6 +526,16 @@ def _selfcheck():
     assert np.array_equal(g_off, g_non), \
         "CPU offload must not change the GPU-resident warm count"
     assert a_off[1] > g_off[1], "offload must add warm STORAGE beyond HBM"
+    # the offloaded tier is a per-draw statistic, zero without a RAM buffer
+    assert np.all(warm_capacity(m35, t1, wl, ram_gib=0, which="offload", **kw) == 0)
+    o_off = warm_capacity(m35, t1, wl, ram_gib=600, which="offload", **kw)
+    assert 0 < o_off[0] <= o_off[1] <= o_off[2]
+    for bad in ("ALL", "cpu", ""):
+        try:
+            warm_capacity(m35, t1, wl, n_iter=1, which=bad)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
 
     print("selfcheck OK")
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
