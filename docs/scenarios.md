@@ -3,7 +3,7 @@
 **Decision question.** How many agentic-coding users can we serve *comfortably* per
 hardware / vLLM configuration — where "comfortably" means a returning user's next
 request hits the warm prefix cache (TTFT of seconds, not a full re-prefill) **and**
-their decode speed stays above a 40 tok/s comfort floor (20 tok/s as the hard floor)?
+their decode speed stays above a 40 tok/s hard floor (50 tok/s is comfortable)?
 
 **Primary metric and working hypothesis.** The study's central simplification: **a
 request served from a warm session is a request served well and comfortably**, while
@@ -173,7 +173,7 @@ FP16 (from `tables.py`):
 
 Warm capacity retains slightly *more* than half its FP8 value (the per-session
 state charge is dtype-independent, so it shrinks in token-equivalents as KV bytes
-grow). Note the 27B on one GPU drops below the 40 tok/s comfort floor at mns 64
+grow). Note the 27B on one GPU drops below the 40 tok/s hard floor at mns 64
 under FP16 — the quantitative version of the baseline's "FP8 KV doubles P"
 recommendation.
 
@@ -309,7 +309,7 @@ The gap between the two union models peaks around the linear-saturation kink
 (~30% faster under the coverage model at n ≈ 32) and closes above it (+7% at
 mns 64, +1% at 120), so the conservative bound is tight in the high-concurrency
 region where the capacity decisions are made. Because decode reads only ~3B active
-parameters, per-user speed stays above the 40 tok/s comfort floor to **mns ≈ 355**
+parameters, per-user speed stays above the 40 tok/s hard floor to **mns ≈ 355**
 (1×H200) and **≈ 695** (TP2) — beyond what the pool can hold warm in every config,
 though the TP2 margin is thin (678 warm vs 695; a few-percent shift in either number
 could flip its binding constraint, unlike the ~27% margin elsewhere) (H7).
@@ -499,7 +499,7 @@ binding constraint flips in *every* configuration, not just the marginal ones:
 So "the cache binds before bandwidth" is a claim about a serving stack **with
 working MTP**, and MTP + hybrid-model prefix caching is exactly the immature path
 the conservative purchasing view excludes (§ Limitations). Without it the 27B on
-one H200 supports 60 concurrent decoders at the 40 tok/s comfort floor against 86
+one H200 supports 60 concurrent decoders at the 40 tok/s hard floor against 86
 warm users — bandwidth binds, and the surplus warm capacity buys queueing headroom
 rather than concurrency. Regenerate with the "Binding order WITHOUT MTP" table in
 `tables.py`.
@@ -601,9 +601,9 @@ regenerate via the "Structural-uncertainty stack" section of `tables.py`):
 | 35B-A3B, 1×H200 | **144** | **130** | 43 tok/s |
 | 35B-A3B, TP2 | **403** | **367** | 34 tok/s |
 
-Note the MTP-off stress speed on TP2 (34 tok/s) sits between the 20 tok/s hard
-floor and the 40 tok/s comfort floor: without the speculative-decoding path, the
-comfort margin at full warm load depends on duty cycle < 100%.
+Note the MTP-off stress speed on TP2 (34 tok/s) sits below the 40 tok/s hard
+floor: without the speculative-decoding path, holding the floor at full warm
+load depends on duty cycle < 100%.
 
 ## Outcomes
 

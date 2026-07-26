@@ -129,7 +129,11 @@ input[type=range]::-moz-range-thumb{
 .toggle input:checked + .track::after{transform:translateX(17px)}
 
 /* stat tiles */
-.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin:16px 0;}
+/* 6 tiles = 8 column units (hero + aggregate span 2 each): two full rows of 4,
+   so no tile ever wraps onto a line of its own */
+.tiles{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:16px 0;}
+.tile.wide{grid-column:span 2}
+@media (max-width:760px){ .tiles{grid-template-columns:repeat(2,1fr)} }
 .tile{background:var(--tile); border:1px solid var(--border); border-radius:11px; padding:13px 15px; box-shadow:var(--shadow);}
 .tile .k{font-size:11.5px; color:var(--muted); font-weight:560; letter-spacing:.01em}
 .tile .v{font-size:25px; font-weight:680; letter-spacing:-.02em; margin-top:4px; line-height:1.05}
@@ -139,7 +143,7 @@ input[type=range]::-moz-range-thumb{
 .tile.hero{grid-column:span 2; border-color:var(--s1); border-width:1.5px}
 .tile.hero .k{color:var(--s1); font-weight:650}
 .tile.hero .v{font-size:38px}
-@media (max-width:480px){ .tile.hero{grid-column:auto} }
+@media (max-width:480px){ .tiles{grid-template-columns:1fr} .tile.hero,.tile.wide{grid-column:auto} }
 
 /* hover tooltips (metric / control explanations) */
 .tip{cursor:help; border-bottom:1px dotted var(--muted); position:relative}
@@ -345,7 +349,7 @@ svg text{fill:var(--text-2)}
 
     <div class="panel card">
       <p class="ct">C · Per-user decode speed vs max_num_seqs</p>
-      <p class="cs">p50 line, p5–p95 band, <b>log</b> speed axis. Shaded span = GPU-resident warm capacity zone; lines = 40 (comfort) / 50 tok/s. The x-axis rescales with the config so the all-warm-decoding point always fits.</p>
+      <p class="cs">p50 line, p5–p95 band, <b>log</b> speed axis. Shaded span = GPU-resident warm capacity zone; lines = 40 (hard floor) / 50 (comfortable) tok/s. The x-axis rescales with the config so the all-warm-decoding point always fits.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>p50 per-user</span>
         <span class="li"><span class="sw" style="background:var(--s1);opacity:.28"></span>p5–p95</span>
@@ -949,9 +953,8 @@ function renderChartC(dc, zone, stress){
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-5}" text-anchor="middle">max_num_seqs</text>`;
   g+=`<text class="axlbl" transform="translate(12,${mT+ph/2}) rotate(-90)" text-anchor="middle">per-user tok/s</text>`;
-  // decode-speed thresholds: 40 tok/s is the study's comfort floor, 50 the
-  // "no one notices the model is shared" mark (the 20 tok/s hard floor is
-  // deliberately not drawn — planning happens against 40).
+  // decode-speed thresholds: 40 tok/s is the study's hard floor, 50 the
+  // comfortable mark. Planning happens against 40.
   [40,50].forEach(f=>{
     if(f>=ylo && f<=yhi){ const Y=sy(f);
       g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${muted}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>`;
@@ -1234,7 +1237,7 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // per-user decode speed, only warm STORAGE.
   const st=stress || stressPoint(dc,topo,warm);
   const nOp=st.n, puOp=st.pu, aggOp=st.agg/1000;
-  const floorClass = puOp>=40?'good':(puOp>=20?'warn':'crit');
+  const floorClass = puOp>=50?'good':(puOp>=40?'warn':'crit');
   const dp = topo.kind==="dp";
   // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
   // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
@@ -1260,8 +1263,8 @@ function renderTiles(model,topo,wl,dc,warm,stress){
      tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
     {k:"Per-user, all GPU-resident p5 warm active", v:fmt(puOp,1), u:"tok/s",
      sub:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
-     tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥40 tok/s (comfortable), amber ≥20 (floor). If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
-    {k:"Aggregate, all GPU-resident p5 warm active", v:fmt(aggOp,1), u:"ktok/s",
+     tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥50 tok/s (comfortable), amber ≥40 (at the hard floor), red below. If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
+    {k:"Aggregate, all GPU-resident p5 warm active", wide:true, v:fmt(aggOp,1), u:"ktok/s",
      sub:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
      tip:"System-wide token throughput at that same stress point — the GPU-resident p5-warm sessions all decoding at once, summed over DP replicas. A capacity ceiling for batch/offline work, not a latency promise."},
   ];
@@ -1270,7 +1273,7 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   document.getElementById('tiles').innerHTML = tiles.map(t=>{
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
     const kk = t.tip? `<span class="tip" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
-    return `<div class="tile${t.hero?' hero':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
+    return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
   }).join('');
 }
 
