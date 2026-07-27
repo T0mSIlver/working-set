@@ -97,6 +97,10 @@ details.assump .body b{color:var(--text); font-weight:600}
 
 /* segmented control */
 .seg{display:inline-flex; background:var(--control); border-radius:8px; padding:2.5px; gap:2px; flex-wrap:wrap;}
+/* the 4-model selector wraps to 2x2 — an equal-width grid instead of the
+   ragged inline wrap, so the buttons fill the field cleanly */
+#seg-model{display:grid; grid-template-columns:1fr 1fr; width:100%;}
+#seg-model button{text-align:center}
 .seg button{
   border:0; background:transparent; color:var(--text-2); font:inherit; font-size:12px;
   padding:5px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; font-weight:520;
@@ -365,7 +369,7 @@ svg text{fill:var(--text-2)}
 
     <div class="panel card">
       <p class="ct">C · Per-user decode speed vs max_num_seqs</p>
-      <p class="cs">p50 line, p5–p95 band, <b>log</b> speed axis. Shaded span = GPU-resident warm capacity zone; lines = 40 (hard floor) / 50 (comfortable) tok/s. The x-axis rescales with the config so the all-warm-decoding point always fits.</p>
+      <p class="cs">p50 line, p5–p95 band, <b>log</b> speed axis. Shaded span = GPU-resident warm capacity zone; lines = 40 (hard floor) / 50 (comfortable) tok/s.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>p50 per-user</span>
         <span class="li"><span class="sw" style="background:var(--s1);opacity:.28"></span>p5–p95</span>
@@ -377,7 +381,7 @@ svg text{fill:var(--text-2)}
 
     <div class="panel card">
       <p class="ct">D · Aggregate throughput vs max_num_seqs</p>
-      <p class="cs">System p50 tok/s (×replicas for DP). Same auto-scaled axis as C.</p>
+      <p class="cs" id="cs-D">System p50 tok/s (×replicas for DP).</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>aggregate p50</span>
         <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
@@ -524,6 +528,9 @@ const CONFIG = {
 
 /* ---- model helpers ---- */
 function is_moe(m){ return m.w_route_total > 0; }
+// concurrency at which the conservative expert union saturates (every routed
+// expert read each step): n_sat = total/pertok = E/k = 32 for both MoE models
+function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / m.w_route_pertok) : null; }
 // Conservative (no-overlap) expert-union bound, the study's planning default;
 // the expected-union "coverage" model is the optimistic bracket (see docs).
 function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_pertok, m.w_route_total); }
@@ -1163,7 +1170,7 @@ function renderChartC(dc, zone, stress){
 
 /* ---- Chart D: aggregate ---- */
 let chartDGeom=null;
-function renderChartD(dc, stress){
+function renderChartD(dc, stress, kink){
   const W=560,H=300, mL=54,mR=16,mT=14,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
   const xmax=dc.ns[dc.ns.length-1];   // dynamic, same range as chart C
@@ -1186,6 +1193,14 @@ function renderChartD(dc, stress){
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-5}" text-anchor="middle">max_num_seqs</text>`;
   g+=`<text class="axlbl" transform="translate(13,${mT+ph/2}) rotate(-90)" text-anchor="middle">aggregate tok/s</text>`;
+  // expert-union kink (MoE only): from n_sat on, every routed expert is
+  // already read each step — the per-step weight read stops growing, so the
+  // aggregate curve's slope visibly breaks here. Drawn behind the line.
+  if(kink && kink>1 && kink<xmax){
+    const X=sx(kink), mut=cssv('--muted');
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${mut}" stroke-width="1" stroke-dasharray="2 3" opacity="0.65"/>`;
+    g+=`<text class="axtick" x="${X+5}" y="${mT+10}" text-anchor="start" fill="${mut}">expert-union kink · n = ${kink}</text>`;
+  }
   let ln=`M ${sx(dc.ns[0])} ${sy(dc.agg[0])}`;
   for(let i=1;i<dc.ns.length;i++) ln+=` L ${sx(dc.ns[i])} ${sy(dc.agg[i])}`;
   g+=`<path d="${ln}" fill="none" stroke="${s3}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -1398,10 +1413,21 @@ function computeAndRender(draft){
     chartCGeom=null; chartDGeom=null;
   } else {
     renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress);
-    renderChartD(dc, lastStress);
+    renderChartD(dc, lastStress, unionKink(model));
   }
+  updateCsD(model);
 
   renderTiles(model,topo,wl,dc,lastWarmCur,lastStress);
+}
+
+// chart D's subtitle explains the n=32 slope break, but only when the active
+// model is MoE and actually has one
+function updateCsD(model){
+  const kink = unionKink(model);
+  document.getElementById('cs-D').textContent =
+    "System p50 tok/s (×replicas for DP)." + (kink
+      ? ` The slope break at n = ${kink} is the expert-union kink: from there every routed expert is read each step, so the fixed weight read stops growing with the batch.`
+      : "");
 }
 
 // The study's worst case: every GPU-resident p5-warm session decoding at once.
@@ -1636,7 +1662,7 @@ function redrawCharts(){
     chartCGeom=null; chartDGeom=null;
   } else {
     renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress);
-    renderChartD(lastDC,lastStress);
+    renderChartD(lastDC,lastStress,unionKink(activeModel()));
   }
   renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress);
 }
