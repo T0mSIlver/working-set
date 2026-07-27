@@ -653,6 +653,15 @@ Added 2026-07-27; regenerate every number via the extension sections of
    cache FP8.
 3. **GLM-5.2 refuses FP16 KV** (`kv_fp16_ok=False`): vLLM's sparse-MLA path
    asserts a quantized cache, so an FP16-KV GLM run is not a servable config.
+4. **Per-model `max_seq_len` ranges.** The allowed workload cap now extends to
+   **1,048,576** for the Qwens (262,144 native; 1M via YaRN rope scaling) and
+   GLM-5.2 (1M native); **Mistral-Medium-3.5 hard-caps at 262,144** — the
+   model (`check_cap_allowed`) and the explorer's slider both enforce it.
+   Raising the cap keeps *lowering* warm capacity (the log-normal tail keeps
+   gaining mass), but the effect saturates — almost all tail mass sits below
+   512k: 35B-A3B TP2 warm p5/p50 goes 631/678 (180k) → 616/663 (262k) →
+   606/659 (512k) → 605/658 (1M) — regenerate via the 1M cap sweep in
+   `tables.py`.
 
 ### New model constants (FP8 serving checkpoints)
 
