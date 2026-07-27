@@ -11,6 +11,11 @@ The full write-up — setup, method, results, and recommendations — is in
 > methodology to **2×H200** (tensor- vs data-parallel), the **35B-A3B MoE** model,
 > **subagent** workloads, **system-prompt size**, and a **cache-invalidation** rate —
 > with an interactive explorer at [`interactive/index.html`](interactive/index.html).
+> The 2026-07 extension adds the **B300** (Blackwell Ultra) as a selectable GPU,
+> **NVFP4 weight quantization** (B300-only, weights-never-KV, available for all
+> four models), and two more models: **Mistral-Medium-3.5-128B** (dense GQA,
+> 176 KiB/token KV) and **GLM-5.2** (744B-A40B, MLA + DeepSeek Sparse Attention,
+> sparse decode pricing). See docs/scenarios.md § Extension.
 
 ## Key findings
 
@@ -52,7 +57,11 @@ The full write-up — setup, method, results, and recommendations — is in
 ├── interactive/
 │   └── index.html            # self-contained interactive scenario explorer
 ├── research/
-│   └── model_35ba3b.md       # cited architecture parameterization for 35B-A3B
+│   ├── model_35ba3b.md       # cited architecture parameterization for 35B-A3B
+│   ├── model_mistral_medium35.md  # Mistral-Medium-3.5-128B constants + sources
+│   ├── model_glm52.md        # GLM-5.2 (MLA+DSA) constants + sources
+│   ├── gpu_b300.md           # B300 (Blackwell Ultra) hardware constants
+│   └── nvfp4.md              # NVFP4 format, B300-only gate, per-model bytes
 ├── figures/                  # generated figures used in the write-ups
 └── data/                     # provider CSVs (not committed — see data/README.md)
 ```
@@ -104,7 +113,11 @@ uv run scripts/tables.py           # regenerates every number quoted in docs/sce
 2.77M-token FP8 anchor — projected from the measured FP16 pool, see
 docs/scenarios.md limitations; 35B-A3B constants from the published
 Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`; an FP8/FP16 KV-cache
-switch is available via `with_kv_dtype`, FP8 being the studied default);
+switch is available via `with_kv_dtype`, FP8 being the studied default, and an
+FP8/NVFP4 *weight* switch via `with_weight_dtype` — NVFP4 being gated to the
+B300's native FP4 tensor cores and never applied to the KV cache);
 `scripts/scenarios.py` renders the static figures; and `interactive/index.html`
 is a dependency-free page mirroring the same math with live sliders for the
-workload, model, KV dtype, and topology. See [docs/scenarios.md](docs/scenarios.md).
+workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 / GLM-5.2), GPU
+(H200 / B300), weight & KV dtypes, and topology. See
+[docs/scenarios.md](docs/scenarios.md).
