@@ -148,7 +148,8 @@ input[type=range]::-moz-range-thumb{
 
 /* hover tooltips (metric / control explanations) */
 .tip{cursor:help; border-bottom:1px dotted var(--muted); position:relative}
-.tip:hover::after{
+.tip:focus-visible{outline:1.5px solid var(--s1); outline-offset:2px; border-radius:3px}
+.tip:hover::after, .tip:focus-visible::after{
   content:attr(data-tip); position:absolute; left:0; top:100%; margin-top:7px;
   background:var(--surface); color:var(--text); border:1px solid var(--border);
   border-radius:8px; padding:9px 11px; width:270px; white-space:normal;
@@ -213,8 +214,8 @@ svg text{fill:var(--text-2)}
         <li><b>CPU offload is storage only.</b> A session offloaded to host RAM still counts as warm <em>capacity</em>, but only sessions whose KV is resident in GPU HBM can decode — an offloaded one must be restored over PCIe first (a latency the model does not price). Every decode-side readout (the per-user/aggregate stress tiles, chart C's capacity zone) is therefore computed over <b>HBM-resident warm sessions only</b>, so moving the offload slider never changes per-user decode speed.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
-        <li><b>GPU choice (H200 / B300):</b> the H200 is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve — a flagged assumption until a B300 startup log exists, and possibly ~10 GB/GPU optimistic if Hopper's vendor "141 GB" understates usable bytes as documented for the H100 (<code>research/gpu_b300.md</code>).</li>
-        <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; what stays high-precision is recipe-specific — see <code>research/nvfp4.md</code> — e.g. RedHatAI's 35B-A3B keeps the DeltaNet blocks BF16 while NVIDIA's GLM recipe quantizes only the routed experts). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — vLLM's nvfp4 KV is not yet stable (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
+        <li><b>GPU choice (H200 / B300):</b> the H200 is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve, <b>plus a measured +9.75 GB/GPU correction</b>: the H200 actually delivers ~150.75 GB usable against its 141 GB vendor figure (the calibration silently absorbs that margin), while a real B300 <code>nvidia-smi</code> dump shows 275,040 MiB = 288.4 GB — nominal bytes, no Hopper-style over-provision — so the transferred reserve must add the hidden margin back (<code>research/gpu_b300.md</code>; formerly a sensitivity, measured 2026-07-27).</li>
+        <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; what stays high-precision is recipe-specific — see <code>research/nvfp4.md</code> — e.g. RedHatAI's 35B-A3B keeps the DeltaNet blocks BF16 while NVIDIA's GLM recipe quantizes only the routed experts). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug (open as of 2026-07-27), so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — an owner policy: vLLM's nvfp4 KV shipped 2026-05 (Blackwell-datacenter-only, values dequantized to FP8 before attention) but is not modelled in this study (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
         <li><b>Mistral-Medium-3.5-128B</b> (open weights, 2026-04): dense, 88 uniform GQA layers → <b>176 KiB/token</b> FP8 KV, no recurrent state, no MTP module (speculative default 1.0×; external EAGLE draft unmeasured). <code>research/model_mistral_medium35.md</code>.</li>
         <li><b>GLM-5.2</b> (open weights, 2026-06): 744B-A40B MLA + DeepSeek Sparse Attention; stores 47.3 KiB/token (MLA latent + indexer keys) but decode reads only the top-2048 tokens per layer plus an indexer scan (2,772 B per context token) — priced via <code>kv_decode_bpt/const</code>. vLLM requires FP8 KV on this path, so the FP16 toggle is disabled. FP8 weights (~756 GB) fit from 7×H200 / 4×B300 per the vLLM recipe's 893 GB floor (3×B300 = 864 GB passes the pool arithmetic only); NVFP4 (~465 GB) from 2×B300. <code>research/model_glm52.md</code>.</li>
         <li><span class="prov">Note:</span> the 35B-A3B constants come from the <b>published Qwen3.6-35B-A3B config</b> (40 layers: 30 DeltaNet + 10 full-attention, 2 KV heads × 256, 256 experts / 8 routed) &mdash; derivations in <code>research/model_35ba3b.md</code>. Edit the <code>CONFIG</code> block to revise.</li>
@@ -240,14 +241,14 @@ svg text{fill:var(--text-2)}
           <div class="hint" id="model-hint"></div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="H200: the study's calibrated baseline (141 GB HBM3e, 4.8 TB/s). B300 (Blackwell Ultra): 288 GB HBM3e, 8 TB/s, native FP4 tensor cores — the only part that can run NVFP4 weights. The H200-calibrated ~18 GiB reserve is applied per B300 unchanged (a flagged assumption, see research/gpu_b300.md).">GPU</span></label>
+          <label class="flabel"><span class="tip" data-tip="H200: the study's calibrated baseline (141 GB HBM3e, 4.8 TB/s). B300 (Blackwell Ultra): measured 288.4 GB usable HBM3e, 8 TB/s, native FP4 tensor cores — the only part that can run NVFP4 weights. The H200-calibrated ~18 GiB reserve transfers per B300 plus a measured +9.75 GB/GPU correction for the H200's hidden HBM over-provision (research/gpu_b300.md).">GPU</span></label>
           <div class="seg" id="seg-gpu" data-key="gpu">
             <button data-v="H200" aria-pressed="true">H200</button>
             <button data-v="B300" aria-pressed="false">B300</button>
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline. NVFP4 (4.5 bits/param on quantized tensors) swaps in the real NVFP4-checkpoint byte counts. What stays high-precision is recipe-specific — RedHatAI's 35B-A3B keeps embeddings, lm_head, routers and the DeltaNet blocks BF16; NVIDIA's Mistral recipe keeps attention and edge MLP FP8; NVIDIA's GLM recipe quantizes ONLY routed experts — so the modelled bytes follow the specific checkpoints named in the research notes, and MoE models' fixed per-step read can grow even as expert reads shrink. B300-only: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so this study does not model NVFP4 on H-generation GPUs. KV cache is NOT quantized to 4-bit (unstable in vLLM).">Weights</span></label>
+          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline. NVFP4 (4.5 bits/param on quantized tensors) swaps in the real NVFP4-checkpoint byte counts. What stays high-precision is recipe-specific — RedHatAI's 35B-A3B keeps embeddings, lm_head, routers and the DeltaNet blocks BF16; NVIDIA's Mistral recipe keeps attention and edge MLP FP8; NVIDIA's GLM recipe quantizes ONLY routed experts — so the modelled bytes follow the specific checkpoints named in the research notes, and MoE models' fixed per-step read can grow even as expert reads shrink. B300-only: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so this study does not model NVFP4 on H-generation GPUs. KV cache stays FP8/FP16 by policy — vLLM's nvfp4 KV (Blackwell-only, shipped 2026-05) is not modelled.">Weights</span></label>
           <div class="seg" id="seg-wdt" data-key="wdt">
             <button data-v="fp8" aria-pressed="true">FP8</button>
             <button data-v="nvfp4" aria-pressed="false">NVFP4</button>
@@ -412,9 +413,14 @@ const CONFIG = {
   // every part — a flagged assumption for the B300, see research/gpu_b300.md).
   // supports_nvfp4: native FP4 tensor cores — NVFP4 weights are gated to
   // these parts (Hopper's Marlin fallback is deliberately not modelled).
+  // reserve_extra: the measured H200 HBM over-provision (~9.75e9 B — vendor
+  // "141 GB" actually delivers ~150.75e9 usable) that the SOLVED reserve
+  // absorbs implicitly. A part without that over-provision (the B300 delivers
+  // its nominal bytes: a real nvidia-smi dump shows 275,040 MiB = 288.4e9 B)
+  // must add it back, or its pools inherit ~9.75 GB/GPU of phantom HBM.
   GPUS: {
-    "H200": { name: "H200", vram: 141e9, hbm_bw: 4.8e12, supports_nvfp4: false },
-    "B300": { name: "B300", vram: 288e9, hbm_bw: 8.0e12, supports_nvfp4: true  },
+    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0 },
+    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9 },
   },
   VRAM_PER_GPU: 141e9,     // calibration-anchor GPU (H200) HBM bytes
   HBM_BW:       4.8e12,    // calibration-anchor GPU bandwidth, bytes/s
@@ -446,8 +452,8 @@ const CONFIG = {
       w_route_pertok: 0.0,
       w_route_total: 0.0,
       mtp: 1.7,
-      // nvidia/Qwen3.6-27B-NVFP4 (~22 GB ckpt), as-deployed convention
-      nvfp4_w: [24.47e9, 24.47e9, 0.0, 0.0],
+      // nvidia/Qwen3.6-27B-NVFP4, MEASURED safetensors total (21.92e9 B)
+      nvfp4_w: [21.92e9, 21.92e9, 0.0, 0.0],
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
     },
     "35BA3B": {                    // published Qwen3.6-35B-A3B config; see research/model_35ba3b.md
@@ -459,9 +465,9 @@ const CONFIG = {
       w_route_pertok: 1006632960,  // 8 routed experts x 3.146M x 40 layers, FP8
       w_route_total: 32212254720,  // 256 routed experts (saturates at exactly n=32 linear)
       mtp: 1.7,                    // MTP module, speedup kept equal to baseline's fit
-      // RedHatAI NVFP4 recipe: experts+attn NVFP4, DeltaNet/lm_head/router BF16
+      // RedHatAI NVFP4 recipe: experts+attn NVFP4; DeltaNet/lm_head/router/MTP BF16
       // -> shared per-step read GROWS 1.7x while expert reads shrink 1.78x
-      nvfp4_w: [22.92e9, 3.308e9, 566231040, 18119393280],
+      nvfp4_w: [24.13e9, 3.308e9, 566231040, 18119393280],
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
     },
     "MM35": {                      // research/model_mistral_medium35.md
@@ -473,7 +479,7 @@ const CONFIG = {
       w_route_pertok: 0.0,
       w_route_total: 0.0,
       mtp: 1.0,                    // NO MTP module (external EAGLE draft exists)
-      nvfp4_w: [92.7e9, 86.6e9, 0.0, 0.0],  // nvidia mixed recipe: MLP 4-86 NVFP4, rest FP8/BF16
+      nvfp4_w: [95.2e9, 86.6e9, 0.0, 0.0],  // nvidia mixed recipe, MEASURED safetensors total
       max_ctx: 262144,             // hard model max (YaRN x64 over a 4k base)
     },
     "GLM52": {                     // research/model_glm52.md
@@ -489,6 +495,7 @@ const CONFIG = {
       nvfp4_w: [464.8e9, 35.30e9, 12740198400, 407686348800],
       kv_decode_bpt: 2772,         // DSA: 21 indexer layers x 132 B per context token
       kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
+      kv_decode_topk: 2048,        // ...scaled by min(len, topk)/topk per sequence
       kv_fp16_ok: false,           // vLLM DSA path asserts a quantized KV cache
       max_ctx: 1048576,            // native 1M context
     },
@@ -556,8 +563,9 @@ function checkDtypeSupported(m, topo){
 
 function kv_pool_tokens(m, topo){
   checkDtypeSupported(m, topo);
-  const R = reserveNow();
-  const vram = (topo.gpu || CONFIG.GPUS["H200"]).vram;
+  const gpu = topo.gpu || CONFIG.GPUS["H200"];
+  const R = reserveNow() + (gpu.reserve_extra || 0);
+  const vram = gpu.vram;
   let poolBytes;
   if (topo.kind === "tp"){
     poolBytes = topo.n_gpu * vram - m.w_resident - topo.n_gpu * R;
@@ -623,6 +631,22 @@ function effective_bw(topo){
   console.assert(kv_pool_tokens(glm, makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(glm, makeTopo("tp",8,"H200")) > 0,
     "GLM-5.2 FP8 must not fit 1 GPU but fit 8xH200");
+  // NVFP4 swap identities (mirror _selfcheck): checkpoint shrinks, but the
+  // BF16-kept blocks make the SHARED per-step read heavier on the MoE models
+  console.assert(m35.nvfp4_w[0] < m35.w_resident && m35.nvfp4_w[1] > m35.w_decode_shared,
+    "35B NVFP4: smaller resident, heavier shared read");
+  console.assert(glm.nvfp4_w[0] < glm.w_resident && glm.nvfp4_w[1] > glm.w_decode_shared,
+    "GLM NVFP4: smaller resident, heavier shared read");
+  // sparse-decode pricing identities (research/model_glm52.md #3)
+  console.assert(glm.kv_decode_bpt === 21*132, "GLM indexer scan = 21 x 132 B/tok");
+  console.assert(Math.abs(glm.kv_decode_const/(78*2048*576) - 1) < 0.001,
+    "GLM top-k read = 78 layers x top-2048 x 576 B");
+  console.assert(glm.kv_decode_topk === 2048, "GLM top-k window");
+  // zero-pool honesty: weights that don't fit report ZERO warm even with a
+  // large CPU-offload buffer (the guard fires before the workload is touched)
+  const zr = warmCapacity(glm, makeTopo("tp",1,"H200"), null, 512, 3, 1000);
+  console.assert(zr.all[2] === 0 && zr.gpu[2] === 0,
+    "no-fit config must stay at zero warm regardless of offload");
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -745,6 +769,11 @@ function warmOnce(pool, ram_gib, model, wl){
 // Mirrors warm_capacity(which=...) in scenario_model.py.
 function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
   const pool = kv_pool_tokens(model, topo);
+  // Weights (+ reserve) leave no KV space -> there is no engine to serve or
+  // to restore offloaded sessions into: capacity is zero REGARDLESS of the
+  // CPU-offload buffer (mirrors warm_capacity in scenario_model.py).
+  if (pool <= 0)
+    return { all:[0,0,0], gpu:[0,0,0], off:[0,0,0], censored:false };
   // One fill costs one draw per resident session, so a big pool full of small
   // sessions (a 91M-token TP8 pool at a 5k median holds ~30k of them) makes a
   // 700-iteration run a multi-second freeze. Probe one fill for its true cost,
@@ -812,27 +841,36 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // Neighbouring n now share draws (common random numbers), which only makes
   // the curve smoother. scenario_model.py redraws per n; that is a difference
   // in MC noise structure, not in the model.
+  // DSA top-k reads are capped at each sequence's own length (a context
+  // shorter than the 2,048-token window only reads its own tokens), so the
+  // per-sequence top-k bytes need their own running sum over min(len, topk).
+  const topk = (model.kv_decode_const && model.kv_decode_topk) ? model.kv_decode_topk : 0;
   const kvsum = Array.from({length:K}, ()=>new Float64Array(n_iter));
+  const tksum = topk ? Array.from({length:K}, ()=>new Float64Array(n_iter)) : null;
   for (let it=0; it<n_iter; it++){
-    let sum=0, k=0;
+    let sum=0, tsum=0, k=0;
     for (let s=1; s<=last; s++){
-      sum += sampleFull(wl);
-      if (ns[k]===s) kvsum[k++][it]=sum;
+      const L = sampleFull(wl);
+      sum += L;
+      if (topk) tsum += Math.min(L, topk);
+      if (ns[k]===s){ kvsum[k][it]=sum; if (topk) tksum[k][it]=tsum; k++; }
     }
   }
   const p5=[], p50=[], p95=[], agg=[];
   const buf = new Float64Array(n_iter);
   // dense attention reads the whole cache (kv_bpt per context token); a
   // sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
-  // token (indexer scan) plus a constant top-k read per active sequence
+  // token (indexer scan) plus the length-capped top-k read per sequence
   const kvReadBpt = model.kv_decode_bpt ?? model.kv_bpt;
+  const perTok = topk ? model.kv_decode_const/topk : 0;
   for (let k=0;k<K;k++){
     const n=ns[k];
     // weights + DeltaNet recurrent-state read+write for every active sequence
     const wd = w_decode(model, n) + 2*n*model.deltanet_state
-             + n*(model.kv_decode_const ?? 0);
-    const col=kvsum[k];
-    for (let it=0; it<n_iter; it++) buf[it] = model.mtp * bw / (wd + col[it]*kvReadBpt);
+             + (topk ? 0 : n*(model.kv_decode_const ?? 0));
+    const col=kvsum[k], tcol=topk?tksum[k]:null;
+    for (let it=0; it<n_iter; it++)
+      buf[it] = model.mtp * bw / (wd + col[it]*kvReadBpt + (topk ? tcol[it]*perTok : 0));
     const [a,b,c] = percentiles(buf, [5,50,95]);
     p5.push(a); p50.push(b); p95.push(c);
     agg.push(n*b*scale);
@@ -919,9 +957,10 @@ function logTicks(lo,hi){
   return coarse.length>=4 ? coarse : build([1,1.5,2,3,5,7]);
 }
 
-// build an svg element from an html string
-function svgEl(inner, vbW, vbH){
-  return `<svg class="chart" viewBox="0 0 ${vbW} ${vbH}" preserveAspectRatio="xMidYMid meet" role="img">${inner}</svg>`;
+// build an svg element from an html string; label = the accessible name a
+// screen reader announces for the role="img" chart
+function svgEl(inner, vbW, vbH, label){
+  return `<svg class="chart" viewBox="0 0 ${vbW} ${vbH}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(label||'chart')}">${inner}</svg>`;
 }
 
 /* ---- Chart A: prompt-length PDFs ---- */
@@ -976,7 +1015,7 @@ function renderChartA(){
   const cx=sx(wl.cap);
   g+=`<line x1="${cx}" y1="${mT}" x2="${cx}" y2="${mT+ph}" stroke="${cssv('--crit')}" stroke-width="1.5" stroke-dasharray="4 3"/>`;
   g+=`<text class="dlabel" x="${cx-4}" y="${mT+11}" text-anchor="end" fill="${cssv('--crit')}">cap ${Math.round(wl.cap/1000)}k</text>`;
-  document.getElementById('chartA').innerHTML = svgEl(g,W,H);
+  document.getElementById('chartA').innerHTML = svgEl(g,W,H,'Prompt-length distribution: log-normal densities for user and subagent prompts with the max_seq_len cap');
 }
 
 /* ---- Chart B: warm capacity (p5) vs number of H200s, TP vs DP ---- */
@@ -1026,7 +1065,7 @@ function renderChartB(sc){
     g+=`<circle cx="${sx(sc.cur.n)}" cy="${cy}" r="8" fill="none" stroke="${cssv('--text')}" stroke-width="1.6"/>`;
     g+=`<text class="dlabel" x="${sx(sc.cur.n)+11}" y="${cy+4}" fill="${cssv('--text')}">you</text>`;
   }
-  document.getElementById('chartB').innerHTML = svgEl(g,W,H);
+  document.getElementById('chartB').innerHTML = svgEl(g,W,H,'Warm sessions (p5) versus number of GPUs, tensor-parallel and data-parallel');
 }
 
 // Round, human-readable x ticks for a dynamic 1..nMax axis (~4 intervals).
@@ -1043,6 +1082,16 @@ function xTicks(nMax){
 }
 
 /* ---- Chart C: per-user decode with band + capacity zone ---- */
+// A zero pool means the weights don't fit the configuration at all — a decode
+// curve there prices reads from weights that were never loaded. Charts C and D
+// show this empty state instead (the tiles already say "—"), and null geometry
+// switches the hover layer off.
+function renderNoFit(divId){
+  const W=560,H=300;
+  const g=`<text x="${W/2}" y="${H/2-8}" text-anchor="middle" class="axlbl" font-size="13">model weights do not fit this configuration</text>`+
+          `<text x="${W/2}" y="${H/2+12}" text-anchor="middle" class="axtick">no decode curve — add GPUs, or switch GPU / weight dtype</text>`;
+  document.getElementById(divId).innerHTML = svgEl(g,W,H,'Model weights do not fit this configuration; no decode curve');
+}
 let chartCGeom=null;
 function renderChartC(dc, zone, stress){
   const W=560,H=300, mL=46,mR=16,mT=14,mB=40;
@@ -1114,7 +1163,7 @@ function renderChartC(dc, zone, stress){
     const flip = X > mL+pw*0.62;    // keep the label inside the plot
     g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s3}">all warm decoding · ${fmt(stress.pu,0)} tok/s</text>`;
   }
-  document.getElementById('chartC').innerHTML = svgEl(g,W,H);
+  document.getElementById('chartC').innerHTML = svgEl(g,W,H,'Per-user decode speed versus max_num_seqs with capacity zone and stress point');
   // ylog tells the hover to interpolate GEOMETRICALLY between samples, matching
   // the straight segments actually drawn on a log axis (see interpAt)
   chartCGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax, ylo,yhi, ylog:true, sxDom:[1,xmax], dc,
@@ -1157,7 +1206,7 @@ function renderChartD(dc, stress){
     const flip = X > mL+pw*0.62;
     g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s3}">all warm decoding · ${fmt(stress.agg/1000,1)} ktok/s</text>`;
   }
-  document.getElementById('chartD').innerHTML = svgEl(g,W,H);
+  document.getElementById('chartD').innerHTML = svgEl(g,W,H,'Aggregate throughput versus max_num_seqs');
   chartDGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax,ymax, dc, sx:(x)=>sx(x), sy:(y)=>sy(y) };
 }
 
@@ -1353,8 +1402,13 @@ function computeAndRender(draft){
   // computed once here rather than three times with three different draws
   lastStress=stressPoint(dc,topo,lastWarmCur);
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
-  renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress);
-  renderChartD(dc, lastStress);
+  if (kv_pool_tokens(model,topo) <= 0){
+    renderNoFit('chartC'); renderNoFit('chartD');
+    chartCGeom=null; chartDGeom=null;
+  } else {
+    renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress);
+    renderChartD(dc, lastStress);
+  }
 
   renderTiles(model,topo,wl,dc,lastWarmCur,lastStress);
 }
@@ -1395,13 +1449,15 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   const tiles=[
     // a censored fill ran out of draws before it ran out of budget, so the count
     // is a floor, not an estimate — say so rather than quietly under-reporting
-    {k:"Warm sessions · p5", hero:true, v:(warm.censored?"≥ ":"")+fmt(warm.p5,0),
-     u:dp?"per replica":"sessions",
-     sub: (dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`
+    {k:"Warm sessions · p5", hero:true, v:noFit?"—":(warm.censored?"≥ ":"")+fmt(warm.p5,0),
+     u:noFit?"":(dp?"per replica":"sessions"),
+     sub: noFit ? "model weights do not fit this configuration — zero at any CPU offload"
+        : (dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`
               : `the planning number — 95% of draws hold at least this many · ≈ ${fmt(warm.p5*(1-p_sub(wl)),0)} distinct users`)
           + (offl>=1 ? ` · by tier, p5 each: ${fmt(warm.g5,0)} HBM-resident · ${fmt(offl,0)} offloaded (storage)` : ''),
      tip:"THE number this study is built to produce. A warm session's KV + recurrent state sit in cache, so its next request prefills only the new turn — served well and comfortably. A cold request re-prefills everything and briefly thrashes the GPU for every active user. p5 = conservative tail: 95% of draws keep at least this many warm. With CPU offload on, this counts both HBM-resident and host-RAM sessions — the RAM tier is storage, and must be restored over PCIe before it can decode."},
-    {k:"Warm p50 / p95", v:fmt(warm.p50,0), u:"sessions", sub:`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
+    {k:"Warm p50 / p95", v:noFit?"—":fmt(warm.p50,0), u:noFit?"":"sessions",
+     sub:noFit?"model weights do not fit this configuration":`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
      tip:"Same metric, median (p50) and optimistic (p95) draws. Plan on p5; use p50 to compare configurations."},
     {k:"KV pool", v:fmt(pool/1e6,2), u:"M tok", sub:topo.name,
      tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
@@ -1418,7 +1474,7 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   const colMap={good,warn,crit};
   document.getElementById('tiles').innerHTML = tiles.map(t=>{
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
-    const kk = t.tip? `<span class="tip" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
+    const kk = t.tip? `<span class="tip" tabindex="0" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
     return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
   }).join('');
 }
@@ -1463,7 +1519,7 @@ function enforceConstraints(){
   const hints = {
     "27B": "", "35BA3B": "",
     "MM35": "Dense 128B, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B). No MTP module: speculative default 1.0× (external EAGLE draft unmeasured).",
-    "GLM52": "744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 3×B300; NVFP4 from 2×B300.",
+    "GLM52": "744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300.",
   };
   document.getElementById('model-hint').textContent = hints[state.model];
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
@@ -1519,8 +1575,14 @@ const sliderMap=[
 ];
 sliderMap.forEach(([id,key,cast])=>{
   const el=document.getElementById(id);
+  // associate the field's visible label with its slider for AT/click-to-focus
+  const lab=el.closest('.field')?.querySelector('label.flabel');
+  if (lab) lab.setAttribute('for', id);
   el.addEventListener('input',()=>{ state[key]=cast(el.value); onInput(); });
 });
+// metric/control explainer tooltips are keyboard-reachable (CSS shows them on
+// :focus-visible); tile tips are stamped in renderTiles' generated markup
+document.querySelectorAll('.tip').forEach(t=>{ t.tabIndex=0; });
 document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
   state.sub_shares_prefix=e.target.checked; computeAndRender(false);
 });
@@ -1568,23 +1630,29 @@ function applyThemeLabel(){
   document.getElementById('themeIco').textContent = t==='dark'?'☾':'☀';
   document.getElementById('themeTxt').textContent = t==='dark'?'Dark':'Light';
 }
+// repaint every panel from the LAST computed results (no new MC draws — a
+// theme change must not re-roll the numbers); keeps the no-fit empty state
+function redrawCharts(){
+  if(!lastWarmAll) return;
+  renderChartA(); renderChartB(lastWarmAll);
+  if(!lastDC) return;
+  if (kv_pool_tokens(activeModel(),currentTopo()) <= 0){
+    renderNoFit('chartC'); renderNoFit('chartD');
+    chartCGeom=null; chartDGeom=null;
+  } else {
+    renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress);
+    renderChartD(lastDC,lastStress);
+  }
+  renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress);
+}
 themeBtn.addEventListener('click',()=>{
   const next = currentTheme()==='dark'?'light':'dark';
   document.documentElement.setAttribute('data-theme',next);
   applyThemeLabel();
-  // re-render charts with new theme colors
-  if(lastWarmAll){ renderChartA(); renderChartB(lastWarmAll);
-    if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress); renderChartD(lastDC,lastStress);
-      renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress);
-    }
-  }
+  redrawCharts();
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{
-  if(!document.documentElement.getAttribute('data-theme')){ applyThemeLabel();
-    if(lastWarmAll){ renderChartA(); renderChartB(lastWarmAll);
-      if(lastDC){ renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress); renderChartD(lastDC,lastStress);
-        renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress); } }
-  }
+  if(!document.documentElement.getAttribute('data-theme')){ applyThemeLabel(); redrawCharts(); }
 });
 
 /* ---- hover setup ---- */

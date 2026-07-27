@@ -629,28 +629,36 @@ Added 2026-07-27; regenerate every number via the extension sections of
 [`research/model_mistral_medium35.md`](../research/model_mistral_medium35.md),
 [`research/model_glm52.md`](../research/model_glm52.md).
 
-> **Provenance caveat.** These notes were researched with HuggingFace and all
-> NVIDIA domains blocked at this environment's proxy (a policy change since
-> the 35B-A3B note was written), so no primary `config.json` or datasheet was
-> read directly. Chains run through first-party GitHub repos (Mistral's docs
-> schema, Z.ai's README, NVIDIA's Model-Optimizer recipes, vLLM's source and
-> recipes), three-way-agreeing config mirrors, and cross-checked search
-> snippets — with per-claim confidence tiers and re-verification ledgers in
-> each note. Strongest non-circular check: the config-derived GLM-5.2 NVFP4
-> resident (464.8e9 B) matches the vLLM recipe's independently reported
-> "~465 GB" within 0.05%.
+> **Provenance.** These notes were first researched with HuggingFace and all
+> NVIDIA domains blocked at this environment's proxy, via first-party GitHub
+> repos, config mirrors and cross-checked snippets. **Re-verified 2026-07-27
+> against the primary sources after the block lifted**: literal `config.json`
+> / quantization configs for all four models, measured per-shard safetensors
+> dtype splits and `total_size` indexes for every modelled checkpoint, the
+> NVIDIA product pages, a **real B300 nvidia-smi dump** (Oracle OCI), and the
+> live vLLM issue/docs state. Outcome: GLM-5.2 and Mistral architecture
+> constants confirmed exactly (GLM FP8/NVFP4 totals within 0.02%); three
+> weight constants were corrected to measured values (27B NVFP4 24.47 →
+> **21.92e9**; 35B-A3B NVFP4 22.92 → **24.13e9** — the MTP module is
+> BF16-excluded; Mistral NVFP4 92.7 → **95.2e9** — the vision tower is 2.68B
+> params); and the B300 reserve-transfer sensitivity was **promoted to the
+> measured central case** (limitation 16). Full resolution ledgers live in
+> each research note.
 
 ### Owner decisions (2026-07-27)
 
 1. **NVFP4 is weights-only and B300-only.** vLLM removed FP4 emulation on
    pre-Blackwell parts; the remaining Hopper path is weight-only Marlin with
-   an open correctness bug — so H-generation NVFP4 is not modelled at all
-   (`check_dtype_supported` raises). Both Qwen models, Mistral-Medium-3.5 and
-   GLM-5.2 all have real NVFP4 checkpoints and are selectable.
-2. **No 4-bit KV cache.** vLLM's `--kv-cache-dtype nvfp4` has an open
-   feature-tracking issue and a first-request crash bug; the KV axis stays
-   FP8 (default) / FP16. Even NVIDIA's own NVFP4 checkpoints keep the KV
-   cache FP8.
+   a correctness bug still open as of 2026-07-27 (fix PR unmerged) — so
+   H-generation NVFP4 is not modelled at all (`check_dtype_supported`
+   raises). Both Qwen models, Mistral-Medium-3.5 and GLM-5.2 all have real
+   NVFP4 checkpoints and are selectable.
+2. **No 4-bit KV cache — an owner policy.** vLLM's `--kv-cache-dtype nvfp4`
+   shipped 2026-05 (Blackwell-datacenter-only; values dequantize to FP8
+   before attention) and its early crash bug is fixed, so this is no longer
+   a stability constraint — the study still keeps the KV axis at FP8
+   (default) / FP16 as a conservatism choice on a young path. Even NVIDIA's
+   own NVFP4 weight checkpoints declare FP8 KV.
 3. **GLM-5.2 refuses FP16 KV** (`kv_fp16_ok=False`): vLLM's sparse-MLA path
    asserts a quantized cache, so an FP16-KV GLM run is not a servable config.
 4. **Per-model `max_seq_len` ranges.** The allowed workload cap now extends to
@@ -682,14 +690,14 @@ Reference workload, FP8 KV, 0 offload (`tables.py` "B300 × weight dtype"):
 
 | Config | FP8: pool / warm p5 / p50 | NVFP4: pool / warm p5 / p50 |
 | --- | --- | --- |
-| 27B, 1×B300 | 7.26M / **220** / 247 | 7.45M / **227** / 257 |
-| 27B, 2×B300 TP | 15.46M / **487** / 533 | 15.65M / **492** / 540 |
-| 35B-A3B, 1×B300 | 22.77M / **715** / 764 | 24.00M / **747** / 803 |
-| 35B-A3B, 2×B300 TP | 49.01M / **1,561** / 1,638 | 50.24M / **1,603** / 1,682 |
-| MM-3.5, 1×B300 | 0.75M / **17** / 27 | 0.98M / **25** / 36 |
-| MM-3.5, 2×B300 TP | 2.24M / **65** / 82 | 2.47M / **72** / 91 |
-| GLM-5.2, 4×B300 TP | 6.60M / **216** / 247 | 12.60M / **429** / 473 |
-| GLM-5.2, 8×B300 TP | 28.80M / **1,017** / 1,079 | 34.80M / **1,241** / 1,309 |
+| 27B, 1×B300 | 6.97M / **208** / 239 | 7.25M / **216** / 248 |
+| 27B, 2×B300 TP | 14.89M / **470** / 512 | 15.16M / **480** / 524 |
+| 35B-A3B, 1×B300 | 21.86M / **688** / 731 | 22.97M / **718** / 770 |
+| 35B-A3B, 2×B300 TP | 47.19M / **1,509** / 1,582 | 48.30M / **1,544** / 1,613 |
+| MM-3.5, 1×B300 | 0.70M / **16** / 26 | 0.91M / **24** / 33 |
+| MM-3.5, 2×B300 TP | 2.14M / **61** / 79 | 2.35M / **70** / 88 |
+| GLM-5.2, 4×B300 TP | 5.82M / **187** / 217 | 11.83M / **403** / 442 |
+| GLM-5.2, 8×B300 TP | 27.25M / **957** / 1,023 | 33.26M / **1,177** / 1,247 |
 
 And on H200s where the new models fit at FP8:
 
@@ -706,8 +714,9 @@ the Mistral rows read 31 / 24 tok/s.)
 Observations:
 
 1. **A 1×B300 roughly matches a 2×H200 TP2 pair** for the Qwen models (27B:
-   220 vs 195 warm p5; 35B-A3B: 715 vs 632) — one part, no TP haircut, in a
-   single NVLink domain.
+   208 vs 195 warm p5; 35B-A3B: 688 vs 632) — one part, no TP haircut, in a
+   single NVLink domain. (These are the reserve-corrected B300 numbers;
+   see limitation 16.)
 2. **Mistral-Medium-3.5 reverses H7: bandwidth binds, not cache.** Even the
    few sessions that fit warm decode at 30–40 tok/s p50 when all active —
    **at or below the 40 tok/s hard floor** (24–31 tok/s at the p50 warm
@@ -716,25 +725,26 @@ Observations:
    simply has no MTP module, so its honest default is the mtp=1.0 column. At
    a hypothetical 1.7× EAGLE speedup the same configs hit **68 / 52 tok/s**
    and H7 holds again. What *is* Mistral-specific is the warm count — 176
-   KiB/token leaves only **13–65 sessions p5** on 2–4 GPUs, an order of
-   magnitude under the Qwens — so it wants NVL-class pools or a measured
-   EAGLE speedup before it serves this workload comfortably.
+   KiB/token leaves only **13–61 sessions p5** across the 2–4×H200 and
+   1–2×B300 configs above, an order of magnitude under the Qwens — so it
+   wants NVL-class pools or a measured EAGLE speedup before it serves this
+   workload comfortably.
 3. **NVFP4's capacity upside scales with how much of the checkpoint the
-   experts are.** GLM-5.2's pool nearly doubles on 4×B300 (6.6M → 12.6M,
-   warm p5 216 → 429) because routed experts are **725 GB of its 756 GB**
-   FP8 footprint and are the *only* tensors `nvidia/GLM-5.2-NVFP4`
+   experts are.** GLM-5.2's pool more than doubles on 4×B300 (5.82M →
+   11.83M, warm p5 187 → 403) because routed experts are **725 GB of its
+   756 GB** FP8 footprint and are the *only* tensors `nvidia/GLM-5.2-NVFP4`
    quantizes (725 → 408 GB; whole checkpoint 756 → 465 GB); the Qwen models
-   gain only 1–5% in warm capacity (their checkpoints keep large BF16
+   gain only ~4% in warm capacity (their checkpoints keep large BF16
    shares under NVFP4).
 4. **NVFP4 decode crosses over on MoE models** (35B-A3B, 1×B300 p50):
    −22% at mns 1, +5% at 4, **+29% at 16**, +25% at 64. The BF16-kept blocks
    (DeltaNet, lm_head, router) make the fixed per-step read 1.7× heavier
    while expert reads shrink 1.78× — so NVFP4 is a *throughput* upgrade, not
    a latency one. This is a **hybrid-architecture × quantizer-recipe**
-   phenomenon, not an MoE law: it follows from RedHatAI's recipe excluding
-   the DeltaNet blocks, while NVIDIA's 27B recipe appears to quantize them —
-   which is why the dense hybrid 27B shows a uniform speedup instead
-   (limitation 17).
+   phenomenon, not an MoE law: it follows from RedHatAI's recipe keeping the
+   DeltaNet blocks BF16, while NVIDIA's 27B recipe holds them at FP8
+   (verified from the literal quant config) — which is why the dense hybrid
+   27B shows a uniform speedup instead (limitation 17).
 5. **GLM-5.2's DSA decode pricing matters and is honest**: at 8×H200,
    DSA-priced decode beats full-cache-read pricing 124 vs 116 tok/s (mns 16)
    and 62 vs 49 (mns 120) — and per-user speed is nearly *flat* beyond the
@@ -747,19 +757,26 @@ Observations:
 
 ### New limitations 16–19 (extending the general list 1–15, which follows in § Limitations below)
 
-16. **B300 constants are datasheet-tier, and the reserve is transferred, not
-    measured.** The H200-calibrated ~18 GiB/GPU reserve is applied to the
-    B300 unchanged. Additionally, cross-generation unit conventions differ:
-    if Hopper's vendor "141 GB" understates usable bytes by ~7% (documented
-    for the H100), B300 pools here are optimistic by ~9.8e9 B/GPU — −4.2%
-    for the 35B-A3B on 1×B300, −12.3% for GLM-5.2 on 4×B300 (`tables.py`
-    sensitivity). One B300 vLLM startup log would pin both.
+16. **The B300 reserve is transferred, then corrected by measurement — but
+    still not observed end-to-end.** The hardware constants themselves are
+    now primary-verified (288.4e9 usable B/GPU from a real `nvidia-smi`
+    dump; 8.0 TB/s from NVIDIA's own aggregates), and the cross-generation
+    unit-convention mismatch is **measured, not hypothesized**: the H200
+    delivers ~150.75e9 usable bytes against the 141e9 the calibration uses,
+    the B300 delivers nominal bytes, so the model adds the hidden 9.75e9
+    B/GPU back on the B300 (`GPU.reserve_extra`; −4.0% pool for the
+    35B-A3B on 1×B300, −11.7% for GLM-5.2 FP8 on 4×B300 vs the uncorrected
+    transfer — `tables.py` prints both). What remains an assumption is the
+    activation/workspace reserve itself transferring across generations —
+    one B300 vLLM startup log would close it.
 17. **NVFP4 constants inherit checkpoint-recipe choices.** Which layers stay
-    BF16 differs per quantizer (RedHatAI excludes the DeltaNet blocks on the
-    35B-A3B; NVIDIA's 27B recipe appears to quantize them); the modelled
-    numbers follow the specific checkpoints named in `research/nvfp4.md`,
-    and the RedHatAI 35B-A3B checkpoint self-describes as an *early
-    release*. Accuracy is not modelled at all — NVFP4 is treated as
+    BF16 differs per quantizer (all recipes now read from the literal quant
+    configs: RedHatAI keeps the 35B-A3B's DeltaNet blocks + MTP module BF16;
+    NVIDIA's 27B recipe holds attention/DeltaNet at FP8 and even quantizes
+    lm_head; NVIDIA's own 35B-A3B recipe differs from RedHatAI's enough to
+    *flip* the shared-read-heavier result — the study models the named
+    checkpoints only). The RedHatAI 35B-A3B checkpoint self-describes as an
+    *early release*. Accuracy is not modelled at all — NVFP4 is treated as
     serving-viable per published ~1% deltas, unverified on this workload.
 18. **GLM-5.2's warm-hit story on vLLM is less mature than the Qwens'.**
     Prefix caching over MLA latents + DSA indexer pages, IndexShare, and

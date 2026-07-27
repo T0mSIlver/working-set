@@ -4,12 +4,22 @@
 (Z.ai / Zhipu, `zai-org/GLM-5.2`, MIT weights, released 2026-06) as used by
 `scripts/scenario_model.py` and the explorer.
 
-> **Egress note (2026-07-27):** `huggingface.co` and `z.ai` are blocked at
-> this environment's proxy. The `config.json` was instead read from **three
-> independent GitHub mirrors that agree** (two byte-identical), cross-checked
-> against HuggingFace `transformers`' `GlmMoeDsaConfig` defaults and vLLM's
-> own GLM-5.2/DSA source code. This is the strongest provenance of the four
-> new research notes.
+> **Egress note (2026-07-27):** `huggingface.co` and `z.ai` were blocked at
+> this environment's proxy when this note was first written; the `config.json`
+> was read from three agreeing GitHub mirrors instead.
+>
+> **Re-verified same day after the block lifted — every value below is now
+> confirmed against the literal HF files:** base + FP8 + NVFP4 `config.json`
+> (the FP8 `modules_to_not_convert` has exactly 541 entries; the NVFP4
+> `ignore` list matches § 4 pattern-for-pattern), the `indexer_types` array
+> (literally 21 "full" indexers at layers 0,1,2,6,10,…,74 + 
+> `index_share_for_mtp_iteration: true`), shard-header dtype sampling (routed
+> experts are U8-packed FP4 + E4M3 block scales = exactly 0.5625 B/param),
+> and both `total_size` figures: **FP8 755,617,140,416 B** (note's 755.5e9,
+> +0.016%) and **NVFP4 464,795,267,072 B** (note's 464.8e9, −0.001%). No
+> constant changed. MIT license, 2026-06-17 release and the 1M context are
+> confirmed on the HF card and docs.z.ai (the z.ai blog page itself still
+> returned empty — the sole remaining secondary-only citation).
 
 ## 1. Architecture table (config.json, mirrored)
 
@@ -151,12 +161,16 @@ falls 1.78×.
   as everywhere).
 - MTP-layer indexer shares the main top-k (`index_share_for_mtp_iteration`),
   so no extra decode scan is charged for it.
-- The top-2048 sparse read (`kv_decode_const`) is charged in full for every
-  active sequence, including ones shorter than 2,048 tokens (where DSA reads
-  only `len` tokens). Unreachable at the reference workload — every sampled
-  length is floored at its ≥3k prefix — but would overprice a sub-2k-context
-  workload.
-- Literal HF bytes unread (blocked); mirrors are consistent three-way.
+- ~~The top-2048 sparse read (`kv_decode_const`) is charged in full for every
+  active sequence, including ones shorter than 2,048 tokens.~~ **Fixed
+  2026-07-27** (review finding): the per-sequence read is now scaled by
+  `min(len, kv_decode_topk) / kv_decode_topk` in both `decode_curves` and the
+  explorer, so a sub-2k context only pays for its own tokens. Invisible at
+  the reference workload (every sampled length is floored at its ≥3k prefix).
+- ~~Literal HF bytes unread (blocked); mirrors are consistent three-way.~~
+  **Resolved 2026-07-27:** literal HF configs, quant configs, ignore lists,
+  shard-header dtypes and both checkpoint `total_size` figures all read and
+  matched (see the egress note at the top).
 
 ## Sources
 

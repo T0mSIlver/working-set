@@ -4,19 +4,30 @@
 `scripts/scenario_model.py` and the explorer, alongside the study's calibrated
 H200 baseline.
 
-> **Egress note (2026-07-27):** every NVIDIA-owned domain 403s at this
-> environment's proxy gateway, so no figure below was read from a primary
-> NVIDIA datasheet. Values come from search-index snippets of NVIDIA pages
-> plus reputable secondary coverage (Tom's Hardware, The Register, OEM
-> datasheet mirrors), cross-checked for internal consistency (per-GPU ×
-> node-count = published aggregates). Confidence is tiered per row.
+> **Egress note (2026-07-27):** first written with every NVIDIA domain
+> blocked at the proxy, from search snippets + secondary coverage.
+>
+> **Re-verified same day after the block lifted, from primary sources:** the
+> GB300 NVL72 page ("576 TB/s"/72 = 8.0 TB/s exactly; 1,080/72 = 15 PFLOPS
+> dense FP4), the "Inside Blackwell Ultra" blog ("288 GB of HBM3e per GPU",
+> "8 TB/s per GPU", eight 12-Hi stacks, NVLink-5 1.8 TB/s, up to 1,400 W),
+> and — the load-bearing find — a **real B300 nvidia-smi dump** (Oracle OCI
+> quickstart, shape BM.GPU.B300.8, driver 590.48.01): **275,040 MiB =
+> 288.4e9 B usable per GPU**. One premise did not reproduce: both DGX and
+> HGX B300 pages now state "2.1 TB" total (no "2.3 TB" decimal variant), so
+> the old two-page reconciliation is retired — the per-GPU figure now rests
+> on the direct measurement instead. Also confirmed: thundergolfer.com's
+> H200 claim (vendor "141 GB" → **150.75e9 B actual**, +6.9%). Consequence:
+> the § 3 reserve-transfer sensitivity became the measured central case —
+> see below. Minor: the HGX B300 form is 108/8 = 13.5 PFLOPS dense FP4/GPU;
+> 15 belongs to the GB300 form.
 
 ## 1. Constants
 
 | Constant | Value | Confidence | Basis |
 |---|---|---|---|
-| HBM capacity | **288 GB HBM3e** / GPU (8 × 12-high stacks) | HIGH | NVIDIA "Inside Blackwell Ultra" blog (snippet), Tom's Hardware, The Register |
-| Usable bytes | **≈ 288e9 B** (= 268.2 GiB) | MEDIUM | Reconciles NVIDIA's own HGX B300 "2.3 TB" (decimal) and DGX B300 "2.1 TB" (binary TiB) 8-GPU aggregates to one per-GPU figure |
+| HBM capacity | **288 GB HBM3e** / GPU (8 × 12-high stacks) | VERIFIED (primary) | NVIDIA "Inside Blackwell Ultra" blog, read directly 2026-07-27 |
+| Usable bytes | **288.4e9 B** (275,040 MiB = 268.6 GiB) — nominal decimal bytes, NO Hopper-style ~7% over-provision | VERIFIED (measured) | Real nvidia-smi dump, Oracle OCI BM.GPU.B300.8 quickstart README |
 | Memory bandwidth | **8.0 TB/s** (8.0e12 B/s) | HIGH | GB300 NVL72 "576 TB/s"/72 = HGX B300 "64 TB/s"/8 = 8.0 exactly |
 | FP4 tensor cores | **Native NVFP4** (5th-gen tensor cores, ~15 PFLOPS dense/GPU GB300 form) | HIGH (support) / MEDIUM (PFLOPS) | NVIDIA Blackwell Ultra materials; 72 × 15 ≈ the published "1.1 EF dense NVFP4" for NVL72 |
 | FP8 | Supported (≈ half the FP4 rate) | HIGH | Blackwell tensor-core path |
@@ -27,7 +38,12 @@ H200 baseline.
 Model constants adopted:
 
 ```python
-GPUS["B300"] = GPU("B300", vram=288e9, hbm_bw=8.0e12, supports_nvfp4=True)
+GPUS["B300"] = GPU("B300", vram=288.4e9, hbm_bw=8.0e12, supports_nvfp4=True,
+                   reserve_extra=9.75e9)
+# vram: measured usable bytes (Oracle nvidia-smi dump). reserve_extra: the
+# H200's measured hidden HBM margin (150.75e9 actual vs the 141e9 the
+# calibration uses) — the solved reserve silently absorbs it on the H200, so
+# a part WITHOUT the over-provision must add it back (see § 3.2).
 ```
 
 ## 2. What the B300 changes for this study
@@ -45,23 +61,22 @@ domain at 8 the way single-node H200 systems do.
 ## 3. Assumptions carried into the model (flagged)
 
 1. **Reserve transfer.** The per-GPU activation/workspace reserve
-   (≈ 18.0 GiB) is *solved* from the H200 anchor and applied to the B300
-   unchanged. Activation/workspace scale mostly with model and batch, not
-   VRAM, so this is plausible — but no B300 measurement anchors it. One vLLM
-   startup log on a B300 (as was captured for 2×H200 TP2) would pin it.
-2. **Unit-convention mismatch across generations.** For Hopper, vendor "GB"
-   *understates* usable bytes (~7%, documented for H100: 80 GB advertised,
-   85.5e9 usable — thundergolfer.com; the same source claims the H200
-   similarly delivers ~7% over 141e9). The study keeps the H200 at its
-   141e9-vendor convention — the calibration absorbs any excess into the
-   solved reserve, so H200 numbers are unaffected. But the *transferred*
-   reserve then under-counts true per-GPU overhead by the same hidden ~10e9 B,
-   which **overstates B300 pools by ~10 GB per GPU if the Hopper
-   over-provision claim is right** — ~4% of the pool for the 35B-A3B on
-   1×B300, up to ~12% for GLM-5.2 on 4×B300 (the fraction grows with the
-   weight share of VRAM). Carried as a B300 sensitivity
-   (`tables.py`), resolvable only by a real B300 memory dump — no genuine
-   `nvidia-smi` reading from a B300 was locatable.
+   (≈ 18.0 GiB) is *solved* from the H200 anchor and applied to the B300, now
+   **plus the measured `reserve_extra` correction** (item 2). Activation/
+   workspace scale mostly with model and batch, not VRAM, so the transfer
+   itself remains plausible; a vLLM startup log on a B300 (as was captured
+   for 2×H200 TP2) would still be a welcome end-to-end check.
+2. **Unit-convention mismatch across generations — RESOLVED BY MEASUREMENT
+   (2026-07-27), promoted from sensitivity to central.** Both sides are now
+   pinned: thundergolfer.com (read in full) documents the H200 delivering
+   **150.75e9 B** usable against its 141e9 vendor figure (+6.9%), and the
+   Oracle OCI dump shows the B300 delivering **288.4e9 B** — nominal, no
+   over-provision. The calibration keeps the H200 at 141e9 (its numbers are
+   exact by construction — the hidden 9.75e9 lives inside the solved
+   reserve), and the B300 adds `reserve_extra = 9.75e9` per GPU so the
+   phantom margin does not transfer. Effect vs the uncorrected model:
+   −9.35e9 B of pool per B300 (−4% for the 35B-A3B on 1×B300, −12% for
+   GLM-5.2 FP8 on 4×B300); `tables.py` prints central vs uncorrected.
 3. **B300 FLOPS are not modelled.** The decode model is an HBM roofline;
    FP4 compute throughput only matters if compute becomes the binding
    constraint, which the roofline model cannot see (limitation carried from
@@ -69,7 +84,11 @@ domain at 8 the way single-node H200 systems do.
 
 ## Sources
 
-- NVIDIA (canonical, blocked at gateway — cited via snippets): GB300 NVL72 —
+- **Oracle OCI B300 quickstart README — the real BM.GPU.B300.8 nvidia-smi
+  dump (275,040 MiB/GPU, driver 590.48.01, power cap 1100 W on the
+  air-cooled SXM6 AC variant):**
+  https://github.com/oracle-quickstart/oci-gpu-quickstarts/blob/main/nvidia/B300/README-B300.md
+- NVIDIA (canonical; read directly 2026-07-27 after the block lifted): GB300 NVL72 —
   https://www.nvidia.com/en-us/data-center/gb300-nvl72/ · DGX B300 —
   https://www.nvidia.com/en-us/data-center/dgx-b300/ · "Inside NVIDIA
   Blackwell Ultra" — https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/
