@@ -142,6 +142,12 @@ class Model:
     # False for models vLLM can only serve with a quantized KV cache
     # (GLM-5.2's DSA path asserts fp8) — with_kv_dtype("fp16") then raises.
     kv_fp16_ok: bool = True
+    # Largest max_seq_len the study allows for this model (tokens). The
+    # workload cap (Workload.cap) may not exceed it — warm_capacity and
+    # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
+    # the Qwens (262,144 native, 1M via YaRN rope scaling) and GLM-5.2
+    # (1M native); Mistral-Medium-3.5 stays at its 262,144 model max.
+    max_ctx: float = 262_144
 
     @property
     def is_moe(self) -> bool:
@@ -178,6 +184,7 @@ MODELS = {
         # scaled by the baseline's as-deployed convention: 28.8 GiB x 22/27.8
         # = 22.8 GiB. Dense: decode reads everything. See research/nvfp4.md 6.2.
         nvfp4_w=(24.47e9, 24.47e9, 0.0, 0.0),
+        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
     ),
     # MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
     "35BA3B": Model(
@@ -199,6 +206,7 @@ MODELS = {
                  3.308e9,                # attn+shared-exp NVFP4; DN+lm_head+router BF16
                  566_231_040,            # 1_006_632_960 x 0.5625
                  18_119_393_280),        # 32_212_254_720 x 0.5625 (kink stays n=32)
+        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
     ),
     # Dense 128B, open weights (2026-04), 88 uniform full-attention GQA layers
     # (8 KV heads x 128) — the study's KV-hungriest model: 176 KiB/token FP8,
@@ -217,6 +225,7 @@ MODELS = {
         # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
         # edge MLP + all attention FP8, lm_head BF16 (research note #3)
         nvfp4_w=(92.7e9, 86.6e9, 0.0, 0.0),
+        max_ctx=262_144,                 # hard model max (YaRN x64 over a 4k base)
     ),
     # MoE 744B-A40B (753B incl. MTP), MLA + DeepSeek Sparse Attention, open
     # weights (2026-06). Cached: 576-B MLA latent/layer + 132-B indexer keys
@@ -242,6 +251,7 @@ MODELS = {
         kv_decode_bpt=2_772,             # 21 indexer layers x 132 B per context token
         kv_decode_const=92.0e6,          # 78 layers x top-2048 x 576 B per active seq
         kv_fp16_ok=False,                # vLLM DSA path asserts a quantized KV cache
+        max_ctx=1_048_576,               # native 1M context (theta 8e6)
     ),
 }
 
@@ -312,6 +322,14 @@ def with_weight_dtype(model: Model, weight_dtype: str) -> Model:
 # NVFP4 weights are only allowed on GPUs with native FP4 tensor cores (B300);
 # H-generation GPUs are deliberately excluded even where emulation kernels
 # exist (see research/nvfp4.md). Every capacity/decode entry point calls this.
+def check_cap_allowed(model: Model, wl) -> None:
+    """The workload's max_seq_len cap may not exceed the model's context."""
+    if wl.cap > model.max_ctx:
+        raise ValueError(
+            f"cap={wl.cap:.0f} exceeds {model.name}'s max context "
+            f"({model.max_ctx:.0f} tokens)")
+
+
 def check_dtype_supported(model: Model, topo: Topology) -> None:
     if model.weight_dtype == "nvfp4" and not topo.gpu.supports_nvfp4:
         raise ValueError(
@@ -545,6 +563,7 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     valid = ("all", "user", "gpu", "offload")
     if which not in valid:
         raise ValueError(f"which must be one of {valid}, got {which!r}")
+    check_cap_allowed(model, wl)
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)
     counts = np.empty(n_iter)
@@ -575,6 +594,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     <2% of step bytes, but at mns 64+ it is no longer negligible.
     """
     check_dtype_supported(model, topo)
+    check_cap_allowed(model, wl)
     rng = np.random.default_rng(seed)
     bw = effective_bw(topo)
     # dense-attention models read every cached token per step (kv_bpt); a
@@ -716,6 +736,19 @@ def _selfcheck():
         with_kv_dtype(glm, "fp16"); raise AssertionError("expected ValueError")
     except ValueError:
         pass
+
+    # context caps (owner decision 2026-07): Qwens + GLM allow up to 1M
+    # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144
+    assert m27.max_ctx == m35.max_ctx == glm.max_ctx == 1_048_576
+    assert mm.max_ctx == 262_144
+    wl_1m = replace(wl, cap=1_048_576)
+    assert warm_capacity(m35, t1, wl_1m, n_iter=40)[1] > 0     # 1M cap runs
+    for fn in (lambda: warm_capacity(mm, tp2, wl_1m, n_iter=1),
+               lambda: decode_curves(mm, tp2, wl_1m, [1], n_iter=10)):
+        try:
+            fn(); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
 
     # GLM-5.2 sizing: FP8 weights (755.5e9 B) fit no single GPU — pool clamps
     # to 0 — but 8xH200 TP and 4xB300 hold a real pool, NVFP4 a bigger one

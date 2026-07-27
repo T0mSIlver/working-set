@@ -292,7 +292,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-ram" min="0" max="1024" step="32" value="0">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="vLLM max_seq_len. Prompts longer than this are truncated. A lower cap trims the log-normal tail: smaller worst-case cold prefill, less pool hogging by huge sessions — more sessions warm. Model max: 262k (the top stop maps to the exact 262,144).">max_seq_len cap</span> <span class="val"><span id="v-cap">180</span>k</span></label>
+          <label class="flabel"><span class="tip" data-tip="vLLM max_seq_len. Prompts longer than this are truncated. A lower cap trims the log-normal tail: smaller worst-case cold prefill, less pool hogging by huge sessions — more sessions warm. Allowed range is per model: up to 1,048,576 for the Qwens (262k native, 1M via YaRN) and GLM-5.2 (1M native); Mistral-Medium-3.5 hard-caps at 262,144. The top stop maps to the exact model max.">max_seq_len cap</span> <span class="val"><span id="v-cap">180</span>k</span></label>
           <input type="range" id="s-cap" min="30" max="262" step="2" value="180">
         </div>
       </div>
@@ -448,6 +448,7 @@ const CONFIG = {
       mtp: 1.7,
       // nvidia/Qwen3.6-27B-NVFP4 (~22 GB ckpt), as-deployed convention
       nvfp4_w: [24.47e9, 24.47e9, 0.0, 0.0],
+      max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
     },
     "35BA3B": {                    // published Qwen3.6-35B-A3B config; see research/model_35ba3b.md
       name: "Qwen3.6-35B-A3B (MoE, ~3B active)",
@@ -461,6 +462,7 @@ const CONFIG = {
       // RedHatAI NVFP4 recipe: experts+attn NVFP4, DeltaNet/lm_head/router BF16
       // -> shared per-step read GROWS 1.7x while expert reads shrink 1.78x
       nvfp4_w: [22.92e9, 3.308e9, 566231040, 18119393280],
+      max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
     },
     "MM35": {                      // research/model_mistral_medium35.md
       name: "Mistral-Medium-3.5-128B (dense)",
@@ -472,6 +474,7 @@ const CONFIG = {
       w_route_total: 0.0,
       mtp: 1.0,                    // NO MTP module (external EAGLE draft exists)
       nvfp4_w: [92.7e9, 86.6e9, 0.0, 0.0],  // nvidia mixed recipe: MLP 4-86 NVFP4, rest FP8/BF16
+      max_ctx: 262144,             // hard model max (YaRN x64 over a 4k base)
     },
     "GLM52": {                     // research/model_glm52.md
       name: "GLM-5.2 (MoE 744B-A40B, MLA+DSA)",
@@ -487,6 +490,7 @@ const CONFIG = {
       kv_decode_bpt: 2772,         // DSA: 21 indexer layers x 132 B per context token
       kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
       kv_fp16_ok: false,           // vLLM DSA path asserts a quantized KV cache
+      max_ctx: 1048576,            // native 1M context
     },
   },
 
@@ -788,6 +792,16 @@ function decodePlan(gpuP95, draft){
 function decodeCurves(model, topo, wl, nMax, step, n_iter){
   const bw = effective_bw(topo), scale = topo.replicas;
   const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);
+  // The conservative expert union kinks HARD at n_sat = total/pertok (the
+  // batch activates every expert; n_sat = 32 for both MoE models). A wide-
+  // step sweep that straddles n_sat interpolates straight through the kink
+  // and draws a spurious notch around it — sample the kink point exactly so
+  // charts C and D show the true piecewise shape.
+  if (is_moe(model)){
+    const nSat = Math.round(model.w_route_total / model.w_route_pertok);
+    if (nSat > 1 && nSat < nMax && !ns.includes(nSat))
+      ns.push(nSat), ns.sort((a,b)=>a-b);
+  }
   const K=ns.length, last=ns[K-1];
   // ONE pool of contexts per iteration, read CUMULATIVELY: the sample for
   // concurrency n is the running sum of the pool's first n contexts. Drawing
@@ -850,6 +864,9 @@ function makeTopo(kind, n, gpuKey){
   return {name:`${n}×${g.name} DP`, n_gpu:n, kind:"dp", replicas:n, gpu:g};
 }
 function currentTopo(){ return makeTopo(state.par, state.ngpu, state.gpu); }
+// top stop of the max_seq_len slider for the active model: 1024 (-> the exact
+// 1,048,576) for 1M-context models, 262 (-> 262,144) for Mistral-Medium-3.5
+function capSliderMax(){ return CONFIG.MODELS[state.model].max_ctx >= 1048576 ? 1024 : 262; }
 // the host-RAM offload buffer is shared: DP replicas each get 1/N of it
 function ramPerCache(topo){ return topo.kind==="dp" ? state.ram/topo.replicas : state.ram; }
 
@@ -863,8 +880,9 @@ function currentWL(){
     sys_user: state.sys*1000, sys_sub: 3000,
     sub_shares_prefix: state.sub_shares_prefix,
     invalidation: state.inval/100,
-    // top slider stop maps to the model's exact 262,144 max
-    cap: state.cap>=262 ? 262144 : state.cap*1000, min_tokens: 1000,
+    // top slider stop maps to the active model's exact context max
+    cap: state.cap>=capSliderMax() ? CONFIG.MODELS[state.model].max_ctx
+                                   : state.cap*1000, min_tokens: 1000,
   };
 }
 
@@ -930,7 +948,7 @@ function renderChartA(){
   const sy=linScale(0,ymax,mT+ph,mT);
   let g='';
   // grid + x ticks (k)
-  const xstep=xmax>160000?50000:(xmax>80000?25000:10000);
+  const xstep=xmax>500000?250000:(xmax>160000?50000:(xmax>80000?25000:10000));
   const xticks=[]; for(let t=0;t<xmax;t+=xstep) xticks.push(t);
   xticks.forEach(t=>{
     const X=sx(t);
@@ -1441,6 +1459,11 @@ function enforceConstraints(){
   };
   document.getElementById('model-hint').textContent = hints[state.model];
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
+  // per-model max_seq_len range: re-scope the cap slider and clamp the value
+  // (mirrors check_cap_allowed in scenario_model.py)
+  const capEl = document.getElementById('s-cap'), capMax = capSliderMax();
+  capEl.max = capMax;
+  if (state.cap > capMax){ state.cap = capMax; capEl.value = capMax; }
 }
 
 // segmented controls

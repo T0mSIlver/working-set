@@ -300,6 +300,16 @@ def main():
         _, b, _, _ = M.decode_curves(glm_dense, t_h8, w0, [n], n_iter=1500)
         print(f"  8xH200 mns={n:3d}  DSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
 
+    print("\n== max_seq_len cap sweep to 1M (35B-A3B, TP2, warm p5/p50) ==")
+    print("  the allowed cap now extends to 1,048,576 for the Qwens (YaRN) and")
+    print("  GLM-5.2; Mistral-Medium-3.5's hard model max stays 262,144 and the")
+    print("  model raises on a larger cap. Raising the cap admits ever-larger")
+    print("  log-normal tail sessions, so capacity keeps falling past 262k:")
+    for cap in (180_000, 262_144, 524_288, 1_048_576):
+        p5, p50, _ = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["2xH200-TP2"],
+                                     wl(cap=cap), n_iter=1000)
+        print(f"  cap={cap / 1024:5.0f}k  {p5:5.0f} / {p50:5.0f}")
+
     print("\n== B300 sensitivity: Hopper unit-convention reserve transfer ==")
     print("  If the H200's vendor '141 GB' understates usable bytes ~7% (documented")
     print("  for the H100), the transferred reserve under-counts true overhead by")
