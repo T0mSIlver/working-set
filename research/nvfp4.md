@@ -91,7 +91,7 @@ are 2 B/param — *heavier* than in the FP8 checkpoint, where they are 1 B/param
 Quantized: full-attention projections, shared expert, routed experts.
 Excluded: embeddings, lm_head, DeltaNet blocks, router gates, norms.
 
-## 5. Qwen3.6 NVFP4 checkpoints exist for both study models [corroborated]
+## 5. NVFP4 checkpoints exist for both Qwen study models [corroborated]
 
 | Model | Repo (used for constants) | Also |
 |---|---|---|
@@ -143,14 +143,20 @@ w_route_total   = 32.212e9  x 0.5625                   = 18.119e9  B
 *shared* per-step read **1.7× heavier** than FP8 (3.31 vs 1.94 GB) — the BF16
 DeltaNet blocks and lm_head dominate it — while the *routed-expert* bytes drop
 1.78×. Low-concurrency decode gets *slower*; the crossover to faster-than-FP8
-decode comes as expert reads dominate (n ≳ 5 under the linear union).
+decode comes as expert reads dominate (n ≳ 4 under the linear union; the
+exact crossover on these constants is n = 3.1 — measured −0.7% at n = 3,
++5.4% at n = 4).
 
 ### 6.2 Qwen3.6-27B (dense) — from the reported checkpoint size
 
 No public param-level split of the 27B exists in this repo, so the constant
-comes from the **measured checkpoint size**, scaled by the baseline's
-as-deployed convention (the study's FP8 figure, 28.8 GiB, is an as-deployed
-footprint ≈ 1.11× the raw 27.8e9 B):
+comes from the **measured checkpoint size** (~22 GB [corroborated, NVIDIA
+repo + the ModelOpt ~2.5× claim on the 55.6 GB BF16 base]), scaled by the
+baseline's as-deployed convention (the study's FP8 figure, 28.8 GiB, read as
+≈ 1.11× a raw 27.8e9 B [assumption — raw = half the 55.6 GB BF16 figure];
+note `docs/scenarios.md` limitation 5 quotes the overhead as ~15%, which
+implies a smaller ~26.9e9 raw count — the two conventions differ by ~3% on
+the derived constant, see ledger item 5):
 
 ```
 w_resident_nvfp4(27B) = 28.8 GiB x (22.0 GB / 27.8 GB) = 22.8 GiB = 24.47e9 B
@@ -175,6 +181,10 @@ large BF16 share, so the dense NVFP4 win is real but far from 1.778×.
 4. Whether the 27B NVFP4 recipe quantizes the DeltaNet linears (the ~22 GB
    size implies mostly-quantized; the 35B recipe excludes them — recipes
    differ per quantizer).
+5. The 27B's raw-vs-as-deployed weight ratio: § 6.2 uses 1.11× (raw =
+   27.8e9 from the BF16 size), `docs/scenarios.md` limitation 5 says ~15%
+   (raw ≈ 26.9e9). One vLLM startup log settles it and moves the NVFP4 27B
+   constant ~3% (24.47e9 vs 25.19e9).
 
 ## Sources
 

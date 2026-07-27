@@ -56,8 +56,10 @@ domain at 8 the way single-node H200 systems do.
    141e9-vendor convention — the calibration absorbs any excess into the
    solved reserve, so H200 numbers are unaffected. But the *transferred*
    reserve then under-counts true per-GPU overhead by the same hidden ~10e9 B,
-   which **overstates B300 pools by ~10 GB (~3–5%) if the Hopper
-   over-provision claim is right**. Carried as a B300 sensitivity
+   which **overstates B300 pools by ~10 GB per GPU if the Hopper
+   over-provision claim is right** — ~4% of the pool for the 35B-A3B on
+   1×B300, up to ~12% for GLM-5.2 on 4×B300 (the fraction grows with the
+   weight share of VRAM). Carried as a B300 sensitivity
    (`tables.py`), resolvable only by a real B300 memory dump — no genuine
    `nvidia-smi` reading from a B300 was locatable.
 3. **B300 FLOPS are not modelled.** The decode model is an HBM roofline;

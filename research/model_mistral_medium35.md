@@ -92,9 +92,17 @@ attn x88 FP8  : 88 x 0.3272e9          = 28.79e9
 lm_head BF16  :                           3.22e9
 --------------------------------------------------
 w_decode_shared_nvfp4                   = 86.6e9 B   (0.69x the FP8 read)
-w_resident_nvfp4 = + embeddings 3.22 + vision tower ~2.8
+w_resident_nvfp4 = + embeddings 3.22 (BF16) + vision tower ~2.8
                                         = 92.7e9 B   (86.3 GiB)
 ```
+
+Convention notes: (a) embeddings are charged at **BF16** here; if the NVFP4
+checkpoint instead retains them at the base repo's FP8, w_resident drops
+1.6e9 B (−1.7%) — carried as a sensitivity, not the central value. (b) The
+FP8 w_resident uses the *reported* 133.6e9 (≈2% above the derived ~131e9 —
+packaging/misc) while the NVFP4 figure is *derived* with no equivalent
+gross-up, so the modelled FP8→NVFP4 pool gain is ~2% optimistic on this
+model.
 
 (The community `zdy1995love/…-NVFP4` all-linear variant is smaller, ~74 GB;
 the official mixed recipe is modelled. Mistral's own schema quotes
@@ -105,7 +113,7 @@ unresolved vendor figure.)
 
 - **No MTP module → the model's default speculative speedup is 1.0×** (the
   Qwen models' 1.7× is their own measured MTP fit and does not transplant).
-  The EAGLE-v1 draft head is the specultive path that exists: +4.0 KiB/token
+  The EAGLE-v1 draft head is the speculative path that exists: +4.0 KiB/token
   of draft KV (2 layers × 8 × 128 × 2 × FP8 = +2.3%, ignored) and an
   unmeasured acceptance rate on this workload — the explorer's speedup knob
   covers the what-if.
@@ -114,14 +122,15 @@ unresolved vendor figure.)
   cap `max_seq_len` (this study's 180k reference cap already does);
   `--language-model-only` frees the vision tower's ~2.8 GB.
 
-## 5. Remaining assumptions
+## 5. Remaining assumptions / re-verification ledger
 
 - Literal `config.json` unread (HF blocked): all fields are ≥2-source
   mirrors, but the byte-level file should be re-verified when reachable.
 - `intermediate_size` 28672 and the YaRN parameters are HIGH/MEDIUM-HIGH
   confidence (config mirrors + sibling model), not first-party.
-- NVFP4 embeddings assumed FP8-retained from the base checkpoint (recipe
-  lists only MLP/attention treatment); ±1.6e9 B on w_resident either way.
+- NVFP4 embedding dtype: the recipe lists only MLP/attention treatment; the
+  central value charges embeddings at BF16, with FP8-retained (−1.6e9 B) as
+  the sensitivity (see the convention notes in § 3).
 
 ## Sources
 

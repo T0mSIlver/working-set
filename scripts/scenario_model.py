@@ -308,6 +308,11 @@ def with_weight_dtype(model: Model, weight_dtype: str) -> Model:
         raise ValueError(
             f"weight_dtype must be one of {WEIGHT_DTYPES}, got {weight_dtype!r}")
     if weight_dtype == "fp8":
+        # no fp8_w constants are kept, so an NVFP4 model cannot be converted
+        # back — fail loudly instead of silently returning NVFP4 bytes
+        if model.weight_dtype != "fp8":
+            raise ValueError(f"{model.name}: cannot convert back to FP8; "
+                             "start from the MODELS[...] base entry")
         return model
     if model.nvfp4_w is None:
         raise ValueError(f"{model.name}: no NVFP4 checkpoint constants "
@@ -704,11 +709,12 @@ def _selfcheck():
             pass
     assert kv_pool_tokens(m27_4, b1) > kv_pool_tokens(m27, b1)  # smaller weights -> more KV
     assert with_weight_dtype(m27, "fp8") is m27                 # fp8 = identity
-    try:
-        with_weight_dtype(replace(m27, nvfp4_w=None), "nvfp4")
-        raise AssertionError("expected ValueError")
-    except ValueError:
-        pass
+    for bad_call in (lambda: with_weight_dtype(replace(m27, nvfp4_w=None), "nvfp4"),
+                     lambda: with_weight_dtype(m27_4, "fp8")):  # no way back to fp8
+        try:
+            bad_call(); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
 
     # NVFP4 identities (research/nvfp4.md, research/model_glm52.md):
     m35_4 = with_weight_dtype(m35, "nvfp4")

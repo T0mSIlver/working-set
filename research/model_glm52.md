@@ -8,7 +8,7 @@
 > this environment's proxy. The `config.json` was instead read from **three
 > independent GitHub mirrors that agree** (two byte-identical), cross-checked
 > against HuggingFace `transformers`' `GlmMoeDsaConfig` defaults and vLLM's
-> own GLM-5.2/DSA source code. This is the strongest provenance of the three
+> own GLM-5.2/DSA source code. This is the strongest provenance of the four
 > new research notes.
 
 ## 1. Architecture table (config.json, mirrored)
@@ -58,8 +58,9 @@ kv_bpt (fp8, incl. MTP layer):
 ```
 
 A 262k-token session holds 11.8 GiB; the model's full 1M context holds
-47.3 GiB — the study's workload cap (≤ 262k) stays far below GLM-5.2's
-native window.
+47.3 GiB. The study's *reference* cap (180k) stays far below GLM-5.2's
+native window; the allowed range extends to the full 1M
+(`max_ctx = 1_048_576`, owner decision 2026-07).
 
 ## 3. Decode-bandwidth model — DSA reads are NOT the full cache
 
@@ -136,13 +137,13 @@ falls 1.78×.
   `--kv-cache-dtype fp8` mandatory). MTP speculative decoding supported
   (5 draft tokens); expert parallel recommended for NVFP4.
 - Recipe VRAM floors: BF16 1786 GB · FP8 893 GB · NVFP4 558 GB — GLM-5.2
-  does not fit ≤ 4×H200 at FP8; the explorer will show a zero pool there
+  does not fit ≤ 6×H200 at FP8; the explorer will show a zero pool there
   rather than hiding the config.
 - MTP speedup default kept at the study's 1.7× **transplanted** fit (same
   treatment as the 35B-A3B: module present, acceptance unmeasured on this
   workload; GLM-5.2's 5-draft MTP could be higher — knob covers it).
 
-## 6. Remaining assumptions
+## 6. Remaining assumptions / re-verification ledger
 
 - fp8 (576 B) KV layout modelled; `fp8_ds_mla` (+13%) not.
 - The DSA decode pricing (§3) is a byte model of the vLLM kernels' *reads*;
@@ -150,6 +151,11 @@ falls 1.78×.
   as everywhere).
 - MTP-layer indexer shares the main top-k (`index_share_for_mtp_iteration`),
   so no extra decode scan is charged for it.
+- The top-2048 sparse read (`kv_decode_const`) is charged in full for every
+  active sequence, including ones shorter than 2,048 tokens (where DSA reads
+  only `len` tokens). Unreachable at the reference workload — every sampled
+  length is floored at its ≥3k prefix — but would overprice a sub-2k-context
+  workload.
 - Literal HF bytes unread (blocked); mirrors are consistent three-way.
 
 ## Sources

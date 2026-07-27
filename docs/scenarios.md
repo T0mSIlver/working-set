@@ -623,7 +623,7 @@ load depends on duty cycle < 100%.
 ## Extension (2026-07): B300 GPUs, NVFP4 weights, Mistral-Medium-3.5, GLM-5.2
 
 Added 2026-07-27; regenerate every number via the extension sections of
-`tables.py`. Three research notes carry the provenance:
+`tables.py`. Four research notes carry the provenance:
 [`research/gpu_b300.md`](../research/gpu_b300.md),
 [`research/nvfp4.md`](../research/nvfp4.md),
 [`research/model_mistral_medium35.md`](../research/model_mistral_medium35.md),
@@ -659,8 +659,8 @@ Added 2026-07-27; regenerate every number via the extension sections of
    model (`check_cap_allowed`) and the explorer's slider both enforce it.
    Raising the cap keeps *lowering* warm capacity (the log-normal tail keeps
    gaining mass), but the effect saturates — almost all tail mass sits below
-   512k: 35B-A3B TP2 warm p5/p50 goes 631/678 (180k) → 616/663 (262k) →
-   606/659 (512k) → 605/658 (1M) — regenerate via the 1M cap sweep in
+   512k: 35B-A3B TP2 warm p5/p50 goes 632/678 (180k) → 616/664 (262k) →
+   607/659 (512k) → 605/658 (1M) — regenerate via the 1M cap sweep in
    `tables.py`.
 
 ### New model constants (FP8 serving checkpoints)
@@ -674,7 +674,7 @@ Added 2026-07-27; regenerate every number via the extension sections of
 | Decode read / step | 125.0e9 B (dense read) | 18.92e9 shared + up to 724.8e9 routed (kink n = 32) |
 | Sparse decode | — (reads full cache) | indexer scan 2,772 B/context-token + 92 MB/seq top-2048 read |
 | Speculative default | **1.0×** (no MTP module; external EAGLE unmeasured) | 1.7× (MTP module, transplanted fit) |
-| Fits (FP8 weights) | TP2+ on H200; 1×B300 | 7×H200 / 3×B300; NVFP4 from 2×B300 |
+| Fits (FP8 weights) | TP2+ on H200; 1×B300 | 7×H200 / 4×B300 (3×B300 passes the pool arithmetic but sits under the vLLM recipe's 893 GB floor); NVFP4 from 2×B300 |
 
 ### Results — warm capacity by GPU part and weight dtype
 
@@ -683,6 +683,7 @@ Reference workload, FP8 KV, 0 offload (`tables.py` "B300 × weight dtype"):
 | Config | FP8: pool / warm p5 / p50 | NVFP4: pool / warm p5 / p50 |
 | --- | --- | --- |
 | 27B, 1×B300 | 7.26M / **220** / 247 | 7.45M / **227** / 257 |
+| 27B, 2×B300 TP | 15.46M / **487** / 533 | 15.65M / **492** / 540 |
 | 35B-A3B, 1×B300 | 22.77M / **715** / 764 | 24.00M / **747** / 803 |
 | 35B-A3B, 2×B300 TP | 49.01M / **1,561** / 1,638 | 50.24M / **1,603** / 1,682 |
 | MM-3.5, 1×B300 | 0.75M / **17** / 27 | 0.98M / **25** / 36 |
@@ -692,43 +693,59 @@ Reference workload, FP8 KV, 0 offload (`tables.py` "B300 × weight dtype"):
 
 And on H200s where the new models fit at FP8:
 
-| Config | pool | warm p5 / p50 | v@warm (p50, all warm decoding) |
+| Config | pool | warm p5 / p50 | v@warm-p5 (p50 tok/s, all p5-warm decoding) |
 | --- | --- | --- | --- |
-| MM-3.5, 2×H200 TP | 0.61M | 13 / 22 | **31 tok/s** |
-| MM-3.5, 4×H200 TP | 1.96M | 54 / 73 | **24 tok/s** |
-| GLM-5.2, 8×H200 TP | 4.50M | 141 / 169 | 61 tok/s |
+| MM-3.5, 2×H200 TP | 0.61M | 13 / 22 | **40 tok/s** |
+| MM-3.5, 4×H200 TP | 1.96M | 54 / 73 | **30 tok/s** |
+| GLM-5.2, 8×H200 TP | 4.50M | 141 / 169 | 62 tok/s |
+
+(v@warm-p5 evaluates the decode curve at the **p5** GPU-resident warm count —
+the explorer's stress point and the planning percentile; at the p50 counts
+the Mistral rows read 31 / 24 tok/s.)
 
 Observations:
 
 1. **A 1×B300 roughly matches a 2×H200 TP2 pair** for the Qwen models (27B:
    220 vs 195 warm p5; 35B-A3B: 715 vs 632) — one part, no TP haircut, in a
    single NVLink domain.
-2. **Mistral-Medium-3.5 reverses H7: bandwidth binds, not cache.** At 176
-   KiB/token and no MTP, even the few sessions that fit warm decode at
-   24–31 tok/s p50 when all active — **below the 40 tok/s hard floor**. The
-   warm counts are also tiny (13–65 p5). This model wants very large pools
-   (NVL-class B300 counts) or an EAGLE speedup before it serves this
-   workload comfortably; the explorer's speedup knob covers the what-if.
+2. **Mistral-Medium-3.5 reverses H7: bandwidth binds, not cache.** Even the
+   few sessions that fit warm decode at 30–40 tok/s p50 when all active —
+   **at or below the 40 tok/s hard floor** (24–31 tok/s at the p50 warm
+   counts). Note this is the **no-MTP effect** the "Binding order WITHOUT
+   MTP" table documents for *every* model, not a KV-bytes effect: Mistral
+   simply has no MTP module, so its honest default is the mtp=1.0 column. At
+   a hypothetical 1.7× EAGLE speedup the same configs hit **68 / 52 tok/s**
+   and H7 holds again. What *is* Mistral-specific is the warm count — 176
+   KiB/token leaves only **13–65 sessions p5** on 2–4 GPUs, an order of
+   magnitude under the Qwens — so it wants NVL-class pools or a measured
+   EAGLE speedup before it serves this workload comfortably.
 3. **NVFP4's capacity upside scales with how much of the checkpoint the
    experts are.** GLM-5.2's pool nearly doubles on 4×B300 (6.6M → 12.6M,
-   warm p5 216 → 429) because ~465 GB of its 756 GB FP8 footprint is routed
-   experts; the Qwen models gain only 1–4% (their checkpoints keep large
-   BF16 shares under NVFP4).
+   warm p5 216 → 429) because routed experts are **725 GB of its 756 GB**
+   FP8 footprint and are the *only* tensors `nvidia/GLM-5.2-NVFP4`
+   quantizes (725 → 408 GB; whole checkpoint 756 → 465 GB); the Qwen models
+   gain only 1–5% in warm capacity (their checkpoints keep large BF16
+   shares under NVFP4).
 4. **NVFP4 decode crosses over on MoE models** (35B-A3B, 1×B300 p50):
    −22% at mns 1, +5% at 4, **+29% at 16**, +25% at 64. The BF16-kept blocks
    (DeltaNet, lm_head, router) make the fixed per-step read 1.7× heavier
    while expert reads shrink 1.78× — so NVFP4 is a *throughput* upgrade, not
-   a latency one.
+   a latency one. This is a **hybrid-architecture × quantizer-recipe**
+   phenomenon, not an MoE law: it follows from RedHatAI's recipe excluding
+   the DeltaNet blocks, while NVIDIA's 27B recipe appears to quantize them —
+   which is why the dense hybrid 27B shows a uniform speedup instead
+   (limitation 17).
 5. **GLM-5.2's DSA decode pricing matters and is honest**: at 8×H200,
    DSA-priced decode beats full-cache-read pricing 124 vs 116 tok/s (mns 16)
    and 62 vs 49 (mns 120) — and per-user speed is nearly *flat* beyond the
    expert-saturation kink (63 → 62 tok/s from mns 64 → 120) because the
-   saturated 725 GB expert read dominates every step. The conservative
-   linear union is at its most conservative exactly here (256 experts, 8
-   routed — real batches overlap heavily); the coverage bracket is far
-   faster.
+   saturated 725 GB expert read dominates every step. The linear/coverage
+   union bracket is **widest exactly at the kink** (mns 32: 63 vs 98 tok/s,
+   +54%) and **narrows as the batch saturates under either model** (+14% at
+   mns 64, +2% at 120) — so the flat tail is robust to the union
+   assumption even though the kink region itself is not.
 
-### New limitations (in addition to 1–15 above)
+### New limitations 16–19 (extending the general list 1–15, which follows in § Limitations below)
 
 16. **B300 constants are datasheet-tier, and the reserve is transferred, not
     measured.** The H200-calibrated ~18 GiB/GPU reserve is applied to the
@@ -785,7 +802,10 @@ Ordered roughly by how much each could move the numbers:
    warm capacity drops ~10% (sensitivity in `tables.py`).
 5. **Deployed-weight overhead.** 35B-A3B resident bytes are raw param bytes; the 27B's
    stated footprint runs ~15% above raw. Applying +15% costs 6.2% of the 1×H200 pool
-   (2.6% on TP2).
+   (2.6% on TP2). The explorer's Conservative toggle applies the same +15% to every
+   model whose resident bytes are raw or on-disk-checkpoint figures — all but the
+   27B (Mistral-Medium-3.5 and GLM-5.2 included); the `tables.py` stacked case
+   stays 35B-A3B-scoped by definition.
 6. **Expert-union models, not measurement.** The linear bound is a true byte upper
    bound; the coverage curve is an i.i.d.-routing reference, not a lower bound. Their
    gap peaks ~30% at n ≈ 32 and closes above saturation.
