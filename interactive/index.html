@@ -214,11 +214,11 @@ svg text{fill:var(--text-2)}
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
         <li><b>GPU choice (H200 / B300):</b> the H200 is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve — a flagged assumption until a B300 startup log exists, and possibly ~10 GB/GPU optimistic if Hopper's vendor "141 GB" understates usable bytes as documented for the H100 (<code>research/gpu_b300.md</code>).</li>
-        <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; embeddings, lm_head, routers and linear-attention blocks stay BF16). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — vLLM's nvfp4 KV is not yet stable (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
+        <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; what stays high-precision is recipe-specific — see <code>research/nvfp4.md</code> — e.g. RedHatAI's 35B-A3B keeps the DeltaNet blocks BF16 while NVIDIA's GLM recipe quantizes only the routed experts). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — vLLM's nvfp4 KV is not yet stable (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
         <li><b>Mistral-Medium-3.5-128B</b> (open weights, 2026-04): dense, 88 uniform GQA layers → <b>176 KiB/token</b> FP8 KV, no recurrent state, no MTP module (speculative default 1.0×; external EAGLE draft unmeasured). <code>research/model_mistral_medium35.md</code>.</li>
-        <li><b>GLM-5.2</b> (open weights, 2026-06): 744B-A40B MLA + DeepSeek Sparse Attention; stores 47.3 KiB/token (MLA latent + indexer keys) but decode reads only the top-2048 tokens per layer plus an indexer scan (2,772 B per context token) — priced via <code>kv_decode_bpt/const</code>. vLLM requires FP8 KV on this path, so the FP16 toggle is disabled. FP8 weights (~756 GB) fit from 7×H200 / 3×B300; NVFP4 (~465 GB) from 2×B300. <code>research/model_glm52.md</code>.</li>
+        <li><b>GLM-5.2</b> (open weights, 2026-06): 744B-A40B MLA + DeepSeek Sparse Attention; stores 47.3 KiB/token (MLA latent + indexer keys) but decode reads only the top-2048 tokens per layer plus an indexer scan (2,772 B per context token) — priced via <code>kv_decode_bpt/const</code>. vLLM requires FP8 KV on this path, so the FP16 toggle is disabled. FP8 weights (~756 GB) fit from 7×H200 / 4×B300 per the vLLM recipe's 893 GB floor (3×B300 = 864 GB passes the pool arithmetic only); NVFP4 (~465 GB) from 2×B300. <code>research/model_glm52.md</code>.</li>
         <li><span class="prov">Note:</span> the 35B-A3B constants come from the <b>published Qwen3.6-35B-A3B config</b> (40 layers: 30 DeltaNet + 10 full-attention, 2 KV heads × 256, 256 experts / 8 routed) &mdash; derivations in <code>research/model_35ba3b.md</code>. Edit the <code>CONFIG</code> block to revise.</li>
-        <li><span class="prov">Provenance:</span> the B300 / NVFP4 / Mistral-3.5 / GLM-5.2 constants were researched 2026-07-27 with HuggingFace and NVIDIA domains proxy-blocked — chains run through first-party GitHub repos, three-way config mirrors, and cross-checked snippets, with per-claim confidence tiers and re-verification ledgers in the four research notes. Strongest cross-check: the derived GLM-5.2 NVFP4 resident matches the vLLM recipe's ~465 GB within 0.05%.</li>
+        <li><span class="prov">Provenance:</span> the B300 / NVFP4 / Mistral-3.5 / GLM-5.2 constants were researched 2026-07-27 with HuggingFace and NVIDIA domains proxy-blocked — chains run through first-party GitHub repos, three-way config mirrors, and cross-checked snippets, with an assumptions / re-verification ledger in each of the four research notes and per-claim confidence tiers in <code>nvfp4.md</code> and <code>gpu_b300.md</code>. Strongest cross-check: the derived GLM-5.2 NVFP4 resident matches the vLLM recipe's ~465 GB within 0.05%.</li>
       </ul>
     </div>
   </details>
@@ -247,7 +247,7 @@ svg text{fill:var(--text-2)}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline. NVFP4 (4.5 bits/param on quantized tensors) swaps in the real NVFP4-checkpoint byte counts — embeddings, lm_head, routers and (for hybrid models) linear-attention blocks stay BF16, so MoE models' fixed per-step read grows even as expert reads shrink. B300-only: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so this study does not model NVFP4 on H-generation GPUs. KV cache is NOT quantized to 4-bit (unstable in vLLM).">Weights</span></label>
+          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline. NVFP4 (4.5 bits/param on quantized tensors) swaps in the real NVFP4-checkpoint byte counts. What stays high-precision is recipe-specific — RedHatAI's 35B-A3B keeps embeddings, lm_head, routers and the DeltaNet blocks BF16; NVIDIA's Mistral recipe keeps attention and edge MLP FP8; NVIDIA's GLM recipe quantizes ONLY routed experts — so the modelled bytes follow the specific checkpoints named in the research notes, and MoE models' fixed per-step read can grow even as expert reads shrink. B300-only: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so this study does not model NVFP4 on H-generation GPUs. KV cache is NOT quantized to 4-bit (unstable in vLLM).">Weights</span></label>
           <div class="seg" id="seg-wdt" data-key="wdt">
             <button data-v="fp8" aria-pressed="true">FP8</button>
             <button data-v="nvfp4" aria-pressed="false">NVFP4</button>
@@ -271,12 +271,12 @@ svg text{fill:var(--text-2)}
           <div class="hint" id="assume-hint" style="display:none">Stacked-adverse constants active. Set invalidation to 10% to reproduce the docs' 403-session TP2 case.</div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Multi-Token Prediction speculative decoding. The base quantity is the per-draft acceptance α (with 2 draft tokens, speedup = 1 + α + α²) — shown under the slider. 1.7× is the 27B's measured fit (α ≈ 47%); a measured 87% acceptance would be ≈ 2.6×. MTP + hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps this at 1.0× (off).">MTP decode speedup</span> <span class="val"><span id="v-mtp">1.70</span>×</span></label>
+          <label class="flabel"><span class="tip" data-tip="Multi-Token Prediction speculative decoding. The base quantity is the per-draft acceptance α (with 2 draft tokens, speedup = 1 + α + α²) — shown under the slider. 1.7× is the 27B's measured fit (α ≈ 47%); a measured 87% acceptance would be ≈ 2.6×. MTP + hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps this at 1.0× (off). Switching model resets this slider to that model's default (1.7× Qwen/GLM, 1.0× Mistral).">MTP decode speedup</span> <span class="val"><span id="v-mtp">1.70</span>×</span></label>
           <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
           <div class="hint" id="mtp-accept"></div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200; GLM-5.2 FP8 fits from 7×H200 / 3×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
+          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
@@ -363,7 +363,7 @@ svg text{fill:var(--text-2)}
 
     <div class="panel card">
       <p class="ct">B · Warm sessions (p5) vs hardware</p>
-      <p class="cs">The planning view: how the p5 warm-session count scales with H200 count, under the current workload, KV dtype and offload. Ring = your current configuration.</p>
+      <p class="cs">The planning view: how the p5 warm-session count scales with GPU count, under the current workload, KV dtype and offload. Ring = your current configuration.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>TP — one shared cache (band to p95)</span>
         <span class="li"><span class="sw" style="background:var(--s3)"></span>DP — system total (needs sticky routing)</span>
@@ -864,9 +864,14 @@ function makeTopo(kind, n, gpuKey){
   return {name:`${n}×${g.name} DP`, n_gpu:n, kind:"dp", replicas:n, gpu:g};
 }
 function currentTopo(){ return makeTopo(state.par, state.ngpu, state.gpu); }
-// top stop of the max_seq_len slider for the active model: 1024 (-> the exact
-// 1,048,576) for 1M-context models, 262 (-> 262,144) for Mistral-Medium-3.5
-function capSliderMax(){ return CONFIG.MODELS[state.model].max_ctx >= 1048576 ? 1024 : 262; }
+// top stop of the max_seq_len slider for the active model, derived from its
+// max_ctx (1049 for 1M models, 262 for Mistral). At the top stop the workload
+// cap maps to the EXACT model max (1,048,576 / 262,144), everywhere else to
+// cap*1000 — so the same slider position means slightly different tokens on
+// different models at the very top, by design. The clamp on model switch is
+// one-way: a 1024k cap snaps down to 262 for Mistral and is NOT restored on
+// switching back (the user sees the clamped value and can re-raise it).
+function capSliderMax(){ return Math.round(CONFIG.MODELS[state.model].max_ctx/1000); }
 // the host-RAM offload buffer is shared: DP replicas each get 1/N of it
 function ramPerCache(topo){ return topo.kind==="dp" ? state.ram/topo.replicas : state.ram; }
 
@@ -1261,9 +1266,9 @@ let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null;
 // active model with the KV-dtype, structural-assumption and MTP-speedup
 // knobs applied. FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py). The
 // "conservative" structural set = stacked-adverse case from docs/scenarios.md:
-// fp32 DeltaNet state (2x), +15% deployed-weight overhead (35B-A3B only —
-// the 27B's 28.8 GiB is already an as-deployed figure), and a low calibration
-// anchor (applied in kv_pool_tokens via currentReserve()).
+// fp32/doubled recurrent state (2x), +15% deployed-weight overhead (every
+// model but the 27B, whose 28.8 GiB is already an as-deployed figure), and a
+// low calibration anchor (applied in kv_pool_tokens via reserveNow()).
 function activeModel(){
   let m = CONFIG.MODELS[state.model];
   // NVFP4 weights (B300-only; the UI disables the option elsewhere): swap in
@@ -1375,7 +1380,10 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // per-user decode speed, only warm STORAGE.
   const st=stress || stressPoint(dc,topo,warm);
   const nOp=st.n, puOp=st.pu, aggOp=st.agg/1000;
-  const floorClass = puOp>=50?'good':(puOp>=40?'warn':'crit');
+  // a zero pool means the weights don't fit this configuration at all — a
+  // decode readout evaluated at n=1 would show a meaningless green number
+  const noFit = pool <= 0;
+  const floorClass = noFit ? undefined : (puOp>=50?'good':(puOp>=40?'warn':'crit'));
   const dp = topo.kind==="dp";
   // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
   // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
@@ -1399,11 +1407,11 @@ function renderTiles(model,topo,wl,dc,warm,stress){
      tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
     {k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
      tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
-    {k:"Per-user, all GPU-resident p5 warm active", v:fmt(puOp,1), u:"tok/s",
-     sub:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
+    {k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
+     sub:noFit?"model weights do not fit this configuration":`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥50 tok/s (comfortable), amber ≥40 (at the hard floor), red below. If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
-    {k:"Aggregate, all GPU-resident p5 warm active", wide:true, v:fmt(aggOp,1), u:"ktok/s",
-     sub:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
+    {k:"Aggregate, all GPU-resident p5 warm active", wide:true, v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
+     sub:noFit?"model weights do not fit this configuration":`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
      tip:"System-wide token throughput at that same stress point — the GPU-resident p5-warm sessions all decoding at once, summed over DP replicas. A capacity ceiling for batch/offline work, not a latency promise."},
   ];
   const good=cssv('--good'),warn=cssv('--warn'),crit=cssv('--crit');
@@ -1476,12 +1484,18 @@ document.querySelectorAll('.seg').forEach(seg=>{
       state[key]=btn.dataset.v;
       // switching model adopts ITS speculative-decode default (1.7x = the
       // Qwen fit / GLM transplant; 1.0x = Mistral, which has no MTP module)
+      let mtpAdopted = false;
       if (key==='model'){
+        mtpAdopted = state.mtp !== CONFIG.MODELS[state.model].mtp;
         state.mtp = CONFIG.MODELS[state.model].mtp;
         document.getElementById('s-mtp').value = state.mtp;
       }
       enforceConstraints();
       syncLabels();
+      if (mtpAdopted)
+        document.getElementById('mtp-accept').textContent =
+          `Adopted this model's speculative default (${state.mtp.toFixed(2)}×) — re-set the slider if you were modelling something else. ` +
+          document.getElementById('mtp-accept').textContent;
       document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
       document.getElementById('assume-hint').style.display = (state.assume==='conservative')?'block':'none';
       computeAndRender(false);
@@ -1518,9 +1532,14 @@ function syncLabels(){
   // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
   // per-draft acceptance — the base quantity the speedup is computed from
   const acc = state.mtp<=1 ? 0 : (Math.sqrt(4*state.mtp-3)-1)/2;
+  // α inverts the 2-draft MTP model — exact for the Qwens only. GLM-5.2's MTP
+  // drafts 5 tokens and Mistral has no MTP module (its slider models EAGLE),
+  // so the readout is only indicative there.
+  const aNote = state.model==="GLM52" ? ' GLM-5.2 drafts 5 tokens — α is indicative only.'
+              : state.model==="MM35" ? ' Mistral has no MTP module — the slider models an EAGLE-style speedup; α does not apply.' : '';
   document.getElementById('mtp-accept').textContent =
-    state.mtp<=1 ? 'MTP off — implied per-draft acceptance α = 0%.'
-    : `Implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}% (speedup = 1 + α + α², 2 draft tokens; the 1.7× measured fit ⇔ 47%).`;
+    (state.mtp<=1 ? 'MTP off — implied per-draft acceptance α = 0%.'
+    : `Implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}% (speedup = 1 + α + α², 2 draft tokens; the 1.7× measured fit ⇔ 47%).`) + aNote;
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
   document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';

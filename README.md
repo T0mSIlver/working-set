@@ -61,7 +61,7 @@ The full write-up — setup, method, results, and recommendations — is in
 │   ├── model_mistral_medium35.md  # Mistral-Medium-3.5-128B constants + sources
 │   ├── model_glm52.md        # GLM-5.2 (MLA+DSA) constants + sources
 │   ├── gpu_b300.md           # B300 (Blackwell Ultra) hardware constants
-│   └── nvfp4.md              # NVFP4 format, B300-only gate, per-model bytes
+│   └── nvfp4.md              # NVFP4 format, B300-only gate, Qwen NVFP4 bytes
 ├── figures/                  # generated figures used in the write-ups
 └── data/                     # provider CSVs (not committed — see data/README.md)
 ```

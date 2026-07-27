@@ -222,6 +222,9 @@ def main():
     print("  unknowns. Stacking plausible adverse assumptions bounds the downside:")
     print("  anchor at 2x the measured FP16 LOWER bound (2.278M), fp32 recurrent")
     print("  state, +15% deployed-weight overhead, 10% invalidation.")
+    print("  (This stacked case is 35B-A3B-scoped by definition. The explorer's")
+    print("  Conservative toggle applies the same +15% to every model whose")
+    print("  resident bytes are raw/checkpoint figures — all but the 27B.)")
     base_p5 = M.warm_capacity(m, TOPOLOGIES["2xH200-TP2"], w0, n_iter=1500)[0]
     saved_anchor, saved_reserve = M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE
     try:
@@ -248,7 +251,7 @@ def main():
     # ------------------------------------------------------------------
     print("\n== B300 x weight dtype: pool + warm p5/p50 (fp8 KV, reference workload) ==")
     print("  NVFP4 is B300-only (native FP4; the Hopper fallback is not modelled).")
-    print("  Configs chosen so FP8 weights actually fit; '-' = no NVFP4 constants.")
+    print("  Configs chosen so FP8 weights actually fit.")
     ext_configs = [
         ("27B",    [("tp", 1, "B300"), ("tp", 2, "B300")]),
         ("35BA3B", [("tp", 1, "B300"), ("tp", 2, "B300")]),
@@ -268,15 +271,17 @@ def main():
             print(f"  {mk:7} {t.name:16} " + " | ".join(row))
 
     print("\n== New models on H200 (where FP8 weights fit) ==")
+    print("  v@warm-p5 = per-user p50 tok/s with all P5 GPU-resident warm sessions")
+    print("  decoding at once — the explorer's stress point (the planning percentile)")
     for mk, kind, n in [("MM35", "tp", 2), ("MM35", "tp", 4), ("GLM52", "tp", 8)]:
         t = M.topology(kind, n)
         mdl = MODELS[mk]
         pool = M.kv_pool_tokens(mdl, t)
         p5, p50, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000)
-        _, g50, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000, which="gpu")
-        _, v, _, _ = M.decode_curves(mdl, t, w0, [max(int(g50), 1)], n_iter=800)
+        g5, _, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000, which="gpu")
+        _, v, _, _ = M.decode_curves(mdl, t, w0, [max(int(g5), 1)], n_iter=800)
         print(f"  {mk:7} {t.name:16} pool={pool / 1e6:6.2f}M  warm p5={p5:4.0f} p50={p50:4.0f}  "
-              f"v@warm={v[0]:6.0f} tok/s")
+              f"v@warm-p5={v[0]:6.0f} tok/s")
 
     print("\n== NVFP4 decode effect on MoE (35B-A3B, 1xB300, per-user p50 tok/s) ==")
     print("  NVFP4 shrinks expert reads 1.78x but the BF16-kept blocks (DeltaNet,")
@@ -307,8 +312,8 @@ def main():
     print("  log-normal tail sessions, so capacity keeps falling past 262k:")
     for cap in (180_000, 262_144, 524_288, 1_048_576):
         p5, p50, _ = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["2xH200-TP2"],
-                                     wl(cap=cap), n_iter=1000)
-        print(f"  cap={cap / 1024:5.0f}k  {p5:5.0f} / {p50:5.0f}")
+                                     wl(cap=cap), n_iter=1500)
+        print(f"  cap={cap:>9,}  {p5:5.0f} / {p50:5.0f}")
 
     print("\n== B300 sensitivity: Hopper unit-convention reserve transfer ==")
     print("  If the H200's vendor '141 GB' understates usable bytes ~7% (documented")
