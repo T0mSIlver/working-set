@@ -11,14 +11,21 @@ Modified MIT license. First-party evidence: Mistral's own docs-schema repo
 `type: 'Open'`, `parameters: '128'`, `active: '128'`, `contextLength: '256k'`,
 weights URL = the HF repo).
 
-> **Egress note (2026-07-27):** `huggingface.co` and `mistral.ai` are blocked
-> at this environment's proxy, so the literal `config.json` bytes were NOT
-> read. Every field below was instead cross-checked across ≥2 of: Mistral's
-> first-party schema repo, NVIDIA's Model-Optimizer / NeMo repos, vLLM's
-> recipes + model registry, SGLang's cookbook, and independent config mirrors
-> (Kaito catalog, deployment profiles) — all on GitHub. The strongest single
-> source for the layer count is **NVIDIA's quantization recipe enumerating
-> decoder layers 0–87** for this exact model.
+> **Egress note (2026-07-27):** `huggingface.co` and `mistral.ai` were blocked
+> at this environment's proxy when this note was first written, so the literal
+> `config.json` bytes were NOT read; every field was cross-checked across ≥2
+> GitHub mirrors instead.
+>
+> **Re-verified same day after the block lifted:** the literal
+> `config.json`, both `model.safetensors.index.json` files, the NVFP4
+> `hf_quant_config.json` (all 3,506 entries parsed), per-shard safetensors
+> headers (per-dtype byte sums), the EAGLE `params.json`, and the
+> docs.mistral.ai model card were all read from the primary sources. Every
+> architecture field below is confirmed byte-for-byte; the one corrected
+> constant is the NVFP4 resident (§ 3). One repo caveat worth keeping: the HF
+> README notes the Transformers config originally shipped an incorrect entry
+> causing long-context degradation, fixed in commit `c4be198050fb…` — the
+> verified config is the post-fix one.
 
 ## 1. Architecture table
 
@@ -43,7 +50,8 @@ weights URL = the HF repo).
 Parameter cross-check (config-derived, no fitting): per-layer attn
 2·12288² + 2·(12288·1024) = 327.2M; MLP 3·12288·28672 = 1,056.9M; × 88 =
 121.8B; + untied embeddings 2 × (131072·12288) = 3.22B → **125.0B text**;
-+ Pixtral tower (~1.4B) ≈ **126–127B ≈ "128B"** ✓.
++ Pixtral tower + projector (**2.68B measured** — 5.356e9 BF16 bytes in the
+shard headers) = **127.7B ≈ "128B"** ✓.
 
 ## 2. KV-cache bytes per token — all 88 layers grow
 
@@ -65,17 +73,19 @@ holds **44 GiB** of FP8 KV.
 ### FP8 (as-shipped)
 
 ```
-w_resident      = 133.6e9 B (124.43 GiB on-disk FP8 checkpoint, incl. BF16
-                  vision tower / projector / lm_head)      [Kaito catalog]
-w_decode_shared = 125.0e9 B — text-decoder read per step: 88 layers FP8
-                  (121.8e9) + lm_head BF16 (2 x 1.61e9); the vision tower is
-                  an encoder and is NOT read during decode; the input
-                  embedding is a row lookup, not a matmul read
+w_resident      = 133.6e9 B — MEASURED: index total_size 133,605,834,656 B
+                  = 124.4301 GiB exactly
+w_decode_shared = 125.0e9 B — MEASURED from per-shard dtype sums: attn
+                  28.790e9 + MLP 93.013e9 (F8_E4M3) + lm_head 3.221e9 (BF16)
+                  = 125.024e9; the vision tower is an encoder and is NOT
+                  read during decode; the input embedding is a row lookup
 w_route_*       = 0 (dense)
 ```
 
-Derived resident (125.0 text + BF16 extras + 2.8 vision ≈ 131e9) agrees with
-the reported 133.6e9 within 2% — the gap is packaging/misc, carried as-is.
+The former "≈2% packaging/misc gap" is resolved: it was the Pixtral tower +
+projector being **5.356e9 B (~2.68B params)**, not ~2.8e9 B. With the
+measured tower the sum closes exactly: 125.024 + 3.221 (embed) + 5.356 +
+0.004 (norms) = 133.606e9 B.
 
 ### NVFP4 — official `nvidia/Mistral-Medium-3.5-128B-NVFP4`
 
@@ -86,28 +96,30 @@ FP8** (4-bit KV is not used even in the NVFP4 checkpoint — consistent with
 this study's no-FP4-KV rule).
 
 ```
-MLP x83 NVFP4 : 83 x 1.0569e9 x 0.5625 = 49.35e9
-MLP x5  FP8   :  5 x 1.0569e9          =  5.28e9
-attn x88 FP8  : 88 x 0.3272e9          = 28.79e9
-lm_head BF16  :                           3.22e9
+MLP x83 NVFP4 : measured 43.864e9 (U8/FP4-packed) + scales   } 54.63e9
+MLP x5  FP8   : measured (part of the 10.768e9 FP8 MLP bytes) }  (measured)
+attn x88 FP8  : measured               = 28.790e9
+lm_head BF16  : measured               =  3.221e9
 --------------------------------------------------
-w_decode_shared_nvfp4                   = 86.6e9 B   (0.69x the FP8 read)
-w_resident_nvfp4 = + embeddings 3.22 (BF16) + vision tower ~2.8
-                                        = 92.7e9 B   (86.3 GiB)
+w_decode_shared_nvfp4                  = 86.643e9 B  (0.69x the FP8 read)
+w_resident_nvfp4 = index total_size    = 95.225e9 B  (88.69 GiB) — MEASURED
+                   (95,224,812,960 B; supersedes the derived 92.7e9)
 ```
 
-Convention notes: (a) embeddings are charged at **BF16** here; if the NVFP4
-checkpoint instead retains them at the base repo's FP8, w_resident drops
-1.6e9 B (−1.7%) — carried as a sensitivity, not the central value. (b) The
-FP8 w_resident uses the *reported* 133.6e9 (≈2% above the derived ~131e9 —
-packaging/misc) while the NVFP4 figure is *derived* with no equivalent
-gross-up, so the modelled FP8→NVFP4 pool gain is ~2% optimistic on this
-model.
+Convention notes, resolved by the shard headers: (a) `embed_tokens` **is
+BF16** (3.221e9 B) in the NVFP4 checkpoint — the FP8-retained sensitivity is
+dead; (b) the old derived 92.7e9 undercounted only because it assumed a
+~1.4B-param vision tower — the measured tower + projector is 5.356e9 B, and
+both resident figures are now measured totals, so the FP8→NVFP4 pool
+comparison carries no derivation asymmetry. The 0.5625 B/param NVFP4 packing
+factor is confirmed by the U8 + per-block-scale byte counts.
 
 (The community `zdy1995love/…-NVFP4` all-linear variant is smaller, ~74 GB;
 the official mixed recipe is modelled. Mistral's own schema quotes
-`minGpuRam.fp4: 64` GB, which matches neither exactly — carried as an
-unresolved vendor figure.)
+`minGpuRam.fp4: 64` GB — the measured 95.2e9 B official checkpoint now
+definitively excludes it as a description of the official recipe; it reads
+like an all-linear-FP4 weights-only estimate, or simply fp8/2. Still carried
+as an unresolved vendor figure, but bounded.)
 
 ## 4. Serving notes folded into the model
 

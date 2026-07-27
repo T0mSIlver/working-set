@@ -52,19 +52,30 @@ KIB, MIB, GIB = 1024, 1024**2, 1024**3
 @dataclass(frozen=True)
 class GPU:
     name: str
-    vram: float            # HBM bytes (vendor decimal convention)
+    vram: float            # usable HBM bytes (see per-part comments)
     hbm_bw: float          # HBM bandwidth, bytes/s
     supports_nvfp4: bool   # native FP4 tensor cores (Blackwell+)
+    # Extra per-GPU reserve applied when the H200-SOLVED reserve transfers to
+    # this part. Hopper over-provisions HBM: the H200 actually delivers
+    # ~150.75e9 usable bytes against the 141e9 vendor figure the calibration
+    # uses (thundergolfer.com, confirmed 2026-07-27). The anchor absorbs that
+    # hidden ~9.75e9 into the solved reserve implicitly, so H200 results are
+    # exact by construction — but a part WITHOUT the over-provision must add
+    # it back explicitly or its pools inherit ~9.75e9/GPU of phantom HBM.
+    reserve_extra: float = 0.0
 
 
 GPUS = {
     "H200": GPU("H200", 141e9, 4.8e12, supports_nvfp4=False),
-    # Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores. The
-    # H200-calibrated reserve is applied per B300 unchanged (flagged
-    # assumption — see research/gpu_b300.md #3: if Hopper's vendor "141 GB"
-    # understates usable bytes by ~7% as documented for the H100, B300 pools
-    # here are ~10 GB/GPU optimistic; a real B300 startup log would pin it).
-    "B300": GPU("B300", 288e9, 8.0e12, supports_nvfp4=True),
+    # Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores.
+    # vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
+    # quickstart, driver 590.48.01) shows 275,040 MiB = 288.4e9 B per GPU:
+    # the B300 delivers nominal decimal bytes with NO Hopper-style ~7%
+    # over-provision. reserve_extra: the measured H200 hidden margin that the
+    # transferred reserve must therefore add back (research/gpu_b300.md #3 —
+    # formerly a flagged sensitivity, now the measured central case).
+    "B300": GPU("B300", 288.4e9, 8.0e12, supports_nvfp4=True,
+                reserve_extra=9.75e9),
 }
 
 VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
@@ -129,16 +140,21 @@ class Model:
     # NVFP4-checkpoint weight bytes (w_resident, w_decode_shared,
     # w_route_pertok, w_route_total), or None if no NVFP4 variant exists.
     # Derivations + provenance: research/nvfp4.md. NVFP4 changes WEIGHT bytes
-    # only — kv_bpt and the DeltaNet state are untouched (no 4-bit KV: vLLM's
-    # nvfp4 KV cache is not yet stable, see the research note).
+    # only — kv_bpt and the DeltaNet state are untouched. The KV cache stays
+    # FP8/FP16 by OWNER POLICY: vLLM's nvfp4 KV shipped 2026-05 (Blackwell-
+    # datacenter-only, values dequantized to FP8 before attention) but this
+    # study does not model it — see research/nvfp4.md #3.
     nvfp4_w: tuple | None = None
     # Sparse-attention decode pricing (GLM-5.2 / DSA). By default decode reads
     # the FULL cached context (kv_decode_bpt=None -> kv_bpt). A DSA model
     # instead reads kv_decode_bpt bytes per CONTEXT token (the indexer scan)
-    # plus kv_decode_const bytes per ACTIVE SEQUENCE (the top-k sparse read).
+    # plus kv_decode_const bytes per ACTIVE SEQUENCE (the top-k sparse read,
+    # scaled by min(len, kv_decode_topk)/kv_decode_topk — a sequence shorter
+    # than the top-k window only reads its own tokens).
     # Storage (kv_bpt) is unaffected. research/model_glm52.md #3.
     kv_decode_bpt: float | None = None
     kv_decode_const: float = 0.0
+    kv_decode_topk: float | None = None
     # False for models vLLM can only serve with a quantized KV cache
     # (GLM-5.2's DSA path asserts fp8) — with_kv_dtype("fp16") then raises.
     kv_fp16_ok: bool = True
@@ -180,10 +196,12 @@ MODELS = {
         w_route_pertok=0.0,
         w_route_total=0.0,
         mtp=1.7,
-        # nvidia/Qwen3.6-27B-NVFP4 (~22 GB checkpoint vs 27.8 GB FP8-raw),
-        # scaled by the baseline's as-deployed convention: 28.8 GiB x 22/27.8
-        # = 22.8 GiB. Dense: decode reads everything. See research/nvfp4.md 6.2.
-        nvfp4_w=(24.47e9, 24.47e9, 0.0, 0.0),
+        # nvidia/Qwen3.6-27B-NVFP4: MEASURED safetensors total 21,921,428,072 B
+        # (2026-07-27 re-verification). Same convention as the FP8 28.8 GiB,
+        # which the measured Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B =
+        # 28.75 GiB) matches within 0.2% — the old x22/27.8 "as-deployed"
+        # scaling was a mis-derivation. Dense: decode reads everything.
+        nvfp4_w=(21.92e9, 21.92e9, 0.0, 0.0),
         max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
     ),
     # MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
@@ -199,13 +217,14 @@ MODELS = {
         w_route_total=32_212_254_720,    # 256 routed experts (saturates at exactly n=32 linear)
         mtp=1.7,                         # MTP module, speedup kept equal to baseline's fit
         # RedHatAI/Qwen3.6-35B-A3B-NVFP4 recipe: experts + full-attn NVFP4
-        # (0.5625 B/param), but embed/lm_head/DeltaNet/router stay BF16
-        # (2 B/param) — so the SHARED per-step read is 1.7x HEAVIER than FP8
-        # while the routed-expert read is 1.78x lighter. research/nvfp4.md 6.1.
-        nvfp4_w=(22.92e9,                # 3.10x vs BF16 (reported ~3.06x)
-                 3.308e9,                # attn+shared-exp NVFP4; DN+lm_head+router BF16
-                 566_231_040,            # 1_006_632_960 x 0.5625
-                 18_119_393_280),        # 32_212_254_720 x 0.5625 (kink stays n=32)
+        # (0.5625 B/param), but embed/lm_head/DeltaNet/router — AND the MTP
+        # module (`re:^mtp.*` is in the measured ignore list) — stay BF16,
+        # so the SHARED per-step read is 1.7x HEAVIER than FP8 while the
+        # routed-expert read is 1.78x lighter. research/nvfp4.md 6.1.
+        nvfp4_w=(24.13e9,                # MEASURED LM bytes (2.94x vs BF16 base)
+                 3.308e9,                # measured 3.3065e9: attn+shared NVFP4; DN+lm_head BF16
+                 566_231_040,            # measured 566,238,720 (+1.4e-5)
+                 18_119_393_280),        # measured 18,119,639,040 (kink stays n=32)
         max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
     ),
     # Dense 128B, open weights (2026-04), 88 uniform full-attention GQA layers
@@ -223,8 +242,10 @@ MODELS = {
         w_route_total=0.0,
         mtp=1.0,                         # no MTP module (EAGLE draft is external)
         # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
-        # edge MLP + all attention FP8, lm_head BF16 (research note #3)
-        nvfp4_w=(92.7e9, 86.6e9, 0.0, 0.0),
+        # edge MLP + all attention FP8, lm_head BF16 (research note #3).
+        # Resident = the MEASURED safetensors total (95,224,812,960 B,
+        # 2026-07-27 re-verification); decode read measured 86.643e9.
+        nvfp4_w=(95.2e9, 86.6e9, 0.0, 0.0),
         max_ctx=262_144,                 # hard model max (YaRN x64 over a 4k base)
     ),
     # MoE 744B-A40B (753B incl. MTP), MLA + DeepSeek Sparse Attention, open
@@ -250,6 +271,7 @@ MODELS = {
                  407_686_348_800),        # 724_775_731_200 x 0.5625 (kink n=32)
         kv_decode_bpt=2_772,             # 21 indexer layers x 132 B per context token
         kv_decode_const=92.0e6,          # 78 layers x top-2048 x 576 B per active seq
+        kv_decode_topk=2_048,            # ...scaled down for sequences < 2,048 tokens
         kv_fp16_ok=False,                # vLLM DSA path asserts a quantized KV cache
         max_ctx=1_048_576,               # native 1M context (theta 8e6)
     ),
@@ -419,14 +441,17 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     dp     : each replica is a single-GPU engine; this returns the PER-REPLICA pool
 
     The activation reserve is the H200-calibrated ACT_RESERVE applied per GPU
-    on every part (see the reserve-transfer assumption in docs/scenarios.md).
+    on every part, plus the part's reserve_extra — the measured H200 HBM
+    over-provision the solved reserve implicitly absorbed, added back on parts
+    that do not share it (see GPU.reserve_extra and docs/scenarios.md).
     """
     check_dtype_supported(model, topo)
     vram = topo.gpu.vram
+    reserve = ACT_RESERVE + topo.gpu.reserve_extra
     if topo.kind == "tp":
-        pool_bytes = topo.n_gpu * vram - model.w_resident - topo.n_gpu * ACT_RESERVE
+        pool_bytes = topo.n_gpu * vram - model.w_resident - topo.n_gpu * reserve
     else:  # single or per-replica of dp
-        pool_bytes = vram - model.w_resident - ACT_RESERVE
+        pool_bytes = vram - model.w_resident - reserve
     return max(pool_bytes, 0.0) / model.kv_bpt
 
 
@@ -571,6 +596,13 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     check_cap_allowed(model, wl)
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)
+    # A zero pool means the weights (+ reserve) don't leave any KV space — no
+    # engine can serve here, so capacity is zero REGARDLESS of CPU offload:
+    # host RAM is restore-storage for an engine's sessions, and there is no
+    # engine to restore into. Without this, a big offload buffer would report
+    # hundreds of phantom "warm" sessions on a config that cannot even load.
+    if pool <= 0:
+        return np.zeros(3)
     counts = np.empty(n_iter)
     for i in range(n_iter):
         full, prefix, cold, sub = wl.sample(rng, draw)
@@ -600,16 +632,27 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     """
     check_dtype_supported(model, topo)
     check_cap_allowed(model, wl)
+    if kv_pool_tokens(model, topo) <= 0:
+        raise ValueError(f"{model.name}: weights do not fit {topo.name} — "
+                         "no context can be resident, decode is undefined")
     rng = np.random.default_rng(seed)
     bw = effective_bw(topo)
     # dense-attention models read every cached token per step (kv_bpt); a
     # sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
-    # token (indexer scan) plus a constant top-k read per active sequence
+    # token (indexer scan) plus a top-k read per active sequence, capped at
+    # the sequence's own length when it is shorter than the top-k window
     kv_read_bpt = model.kv_bpt if model.kv_decode_bpt is None else model.kv_decode_bpt
+    topk = model.kv_decode_topk
     p5, p50, p95, agg = [], [], [], []
     for n in mns_range:
         full, _, _, _ = wl.sample(rng, (n_iter, n))
-        kv_bytes = full.sum(axis=1) * kv_read_bpt + n * model.kv_decode_const
+        if model.kv_decode_const and topk:
+            # DSA reads min(len, top-k) tokens per layer, not a flat top-k
+            topk_bytes = (model.kv_decode_const / topk) * \
+                np.minimum(full, topk).sum(axis=1)
+        else:
+            topk_bytes = n * model.kv_decode_const
+        kv_bytes = full.sum(axis=1) * kv_read_bpt + topk_bytes
         state_bytes = 2.0 * n * model.deltanet_state
         step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
         pu = model.mtp * bw / step_bytes

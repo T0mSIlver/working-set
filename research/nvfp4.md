@@ -5,17 +5,18 @@ as a selectable quantization in `scripts/scenario_model.py` and the interactive
 explorer: bytes/param arithmetic, the B300-only hardware gate, the exclusion of
 4-bit KV cache, and derived weight constants for the two Qwen3.6 models.
 
-> **Egress note (2026-07-27): weaker provenance than research/model_35ba3b.md.**
-> Since that note was written, the environment's proxy policy has tightened:
-> `huggingface.co` (including the previously-reachable config pages and the HF
-> API), `docs.vllm.ai`, and `developer.nvidia.com` all now return 403 at the
-> gateway. Everything below therefore rests on (a) search-index entries — real
-> repo paths and issue titles, which cannot be hallucinated by a summarizer —
-> (b) search-engine summaries of those pages, and (c) internal cross-checks
-> against this repo's own published-config arithmetic. Each claim is tiered:
-> **[corroborated]** (multiple independent sources and/or carried by titles/
-> paths alone), **[summary]** (search-summary only — directionally reliable,
-> not citable), **[assumption]**. The re-verification ledger is in § 7.
+> **Egress note (2026-07-27):** first written under a proxy policy that
+> blocked `huggingface.co`, `docs.vllm.ai` and `developer.nvidia.com`, from
+> search snippets + cross-checks, with per-claim confidence tiers.
+>
+> **Re-verified the same day after the block lifted** against the literal
+> quantization configs, measured per-shard safetensors dtype splits (HTTP
+> range reads of every shard header), `total_size` indexes, and the live
+> vLLM issues/docs. Verdicts are inlined per section; the ledger in § 7
+> records each item's resolution. Two constants were corrected (both Qwen
+> w_resident figures — §§ 6.1–6.2); the B300-only weight gate held; the
+> 4-bit-KV exclusion survives as an owner policy but its vLLM-instability
+> rationale is now stale (§ 3).
 
 ---
 
@@ -63,33 +64,52 @@ modelling it would misprice decode. `check_dtype_supported()` enforces this in
 Python and the explorer greys the option out. Note this is a *policy* gate, not
 a physical impossibility.
 
-## 3. 4-bit KV cache: deliberately **excluded**
+## 3. 4-bit KV cache: deliberately **excluded** — now an owner POLICY, not a stability fact
 
-vLLM has grown a `--kv-cache-dtype nvfp4` flag, but it is tracked as an
-in-progress feature (issue #32220 *"NVFP4 KV Cache Support"*) with an open
-crash bug (issue #43562 — *"`--kv-cache-dtype nvfp4` crashes at first request
-… instead of failing fast at init"*) [both corroborated by title]; vLLM's own
-2026-04 blog on KV quantization scopes itself to **FP8** KV. **Owner decision:
-the study keeps the KV dtype axis at FP8 (default) / FP16 and does not model
-4-bit KV until it is stable in vLLM.** NVFP4 here means *weights only*.
+**Status re-verified 2026-07-27 — the original instability rationale is
+stale:** issue #32220 (*NVFP4 KV Cache Support*) was **closed completed
+2026-05-04** (FlashInfer-backend support merged via PR #40177; working
+`--kv-cache-dtype nvfp4` example given) and #43562 (the first-request crash)
+was **closed completed 2026-06-02** — its root cause was a missing sm_120
+kernel upstream; the B300 (sm_103) is on the supported path. NVIDIA has since
+published an NVFP4-KV inference blog (≤1% accuracy loss on its evals; values
+are dequantized NVFP4→FP8 *before* attention; Blackwell-only). The
+docs.vllm.ai quantized-KV page still lists only fp8 variants (doc lag).
+
+**Owner decision (upheld 2026-07-27): the study keeps the KV dtype axis at
+FP8 (default) / FP16 and does not model 4-bit KV** — now purely a
+conservatism/accuracy-margin choice on a young serving path, no longer a
+capability constraint. NVFP4 here means *weights only*.
 
 ## 4. What actually stays high-precision in NVFP4 checkpoints
 
-Model cards consistently state that *only linear operators within transformer
-blocks* are quantized [corroborated]. The reported `llm-compressor` ignore list
-for `RedHatAI/Qwen3.6-35B-A3B-NVFP4` [summary, twice-corroborated across
-independent write-ups]:
+**Verified 2026-07-27 against the literal `config.json`:** the real
+RedHatAI ignore list is 342 concrete module names + 1 regex (not the 7
+regexes previously quoted from summaries). Collapsed:
 
 ```
-"re:.*lm_head", "re:visual.*", "re:model.visual.*", "re:.*mlp.gate$",
-"re:.*embed_tokens$", "re:.*shared_expert_gate$", "re:.*linear_attn.*"
+lm_head                                                   (1)
+model.language_model.layers.N.linear_attn.{in_proj_a,in_proj_b,
+    in_proj_qkv,in_proj_z,out_proj}                       (30 each)
+model.language_model.layers.N.mlp.gate                    (40)
+model.language_model.layers.N.mlp.shared_expert_gate      (40)
+model.visual.*  (attn.qkv/attn.proj/mlp linears, merger)  (110)
+re:^mtp.*                                                 (1)
 ```
 
-The load-bearing entry is **`linear_attn`**: the 30 Gated-DeltaNet layers stay
-**BF16** (the checkpoint is quantized from the BF16 base, so excluded modules
-are 2 B/param — *heavier* than in the FP8 checkpoint, where they are 1 B/param).
-Quantized: full-attention projections, shared expert, routed experts.
-Excluded: embeddings, lm_head, DeltaNet blocks, router gates, norms.
+Two corrections vs the summary-tier version: **(a)** `embed_tokens` is NOT in
+the ignore list — it stays BF16 anyway because `targets: ["Linear"]` never
+touches the Embedding module (measured 1.017e9 B BF16; no byte impact).
+**(b)** **`re:^mtp.*` IS ignored** — the MTP module is BF16 (measured
+1.689e9 B), not quantized as § 6.1 previously assumed; this moves the
+w_resident central (see § 6.1).
+
+The load-bearing entry is still **`linear_attn`**: the 30 Gated-DeltaNet
+layers stay **BF16** (measured 2.023e9 B — the checkpoint is quantized from
+the BF16 base, so excluded modules are 2 B/param, *heavier* than the FP8
+checkpoint's 1 B/param). Quantized: full-attention projections, shared
+expert, routed experts. Excluded: lm_head, DeltaNet blocks, router gates,
+MTP, visual, norms (+ embeddings via the Linear-only targeting).
 
 ## 5. NVFP4 checkpoints exist for both Qwen study models [corroborated]
 
@@ -105,39 +125,42 @@ treat NVFP4 as serving-viable; not sufficient to quote accuracy numbers.
 
 ## 6. Derived model constants
 
-### 6.1 Qwen3.6-35B-A3B — from this repo's published-config param split
+### 6.1 Qwen3.6-35B-A3B — MEASURED per-shard safetensors bytes (2026-07-27)
 
-Param groups from `research/model_35ba3b.md` (config-derived), bytes under the
-RedHatAI recipe (NVFP4 = 0.5625 B/param; excluded = BF16 = 2 B/param):
+Per-group bytes read from the shard headers of
+`RedHatAI/Qwen3.6-35B-A3B-NVFP4` (HTTP range requests; index `total_size`
+25,043,526,104 B incl. visual):
 
 ```
-group                params    dtype     bytes
-embedding            0.509e9   BF16      1.018e9   (excluded: embed_tokens)
-lm_head              0.509e9   BF16      1.018e9   (excluded)
-full-attn x10        0.273e9   NVFP4     0.154e9
-DeltaNet x30         1.012e9   BF16      2.024e9   (excluded: linear_attn)
-shared expert x40    0.126e9   NVFP4     0.071e9
-router x40           0.021e9   BF16      0.042e9   (excluded: mlp.gate)
-routed experts       32.212e9  NVFP4     18.119e9
-MTP module          ~0.84e9    NVFP4     0.473e9   [assumption: quantized]
+group                dtype     bytes (measured)
+embedding            BF16      1.017e9   (Linear-only targets, not ignore)
+lm_head              BF16      1.017e9   (ignored)
+full-attn x10        NVFP4     0.153e9
+DeltaNet x30         BF16      2.023e9   (ignored: linear_attn)
+shared expert x40    NVFP4     0.071e9
+router x40           BF16      0.042e9   (ignored: mlp.gate)
+routed experts       NVFP4    18.120e9
+MTP module           BF16      1.689e9   (ignored: re:^mtp.* — was assumed
+                                          quantized; the note's old 22.92e9
+                                          central used the wrong branch)
 ------------------------------------------------------------------
-w_resident_nvfp4                         22.92e9 B  = 21.3 GiB
+w_resident_nvfp4 (LM, excl. 0.893e9 visual)  = 24.13e9 B = 22.5 GiB
 ```
 
-**Cross-check (non-circular):** vs the BF16 base (2 × 35.5e9 = 71.0e9 B) this
-is a **3.10×** reduction; an independent write-up of the checkpoint reports
-**"~3.06×"** [summary] — a 1.3% agreement, which the param split reached with
-no fitting. Sensitivity: if the MTP module is *excluded* rather than quantized,
-w_resident rises to 24.1e9 B (+5%).
+Vs the BF16 base (2 × 35.5e9 = 71.0e9 B) the LM checkpoint is a **2.94×**
+reduction (the old derived 3.10× belonged to the MTP-quantized branch).
 
-Decode-side groups (same split):
+Decode-side groups (measured):
 
 ```
-w_decode_shared = attn 0.154 + DN 2.024 + shared-exp 0.071 + router 0.042
-                + lm_head 1.018                        = 3.308e9 B
-w_route_pertok  = 1.00663e9 x 0.5625                   = 0.56623e9 B
-w_route_total   = 32.212e9  x 0.5625                   = 18.119e9  B
+w_decode_shared = attn 0.153 + DN 2.023 + shared-exp 0.071 + router 0.042
+                + lm_head 1.017                        = 3.3065e9 B
+w_route_pertok  = measured                             = 0.56624e9 B
+w_route_total   = measured                             = 18.120e9  B
 ```
+
+(The MTP module's 1.689e9 BF16 bytes are resident but its decode reads are
+folded into the speedup, as everywhere in the study.)
 
 **Non-obvious result the model should surface:** NVFP4 makes the 35B-A3B's
 *shared* per-step read **1.7× heavier** than FP8 (3.31 vs 1.94 GB) — the BF16
@@ -145,46 +168,59 @@ DeltaNet blocks and lm_head dominate it — while the *routed-expert* bytes drop
 1.78×. Low-concurrency decode gets *slower*; the crossover to faster-than-FP8
 decode comes as expert reads dominate (n ≳ 4 under the linear union; the
 exact crossover on these constants is n = 3.1 — measured −0.7% at n = 3,
-+5.4% at n = 4).
++5.4% at n = 4). All three decode constants survived measurement unchanged
+(≤0.05%); only the resident total moved.
 
-### 6.2 Qwen3.6-27B (dense) — from the reported checkpoint size
+Note (owner-visible fork): `nvidia/Qwen3.6-35B-A3B-NVFP4` (23.41e9 B total)
+uses a different recipe — attention/DeltaNet **FP8**, lm_head **NVFP4** — and
+its shared read is only ~1.69e9 B, which would *flip* the shared-read-heavier
+result. The study models the RedHatAI checkpoint; the effect is
+checkpoint-specific, not format-inherent.
 
-No public param-level split of the 27B exists in this repo, so the constant
-comes from the **measured checkpoint size** (~22 GB [corroborated, NVIDIA
-repo + the ModelOpt ~2.5× claim on the 55.6 GB BF16 base]), scaled by the
-baseline's as-deployed convention (the study's FP8 figure, 28.8 GiB, read as
-≈ 1.11× a raw 27.8e9 B [assumption — raw = half the 55.6 GB BF16 figure];
-note `docs/scenarios.md` limitation 5 quotes the overhead as ~15%, which
-implies a smaller ~26.9e9 raw count — the two conventions differ by ~3% on
-the derived constant, see ledger item 5):
+### 6.2 Qwen3.6-27B (dense) — MEASURED checkpoint bytes (2026-07-27)
+
+`nvidia/Qwen3.6-27B-NVFP4` index `total_size` = **21,921,428,072 B**
+(header sum exact). The old ×1.11 "as-deployed" scaling is retired: the
+official `Qwen/Qwen3.6-27B-FP8` checkpoint measures 30.87e9 B = **28.75
+GiB — within 0.2% of the study's 28.8 GiB baseline figure**, so the
+baseline convention IS the raw checkpoint size and the NVFP4 constant is
+simply the measured checkpoint under the same convention:
 
 ```
-w_resident_nvfp4(27B) = 28.8 GiB x (22.0 GB / 27.8 GB) = 22.8 GiB = 24.47e9 B
+w_resident_nvfp4(27B) = 21.92e9 B = 20.4 GiB   (was derived 24.47e9: -10.4%)
 w_decode_shared       = w_resident   (dense: every step reads all weights)
 ```
 
-Checkpoint-size spread across quantizers (19.7–22 GB — recipes differ in what
-they preserve, e.g. vision tower / MTP draft head in BF16) is carried as an
-uncertainty note, central = the official NVIDIA repo's ~22 GB. Effective
-whole-checkpoint compression 0.79× vs FP8 — the hybrid dense model keeps a
-large BF16 share, so the dense NVFP4 win is real but far from 1.778×.
+Recipe (from the literal `hf_quant_config.json`, MIXED_PRECISION): MLP
+linears + lm_head **NVFP4** g16; `self_attn` AND the DeltaNet
+(`linear_attn`) linears **FP8** (not BF16 as previously assumed — only
+embed/visual/MTP stay BF16, 4.37 GB); `exclude_modules: ['mtp*']`;
+`kv_cache_quant_algo: FP8` (supports the study's FP8-KV choice). Effective
+whole-checkpoint compression 0.71× vs FP8.
 
-## 7. Re-verification ledger (when network access allows)
+## 7. Re-verification ledger — RESOLVED 2026-07-27 (proxy block lifted)
 
-1. `config.json` + `hf_quant_config.json` of `nvidia/Qwen3.6-27B-NVFP4`,
-   `RedHatAI/Qwen3.6-35B-A3B-NVFP4`: confirm `group_size: 16` and the exact
-   ignore lists (§ 4 is the single most load-bearing summary-tier claim).
-2. `model.safetensors.index.json` of both: sum per-dtype tensor bytes → true
-   w_resident, replacing §§ 6.1–6.2 centrals.
-3. vLLM supported-hardware matrix for nvfp4; status of issues #43562/#32220
-   (KV) and #34694 (Hopper fallback) — whether the gates still hold.
-4. Whether the 27B NVFP4 recipe quantizes the DeltaNet linears (the ~22 GB
-   size implies mostly-quantized; the 35B recipe excludes them — recipes
-   differ per quantizer).
-5. The 27B's raw-vs-as-deployed weight ratio: § 6.2 uses 1.11× (raw =
-   27.8e9 from the BF16 size), `docs/scenarios.md` limitation 5 says ~15%
-   (raw ≈ 26.9e9). One vLLM startup log settles it and moves the NVFP4 27B
-   constant ~3% (24.47e9 vs 25.19e9).
+1. ✅ `group_size: 16` confirmed in all three repos; exact ignore lists read
+   (§ 4 corrected: 342 concrete names; `re:^mtp.*` ignored; `embed_tokens`
+   absent but BF16 via Linear-only targets).
+2. ✅ Per-dtype bytes measured from every shard header; §§ 6.1–6.2 centrals
+   replaced: 35B **24.13e9** (+5.3%), 27B **21.92e9** (−10.4%); decode-side
+   constants confirmed ≤0.05%.
+3. ✅ #34694 (Hopper Marlin garbled output) still OPEN (fix PR #47315
+   unmerged as of 2026-07-27) → **B300-only weight gate holds**. #32220 and
+   #43562 CLOSED-completed → § 3 reworded: no-4-bit-KV is now owner policy.
+   Hopper docs row remains Marlin weight-only W4A16.
+4. ✅ The 27B recipe quantizes DeltaNet linears to **FP8** (neither NVFP4 nor
+   BF16) — § 6.2 updated.
+5. ✅ Resolved without a startup log: the measured `Qwen/Qwen3.6-27B-FP8`
+   checkpoint (30.87e9 B = 28.75 GiB) matches the study's 28.8 GiB within
+   0.2%, so no as-deployed gross-up exists to transfer.
+
+Open note for the owner (pre-existing, outside this axis): the study's 35B
+FP8 `w_resident` = 35.5e9 (params×1B) understates the measured
+`Qwen/Qwen3.6-35B-A3B-FP8` checkpoint (37.46e9 B; ~36.5e9 excl. visual) by
+~1–2e9 B — a convention inconsistency inherited from the baseline, listed
+here for a future recalibration pass.
 
 ## Sources
 

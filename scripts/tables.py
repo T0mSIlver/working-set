@@ -315,17 +315,22 @@ def main():
                                      wl(cap=cap), n_iter=1500)
         print(f"  cap={cap:>9,}  {p5:5.0f} / {p50:5.0f}")
 
-    print("\n== B300 sensitivity: Hopper unit-convention reserve transfer ==")
-    print("  If the H200's vendor '141 GB' understates usable bytes ~7% (documented")
-    print("  for the H100), the transferred reserve under-counts true overhead by")
-    print("  ~9.8e9 B/GPU and B300 pools here are optimistic by that much:")
+    print("\n== B300 reserve transfer: measured correction (now CENTRAL) ==")
+    print("  Measured 2026-07-27: the H200 delivers ~150.75e9 usable bytes against")
+    print("  its 141e9 vendor figure (thundergolfer.com, confirmed), while a real")
+    print("  B300 nvidia-smi dump (Oracle OCI, 275,040 MiB) shows 288.4e9 — nominal,")
+    print("  no Hopper over-provision. GPU('B300').reserve_extra=9.75e9 adds the")
+    print("  hidden H200 margin back; the rows below show central (corrected) pools")
+    print("  vs what the former uncorrected transfer would have reported:")
     for mk, n in [("35BA3B", 1), ("GLM52", 4)]:
         t = M.topology("tp", n, "B300")
         mdl = MODELS[mk]
         pool = M.kv_pool_tokens(mdl, t)
-        pool_adj = pool - n * 9.8e9 / mdl.kv_bpt
+        # former model: vram=288e9 (vendor), reserve_extra=0
+        d_per_gpu = (M.GPUS["B300"].vram - 288e9) - M.GPUS["B300"].reserve_extra
+        pool_old = pool - n * d_per_gpu / mdl.kv_bpt
         print(f"  {mk:7} {t.name:16} central={pool / 1e6:6.2f}M  "
-              f"adjusted={pool_adj / 1e6:6.2f}M  ({(pool_adj / pool - 1) * 100:+.1f}%)")
+              f"uncorrected={pool_old / 1e6:6.2f}M  ({(pool / pool_old - 1) * 100:+.1f}%)")
 
 
 if __name__ == "__main__":
