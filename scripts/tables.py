@@ -243,6 +243,75 @@ def main():
         M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE = saved_anchor, saved_reserve
     print(f"  (central TP2 p5 = {base_p5:.0f}; stacked downside ~{base_p5 - 403:.0f} sessions)")
 
+    # ------------------------------------------------------------------
+    # 2026-07 extension: B300 GPUs, NVFP4 weights, Mistral-Medium-3.5, GLM-5.2
+    # ------------------------------------------------------------------
+    print("\n== B300 x weight dtype: pool + warm p5/p50 (fp8 KV, reference workload) ==")
+    print("  NVFP4 is B300-only (native FP4; the Hopper fallback is not modelled).")
+    print("  Configs chosen so FP8 weights actually fit; '-' = no NVFP4 constants.")
+    ext_configs = [
+        ("27B",    [("tp", 1, "B300"), ("tp", 2, "B300")]),
+        ("35BA3B", [("tp", 1, "B300"), ("tp", 2, "B300")]),
+        ("MM35",   [("tp", 1, "B300"), ("tp", 2, "B300")]),
+        ("GLM52",  [("tp", 4, "B300"), ("tp", 8, "B300")]),
+    ]
+    for mk, topos in ext_configs:
+        for kind, n, gpu in topos:
+            t = M.topology(kind, n, gpu)
+            row = []
+            for wd in M.WEIGHT_DTYPES:
+                mdl = M.with_weight_dtype(MODELS[mk], wd)
+                pool = M.kv_pool_tokens(mdl, t)
+                draw = int(4000 + pool / 8_000)   # big pools hold thousands of sessions
+                p5, p50, _ = M.warm_capacity(mdl, t, w0, n_iter=400, draw=draw)
+                row.append(f"{wd:5}: pool={pool / 1e6:6.2f}M warm p5={p5:5.0f} p50={p50:5.0f}")
+            print(f"  {mk:7} {t.name:16} " + " | ".join(row))
+
+    print("\n== New models on H200 (where FP8 weights fit) ==")
+    for mk, kind, n in [("MM35", "tp", 2), ("MM35", "tp", 4), ("GLM52", "tp", 8)]:
+        t = M.topology(kind, n)
+        mdl = MODELS[mk]
+        pool = M.kv_pool_tokens(mdl, t)
+        p5, p50, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000)
+        _, g50, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000, which="gpu")
+        _, v, _, _ = M.decode_curves(mdl, t, w0, [max(int(g50), 1)], n_iter=800)
+        print(f"  {mk:7} {t.name:16} pool={pool / 1e6:6.2f}M  warm p5={p5:4.0f} p50={p50:4.0f}  "
+              f"v@warm={v[0]:6.0f} tok/s")
+
+    print("\n== NVFP4 decode effect on MoE (35B-A3B, 1xB300, per-user p50 tok/s) ==")
+    print("  NVFP4 shrinks expert reads 1.78x but the BF16-kept blocks (DeltaNet,")
+    print("  lm_head, router) make the FIXED per-step read 1.7x heavier -> slower at")
+    print("  low concurrency, faster once expert reads dominate (research/nvfp4.md 6.1)")
+    t_b1 = M.topology("tp", 1, "B300")
+    for n in (1, 4, 16, 64):
+        _, a, _, _ = M.decode_curves(MODELS["35BA3B"], t_b1, w0, [n], n_iter=2000)
+        m4 = M.with_weight_dtype(MODELS["35BA3B"], "nvfp4")
+        _, b, _, _ = M.decode_curves(m4, t_b1, w0, [n], n_iter=2000)
+        print(f"  mns={n:3d}  fp8={a[0]:6.0f}  nvfp4={b[0]:6.0f}  ({(b[0] / a[0] - 1) * 100:+.0f}%)")
+
+    print("\n== GLM-5.2 sparse-attention decode: DSA pricing vs dense-read pricing ==")
+    print("  DSA reads top-2048 tokens/layer + an indexer scan instead of the full")
+    print("  cache; the dense-read row shows what the same bytes would cost if")
+    print("  decode streamed the whole cache (the study's default pricing).")
+    t_h8 = M.topology("tp", 8)
+    glm_dense = dataclasses.replace(MODELS["GLM52"], kv_decode_bpt=None, kv_decode_const=0.0)
+    for n in (16, 64, 120):
+        _, a, _, _ = M.decode_curves(MODELS["GLM52"], t_h8, w0, [n], n_iter=1500)
+        _, b, _, _ = M.decode_curves(glm_dense, t_h8, w0, [n], n_iter=1500)
+        print(f"  8xH200 mns={n:3d}  DSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
+
+    print("\n== B300 sensitivity: Hopper unit-convention reserve transfer ==")
+    print("  If the H200's vendor '141 GB' understates usable bytes ~7% (documented")
+    print("  for the H100), the transferred reserve under-counts true overhead by")
+    print("  ~9.8e9 B/GPU and B300 pools here are optimistic by that much:")
+    for mk, n in [("35BA3B", 1), ("GLM52", 4)]:
+        t = M.topology("tp", n, "B300")
+        mdl = MODELS[mk]
+        pool = M.kv_pool_tokens(mdl, t)
+        pool_adj = pool - n * 9.8e9 / mdl.kv_bpt
+        print(f"  {mk:7} {t.name:16} central={pool / 1e6:6.2f}M  "
+              f"adjusted={pool_adj / 1e6:6.2f}M  ({(pool_adj / pool - 1) * 100:+.1f}%)")
+
 
 if __name__ == "__main__":
     main()

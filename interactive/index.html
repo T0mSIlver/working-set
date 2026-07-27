@@ -103,6 +103,7 @@ details.assump .body b{color:var(--text); font-weight:600}
   padding:5px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; font-weight:520;
 }
 .seg button[aria-pressed="true"]{background:var(--control-active); color:var(--text); box-shadow:var(--shadow); font-weight:600}
+.seg button:disabled{opacity:.35; cursor:not-allowed}
 
 /* sliders */
 input[type=range]{
@@ -191,7 +192,7 @@ svg text{fill:var(--text-2)}
   <header class="app">
     <div>
       <h1>GPU scaling — interactive scenario explorer</h1>
-      <p class="sub">How many sessions can we keep <b>warm</b> per H200 config (Qwen3.6 27B dense / 35B-A3B MoE)? Working hypothesis: a request that hits a warm session is served well and comfortably; a cold request re-prefills its whole context and briefly thrashes the GPU for everyone. Plan on <b>warm p5</b>.</p>
+      <p class="sub">How many sessions can we keep <b>warm</b> per GPU config (H200 / B300) for Qwen3.6-27B, Qwen3.6-35B-A3B, Mistral-Medium-3.5-128B and GLM-5.2, at FP8 or (B300-only) NVFP4 weights? Working hypothesis: a request that hits a warm session is served well and comfortably; a cold request re-prefills its whole context and briefly thrashes the GPU for everyone. Plan on <b>warm p5</b>.</p>
     </div>
     <button class="themebtn" id="themeBtn" type="button"><span id="themeIco">◐</span><span id="themeTxt">Theme</span></button>
   </header>
@@ -212,7 +213,12 @@ svg text{fill:var(--text-2)}
         <li><b>CPU offload is storage only.</b> A session offloaded to host RAM still counts as warm <em>capacity</em>, but only sessions whose KV is resident in GPU HBM can decode — an offloaded one must be restored over PCIe first (a latency the model does not price). Every decode-side readout (the per-user/aggregate stress tiles, chart C's capacity zone) is therefore computed over <b>HBM-resident warm sessions only</b>, so moving the offload slider never changes per-user decode speed.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
+        <li><b>GPU choice (H200 / B300):</b> the H200 is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve — a flagged assumption until a B300 startup log exists, and possibly ~10 GB/GPU optimistic if Hopper's vendor "141 GB" understates usable bytes as documented for the H100 (<code>research/gpu_b300.md</code>).</li>
+        <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; embeddings, lm_head, routers and linear-attention blocks stay BF16). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — vLLM's nvfp4 KV is not yet stable (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
+        <li><b>Mistral-Medium-3.5-128B</b> (open weights, 2026-04): dense, 88 uniform GQA layers → <b>176 KiB/token</b> FP8 KV, no recurrent state, no MTP module (speculative default 1.0×; external EAGLE draft unmeasured). <code>research/model_mistral_medium35.md</code>.</li>
+        <li><b>GLM-5.2</b> (open weights, 2026-06): 744B-A40B MLA + DeepSeek Sparse Attention; stores 47.3 KiB/token (MLA latent + indexer keys) but decode reads only the top-2048 tokens per layer plus an indexer scan (2,772 B per context token) — priced via <code>kv_decode_bpt/const</code>. vLLM requires FP8 KV on this path, so the FP16 toggle is disabled. FP8 weights (~756 GB) fit from 7×H200 / 3×B300; NVFP4 (~465 GB) from 2×B300. <code>research/model_glm52.md</code>.</li>
         <li><span class="prov">Note:</span> the 35B-A3B constants come from the <b>published Qwen3.6-35B-A3B config</b> (40 layers: 30 DeltaNet + 10 full-attention, 2 KV heads × 256, 256 experts / 8 routed) &mdash; derivations in <code>research/model_35ba3b.md</code>. Edit the <code>CONFIG</code> block to revise.</li>
+        <li><span class="prov">Provenance:</span> the B300 / NVFP4 / Mistral-3.5 / GLM-5.2 constants were researched 2026-07-27 with HuggingFace and NVIDIA domains proxy-blocked — chains run through first-party GitHub repos, three-way config mirrors, and cross-checked snippets, with per-claim confidence tiers and re-verification ledgers in the four research notes. Strongest cross-check: the derived GLM-5.2 NVFP4 resident matches the vLLM recipe's ~465 GB within 0.05%.</li>
       </ul>
     </div>
   </details>
@@ -228,7 +234,25 @@ svg text{fill:var(--text-2)}
           <div class="seg" id="seg-model" data-key="model">
             <button data-v="27B" aria-pressed="true">Qwen3.6-27B</button>
             <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
+            <button data-v="MM35" aria-pressed="false">Mistral-Med-3.5</button>
+            <button data-v="GLM52" aria-pressed="false">GLM-5.2</button>
           </div>
+          <div class="hint" id="model-hint"></div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="H200: the study's calibrated baseline (141 GB HBM3e, 4.8 TB/s). B300 (Blackwell Ultra): 288 GB HBM3e, 8 TB/s, native FP4 tensor cores — the only part that can run NVFP4 weights. The H200-calibrated ~18 GiB reserve is applied per B300 unchanged (a flagged assumption, see research/gpu_b300.md).">GPU</span></label>
+          <div class="seg" id="seg-gpu" data-key="gpu">
+            <button data-v="H200" aria-pressed="true">H200</button>
+            <button data-v="B300" aria-pressed="false">B300</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline. NVFP4 (4.5 bits/param on quantized tensors) swaps in the real NVFP4-checkpoint byte counts — embeddings, lm_head, routers and (for hybrid models) linear-attention blocks stay BF16, so MoE models' fixed per-step read grows even as expert reads shrink. B300-only: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so this study does not model NVFP4 on H-generation GPUs. KV cache is NOT quantized to 4-bit (unstable in vLLM).">Weights</span></label>
+          <div class="seg" id="seg-wdt" data-key="wdt">
+            <button data-v="fp8" aria-pressed="true">FP8</button>
+            <button data-v="nvfp4" aria-pressed="false">NVFP4</button>
+          </div>
+          <div class="hint" id="wdt-hint"></div>
         </div>
         <div class="field">
           <label class="flabel">KV cache dtype</label>
@@ -236,10 +260,10 @@ svg text{fill:var(--text-2)}
             <button data-v="fp8" aria-pressed="true">FP8</button>
             <button data-v="fp16" aria-pressed="false">FP16</button>
           </div>
-          <div class="hint">FP16 doubles KV bytes/token: half the pool, slower decode. Weights &amp; DeltaNet state unaffected.</div>
+          <div class="hint" id="kv-hint">FP16 doubles KV bytes/token: half the pool, slower decode. Weights &amp; DeltaNet state unaffected.</div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Central = the study's calibrated constants. Conservative = the stacked-adverse structural case: calibration anchor at 2× the measured FP16 LOWER bound (2.278M vs 2.77M), fp32 DeltaNet state (2×), and +15% deployed-weight overhead on the 35B-A3B. For the FULL stacked case from the docs, also set invalidation to 10%.">Structural assumptions</span></label>
+          <label class="flabel"><span class="tip" data-tip="Central = the study's calibrated constants. Conservative = the stacked-adverse structural case: calibration anchor at 2× the measured FP16 LOWER bound (2.278M vs 2.77M), fp32/doubled recurrent state, and +15% deployed-weight overhead on every model whose resident bytes are raw/checkpoint figures (all but the 27B, whose 28.8 GiB is already as-deployed). For the FULL stacked case from the docs, also set invalidation to 10%.">Structural assumptions</span></label>
           <div class="seg" id="seg-assume" data-key="assume">
             <button data-v="central" aria-pressed="true">Central</button>
             <button data-v="conservative" aria-pressed="false">Conservative</button>
@@ -252,7 +276,7 @@ svg text{fill:var(--text-2)}
           <div class="hint" id="mtp-accept"></div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How many H200s the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas.">H200 GPUs</span> <span class="val"><span id="v-ngpu">1</span>×</span></label>
+          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200; GLM-5.2 FP8 fits from 7×H200 / 3×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
@@ -370,7 +394,7 @@ svg text{fill:var(--text-2)}
     </div>
   </div>
 
-  <p class="foot">Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>. Constants live in the <code>CONFIG</code> block. 35B-A3B from the published Qwen3.6-35B-A3B config (see <code>research/model_35ba3b.md</code>).</p>
+  <p class="foot">Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>. Constants live in the <code>CONFIG</code> block. Model/GPU provenance: <code>research/model_35ba3b.md</code>, <code>model_mistral_medium35.md</code>, <code>model_glm52.md</code>, <code>gpu_b300.md</code>, <code>nvfp4.md</code>.</p>
 </div>
 
 <script>
@@ -383,8 +407,17 @@ const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 
 const CONFIG = {
   // ---- HARDWARE ----
-  VRAM_PER_GPU: 141e9,     // H200 HBM3e bytes
-  HBM_BW:       4.8e12,    // per-GPU HBM bandwidth, bytes/s
+  // The GPU is a selectable part. H200 is the CALIBRATED baseline (the
+  // activation reserve is solved from its 27B anchor and applied per GPU on
+  // every part — a flagged assumption for the B300, see research/gpu_b300.md).
+  // supports_nvfp4: native FP4 tensor cores — NVFP4 weights are gated to
+  // these parts (Hopper's Marlin fallback is deliberately not modelled).
+  GPUS: {
+    "H200": { name: "H200", vram: 141e9, hbm_bw: 4.8e12, supports_nvfp4: false },
+    "B300": { name: "B300", vram: 288e9, hbm_bw: 8.0e12, supports_nvfp4: true  },
+  },
+  VRAM_PER_GPU: 141e9,     // calibration-anchor GPU (H200) HBM bytes
+  HBM_BW:       4.8e12,    // calibration-anchor GPU bandwidth, bytes/s
   TP_EFFICIENCY: 0.90,     // tensor-parallel aggregate-BW haircut
   // Calibration anchor: 1xH200 + 27B FP8 KV pool (tokens). PROJECTED from the
   // baseline's measured FP16 pool (~1.337M x2 + freed activations), not measured.
@@ -394,7 +427,15 @@ const CONFIG = {
   // kv_bpt: KV bytes/token (FP8) | deltanet_state: recurrent state bytes/session
   // w_resident: FP8 weights resident | w_decode_shared: always-active weight bytes/step
   // w_route_pertok: routed-expert bytes per decoding token | w_route_total: all routed experts
-  // mtp: Multi-Token-Prediction decode speedup
+  // mtp: Multi-Token-Prediction decode speedup (1.0 = model has no MTP module)
+  // nvfp4_w: [w_resident, w_decode_shared, w_route_pertok, w_route_total] of the
+  //          NVFP4 checkpoint (weights ONLY — KV and recurrent state unchanged;
+  //          4-bit KV is deliberately not modelled). See research/nvfp4.md.
+  // kv_decode_bpt/_const: sparse-attention decode pricing (GLM-5.2/DSA): bytes
+  //          read per CONTEXT token / per ACTIVE SEQUENCE per step. Dense-
+  //          attention models omit them (decode reads the full cache at kv_bpt).
+  // kv_fp16_ok: false = vLLM can only serve this model with a quantized KV
+  //          cache (GLM-5.2's DSA path) -> the FP16 toggle is disabled.
   MODELS: {
     "27B": {
       name: "Qwen3.6-27B (dense)",
@@ -405,6 +446,8 @@ const CONFIG = {
       w_route_pertok: 0.0,
       w_route_total: 0.0,
       mtp: 1.7,
+      // nvidia/Qwen3.6-27B-NVFP4 (~22 GB ckpt), as-deployed convention
+      nvfp4_w: [24.47e9, 24.47e9, 0.0, 0.0],
     },
     "35BA3B": {                    // published Qwen3.6-35B-A3B config; see research/model_35ba3b.md
       name: "Qwen3.6-35B-A3B (MoE, ~3B active)",
@@ -415,6 +458,35 @@ const CONFIG = {
       w_route_pertok: 1006632960,  // 8 routed experts x 3.146M x 40 layers, FP8
       w_route_total: 32212254720,  // 256 routed experts (saturates at exactly n=32 linear)
       mtp: 1.7,                    // MTP module, speedup kept equal to baseline's fit
+      // RedHatAI NVFP4 recipe: experts+attn NVFP4, DeltaNet/lm_head/router BF16
+      // -> shared per-step read GROWS 1.7x while expert reads shrink 1.78x
+      nvfp4_w: [22.92e9, 3.308e9, 566231040, 18119393280],
+    },
+    "MM35": {                      // research/model_mistral_medium35.md
+      name: "Mistral-Medium-3.5-128B (dense)",
+      kv_bpt: 180224,              // 88 layers x 8 KV heads x 128 x 2(K,V) x 1B = 176 KiB
+      deltanet_state: 0,           // pure GQA attention, no recurrent state
+      w_resident: 133.6e9,         // 124.43 GiB as-shipped FP8 checkpoint
+      w_decode_shared: 125.0e9,    // 88 FP8 layers + BF16 lm_head; vision tower not read
+      w_route_pertok: 0.0,
+      w_route_total: 0.0,
+      mtp: 1.0,                    // NO MTP module (external EAGLE draft exists)
+      nvfp4_w: [92.7e9, 86.6e9, 0.0, 0.0],  // nvidia mixed recipe: MLP 4-86 NVFP4, rest FP8/BF16
+    },
+    "GLM52": {                     // research/model_glm52.md
+      name: "GLM-5.2 (MoE 744B-A40B, MLA+DSA)",
+      kv_bpt: 48408,               // 79 x 576 MLA latent + 22 x 132 indexer keys (fp8)
+      deltanet_state: 0,           // MLA is cached attention, no recurrent state
+      w_resident: 755.5e9,         // official FP8 ckpt: 753.3e9 params + BF16 excess
+      w_decode_shared: 18.92e9,    // MLA + indexers + dense MLP + shared exp + lm_head
+      w_route_pertok: 22649241600, // 8 experts x (3x6144x2048) x 75 MoE layers, FP8
+      w_route_total: 724775731200, // 256 experts (saturates at n=32)
+      mtp: 1.7,                    // MTP module (5 drafts); transplanted fit, unmeasured
+      // nvidia/GLM-5.2-NVFP4: ONLY routed experts NVFP4 (matches ~465 GB recipe)
+      nvfp4_w: [464.8e9, 35.30e9, 12740198400, 407686348800],
+      kv_decode_bpt: 2772,         // DSA: 21 indexer layers x 132 B per context token
+      kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
+      kv_fp16_ok: false,           // vLLM DSA path asserts a quantized KV cache
     },
   },
 
@@ -470,20 +542,31 @@ function reserveNow(){
   catch(e){ return ACT_RESERVE; }
 }
 
+// NVFP4 weights require native FP4 tensor cores (B300) — the UI greys the
+// option out on the H200; this guard backstops any programmatic path.
+function checkDtypeSupported(m, topo){
+  const gpu = topo.gpu || CONFIG.GPUS["H200"];
+  if (m.weight_dtype === "nvfp4" && !gpu.supports_nvfp4)
+    throw new Error(`NVFP4 weights require native FP4; ${gpu.name} has none`);
+}
+
 function kv_pool_tokens(m, topo){
+  checkDtypeSupported(m, topo);
   const R = reserveNow();
+  const vram = (topo.gpu || CONFIG.GPUS["H200"]).vram;
   let poolBytes;
   if (topo.kind === "tp"){
-    poolBytes = topo.n_gpu * CONFIG.VRAM_PER_GPU - m.w_resident - topo.n_gpu * R;
+    poolBytes = topo.n_gpu * vram - m.w_resident - topo.n_gpu * R;
   } else { // single or per-replica of dp
-    poolBytes = CONFIG.VRAM_PER_GPU - m.w_resident - R;
+    poolBytes = vram - m.w_resident - R;
   }
   return Math.max(poolBytes, 0) / m.kv_bpt;
 }
 
 function effective_bw(topo){
-  if (topo.kind === "tp") return topo.n_gpu * CONFIG.HBM_BW * tpEff(topo.n_gpu);
-  return CONFIG.HBM_BW;
+  const bw = (topo.gpu || CONFIG.GPUS["H200"]).hbm_bw;
+  if (topo.kind === "tp") return topo.n_gpu * bw * tpEff(topo.n_gpu);
+  return bw;
 }
 
 /* ============================================================================
@@ -516,6 +599,26 @@ function effective_bw(topo){
   const p4 = kv_pool_tokens(CONFIG.MODELS["35BA3B"], makeTopo("tp",4));
   console.assert(p4 > 2*kv_pool_tokens(CONFIG.MODELS["35BA3B"], makeTopo("tp",2)),
     "TP4 pool must exceed 2x TP2 (weights amortized)");
+  // new models: published-config KV identities (mirror _selfcheck)
+  const mm = CONFIG.MODELS["MM35"], glm = CONFIG.MODELS["GLM52"];
+  console.assert(mm.kv_bpt === 88*8*128*2*1, "MM35 kv_bpt = 176 KiB/token");
+  console.assert(glm.kv_bpt === 79*576 + 22*132, "GLM52 kv_bpt = MLA latent + indexer");
+  console.assert(mm.mtp === 1.0, "MM35 has no MTP module");
+  console.assert(Math.abs(glm.w_route_total/glm.w_route_pertok - 32) < 1e-9, "GLM kink n=32");
+  // B300 + NVFP4: pool ordering, gate, and the ~465 GB GLM checkpoint check
+  const b1 = makeTopo("tp",1,"B300");
+  console.assert(kv_pool_tokens(CONFIG.MODELS["27B"], b1) > p1, "B300 pool > H200 pool");
+  console.assert(Math.abs(glm.nvfp4_w[0]/465e9 - 1) < 0.005,
+    "GLM-5.2 NVFP4 resident must match the vLLM recipe's ~465 GB");
+  for (const mk of ["27B","35BA3B"])
+    console.assert(!!CONFIG.MODELS[mk].nvfp4_w, mk+" must be NVFP4-selectable");
+  let gateThrew = false;
+  try { kv_pool_tokens({...CONFIG.MODELS["27B"], weight_dtype:"nvfp4"}, makeTopo("tp",1,"H200")); }
+  catch(e){ gateThrew = true; }
+  console.assert(gateThrew, "NVFP4 on H200 must throw (B300-only gate)");
+  console.assert(kv_pool_tokens(glm, makeTopo("tp",1,"H200")) === 0 &&
+                 kv_pool_tokens(glm, makeTopo("tp",8,"H200")) > 0,
+    "GLM-5.2 FP8 must not fit 1 GPU but fit 8xH200");
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -705,12 +808,17 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   }
   const p5=[], p50=[], p95=[], agg=[];
   const buf = new Float64Array(n_iter);
+  // dense attention reads the whole cache (kv_bpt per context token); a
+  // sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
+  // token (indexer scan) plus a constant top-k read per active sequence
+  const kvReadBpt = model.kv_decode_bpt ?? model.kv_bpt;
   for (let k=0;k<K;k++){
     const n=ns[k];
     // weights + DeltaNet recurrent-state read+write for every active sequence
-    const wd = w_decode(model, n) + 2*n*model.deltanet_state;
+    const wd = w_decode(model, n) + 2*n*model.deltanet_state
+             + n*(model.kv_decode_const ?? 0);
     const col=kvsum[k];
-    for (let it=0; it<n_iter; it++) buf[it] = model.mtp * bw / (wd + col[it]*model.kv_bpt);
+    for (let it=0; it<n_iter; it++) buf[it] = model.mtp * bw / (wd + col[it]*kvReadBpt);
     const [a,b,c] = percentiles(buf, [5,50,95]);
     p5.push(a); p50.push(b); p95.push(c);
     agg.push(n*b*scale);
@@ -722,7 +830,8 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
    STATE
    ========================================================================== */
 const state = {
-  model: "27B", ngpu: 1, par: "tp", ram: 0, kv: "fp8", cap: 180,
+  model: "27B", gpu: "H200", wdt: "fp8", ngpu: 1, par: "tp", ram: 0,
+  kv: "fp8", cap: 180,
   assume: "central", mtp: 1.7,
   user_median: 31, user_sigma: 0.81,
   sub_median: 8, sub_sigma: 0.90,
@@ -730,16 +839,17 @@ const state = {
   sys: 15, inval: 1.0,
 };
 
-// topology for arbitrary N H200s (mirrors topology()/tp_efficiency() in
-// scenario_model.py): TP = one engine, weights sharded, one shared cache,
+// topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
+// in scenario_model.py): TP = one engine, weights sharded, one shared cache,
 // 0.90 bandwidth haircut per GPU-count doubling; DP = N 1-GPU replicas.
 function tpEff(n){ return n<=1 ? 1.0 : Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(n)); }
-function makeTopo(kind, n){
-  if (n===1) return {name:"1×H200", n_gpu:1, kind:"single", replicas:1};
-  if (kind==="tp") return {name:`${n}×H200 TP`, n_gpu:n, kind:"tp", replicas:1};
-  return {name:`${n}×H200 DP`, n_gpu:n, kind:"dp", replicas:n};
+function makeTopo(kind, n, gpuKey){
+  const g = CONFIG.GPUS[gpuKey || "H200"];
+  if (n===1) return {name:`1×${g.name}`, n_gpu:1, kind:"single", replicas:1, gpu:g};
+  if (kind==="tp") return {name:`${n}×${g.name} TP`, n_gpu:n, kind:"tp", replicas:1, gpu:g};
+  return {name:`${n}×${g.name} DP`, n_gpu:n, kind:"dp", replicas:n, gpu:g};
 }
-function currentTopo(){ return makeTopo(state.par, state.ngpu); }
+function currentTopo(){ return makeTopo(state.par, state.ngpu, state.gpu); }
 // the host-RAM offload buffer is shared: DP replicas each get 1/N of it
 function ramPerCache(topo){ return topo.kind==="dp" ? state.ram/topo.replicas : state.ram; }
 
@@ -869,7 +979,7 @@ function renderChartB(sc){
     g+=`<text class="axtick" x="${sx(n)}" y="${mT+ph+15}" text-anchor="middle">${n}</text>`;
   });
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-5}" text-anchor="middle">number of H200 GPUs</text>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-5}" text-anchor="middle">number of ${CONFIG.GPUS[state.gpu].name} GPUs</text>`;
   g+=`<text class="axlbl" transform="translate(13,${mT+ph/2}) rotate(-90)" text-anchor="middle">warm sessions (p5)</text>`;
   // TP band p5..p95 + p5 line (the planning series)
   let dband=`M ${sx(sc.ns[0])} ${sy(sc.tp5[0])}`;
@@ -1138,10 +1248,20 @@ let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null;
 // anchor (applied in kv_pool_tokens via currentReserve()).
 function activeModel(){
   let m = CONFIG.MODELS[state.model];
-  if (state.kv === "fp16") m = { ...m, kv_bpt: m.kv_bpt*2, name: m.name + " [FP16 KV]" };
+  // NVFP4 weights (B300-only; the UI disables the option elsewhere): swap in
+  // the NVFP4-checkpoint weight bytes — KV and recurrent state are untouched
+  if (state.wdt === "nvfp4" && m.nvfp4_w){
+    const [wr, wds, wpt, wtot] = m.nvfp4_w;
+    m = { ...m, w_resident: wr, w_decode_shared: wds, w_route_pertok: wpt,
+          w_route_total: wtot, weight_dtype: "nvfp4", name: m.name + " [NVFP4]" };
+  }
+  // FP16 KV is not servable for GLM-5.2 (DSA asserts a quantized cache);
+  // the UI disables the toggle — this guard keeps the math honest anyway
+  if (state.kv === "fp16" && m.kv_fp16_ok !== false)
+    m = { ...m, kv_bpt: m.kv_bpt*2, name: m.name + " [FP16 KV]" };
   if (state.assume === "conservative"){
     m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [conservative]" };
-    if (state.model === "35BA3B") m = { ...m, w_resident: m.w_resident*1.15 };
+    if (state.model !== "27B") m = { ...m, w_resident: m.w_resident*1.15 };
   }
   m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
   return m;
@@ -1190,9 +1310,9 @@ function computeAndRender(draft){
     const tp5=[],tp95=[],dp5=[];
     for(const n of scaleNs){
       const it=Math.max(80, Math.round(warmIter/n));
-      const [a,,c]=warmCapacity(model,makeTopo("tp",n),wl,state.ram,it,scanB).all;
+      const [a,,c]=warmCapacity(model,makeTopo("tp",n,state.gpu),wl,state.ram,it,scanB).all;
       tp5.push(a); tp95.push(c);
-      const [r5]=warmCapacity(model,makeTopo("dp",n),wl,state.ram/n,dpIt,scanB).all;
+      const [r5]=warmCapacity(model,makeTopo("dp",n,state.gpu),wl,state.ram/n,dpIt,scanB).all;
       dp5.push(r5*n);
     }
     sc={ns:scaleNs, tp5, tp95, dp5};
@@ -1292,13 +1412,53 @@ function onInput(){
   scheduleFull();           // full on settle
 }
 
+// Cross-control constraints (mirrors check_dtype_supported / kv_fp16_ok in
+// scenario_model.py): NVFP4 weights only on GPUs with native FP4 (B300);
+// FP16 KV never on GLM-5.2 (vLLM's DSA path asserts a quantized cache).
+// Illegal selections snap back to FP8 rather than silently mis-pricing.
+function enforceConstraints(){
+  const m = CONFIG.MODELS[state.model];
+  const gpuOk = CONFIG.GPUS[state.gpu].supports_nvfp4;
+  if (!gpuOk && state.wdt === "nvfp4") state.wdt = "fp8";
+  const fp16Ok = m.kv_fp16_ok !== false;
+  if (!fp16Ok && state.kv === "fp16") state.kv = "fp8";
+  // reflect state + disabled flags back into the segmented controls
+  const sync = (segId, val)=>document.querySelectorAll(`#${segId} button`).forEach(
+    b=>b.setAttribute('aria-pressed', b.dataset.v===val?'true':'false'));
+  sync('seg-wdt', state.wdt); sync('seg-kv', state.kv);
+  document.querySelector('#seg-wdt button[data-v="nvfp4"]').disabled = !gpuOk;
+  document.querySelector('#seg-kv button[data-v="fp16"]').disabled = !fp16Ok;
+  document.getElementById('wdt-hint').textContent = gpuOk
+    ? (state.wdt==="nvfp4" ? "NVFP4 checkpoint bytes active (KV stays FP8/FP16 — no 4-bit KV)." : "")
+    : "NVFP4 needs native FP4 tensor cores — select the B300.";
+  document.getElementById('kv-hint').textContent = fp16Ok
+    ? "FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
+    : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable.";
+  const hints = {
+    "27B": "", "35BA3B": "",
+    "MM35": "Dense 128B, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B). No MTP module: speculative default 1.0× (external EAGLE draft unmeasured).",
+    "GLM52": "744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 3×B300; NVFP4 from 2×B300.",
+  };
+  document.getElementById('model-hint').textContent = hints[state.model];
+  document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
+}
+
 // segmented controls
 document.querySelectorAll('.seg').forEach(seg=>{
   const key=seg.dataset.key;
   seg.querySelectorAll('button').forEach(btn=>{
     btn.addEventListener('click',()=>{
+      if (btn.disabled) return;
       seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===btn?'true':'false'));
       state[key]=btn.dataset.v;
+      // switching model adopts ITS speculative-decode default (1.7x = the
+      // Qwen fit / GLM transplant; 1.0x = Mistral, which has no MTP module)
+      if (key==='model'){
+        state.mtp = CONFIG.MODELS[state.model].mtp;
+        document.getElementById('s-mtp').value = state.mtp;
+      }
+      enforceConstraints();
+      syncLabels();
       document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
       document.getElementById('assume-hint').style.display = (state.assume==='conservative')?'block':'none';
       computeAndRender(false);
@@ -1330,6 +1490,7 @@ document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
 
 function syncLabels(){
   document.getElementById('v-ngpu').textContent=fmt(state.ngpu,0);
+  document.getElementById('v-gpuname').textContent=CONFIG.GPUS[state.gpu].name;
   document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);
   // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
   // per-draft acceptance — the base quantity the speedup is computed from
@@ -1403,6 +1564,7 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
 }, (n,dc)=>[{v:interpAt(dc,'agg',n), color:cssv('--s3'), r:4}]);
 
 /* ---- init ---- */
+enforceConstraints();
 syncLabels();
 applyThemeLabel();
 computeAndRender(false);
