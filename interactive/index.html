@@ -94,7 +94,6 @@ details.assump .body b{color:var(--text); font-weight:600}
 .ctl-group:first-child > .ctl-sec{border-top:0; padding-top:0; margin-top:0}
 .field label.flabel{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px; color:var(--text-2); margin-bottom:3px; gap:8px}
 .field label.flabel .val{color:var(--text); font-weight:620; font-size:12.5px}
-.field .hint{font-size:11px; color:var(--muted); margin-top:2px; line-height:1.45}
 
 /* segmented control */
 .seg{display:inline-flex; background:var(--control); border-radius:8px; padding:2.5px; gap:2px; flex-wrap:wrap;}
@@ -231,14 +230,13 @@ svg text{fill:var(--text-2)}
       <div class="ctl-group">
         <div class="ctl-sec">Model &amp; hardware</div>
         <div class="field">
-          <label class="flabel">Model</label>
+          <label class="flabel"><span class="tip" id="model-tip" data-tip="">Model</span></label>
           <div class="seg" id="seg-model" data-key="model">
             <button data-v="27B" aria-pressed="true">Qwen3.6-27B</button>
             <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
             <button data-v="MM35" aria-pressed="false">Mistral-Med-3.5</button>
             <button data-v="GLM52" aria-pressed="false">GLM-5.2</button>
           </div>
-          <div class="hint" id="model-hint"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="H200: the study's calibrated baseline (141 GB HBM3e, 4.8 TB/s). B300 (Blackwell Ultra): measured 288.4 GB usable HBM3e, 8 TB/s, native FP4 tensor cores — the only part that can run NVFP4 weights. The H200-calibrated ~18 GiB reserve transfers per B300 plus a measured +9.75 GB/GPU correction for the H200's hidden HBM over-provision (research/gpu_b300.md).">GPU</span></label>
@@ -253,15 +251,13 @@ svg text{fill:var(--text-2)}
             <button data-v="fp8" aria-pressed="true">FP8</button>
             <button data-v="nvfp4" aria-pressed="false">NVFP4</button>
           </div>
-          <div class="hint" id="wdt-hint"></div>
         </div>
         <div class="field">
-          <label class="flabel">KV cache dtype</label>
+          <label class="flabel"><span class="tip" id="kv-tip" data-tip="">KV cache dtype</span></label>
           <div class="seg" id="seg-kv" data-key="kv">
             <button data-v="fp8" aria-pressed="true">FP8</button>
             <button data-v="fp16" aria-pressed="false">FP16</button>
           </div>
-          <div class="hint" id="kv-hint">FP16 doubles KV bytes/token: half the pool, slower decode. Weights &amp; DeltaNet state unaffected.</div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Central = the study's calibrated constants. Conservative = the stacked-adverse structural case: calibration anchor at 2× the measured FP16 LOWER bound (2.278M vs 2.77M), fp32/doubled recurrent state, and +15% deployed-weight overhead on every model whose resident bytes are raw/checkpoint figures (all but the 27B, whose 28.8 GiB is already as-deployed). For the FULL stacked case from the docs, also set invalidation to 10%.">Structural assumptions</span></label>
@@ -269,24 +265,21 @@ svg text{fill:var(--text-2)}
             <button data-v="central" aria-pressed="true">Central</button>
             <button data-v="conservative" aria-pressed="false">Conservative</button>
           </div>
-          <div class="hint" id="assume-hint" style="display:none">Stacked-adverse constants active. Set invalidation to 10% to reproduce the docs' 403-session TP2 case.</div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Multi-Token Prediction speculative decoding. The base quantity is the per-draft acceptance α (with 2 draft tokens, speedup = 1 + α + α²) — shown under the slider. 1.7× is the 27B's measured fit (α ≈ 47%); a measured 87% acceptance would be ≈ 2.6×. MTP + hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps this at 1.0× (off). Switching model resets this slider to that model's default (1.7× Qwen/GLM, 1.0× Mistral).">MTP decode speedup</span> <span class="val"><span id="v-mtp">1.70</span>×</span></label>
+          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">1.70</span>×</span></label>
           <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
-          <div class="hint" id="mtp-accept"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="TP (tensor-parallel): one engine, ONE shared prefix cache — best for warm capacity; bandwidth haircut of 0.90 per GPU-count doubling. DP (data-parallel): N replicas, aggregate throughput ×N, but the cache SPLITS — returning users are warm only on their home replica (needs sticky routing).">Parallelism (N&gt;1)</span></label>
+          <label class="flabel"><span class="tip" data-tip="TP (tensor-parallel): one engine, ONE shared prefix cache — best for warm capacity; bandwidth haircut of 0.90 per GPU-count doubling. DP (data-parallel): N replicas, aggregate throughput ×N, but the cache SPLITS — returning users are warm only on their home replica (needs sticky routing), and the CPU-offload buffer is shared (split N ways).">Parallelism (N&gt;1)</span></label>
           <div class="seg" id="seg-par" data-key="par">
             <button data-v="tp" aria-pressed="true">TP · one cache</button>
             <button data-v="dp" aria-pressed="false">DP · N replicas</button>
           </div>
-          <div class="hint" id="dp-caveat" style="display:none">DP: cache splits — system-wide warm needs session-sticky routing; CPU offload is shared (split N ways).</div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Host-RAM buffer holding evicted sessions' KV + DeltaNet state. Extends how many sessions stay warm as STORAGE — restoring one over PCIe adds latency the model does not price. Offloaded sessions cannot decode until they are restored, so this slider raises warm capacity but never per-user decode speed. For DP the buffer is split across replicas.">CPU offload</span> <span class="val"><span id="v-ram">0</span> GiB</span></label>
@@ -301,7 +294,7 @@ svg text{fill:var(--text-2)}
       <div class="ctl-group">
         <div class="ctl-sec">Prompt-length distribution</div>
         <div class="field">
-          <label class="flabel">User prompt median <span class="val"><span id="v-user_median">31</span>k</span></label>
+          <label class="flabel"><span class="tip" data-tip="Median (50th percentile) of the user-prompt log-normal; the reference workload's fitted 31k. The slider range scales with the active model's context window: up to 480k on the 1M-context models (the Qwens via YaRN, GLM-5.2), up to 120k on Mistral-Medium-3.5 (262k max). Lengths above the max_seq_len cap are truncated to it, so a median far past the cap degenerates toward all-sessions-at-cap.">User prompt median</span> <span class="val"><span id="v-user_median">31</span>k</span></label>
           <input type="range" id="s-user_median" min="5" max="120" step="1" value="31">
         </div>
         <div class="field">
@@ -309,7 +302,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-user_sigma" min="0.30" max="1.40" step="0.01" value="0.81">
         </div>
         <div class="field">
-          <label class="flabel">Subagent prompt median <span class="val"><span id="v-sub_median">8</span>k</span></label>
+          <label class="flabel"><span class="tip" data-tip="Median of the subagent-prompt log-normal (assumed 8k — subagents run much leaner contexts). Range scales with the active model's context window: up to 240k on the 1M-context models, up to 60k on Mistral-Medium-3.5.">Subagent prompt median</span> <span class="val"><span id="v-sub_median">8</span>k</span></label>
           <input type="range" id="s-sub_median" min="1" max="60" step="1" value="8">
         </div>
         <div class="field">
@@ -328,9 +321,8 @@ svg text{fill:var(--text-2)}
           <label class="toggle">
             <input type="checkbox" id="t-sub_shares_prefix">
             <span class="track"></span>
-            <span>Subagents share the user prefix</span>
+            <span class="tip" data-tip="Off = subagents get their own separate lean 3k prefix block (reserved once in the pool). On = they reuse the user prefix instead — no extra reserved block, but each subagent carries the bigger user prefix as its cached base.">Subagents share the user prefix</span>
           </label>
-          <div class="hint">Off = subagents get their own separate prefix block.</div>
         </div>
         <div class="field">
           <label class="flabel">System / shared prefix <span class="val"><span id="v-sys">15</span>k</span></label>
@@ -339,9 +331,8 @@ svg text{fill:var(--text-2)}
           <div class="ticks"><span>3</span><span style="margin-left:22%">15</span><span style="margin-left:20%">30</span></div>
         </div>
         <div class="field">
-          <label class="flabel">Cache-invalidation rate <span class="val"><span id="v-inval">1.0</span>%</span></label>
+          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools…) — 1% = 1 in 100. Cold requests occupy pool space but never count as warm, so they cap the warm-hit ceiling at 1 − f.">Cache-invalidation rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
           <input type="range" id="s-inval" min="0" max="10" step="0.5" value="1">
-          <div class="hint">1% = 1 in 100 can't match any KV.</div>
         </div>
       </div>
     </div>
@@ -1510,24 +1501,34 @@ function enforceConstraints(){
   sync('seg-wdt', state.wdt); sync('seg-kv', state.kv);
   document.querySelector('#seg-wdt button[data-v="nvfp4"]').disabled = !gpuOk;
   document.querySelector('#seg-kv button[data-v="fp16"]').disabled = !fp16Ok;
-  document.getElementById('wdt-hint').textContent = gpuOk
-    ? (state.wdt==="nvfp4" ? "NVFP4 checkpoint bytes active (KV stays FP8/FP16 — no 4-bit KV)." : "")
-    : "NVFP4 needs native FP4 tensor cores — select the B300.";
-  document.getElementById('kv-hint').textContent = fp16Ok
-    ? "FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
-    : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable.";
-  const hints = {
-    "27B": "", "35BA3B": "",
-    "MM35": "Dense 128B, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B). No MTP module: speculative default 1.0× (external EAGLE draft unmeasured).",
-    "GLM52": "744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300.",
+  // control explanations live in the label tooltips, not under the knobs;
+  // the state-dependent ones are re-stamped here on every constraint pass
+  document.getElementById('kv-tip').setAttribute('data-tip', fp16Ok
+    ? "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
+    : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable, so the toggle is disabled.");
+  const modelTips = {
+    "27B": "Qwen3.6-27B — dense hybrid, the calibrated baseline: 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.",
+    "35BA3B": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN.",
+    "MM35": "Mistral-Medium-3.5-128B — dense, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B), the study's KV-hungriest model. No MTP module: speculative default 1.0× (external EAGLE draft unmeasured). Hard 262k context max.",
+    "GLM52": "GLM-5.2 — 744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context.",
   };
-  document.getElementById('model-hint').textContent = hints[state.model];
+  document.getElementById('model-tip').setAttribute('data-tip', modelTips[state.model]);
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
-  // per-model max_seq_len range: re-scope the cap slider and clamp the value
-  // (mirrors check_cap_allowed in scenario_model.py)
+  // per-model ranges: max_seq_len cap (mirrors check_cap_allowed) and the
+  // prompt-median sliders both scale with the model's context window — the
+  // 1M-context models (Qwens via YaRN, GLM-5.2) allow 4× the Mistral ranges.
+  // Clamps are one-way, like the cap: switching to a smaller-context model
+  // snaps the value down and does NOT restore it on switching back.
   const capEl = document.getElementById('s-cap'), capMax = capSliderMax();
   capEl.max = capMax;
   if (state.cap > capMax){ state.cap = capMax; capEl.value = capMax; }
+  const ctxScale = m.max_ctx / 262144;
+  for (const [id, key, base] of [['s-user_median','user_median',120],
+                                 ['s-sub_median','sub_median',60]]){
+    const el = document.getElementById(id), mx = Math.round(base*ctxScale);
+    el.max = mx;
+    if (state[key] > mx){ state[key] = mx; el.value = mx; }
+  }
 }
 
 // segmented controls
@@ -1539,21 +1540,15 @@ document.querySelectorAll('.seg').forEach(seg=>{
       seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===btn?'true':'false'));
       state[key]=btn.dataset.v;
       // switching model adopts ITS speculative-decode default (1.7x = the
-      // Qwen fit / GLM transplant; 1.0x = Mistral, which has no MTP module)
-      let mtpAdopted = false;
+      // Qwen fit / GLM transplant; 1.0x = Mistral, which has no MTP module) —
+      // the label's value readout changes visibly, and the MTP tooltip
+      // documents the reset behaviour
       if (key==='model'){
-        mtpAdopted = state.mtp !== CONFIG.MODELS[state.model].mtp;
         state.mtp = CONFIG.MODELS[state.model].mtp;
         document.getElementById('s-mtp').value = state.mtp;
       }
       enforceConstraints();
       syncLabels();
-      if (mtpAdopted)
-        document.getElementById('mtp-accept').textContent =
-          `Adopted this model's speculative default (${state.mtp.toFixed(2)}×) — re-set the slider if you were modelling something else. ` +
-          document.getElementById('mtp-accept').textContent;
-      document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
-      document.getElementById('assume-hint').style.display = (state.assume==='conservative')?'block':'none';
       computeAndRender(false);
     });
   });
@@ -1599,12 +1594,12 @@ function syncLabels(){
   // so the readout is only indicative there.
   const aNote = state.model==="GLM52" ? ' GLM-5.2 drafts 5 tokens — α is indicative only.'
               : state.model==="MM35" ? ' Mistral has no MTP module — the slider models an EAGLE-style speedup; α does not apply.' : '';
-  document.getElementById('mtp-accept').textContent =
-    (state.mtp<=1 ? 'MTP off — implied per-draft acceptance α = 0%.'
-    : `Implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}% (speedup = 1 + α + α², 2 draft tokens; the 1.7× measured fit ⇔ 47%).`) + aNote;
+  const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
+    : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
+  document.getElementById('mtp-tip').setAttribute('data-tip',
+    'Multi-Token Prediction speculative decoding. The base quantity is the per-draft acceptance α: with 2 draft tokens, speedup = 1 + α + α². 1.7× is the 27B\'s measured fit (α ≈ 47%); a measured 87% acceptance would be ≈ 2.6×. MTP + hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps this at 1.0× (off). Switching model resets the slider to that model\'s default (1.7× Qwen/GLM, 1.0× Mistral). ' + aLine);
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
-  document.getElementById('dp-caveat').style.display = (state.par==='dp' && state.ngpu>1)?'block':'none';
   document.getElementById('v-user_median').textContent=fmt(state.user_median,0);
   document.getElementById('v-user_sigma').textContent=state.user_sigma.toFixed(2);
   document.getElementById('v-sub_median').textContent=fmt(state.sub_median,0);
