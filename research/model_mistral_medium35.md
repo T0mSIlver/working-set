@@ -134,15 +134,16 @@ as an unresolved vendor figure, but bounded.)
   cap `max_seq_len` (this study's 180k reference cap already does);
   `--language-model-only` frees the vision tower's ~2.8 GB.
 
-## 5. Remaining assumptions / re-verification ledger
+## 5. Re-verification ledger — RESOLVED 2026-07-27 (proxy block lifted)
 
-- Literal `config.json` unread (HF blocked): all fields are ≥2-source
-  mirrors, but the byte-level file should be re-verified when reachable.
-- `intermediate_size` 28672 and the YaRN parameters are HIGH/MEDIUM-HIGH
-  confidence (config mirrors + sibling model), not first-party.
-- NVFP4 embedding dtype: the recipe lists only MLP/attention treatment; the
-  central value charges embeddings at BF16, with FP8-retained (−1.6e9 B) as
-  the sensitivity (see the convention notes in § 3).
+- ✅ Literal `config.json` read from the primary source; every § 1 field
+  confirmed byte-for-byte (see the egress note at the top).
+- ✅ `intermediate_size` 28672 and the YaRN parameters are now first-party
+  (`rope_type: yarn, factor: 64.0, original_max_position_embeddings: 4096,
+  rope_theta: 1e6` in the literal file).
+- ✅ NVFP4 embedding dtype settled from the shard headers: `embed_tokens` is
+  BF16 (3.221e9 B); the FP8-retained (−1.6e9 B) sensitivity is dead, and the
+  resident constant is the measured index total (95.2e9 B — § 3).
 
 ## Sources
 
