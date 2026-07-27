@@ -34,9 +34,31 @@ KIB, MIB, GIB = 1024, 1024**2, 1024**3
 
 # ============================================================================
 # HARDWARE
+# ----------------------------------------------------------------------------
+# The study started H200-only; the GPU is now a selectable axis. Constants and
+# provenance for the B300 (Blackwell Ultra): research/gpu_b300.md. The
+# activation/workspace reserve is calibrated on the H200 anchor and applied
+# PER GPU unchanged on other parts (see ACT_RESERVE below) — an assumption,
+# flagged in docs/scenarios.md, until a B300 measurement exists.
+#
+# supports_nvfp4: whether the part has native FP4 tensor cores. NVFP4 weights
+# are gated to GPUs with this flag (a deliberate serving-policy choice: vLLM
+# can emulate FP4 on Hopper via Marlin, but we model native-only deployments).
 # ============================================================================
-VRAM_PER_GPU   = 141e9      # H200 HBM3e, bytes (vendor "141 GB")
-HBM_BW         = 4.8e12     # per-GPU HBM bandwidth, bytes/s
+@dataclass(frozen=True)
+class GPU:
+    name: str
+    vram: float            # HBM bytes (vendor decimal convention)
+    hbm_bw: float          # HBM bandwidth, bytes/s
+    supports_nvfp4: bool   # native FP4 tensor cores (Blackwell+)
+
+
+GPUS = {
+    "H200": GPU("H200", 141e9, 4.8e12, supports_nvfp4=False),
+}
+
+VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
+HBM_BW         = GPUS["H200"].hbm_bw
 TP_EFFICIENCY  = 0.90       # tensor-parallel comm/overhead haircut on aggregate BW
 
 # Calibration anchor for 1xH200 + 27B with FP8 KV. NOTE: this is a PROJECTED
@@ -93,6 +115,7 @@ class Model:
     w_route_pertok: float
     w_route_total: float
     mtp: float = 1.7
+    weight_dtype: str = "fp8"   # set via with_weight_dtype(); gates GPU choice
 
     @property
     def is_moe(self) -> bool:
@@ -175,8 +198,20 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
     return replace(model, kv_bpt=model.kv_bpt * 2, name=model.name + " [FP16 KV]")
 
 
+# ---- weight-dtype x GPU gating ----------------------------------------------
+# NVFP4 weights are only allowed on GPUs with native FP4 tensor cores (B300);
+# H-generation GPUs are deliberately excluded even where emulation kernels
+# exist (see research/nvfp4.md). Every capacity/decode entry point calls this.
+def check_dtype_supported(model: Model, topo: Topology) -> None:
+    if model.weight_dtype == "nvfp4" and not topo.gpu.supports_nvfp4:
+        raise ValueError(
+            f"NVFP4 weights ({model.name}) require a GPU with native FP4 "
+            f"tensor cores; {topo.gpu.name} is not one (this study gates "
+            "NVFP4 to the B300 — no Hopper emulation path is modelled)")
+
+
 # ============================================================================
-# TOPOLOGY  — arbitrary numbers of H200s, tensor- or data-parallel
+# TOPOLOGY  — arbitrary numbers of GPUs, tensor- or data-parallel
 # ============================================================================
 @dataclass
 class Topology:
@@ -184,10 +219,11 @@ class Topology:
     n_gpu: int
     kind: str            # "single" | "tp" | "dp"
     replicas: int        # independent KV caches (1 for single/tp, n for dp)
+    gpu: GPU = GPUS["H200"]
 
 
-def topology(kind: str, n_gpu: int) -> Topology:
-    """Build a topology for `n_gpu` H200s.
+def topology(kind: str, n_gpu: int, gpu: str = "H200") -> Topology:
+    """Build a topology for `n_gpu` GPUs of the given part (default H200).
 
     kind="tp" : ONE engine — weights sharded (stored once), ONE shared prefix
                 cache, bandwidth = n x HBM x tp_efficiency(n).
@@ -198,13 +234,16 @@ def topology(kind: str, n_gpu: int) -> Topology:
     """
     if n_gpu < 1 or int(n_gpu) != n_gpu:
         raise ValueError(f"n_gpu must be a positive integer, got {n_gpu!r}")
+    if gpu not in GPUS:
+        raise ValueError(f"gpu must be one of {tuple(GPUS)}, got {gpu!r}")
+    g = GPUS[gpu]
     n_gpu = int(n_gpu)
     if n_gpu == 1:
-        return Topology("1xH200", 1, "single", 1)
+        return Topology(f"1x{g.name}", 1, "single", 1, g)
     if kind == "tp":
-        return Topology(f"{n_gpu}xH200 tensor-par", n_gpu, "tp", 1)
+        return Topology(f"{n_gpu}x{g.name} tensor-par", n_gpu, "tp", 1, g)
     if kind == "dp":
-        return Topology(f"{n_gpu}xH200 data-par", n_gpu, "dp", n_gpu)
+        return Topology(f"{n_gpu}x{g.name} data-par", n_gpu, "dp", n_gpu, g)
     raise ValueError(f"kind must be 'tp' or 'dp', got {kind!r}")
 
 
@@ -244,20 +283,25 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     single : VRAM - weights - reserve
     tp     : n GPUs act as one engine; weights sharded (counted once),
              reserve per GPU -> pool = (n*VRAM - weights - n*reserve)
-    dp     : each replica is a 1xH200 engine; this returns the PER-REPLICA pool
+    dp     : each replica is a single-GPU engine; this returns the PER-REPLICA pool
+
+    The activation reserve is the H200-calibrated ACT_RESERVE applied per GPU
+    on every part (see the reserve-transfer assumption in docs/scenarios.md).
     """
+    check_dtype_supported(model, topo)
+    vram = topo.gpu.vram
     if topo.kind == "tp":
-        pool_bytes = topo.n_gpu * VRAM_PER_GPU - model.w_resident - topo.n_gpu * ACT_RESERVE
+        pool_bytes = topo.n_gpu * vram - model.w_resident - topo.n_gpu * ACT_RESERVE
     else:  # single or per-replica of dp
-        pool_bytes = VRAM_PER_GPU - model.w_resident - ACT_RESERVE
+        pool_bytes = vram - model.w_resident - ACT_RESERVE
     return max(pool_bytes, 0.0) / model.kv_bpt
 
 
 def effective_bw(topo: Topology) -> float:
     """Effective decode bandwidth seen by ONE engine/replica."""
     if topo.kind == "tp":
-        return topo.n_gpu * HBM_BW * tp_efficiency(topo.n_gpu)
-    return HBM_BW  # single, or per-replica of dp
+        return topo.n_gpu * topo.gpu.hbm_bw * tp_efficiency(topo.n_gpu)
+    return topo.gpu.hbm_bw  # single, or per-replica of dp
 
 
 # ============================================================================
@@ -420,6 +464,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     The state term was omitted by the baseline decode model; at its mns=6 it is
     <2% of step bytes, but at mns 64+ it is no longer negligible.
     """
+    check_dtype_supported(model, topo)
     rng = np.random.default_rng(seed)
     bw = effective_bw(topo)
     p5, p50, p95, agg = [], [], [], []
