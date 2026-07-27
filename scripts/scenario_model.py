@@ -5,8 +5,12 @@ This is the single source of truth for the extended study. It keeps the SAME
 methodology as the baseline scripts (warm_whisker.py / real_mns.py) and
 generalizes it along the axes we now want to explore:
 
-  * model         : 27B (dense sibling) vs 35B-A3B (MoE, ~3B active)
-  * topology      : 1xH200, 2xH200 tensor-parallel (TP2), 2xH200 data-parallel (DP2)
+  * model         : 27B (dense sibling), 35B-A3B (MoE, ~3B active),
+                    Mistral-Medium-3.5-128B (dense GQA), GLM-5.2 (744B-A40B
+                    MoE, MLA + DeepSeek Sparse Attention)
+  * gpu           : H200 (calibrated baseline) or B300 (Blackwell Ultra)
+  * weight dtype  : FP8 (baseline) or NVFP4 (B300-only; weights, never KV)
+  * topology      : N GPUs, tensor-parallel (one shared cache) or data-parallel
   * system prompt : shared-prefix size (e.g. 3k vs 15k vs 30k tokens)
   * subagents     : a second request class with its own length distribution,
                     mixed in at a ratio r (subagent requests per user request)
@@ -34,9 +38,48 @@ KIB, MIB, GIB = 1024, 1024**2, 1024**3
 
 # ============================================================================
 # HARDWARE
+# ----------------------------------------------------------------------------
+# The study started H200-only; the GPU is now a selectable axis. Constants and
+# provenance for the B300 (Blackwell Ultra): research/gpu_b300.md. The
+# activation/workspace reserve is calibrated on the H200 anchor and applied
+# PER GPU unchanged on other parts (see ACT_RESERVE below) — an assumption,
+# flagged in docs/scenarios.md, until a B300 measurement exists.
+#
+# supports_nvfp4: whether the part has native FP4 tensor cores. NVFP4 weights
+# are gated to GPUs with this flag (a deliberate serving-policy choice: vLLM
+# can emulate FP4 on Hopper via Marlin, but we model native-only deployments).
 # ============================================================================
-VRAM_PER_GPU   = 141e9      # H200 HBM3e, bytes (vendor "141 GB")
-HBM_BW         = 4.8e12     # per-GPU HBM bandwidth, bytes/s
+@dataclass(frozen=True)
+class GPU:
+    name: str
+    vram: float            # usable HBM bytes (see per-part comments)
+    hbm_bw: float          # HBM bandwidth, bytes/s
+    supports_nvfp4: bool   # native FP4 tensor cores (Blackwell+)
+    # Extra per-GPU reserve applied when the H200-SOLVED reserve transfers to
+    # this part. Hopper over-provisions HBM: the H200 actually delivers
+    # ~150.75e9 usable bytes against the 141e9 vendor figure the calibration
+    # uses (thundergolfer.com, confirmed 2026-07-27). The anchor absorbs that
+    # hidden ~9.75e9 into the solved reserve implicitly, so H200 results are
+    # exact by construction — but a part WITHOUT the over-provision must add
+    # it back explicitly or its pools inherit ~9.75e9/GPU of phantom HBM.
+    reserve_extra: float = 0.0
+
+
+GPUS = {
+    "H200": GPU("H200", 141e9, 4.8e12, supports_nvfp4=False),
+    # Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores.
+    # vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
+    # quickstart, driver 590.48.01) shows 275,040 MiB = 288.4e9 B per GPU:
+    # the B300 delivers nominal decimal bytes with NO Hopper-style ~7%
+    # over-provision. reserve_extra: the measured H200 hidden margin that the
+    # transferred reserve must therefore add back (research/gpu_b300.md #3 —
+    # formerly a flagged sensitivity, now the measured central case).
+    "B300": GPU("B300", 288.4e9, 8.0e12, supports_nvfp4=True,
+                reserve_extra=9.75e9),
+}
+
+VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
+HBM_BW         = GPUS["H200"].hbm_bw
 TP_EFFICIENCY  = 0.90       # tensor-parallel comm/overhead haircut on aggregate BW
 
 # Calibration anchor for 1xH200 + 27B with FP8 KV. NOTE: this is a PROJECTED
@@ -93,6 +136,34 @@ class Model:
     w_route_pertok: float
     w_route_total: float
     mtp: float = 1.7
+    weight_dtype: str = "fp8"   # set via with_weight_dtype(); gates GPU choice
+    # NVFP4-checkpoint weight bytes (w_resident, w_decode_shared,
+    # w_route_pertok, w_route_total), or None if no NVFP4 variant exists.
+    # Derivations + provenance: research/nvfp4.md. NVFP4 changes WEIGHT bytes
+    # only — kv_bpt and the DeltaNet state are untouched. The KV cache stays
+    # FP8/FP16 by OWNER POLICY: vLLM's nvfp4 KV shipped 2026-05 (Blackwell-
+    # datacenter-only, values dequantized to FP8 before attention) but this
+    # study does not model it — see research/nvfp4.md #3.
+    nvfp4_w: tuple | None = None
+    # Sparse-attention decode pricing (GLM-5.2 / DSA). By default decode reads
+    # the FULL cached context (kv_decode_bpt=None -> kv_bpt). A DSA model
+    # instead reads kv_decode_bpt bytes per CONTEXT token (the indexer scan)
+    # plus kv_decode_const bytes per ACTIVE SEQUENCE (the top-k sparse read,
+    # scaled by min(len, kv_decode_topk)/kv_decode_topk — a sequence shorter
+    # than the top-k window only reads its own tokens).
+    # Storage (kv_bpt) is unaffected. research/model_glm52.md #3.
+    kv_decode_bpt: float | None = None
+    kv_decode_const: float = 0.0
+    kv_decode_topk: float | None = None
+    # False for models vLLM can only serve with a quantized KV cache
+    # (GLM-5.2's DSA path asserts fp8) — with_kv_dtype("fp16") then raises.
+    kv_fp16_ok: bool = True
+    # Largest max_seq_len the study allows for this model (tokens). The
+    # workload cap (Workload.cap) may not exceed it — warm_capacity and
+    # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
+    # the Qwens (262,144 native, 1M via YaRN rope scaling) and GLM-5.2
+    # (1M native); Mistral-Medium-3.5 stays at its 262,144 model max.
+    max_ctx: float = 262_144
 
     @property
     def is_moe(self) -> bool:
@@ -125,6 +196,13 @@ MODELS = {
         w_route_pertok=0.0,
         w_route_total=0.0,
         mtp=1.7,
+        # nvidia/Qwen3.6-27B-NVFP4: MEASURED safetensors total 21,921,428,072 B
+        # (2026-07-27 re-verification). Same convention as the FP8 28.8 GiB,
+        # which the measured Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B =
+        # 28.75 GiB) matches within 0.2% — the old x22/27.8 "as-deployed"
+        # scaling was a mis-derivation. Dense: decode reads everything.
+        nvfp4_w=(21.92e9, 21.92e9, 0.0, 0.0),
+        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
     ),
     # MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
     "35BA3B": Model(
@@ -138,6 +216,64 @@ MODELS = {
         w_route_pertok=1_006_632_960,    # 8 routed experts x 3.146M x 40 layers, FP8
         w_route_total=32_212_254_720,    # 256 routed experts (saturates at exactly n=32 linear)
         mtp=1.7,                         # MTP module, speedup kept equal to baseline's fit
+        # RedHatAI/Qwen3.6-35B-A3B-NVFP4 recipe: experts + full-attn NVFP4
+        # (0.5625 B/param), but embed/lm_head/DeltaNet/router — AND the MTP
+        # module (`re:^mtp.*` is in the measured ignore list) — stay BF16,
+        # so the SHARED per-step read is 1.7x HEAVIER than FP8 while the
+        # routed-expert read is 1.78x lighter. research/nvfp4.md 6.1.
+        nvfp4_w=(24.13e9,                # MEASURED LM bytes (2.94x vs BF16 base)
+                 3.308e9,                # measured 3.3065e9: attn+shared NVFP4; DN+lm_head BF16
+                 566_231_040,            # measured 566,238,720 (+1.4e-5)
+                 18_119_393_280),        # measured 18,119,639,040 (kink stays n=32)
+        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
+    ),
+    # Dense 128B, open weights (2026-04), 88 uniform full-attention GQA layers
+    # (8 KV heads x 128) — the study's KV-hungriest model: 176 KiB/token FP8,
+    # no recurrent state, no MoE. No MTP module -> speculative default 1.0x
+    # (an external EAGLE-v1 draft exists; its speedup is unmeasured here).
+    # Constants: research/model_mistral_medium35.md.
+    "MM35": Model(
+        name="Mistral-Medium-3.5-128B (dense)",
+        kv_bpt=180_224,                  # 88 layers x 8 KV heads x 128 x 2(K,V) x 1B
+        deltanet_state=0.0,              # pure attention, no recurrent state
+        w_resident=133.6e9,              # 124.43 GiB as-shipped FP8 checkpoint
+        w_decode_shared=125.0e9,         # 88 FP8 layers + BF16 lm_head; vision tower not read
+        w_route_pertok=0.0,
+        w_route_total=0.0,
+        mtp=1.0,                         # no MTP module (EAGLE draft is external)
+        # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
+        # edge MLP + all attention FP8, lm_head BF16 (research note #3).
+        # Resident = the MEASURED safetensors total (95,224,812,960 B,
+        # 2026-07-27 re-verification); decode read measured 86.643e9.
+        nvfp4_w=(95.2e9, 86.6e9, 0.0, 0.0),
+        max_ctx=262_144,                 # hard model max (YaRN x64 over a 4k base)
+    ),
+    # MoE 744B-A40B (753B incl. MTP), MLA + DeepSeek Sparse Attention, open
+    # weights (2026-06). Cached: 576-B MLA latent/layer + 132-B indexer keys
+    # on 21+1 layers = 47.3 KiB/token fp8; vLLM REQUIRES fp8 KV on this path
+    # (kv_fp16_ok=False). Decode is sparse: indexer scans the context at
+    # 2,772 B/token while attention reads only top-2048 tokens/layer.
+    # Constants: research/model_glm52.md.
+    "GLM52": Model(
+        name="GLM-5.2 (MoE 744B-A40B, MLA+DSA)",
+        kv_bpt=48_408,                   # 79 x 576 (MLA latent) + 22 x 132 (indexer)
+        deltanet_state=0.0,              # MLA is cached attention, no recurrent state
+        w_resident=755.5e9,              # official FP8 ckpt: 753.3e9 params + BF16 excess
+        w_decode_shared=18.92e9,         # MLA + indexers + dense MLP + shared exp + lm_head
+        w_route_pertok=22_649_241_600,   # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
+        w_route_total=724_775_731_200,   # 256 experts (saturates at n=32, like 35BA3B)
+        mtp=1.7,                         # MTP module (5 drafts); transplanted fit, unmeasured
+        # nvidia/GLM-5.2-NVFP4: ONLY routed experts NVFP4; attn/shared/dense/
+        # embeddings/lm_head/MTP stay BF16. Derived 464.8e9 B matches the vLLM
+        # recipe's "~465 GB" within 0.05% (research/model_glm52.md #4).
+        nvfp4_w=(464.8e9, 35.30e9,
+                 12_740_198_400,          # 22_649_241_600 x 0.5625
+                 407_686_348_800),        # 724_775_731_200 x 0.5625 (kink n=32)
+        kv_decode_bpt=2_772,             # 21 indexer layers x 132 B per context token
+        kv_decode_const=92.0e6,          # 78 layers x top-2048 x 576 B per active seq
+        kv_decode_topk=2_048,            # ...scaled down for sequences < 2,048 tokens
+        kv_fp16_ok=False,                # vLLM DSA path asserts a quantized KV cache
+        max_ctx=1_048_576,               # native 1M context (theta 8e6)
     ),
 }
 
@@ -172,11 +308,65 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
         raise ValueError(f"kv_dtype must be one of {KV_DTYPES}, got {kv_dtype!r}")
     if kv_dtype == "fp8":
         return model
+    if not model.kv_fp16_ok:
+        raise ValueError(
+            f"{model.name}: FP16 KV is not servable (vLLM's sparse-MLA/DSA "
+            "path requires a quantized KV cache; see research/model_glm52.md)")
     return replace(model, kv_bpt=model.kv_bpt * 2, name=model.name + " [FP16 KV]")
 
 
+# ---- weight-dtype switch ----------------------------------------------------
+# All MODELS constants are the FP8 serving checkpoints (the study baseline).
+# "nvfp4" swaps in the per-model NVFP4-checkpoint weight bytes (derived in
+# research/nvfp4.md and the per-model notes). Weights ONLY: kv_bpt and the
+# recurrent state are untouched (4-bit KV is deliberately not modelled), and
+# the FP8-anchored reserve calibration never re-runs. The resulting model is
+# only usable on GPUs with native FP4 (check_dtype_supported gates it).
+WEIGHT_DTYPES = ("fp8", "nvfp4")
+
+def with_weight_dtype(model: Model, weight_dtype: str) -> Model:
+    """Return `model` configured for the given weight quantization."""
+    if weight_dtype not in WEIGHT_DTYPES:
+        raise ValueError(
+            f"weight_dtype must be one of {WEIGHT_DTYPES}, got {weight_dtype!r}")
+    if weight_dtype == "fp8":
+        # no fp8_w constants are kept, so an NVFP4 model cannot be converted
+        # back — fail loudly instead of silently returning NVFP4 bytes
+        if model.weight_dtype != "fp8":
+            raise ValueError(f"{model.name}: cannot convert back to FP8; "
+                             "start from the MODELS[...] base entry")
+        return model
+    if model.nvfp4_w is None:
+        raise ValueError(f"{model.name}: no NVFP4 checkpoint constants "
+                         "(see research/nvfp4.md)")
+    wr, wds, wpt, wtot = model.nvfp4_w
+    return replace(model, w_resident=wr, w_decode_shared=wds,
+                   w_route_pertok=wpt, w_route_total=wtot,
+                   weight_dtype="nvfp4", name=model.name + " [NVFP4]")
+
+
+# ---- weight-dtype x GPU gating ----------------------------------------------
+# NVFP4 weights are only allowed on GPUs with native FP4 tensor cores (B300);
+# H-generation GPUs are deliberately excluded even where emulation kernels
+# exist (see research/nvfp4.md). Every capacity/decode entry point calls this.
+def check_cap_allowed(model: Model, wl) -> None:
+    """The workload's max_seq_len cap may not exceed the model's context."""
+    if wl.cap > model.max_ctx:
+        raise ValueError(
+            f"cap={wl.cap:.0f} exceeds {model.name}'s max context "
+            f"({model.max_ctx:.0f} tokens)")
+
+
+def check_dtype_supported(model: Model, topo: Topology) -> None:
+    if model.weight_dtype == "nvfp4" and not topo.gpu.supports_nvfp4:
+        raise ValueError(
+            f"NVFP4 weights ({model.name}) require a GPU with native FP4 "
+            f"tensor cores; {topo.gpu.name} is not one (this study gates "
+            "NVFP4 to the B300 — no Hopper emulation path is modelled)")
+
+
 # ============================================================================
-# TOPOLOGY  — arbitrary numbers of H200s, tensor- or data-parallel
+# TOPOLOGY  — arbitrary numbers of GPUs, tensor- or data-parallel
 # ============================================================================
 @dataclass
 class Topology:
@@ -184,10 +374,11 @@ class Topology:
     n_gpu: int
     kind: str            # "single" | "tp" | "dp"
     replicas: int        # independent KV caches (1 for single/tp, n for dp)
+    gpu: GPU = GPUS["H200"]
 
 
-def topology(kind: str, n_gpu: int) -> Topology:
-    """Build a topology for `n_gpu` H200s.
+def topology(kind: str, n_gpu: int, gpu: str = "H200") -> Topology:
+    """Build a topology for `n_gpu` GPUs of the given part (default H200).
 
     kind="tp" : ONE engine — weights sharded (stored once), ONE shared prefix
                 cache, bandwidth = n x HBM x tp_efficiency(n).
@@ -198,13 +389,16 @@ def topology(kind: str, n_gpu: int) -> Topology:
     """
     if n_gpu < 1 or int(n_gpu) != n_gpu:
         raise ValueError(f"n_gpu must be a positive integer, got {n_gpu!r}")
+    if gpu not in GPUS:
+        raise ValueError(f"gpu must be one of {tuple(GPUS)}, got {gpu!r}")
+    g = GPUS[gpu]
     n_gpu = int(n_gpu)
     if n_gpu == 1:
-        return Topology("1xH200", 1, "single", 1)
+        return Topology(f"1x{g.name}", 1, "single", 1, g)
     if kind == "tp":
-        return Topology(f"{n_gpu}xH200 tensor-par", n_gpu, "tp", 1)
+        return Topology(f"{n_gpu}x{g.name} tensor-par", n_gpu, "tp", 1, g)
     if kind == "dp":
-        return Topology(f"{n_gpu}xH200 data-par", n_gpu, "dp", n_gpu)
+        return Topology(f"{n_gpu}x{g.name} data-par", n_gpu, "dp", n_gpu, g)
     raise ValueError(f"kind must be 'tp' or 'dp', got {kind!r}")
 
 
@@ -244,20 +438,28 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     single : VRAM - weights - reserve
     tp     : n GPUs act as one engine; weights sharded (counted once),
              reserve per GPU -> pool = (n*VRAM - weights - n*reserve)
-    dp     : each replica is a 1xH200 engine; this returns the PER-REPLICA pool
+    dp     : each replica is a single-GPU engine; this returns the PER-REPLICA pool
+
+    The activation reserve is the H200-calibrated ACT_RESERVE applied per GPU
+    on every part, plus the part's reserve_extra — the measured H200 HBM
+    over-provision the solved reserve implicitly absorbed, added back on parts
+    that do not share it (see GPU.reserve_extra and docs/scenarios.md).
     """
+    check_dtype_supported(model, topo)
+    vram = topo.gpu.vram
+    reserve = ACT_RESERVE + topo.gpu.reserve_extra
     if topo.kind == "tp":
-        pool_bytes = topo.n_gpu * VRAM_PER_GPU - model.w_resident - topo.n_gpu * ACT_RESERVE
+        pool_bytes = topo.n_gpu * vram - model.w_resident - topo.n_gpu * reserve
     else:  # single or per-replica of dp
-        pool_bytes = VRAM_PER_GPU - model.w_resident - ACT_RESERVE
+        pool_bytes = vram - model.w_resident - reserve
     return max(pool_bytes, 0.0) / model.kv_bpt
 
 
 def effective_bw(topo: Topology) -> float:
     """Effective decode bandwidth seen by ONE engine/replica."""
     if topo.kind == "tp":
-        return topo.n_gpu * HBM_BW * tp_efficiency(topo.n_gpu)
-    return HBM_BW  # single, or per-replica of dp
+        return topo.n_gpu * topo.gpu.hbm_bw * tp_efficiency(topo.n_gpu)
+    return topo.gpu.hbm_bw  # single, or per-replica of dp
 
 
 # ============================================================================
@@ -391,8 +593,16 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     valid = ("all", "user", "gpu", "offload")
     if which not in valid:
         raise ValueError(f"which must be one of {valid}, got {which!r}")
+    check_cap_allowed(model, wl)
     rng = np.random.default_rng(seed)
     pool = kv_pool_tokens(model, topo)
+    # A zero pool means the weights (+ reserve) don't leave any KV space — no
+    # engine can serve here, so capacity is zero REGARDLESS of CPU offload:
+    # host RAM is restore-storage for an engine's sessions, and there is no
+    # engine to restore into. Without this, a big offload buffer would report
+    # hundreds of phantom "warm" sessions on a config that cannot even load.
+    if pool <= 0:
+        return np.zeros(3)
     counts = np.empty(n_iter)
     for i in range(n_iter):
         full, prefix, cold, sub = wl.sample(rng, draw)
@@ -420,12 +630,29 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     The state term was omitted by the baseline decode model; at its mns=6 it is
     <2% of step bytes, but at mns 64+ it is no longer negligible.
     """
+    check_dtype_supported(model, topo)
+    check_cap_allowed(model, wl)
+    if kv_pool_tokens(model, topo) <= 0:
+        raise ValueError(f"{model.name}: weights do not fit {topo.name} — "
+                         "no context can be resident, decode is undefined")
     rng = np.random.default_rng(seed)
     bw = effective_bw(topo)
+    # dense-attention models read every cached token per step (kv_bpt); a
+    # sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
+    # token (indexer scan) plus a top-k read per active sequence, capped at
+    # the sequence's own length when it is shorter than the top-k window
+    kv_read_bpt = model.kv_bpt if model.kv_decode_bpt is None else model.kv_decode_bpt
+    topk = model.kv_decode_topk
     p5, p50, p95, agg = [], [], [], []
     for n in mns_range:
         full, _, _, _ = wl.sample(rng, (n_iter, n))
-        kv_bytes = full.sum(axis=1) * model.kv_bpt
+        if model.kv_decode_const and topk:
+            # DSA reads min(len, top-k) tokens per layer, not a flat top-k
+            topk_bytes = (model.kv_decode_const / topk) * \
+                np.minimum(full, topk).sum(axis=1)
+        else:
+            topk_bytes = n * model.kv_decode_const
+        kv_bytes = full.sum(axis=1) * kv_read_bpt + topk_bytes
         state_bytes = 2.0 * n * model.deltanet_state
         step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
         pu = model.mtp * bw / step_bytes
@@ -507,6 +734,90 @@ def _selfcheck():
         except ValueError:
             pass
 
+    # ---- B300 GPU + NVFP4 weight dtype + new models ------------------------
+    b1, b4 = topology("tp", 1, "B300"), topology("tp", 4, "B300")
+    mm, glm = MODELS["MM35"], MODELS["GLM52"]
+
+    # B300: 288 GB / 8 TB/s; pools grow vs H200 at equal weights; NVFP4 flag
+    assert GPUS["B300"].supports_nvfp4 and not GPUS["H200"].supports_nvfp4
+    assert kv_pool_tokens(m27, b1) > kv_pool_tokens(m27, t1)
+    assert effective_bw(b1) / effective_bw(t1) == 8.0 / 4.8
+
+    # NVFP4 gate: B300-only — H-generation GPUs must raise
+    m27_4 = with_weight_dtype(m27, "nvfp4")
+    for topo_bad in (t1, tp2):
+        try:
+            kv_pool_tokens(m27_4, topo_bad); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+    assert kv_pool_tokens(m27_4, b1) > kv_pool_tokens(m27, b1)  # smaller weights -> more KV
+    assert with_weight_dtype(m27, "fp8") is m27                 # fp8 = identity
+    for bad_call in (lambda: with_weight_dtype(replace(m27, nvfp4_w=None), "nvfp4"),
+                     lambda: with_weight_dtype(m27_4, "fp8")):  # no way back to fp8
+        try:
+            bad_call(); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+    # NVFP4 identities (research/nvfp4.md, research/model_glm52.md):
+    m35_4 = with_weight_dtype(m35, "nvfp4")
+    assert m35_4.w_route_total == 32_212_254_720 * 0.5625       # exact 0.5625 B/param
+    assert abs(m35_4.w_route_total / m35_4.w_route_pertok - 32) < 1e-9  # kink stays n=32
+    assert m35_4.w_resident < m35.w_resident                    # checkpoint shrinks...
+    assert m35_4.w_decode_shared > m35.w_decode_shared          # ...but BF16 exclusions
+    glm_4 = with_weight_dtype(glm, "nvfp4")                     #    weigh on shared reads
+    assert abs(glm_4.w_resident / 465e9 - 1) < 0.005, \
+        "GLM-5.2 NVFP4 resident must match the vLLM recipe's ~465 GB"
+    assert abs(glm_4.w_route_total / glm_4.w_route_pertok - 32) < 1e-9
+    # both Qwen models must be NVFP4-selectable (checkpoints exist for both)
+    for mk in ("27B", "35BA3B"):
+        assert MODELS[mk].nvfp4_w is not None
+
+    # published-config KV identities for the new models
+    assert mm.kv_bpt == 88 * 8 * 128 * 2 * 1                    # 176 KiB/token FP8
+    assert glm.kv_bpt == 79 * 576 + 22 * 132                    # MLA latent + indexer
+    assert mm.mtp == 1.0, "no MTP module on Mistral Medium 3.5"
+    assert mm.deltanet_state == 0.0 and glm.deltanet_state == 0.0
+
+    # KV dtype: Mistral doubles like the Qwens; GLM's DSA path must refuse FP16
+    assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
+    try:
+        with_kv_dtype(glm, "fp16"); raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+    # context caps (owner decision 2026-07): Qwens + GLM allow up to 1M
+    # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144
+    assert m27.max_ctx == m35.max_ctx == glm.max_ctx == 1_048_576
+    assert mm.max_ctx == 262_144
+    wl_1m = replace(wl, cap=1_048_576)
+    assert warm_capacity(m35, t1, wl_1m, n_iter=40)[1] > 0     # 1M cap runs
+    for fn in (lambda: warm_capacity(mm, tp2, wl_1m, n_iter=1),
+               lambda: decode_curves(mm, tp2, wl_1m, [1], n_iter=10)):
+        try:
+            fn(); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+    # GLM-5.2 sizing: FP8 weights (755.5e9 B) fit no single GPU — pool clamps
+    # to 0 — but 8xH200 TP and 4xB300 hold a real pool, NVFP4 a bigger one
+    assert kv_pool_tokens(glm, t1) == 0 and kv_pool_tokens(glm, b1) == 0
+    assert kv_pool_tokens(glm, topology("tp", 8)) > 0
+    assert kv_pool_tokens(with_weight_dtype(glm, "nvfp4"), b4) > kv_pool_tokens(glm, b4) > 0
+
+    # sparse-attention decode: GLM's DSA pricing must beat the dense-read
+    # pricing of the same bytes at long context (that is DSA's entire point)
+    glm_dense_read = replace(glm, kv_decode_bpt=None, kv_decode_const=0.0)
+    t8 = topology("tp", 8)
+    _, p_dsa, _, _ = decode_curves(glm, t8, wl, [64], n_iter=300)
+    _, p_dense, _, _ = decode_curves(glm_dense_read, t8, wl, [64], n_iter=300)
+    assert p_dsa[0] > p_dense[0], "DSA decode must out-speed full-cache reads"
+    # decode monotonicity holds for the new models on hardware they fit
+    for mdl, topo_fit in ((mm, tp2), (glm, t8), (with_weight_dtype(glm, "nvfp4"), b4)):
+        _, p50n, _, aggn = decode_curves(mdl, topo_fit, wl, [1, 8, 64], n_iter=300)
+        assert p50n[0] > p50n[1] > p50n[2] > 0
+        assert aggn[2] > aggn[0]
+
     # warm capacity sanity: pool grows => capacity grows
     lo = warm_capacity(m35, t1, wl, n_iter=120)[1]
     hi = warm_capacity(m35, tp2, wl, n_iter=120)[1]
@@ -541,9 +852,20 @@ def _selfcheck():
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
     for dtype in KV_DTYPES:
         for mk in MODELS:
+            if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:
+                continue   # GLM-5.2: FP16 KV not servable on the DSA path
             for tk in TOPOLOGIES:
                 p = kv_pool_tokens(with_kv_dtype(MODELS[mk], dtype), TOPOLOGIES[tk])
                 print(f"  pool {mk:7} {tk:12} {dtype:5} = {p / 1e6:6.2f} M tokens")
+    print("  -- B300, fp8 KV, weight dtype fp8 | nvfp4 --")
+    for mk in MODELS:
+        for n in (1, 4):
+            t = topology("tp", n, "B300")
+            pools = []
+            for wd in WEIGHT_DTYPES:
+                mdl = with_weight_dtype(MODELS[mk], wd)
+                pools.append(f"{kv_pool_tokens(mdl, t) / 1e6:6.2f}")
+            print(f"  pool {mk:7} {t.name:19} = {' | '.join(pools)} M tokens")
 
 
 if __name__ == "__main__":
