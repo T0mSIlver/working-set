@@ -413,13 +413,20 @@ const CONFIG = {
   // absorbs implicitly. A part without that over-provision (the B300 delivers
   // its nominal bytes: a real nvidia-smi dump shows 275,040 MiB = 288.4e9 B)
   // must add it back, or its pools inherit ~9.75 GB/GPU of phantom HBM.
+  // nvlink_domain: GPUs reachable over NVLink without leaving the node. A TP
+  // group wider than this crosses onto IB/Ethernet and pays the extra
+  // CROSS_DOMAIN_EFFICIENCY penalty. 8 for both parts — HGX H200 and the 8-GPU
+  // HGX B300 baseboard we deploy (a GB300 NVL72 rack would be 72; we have none).
   GPUS: {
-    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0 },
-    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9 },
+    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8 },
+    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8 },
   },
   VRAM_PER_GPU: 141e9,     // calibration-anchor GPU (H200) HBM bytes
   HBM_BW:       4.8e12,    // calibration-anchor GPU bandwidth, bytes/s
   TP_EFFICIENCY: 0.90,     // tensor-parallel aggregate-BW haircut
+  // extra haircut per doubling once a TP group spans nodes. UNMEASURED and
+  // deliberately pessimistic; nothing in the study crosses the boundary.
+  CROSS_DOMAIN_EFFICIENCY: 0.65,
   // Calibration anchor: 1xH200 + 27B FP8 KV pool (tokens). PROJECTED from the
   // baseline's measured FP16 pool (~1.337M x2 + freed activations), not measured.
   BASELINE_POOL_TOKENS_27B_1GPU: 2.77e6,
@@ -497,10 +504,13 @@ const CONFIG = {
   },
 
   // ---- TOPOLOGY ----
+  // A DP x TP grid: the unit DP replicates is a GROUP of `tp` GPUs, not a GPU.
+  // n_gpu/kind/replicas are derived (dp*tp / label / dp) and spelled out here
+  // only because these literals are built before the helpers exist.
   TOPOLOGIES: {
-    "1xH200":     { name: "1×H200",            n_gpu: 1, kind: "single", replicas: 1 },
-    "2xH200-TP2": { name: "2×H200 tensor-par", n_gpu: 2, kind: "tp",     replicas: 1 },
-    "2xH200-DP2": { name: "2×H200 data-par",   n_gpu: 2, kind: "dp",     replicas: 2 },
+    "1xH200":     { name: "1×H200",            dp: 1, tp: 1, n_gpu: 1, kind: "single", replicas: 1 },
+    "2xH200-TP2": { name: "2×H200 tensor-par", dp: 1, tp: 2, n_gpu: 2, kind: "tp",     replicas: 1 },
+    "2xH200-DP2": { name: "2×H200 data-par",   dp: 2, tp: 1, n_gpu: 2, kind: "dp",     replicas: 2 },
   },
 
   // ---- MONTE-CARLO sizes (full quality) ----
@@ -559,24 +569,30 @@ function checkDtypeSupported(m, topo){
     throw new Error(`NVFP4 weights require native FP4; ${gpu.name} has none`);
 }
 
+// KV pool of ONE replica group. A group owns topo.tp GPUs: the weights are
+// sharded across them and counted once, the reserve is scratch and charged per
+// GPU -> pool = tp*(vram - reserve) - weights. Per-GROUP, i.e. per-cache; a
+// dp>1 deployment has topo.replicas of them. A model too large for its group
+// still clamps to 0 (the study's "does not fit" sentinel); minTpFor() reports
+// the group size that would fit.
 function kv_pool_tokens(m, topo){
   checkDtypeSupported(m, topo);
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
   const R = reserveNow() + (gpu.reserve_extra || 0);
-  const vram = gpu.vram;
-  let poolBytes;
-  if (topo.kind === "tp"){
-    poolBytes = topo.n_gpu * vram - m.w_resident - topo.n_gpu * R;
-  } else { // single or per-replica of dp
-    poolBytes = vram - m.w_resident - R;
-  }
+  const poolBytes = topo.tp * (gpu.vram - R) - m.w_resident;
   return Math.max(poolBytes, 0) / m.kv_bpt;
 }
 
+// Smallest TP group size with a non-empty pool on this part.
+function minTpFor(m, gpuKey){
+  const gpu = CONFIG.GPUS[gpuKey || "H200"];
+  return Math.floor(m.w_resident / (gpu.vram - (reserveNow() + (gpu.reserve_extra || 0)))) + 1;
+}
+
+// Bandwidth seen by ONE replica group. DP adds groups, it never widens one.
 function effective_bw(topo){
-  const bw = (topo.gpu || CONFIG.GPUS["H200"]).hbm_bw;
-  if (topo.kind === "tp") return topo.n_gpu * bw * tpEff(topo.n_gpu);
-  return bw;
+  const gpu = topo.gpu || CONFIG.GPUS["H200"];
+  return topo.tp * gpu.hbm_bw * tpEff(topo.tp, gpu.nvlink_domain);
 }
 
 /* ============================================================================
@@ -609,6 +625,52 @@ function effective_bw(topo){
   const p4 = kv_pool_tokens(CONFIG.MODELS["35BA3B"], makeTopo("tp",4));
   console.assert(p4 > 2*kv_pool_tokens(CONFIG.MODELS["35BA3B"], makeTopo("tp",2)),
     "TP4 pool must exceed 2x TP2 (weights amortized)");
+  // ---- DP x TP grid: a replica is a GROUP, not a GPU (mirrors _selfcheck) ----
+  const g24 = makeGrid(2,4,"B300");
+  console.assert(g24.n_gpu===8 && g24.replicas===2 && g24.kind==="hybrid" &&
+    g24.gpu===CONFIG.GPUS["B300"], "makeGrid(2,4,B300) shape");
+  console.assert(makeTopo("tp",4).tp===4 && makeTopo("tp",4).dp===1, "TP4 = edge (1,4)");
+  console.assert(makeTopo("dp",4).dp===4 && makeTopo("dp",4).tp===1, "DP4 = edge (4,1)");
+  const m35g = CONFIG.MODELS["35BA3B"];
+  for (const tp of [1,2,4]){
+    const basePool = kv_pool_tokens(m35g, makeGrid(1,tp)), baseBw = effective_bw(makeGrid(1,tp));
+    for (const dp of [1,3,8]){
+      console.assert(approx(kv_pool_tokens(m35g, makeGrid(dp,tp)), basePool, 1e-12),
+        "per-group pool must be independent of dp");
+      console.assert(effective_bw(makeGrid(dp,tp))===baseBw, "DP must not widen a group");
+    }
+  }
+  for (const [k,t] of Object.entries(CONFIG.TOPOLOGIES)){
+    const g = makeGrid(t.dp, t.tp);
+    console.assert(g.n_gpu===t.n_gpu && g.kind===t.kind && g.replicas===t.replicas,
+      "TOPOLOGIES literal "+k+" must match makeGrid(dp,tp)");
+  }
+  // the grid is what makes DP expressible for the models that fit no single GPU
+  console.assert(minTpFor(CONFIG.MODELS["MM35"],"H200")===2 &&
+                 minTpFor(CONFIG.MODELS["MM35"],"B300")===1 &&
+                 minTpFor(CONFIG.MODELS["GLM52"],"H200")===7 &&
+                 minTpFor(CONFIG.MODELS["GLM52"],"B300")===3, "min TP per model/part");
+  for (const mk of ["MM35","GLM52"])
+    for (const n of [1,2,4,8])
+      console.assert(kv_pool_tokens(CONFIG.MODELS[mk], makeTopo("dp",n))===0,
+        mk+": pure DP of single H200s must stay a 0 pool");
+  console.assert(kv_pool_tokens(CONFIG.MODELS["MM35"], makeGrid(4,2)) > 0,
+    "MM35 DP4xTP2 on H200 must hold a real pool");
+  console.assert(kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(2,4,"B300")) > 0,
+    "GLM-5.2 DP2xTP4 on B300 must hold a real pool");
+  // widening TP raises the SYSTEM total: each DP group re-pays for the weights
+  const sys = tp => tp>0 ? (8/tp)*kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(8/tp,tp,"B300")) : 0;
+  console.assert(sys(8) > sys(4), "GLM-5.2 TP8 must beat DP2xTP4 on system total");
+  // TP past the node's NVLink domain must cliff, not extrapolate
+  for (const g of Object.values(CONFIG.GPUS))
+    console.assert(g.nvlink_domain===8, "both parts are 8-GPU nodes");
+  console.assert(tpEff(16)/tpEff(8) < tpEff(8)/tpEff(4),
+    "crossing nodes must cost more than an in-node doubling");
+  console.assert(approx(tpEff(16)/tpEff(8), CONFIG.CROSS_DOMAIN_EFFICIENCY, 1e-9), "cliff factor");
+  for (const n of [1,2,4,8])
+    console.assert(approx(tpEff(n), Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(n)), 1e-12),
+      "in-node tpEff unchanged at n="+n);
+  console.assert(tpEff(8,4) < tpEff(8,8), "a smaller domain moves the cliff earlier");
   // new models: published-config KV identities (mirror _selfcheck)
   const mm = CONFIG.MODELS["MM35"], glm = CONFIG.MODELS["GLM52"];
   console.assert(mm.kv_bpt === 88*8*128*2*1, "MM35 kv_bpt = 176 KiB/token");
@@ -891,13 +953,30 @@ const state = {
 
 // topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
 // in scenario_model.py): TP = one engine, weights sharded, one shared cache,
-// 0.90 bandwidth haircut per GPU-count doubling; DP = N 1-GPU replicas.
-function tpEff(n){ return n<=1 ? 1.0 : Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(n)); }
+// 0.90 bandwidth haircut per GPU-count doubling inside the node, then a steeper
+// CROSS_DOMAIN_EFFICIENCY penalty per doubling once a TP group spans nodes.
+function tpEff(n, domain){
+  if (n<=1) return 1.0;
+  const d = domain || 8;
+  let eff = Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(Math.min(n, d)));
+  if (n > d) eff *= Math.pow(CONFIG.CROSS_DOMAIN_EFFICIENCY, Math.log2(n/d));
+  return eff;
+}
+// DP x TP grid (mirrors topology_grid() in scenario_model.py). DP replicates
+// whole GROUPS of `tp` GPUs — the only way the models that fit no single GPU
+// (Mistral-Medium-3.5, GLM-5.2) can be data-parallel at all.
+function makeGrid(dp, tp, gpuKey){
+  const g = CONFIG.GPUS[gpuKey || "H200"], n = dp*tp;
+  const name = n===1 ? `1×${g.name}`
+             : dp===1 ? `${tp}×${g.name} TP`
+             : tp===1 ? `${dp}×${g.name} DP`
+             : `${n}×${g.name} DP${dp}×TP${tp}`;
+  const kind = n===1 ? "single" : dp===1 ? "tp" : tp===1 ? "dp" : "hybrid";
+  return {name, dp, tp, n_gpu:n, kind, replicas:dp, gpu:g};
+}
+// single-axis helper for the explorer's TP/DP toggle: the two grid edges
 function makeTopo(kind, n, gpuKey){
-  const g = CONFIG.GPUS[gpuKey || "H200"];
-  if (n===1) return {name:`1×${g.name}`, n_gpu:1, kind:"single", replicas:1, gpu:g};
-  if (kind==="tp") return {name:`${n}×${g.name} TP`, n_gpu:n, kind:"tp", replicas:1, gpu:g};
-  return {name:`${n}×${g.name} DP`, n_gpu:n, kind:"dp", replicas:n, gpu:g};
+  return kind==="tp" ? makeGrid(1, n, gpuKey) : makeGrid(n, 1, gpuKey);
 }
 function currentTopo(){ return makeTopo(state.par, state.ngpu, state.gpu); }
 // top stop of the max_seq_len slider for the active model, derived from its
@@ -909,7 +988,7 @@ function currentTopo(){ return makeTopo(state.par, state.ngpu, state.gpu); }
 // switching back (the user sees the clamped value and can re-raise it).
 function capSliderMax(){ return Math.round(CONFIG.MODELS[state.model].max_ctx/1000); }
 // the host-RAM offload buffer is shared: DP replicas each get 1/N of it
-function ramPerCache(topo){ return topo.kind==="dp" ? state.ram/topo.replicas : state.ram; }
+function ramPerCache(topo){ return topo.replicas>1 ? state.ram/topo.replicas : state.ram; }
 
 function currentWL(){
   return {
@@ -1455,7 +1534,9 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // decode readout evaluated at n=1 would show a meaningless green number
   const noFit = pool <= 0;
   const floorClass = noFit ? undefined : (puOp>=50?'good':(puOp>=40?'warn':'crit'));
-  const dp = topo.kind==="dp";
+  // true whenever the cache SPLITS across >1 replica group (pure DP or a DP×TP
+  // grid) — that is what makes the headline a per-replica number
+  const dp = topo.replicas>1;
   // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
   // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
   // different draws and is not a count of anything.
