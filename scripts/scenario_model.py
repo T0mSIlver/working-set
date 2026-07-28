@@ -382,17 +382,18 @@ def check_dtype_supported(model: Model, topo: Topology) -> None:
 # ----------------------------------------------------------------------------
 # The unit DP replicates is a GROUP of `tp` GPUs, not a GPU. That distinction is
 # invisible while a model fits in one GPU (the 27B and 35B-A3B on either part)
-# and load-bearing for the models added in 2026-07, which do not:
+# and load-bearing wherever one does not:
 #
 #     min TP to fit FP8 weights      H200    B300
-#       Mistral-Medium-3.5-128B         2       1
+#       Mistral-Medium-3.5-128B         2       1     <- fits a single B300
 #       GLM-5.2 (744B-A40B)             7       3
 #
-# For those, `topology("dp", n)` — n INDEPENDENT SINGLE GPUs — is not a
-# deployment that exists: no count of single GPUs ever holds the weights, so the
-# whole DP axis reported a 0 pool. Data parallelism for them means replicating
-# whole TP groups: on one 8-GPU node, GLM-5.2 runs DP2xTP4 and
-# Mistral-Medium-3.5 runs DP4xTP2. Total GPUs = dp * tp.
+# In every cell above where min TP > 1, `topology("dp", n)` — n INDEPENDENT
+# SINGLE GPUs — is not a deployment that exists: no count of single GPUs ever
+# holds the weights, so the whole DP axis reported a 0 pool. (MM35 on B300 is
+# the exception: min TP 1, so pure DP is real there.) Data parallelism in the
+# other cells means replicating whole TP groups: on one 8-GPU node GLM-5.2 runs
+# DP2xTP4 on B300, and MM35 runs DP4xTP2 on H200. Total GPUs = dp * tp.
 #
 #   weights  : sharded across a group's tp GPUs -> stored ONCE per group
 #   reserve  : activation/workspace scratch, charged PER GPU
@@ -501,6 +502,9 @@ def tp_efficiency(tp: int, nvlink_domain: int = 8) -> float:
     would badly overstate throughput. Both parts here are 8-GPU nodes, so every
     configuration the study reports stays in the first regime.
     """
+    if nvlink_domain < 1 or int(nvlink_domain) != nvlink_domain:
+        raise ValueError(
+            f"nvlink_domain must be a positive integer, got {nvlink_domain!r}")
     if tp <= 1:
         return 1.0
     eff = TP_EFFICIENCY ** np.log2(min(tp, nvlink_domain))
@@ -579,7 +583,11 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     """
     check_dtype_supported(model, topo)
     reserve = ACT_RESERVE + topo.gpu.reserve_extra
-    pool_bytes = topo.tp * (topo.gpu.vram - reserve) - model.w_resident
+    # NOT factored as tp*(vram - reserve) - w: keeping the three terms in the
+    # original order makes every pre-existing configuration bit-identical to the
+    # pre-grid code (tp=1 reproduces the old single/DP branch, tp=n the old TP
+    # branch) rather than merely equal after formatting.
+    pool_bytes = topo.tp * topo.gpu.vram - model.w_resident - topo.tp * reserve
     return max(pool_bytes, 0.0) / model.kv_bpt
 
 
@@ -923,13 +931,19 @@ def _selfcheck():
         assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
         for t in node_splits(MODELS[mk], gk, node=8):
             assert t.n_gpu == 8 and kv_pool_tokens(MODELS[mk], t) > 0
-    # Within a FIXED node, widening TP strictly raises the SYSTEM total, because
-    # every DP group re-pays for its own full copy of the weights. node_splits
-    # is ordered widest-DP first, so the system totals must rise along it. The
-    # margin scales with how heavy the weights are: on 8 GPUs, TP8 beats the
-    # widest DP by 1.36x for the 35B-A3B (35.5 GB), 1.91x for MM35 (133.6 GB)
-    # and 2.34x for GLM-5.2 (755.5 GB). DP buys cache isolation and routing
-    # headroom, never capacity.
+    # Within a FIXED node of N GPUs the system total has a closed form:
+    #
+    #     system(tp) = (N/tp) * (tp*(V-R) - W)  =  N*(V-R) - N*W/tp
+    #
+    # so it depends on tp ONLY through -N*W/tp: monotone non-decreasing always,
+    # and strictly increasing exactly when the weight charge W is positive and
+    # numerically material (a weightless model is flat, and a tiny-W one can tie
+    # under float rounding). Every real model here has material weights, so the
+    # totals must rise along node_splits, which is ordered widest-DP first. The
+    # margin scales with W: on 8 GPUs, TP8 beats the widest fitting DP split by
+    # 1.36x for the 35B-A3B (35.5 GB), 1.91x for MM35 (133.6 GB) and 2.34x for
+    # GLM-5.2 (755.5 GB). DP buys cache isolation and routing headroom, never
+    # capacity.
     for mk, gk in (("GLM52", "B300"), ("MM35", "H200"),
                    ("MM35", "B300"), ("35BA3B", "H200")):
         sys_tot = [t.replicas * kv_pool_tokens(MODELS[mk], t)
@@ -938,6 +952,20 @@ def _selfcheck():
             f"{mk}/{gk}: system total must rise as TP widens, got {sys_tot}"
         if len(sys_tot) > 1:
             assert sys_tot[-1] > sys_tot[0], "TP8 must beat the widest DP split"
+        # the closed form must reproduce it exactly
+        g_ = GPUS[gk]
+        V, R = g_.vram, ACT_RESERVE + g_.reserve_extra
+        for t in node_splits(MODELS[mk], gk, node=8):
+            closed = (8 * (V - R) - 8 * MODELS[mk].w_resident / t.tp) / MODELS[mk].kv_bpt
+            actual = t.replicas * kv_pool_tokens(MODELS[mk], t)
+            assert abs(actual - closed) < 1e-6, f"closed form mismatch {mk}/{gk}"
+    # ...and the strictness is conditional on a material weight charge: a
+    # weightless model is FLAT across every split, not rising. The docs say
+    # "strictly raises" for real models only.
+    weightless = replace(m35, w_resident=0.0)
+    flat = [t.replicas * kv_pool_tokens(weightless, t)
+            for t in node_splits(weightless, "H200", node=8)]
+    assert len(set(flat)) == 1, f"weightless model must be flat, got {flat}"
 
     # ---- TP past the node's NVLink domain must cliff, not extrapolate ------
     assert all(g.nvlink_domain == 8 for g in GPUS.values())   # 8-GPU nodes
@@ -950,6 +978,13 @@ def _selfcheck():
     for n in (1, 2, 4, 8):
         assert abs(tp_efficiency(n) - TP_EFFICIENCY ** np.log2(n)) < 1e-12
     assert tp_efficiency(8, nvlink_domain=4) < tp_efficiency(8, nvlink_domain=8)
+    # a non-positive domain must RAISE, not divide by zero or silently mean 8
+    for bad in (0, -1, 2.5):
+        try:
+            tp_efficiency(4, nvlink_domain=bad)
+            raise AssertionError(f"expected ValueError for domain={bad}")
+        except ValueError:
+            pass
     # bandwidth still rises with tp (the cliff is a haircut, not an inversion)
     bws = [effective_bw(topology_grid(1, n)) for n in (1, 2, 4, 8, 16)]
     assert bws == sorted(bws)

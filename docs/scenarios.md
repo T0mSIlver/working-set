@@ -135,19 +135,29 @@ The unit DP replicates is a **group of `tp` GPUs, not a GPU**. Total GPUs =
 `dp · tp`; each group shards one copy of the weights, owns one independent KV
 cache, and has its own bandwidth.
 
-That distinction is invisible for the 27B and 35B-A3B, which fit in one GPU, and
-**load-bearing for the two models added in 2026-07, which do not**:
+That distinction is invisible for the 27B and 35B-A3B, which fit in one GPU on
+either part, and **load-bearing wherever a model does not** — which for the two
+models added in 2026-07 is every cell below except one:
 
 | min TP to fit FP8 weights | H200 | B300 |
 | --- | --- | --- |
-| Mistral-Medium-3.5-128B (133.6 GB) | **2** | 1 |
+| Mistral-Medium-3.5-128B (133.6 GB) | **2** | 1 — *fits a single B300* |
 | GLM-5.2 (755.5 GB) | **7** | **3** |
 
-For those, `topology("dp", n)` — *n* independent **single** GPUs — is not a
-deployment that exists: no number of single GPUs ever holds the weights, so the
-entire DP axis reported a 0-token pool at every *N*. Data parallelism for them
-means replicating whole **TP groups**, which `topology_grid(dp, tp)` now
-expresses. The splits of one 8-GPU node that actually fit (FP8 weights, FP8 KV;
+In every bolded cell, `topology("dp", n)` — *n* independent **single** GPUs — is
+not a deployment that exists: no number of single GPUs ever holds the weights,
+so the entire DP axis reported a 0-token pool at every *N*. (Mistral-Medium-3.5
+on B300 is the exception — min TP 1, so pure DP is real there, and it appears as
+the `DP8×TP1` column below.) Data parallelism in the other cells means
+replicating whole **TP groups**, which `topology_grid(dp, tp)` now expresses.
+
+These min-TP figures are **central-case**: they use the calibrated
+`ACT_RESERVE ≈ 18.0 GiB`. Under the explorer's *conservative* structural
+assumption the reserve is larger and the thresholds rise (GLM-5.2 → 8 on H200,
+4 on B300); the explorer reports that number, Python's `min_tp_for` reports this
+one.
+
+The splits of one 8-GPU node that actually fit (FP8 weights, FP8 KV;
 `system = replicas × per-group`, and only with session-sticky routing):
 
 | Model | Part | DP8×TP1 | DP4×TP2 | DP2×TP4 | TP8 |
@@ -157,13 +167,24 @@ expresses. The splits of one 8-GPU node that actually fit (FP8 weights, FP8 KV;
 | GLM-5.2 | H200 | — | — | — *(needs TP7)* | 4.50M = **4.50M** |
 | GLM-5.2 | B300 | — | — | 5.82M ×2 = **11.65M** | 27.25M = **27.25M** |
 
-**Widening TP strictly raises the system total**, because every DP group re-pays
-for its own full copy of the weights. The margin scales with weight size — on 8
-GPUs, TP8 beats the widest fitting DP split by **1.36×** for the 35B-A3B
-(35.5 GB), **1.91×** for Mistral-Medium-3.5 (133.6 GB) and **2.34×** for GLM-5.2
-(755.5 GB). DP buys cache isolation and routing headroom, never capacity — the
-same conclusion [§ 5](#5-scaling-to-n--h200) reached for the 35B-A3B, but far
-sharper the heavier the weights.
+**Widening TP raises the system total**, because every DP group re-pays for its
+own full copy of the weights. On a fixed node of *N* GPUs the total has a closed
+form that makes this exact:
+
+```
+system(tp) = [ N·(V − R) − N·W / tp ] / KV_bpt        V = vram, R = reserve, W = weights
+```
+
+It depends on `tp` **only** through the `− N·W/tp` term, so it is monotone
+non-decreasing always, and *strictly* increasing exactly when the weight charge
+`W` is positive and numerically material. A weightless model is flat; every real
+model here has material weights, so the margin scales with `W` — on 8 GPUs, TP8
+beats the widest fitting DP split by **1.36×** for the 35B-A3B (35.5 GB),
+**1.91×** for Mistral-Medium-3.5 (133.6 GB) and **2.34×** for GLM-5.2 (755.5 GB).
+
+DP buys cache isolation and routing headroom, never capacity — the same
+conclusion [§ 5](#5-scaling-to-n--h200) reached for the 35B-A3B, but far sharper
+the heavier the weights.
 
 **TP is bounded by the node.** TP all-reduces fire twice per layer and are
 latency-critical, so they are only cheap inside the node's NVSwitch fabric.
@@ -177,6 +198,14 @@ doubling up to that boundary, then applies an additional
 > TP, where it would badly overstate throughput. **No configuration in this study
 > crosses the boundary**, so it bounds the extrapolation rather than predicting
 > it. Treat any `tp > 2` figure as a projection needing measurement.
+
+> **Explorer coverage gap.** `interactive/index.html` mirrors the grid math and
+> is unit-checked against it, but its Parallelism control still offers only the
+> two single-axis edges (TP or DP). **Hybrid splits such as GLM-5.2 `DP2×TP4` are
+> reachable in Python and in the table above, but not from the page** — a user
+> can explore the TP column only. The page does now report the fit threshold
+> ("needs TP ≥ 7 on H200") instead of a bare "does not fit". Exposing hybrid
+> grids in the UI is deliberately left as follow-up work.
 
 ### Model constants
 
