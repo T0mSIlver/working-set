@@ -199,13 +199,15 @@ doubling up to that boundary, then applies an additional
 > crosses the boundary**, so it bounds the extrapolation rather than predicting
 > it. Treat any `tp > 2` figure as a projection needing measurement.
 
-> **Explorer coverage gap.** `interactive/index.html` mirrors the grid math and
-> is unit-checked against it, but its Parallelism control still offers only the
-> two single-axis edges (TP or DP). **Hybrid splits such as GLM-5.2 `DP2×TP4` are
-> reachable in Python and in the table above, but not from the page** — a user
-> can explore the TP column only. The page does now report the fit threshold
-> ("needs TP ≥ 7 on H200") instead of a bare "does not fit". Exposing hybrid
-> grids in the UI is deliberately left as follow-up work.
+**In the explorer.** The **Split (DP × TP)** control offers exactly the legal
+splits of the chosen GPU count — the divisors of *N*, so `N=8` gives
+`DP8 / DP4×TP2 / DP2×TP4 / TP8` and `N=6` gives `DP6 / DP3×TP2 / DP2×TP3 / TP6`.
+Every row of the table above is therefore reachable interactively. Splits whose
+TP group is too small to hold the weights are struck through, and selecting one
+reports the threshold ("needs TP ≥ 7 on H200") rather than a bare "does not
+fit". Changing the GPU count snaps the TP width to the largest divisor that does
+not exceed the current one, so shrinking *N* keeps as much TP as still divides
+evenly instead of resetting to an end of the range.
 
 ### Model constants
 
