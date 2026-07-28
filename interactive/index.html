@@ -107,6 +107,10 @@ details.assump .body b{color:var(--text); font-weight:600}
 }
 .seg button[aria-pressed="true"]{background:var(--control-active); color:var(--text); box-shadow:var(--shadow); font-weight:600}
 .seg button:disabled{opacity:.35; cursor:not-allowed}
+/* a split whose TP group cannot hold the weights: still selectable, so the
+   tiles can explain the threshold, but visibly marked as non-viable */
+.seg button.nofit{opacity:.45; text-decoration:line-through solid 1px}
+.seg button.nofit[aria-pressed="true"]{opacity:.8; text-decoration:none}
 
 /* sliders */
 input[type=range]{
@@ -275,15 +279,12 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses. TP shards weights across all of them (stored once — freed VRAM becomes cache); DP runs N independent replicas. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
+          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses in total (one 8-GPU node at most — both parts here are 8-GPU NVLink domains). How they are divided into replica groups is the Split control below. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200, though it fits one B300; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="TP (tensor-parallel): one engine, ONE shared prefix cache — best for warm capacity; bandwidth haircut of 0.90 per GPU-count doubling. DP (data-parallel): N replicas, aggregate throughput ×N, but the cache SPLITS — returning users are warm only on their home replica (needs sticky routing), and the CPU-offload buffer is shared (split N ways).">Parallelism (N&gt;1)</span></label>
-          <div class="seg" id="seg-par" data-key="par">
-            <button data-v="tp" aria-pressed="true">TP · one cache</button>
-            <button data-v="dp" aria-pressed="false">DP · N replicas</button>
-          </div>
+          <label class="flabel"><span class="tip" id="split-tip" data-tip="How the N GPUs are split into DP replica groups × TP width (only divisors of N are valid, so the buttons change with the GPU count). TP shards the weights across a group — stored once, so freed VRAM becomes cache — and keeps ONE shared prefix cache. DP replicates whole GROUPS: aggregate throughput ×replicas, but the cache SPLITS (a returning user is warm only on their home group, so it needs sticky routing) and the CPU-offload buffer is split too. Widening TP always raises TOTAL capacity, because every DP group re-pays for its own full copy of the weights. Splits whose group is too small to hold the weights are dimmed — pick one to see the threshold.">Split (DP × TP)</span></label>
+          <div class="seg" id="seg-split"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Host-RAM buffer holding evicted sessions' KV + DeltaNet state. Extends how many sessions stay warm as STORAGE — restoring one over PCIe adds latency the model does not price. Offloaded sessions cannot decode until they are restored, so this slider raises warm capacity but never per-user decode speed. For DP the buffer is split across replicas.">CPU offload</span> <span class="val"><span id="v-ram">0</span> GiB</span></label>
@@ -708,6 +709,23 @@ function effective_bw(topo){
     console.assert(approx(tpEff(n), Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(n)), 1e-12),
       "in-node tpEff unchanged at n="+n);
   console.assert(tpEff(8,4) < tpEff(8,8), "a smaller domain moves the cliff earlier");
+  // ---- split control: the TP widths offered, and the clamp on GPU-count change
+  console.assert(divisors(8).join()==="1,2,4,8" && divisors(6).join()==="1,2,3,6" &&
+                 divisors(1).join()==="1" && divisors(7).join()==="1,7", "divisors");
+  // every clamp result must divide ngpu and never exceed the requested width
+  for (let n=1;n<=8;n++) for (let tp=1;tp<=8;tp++){
+    const c = clampTp(tp, n);
+    console.assert(n % c === 0 && c <= tp && c >= 1,
+      `clampTp(${tp},${n})=${c} must be a divisor of ${n} no greater than ${tp}`);
+  }
+  console.assert(clampTp(4,8)===4 && clampTp(4,6)===3 && clampTp(8,6)===6 &&
+                 clampTp(3,8)===2 && clampTp(1,8)===1,
+    "clampTp keeps as much TP as still divides evenly");
+  // a legal split is exactly a grid whose product is the GPU count
+  for (const tp of divisors(8)){
+    const t = makeGrid(8/tp, tp, "B300");
+    console.assert(t.n_gpu===8 && t.tp===tp && t.replicas===8/tp, "split grid "+tp);
+  }
   // new models: published-config KV identities (mirror _selfcheck)
   const mm = CONFIG.MODELS["MM35"], glm = CONFIG.MODELS["GLM52"];
   console.assert(mm.kv_bpt === 88*8*128*2*1, "MM35 kv_bpt = 176 KiB/token");
@@ -979,7 +997,10 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
    STATE
    ========================================================================== */
 const state = {
-  model: "27B", gpu: "H200", wdt: "fp8", ngpu: 1, par: "tp", ram: 0,
+  // tp = TENSOR-PARALLEL WIDTH of one replica group; the replica count is the
+  // derived dp = ngpu / tp, so tp must always divide ngpu (enforceConstraints
+  // clamps it). tp === ngpu is pure TP (the old par:"tp"), tp === 1 is pure DP.
+  model: "27B", gpu: "H200", wdt: "fp8", ngpu: 1, tp: 1, ram: 0,
   kv: "fp8", cap: 180,
   assume: "central", mtp: 1.7,
   user_median: 31, user_sigma: 0.81,
@@ -1029,7 +1050,16 @@ function makeTopo(kind, n, gpuKey){
   if (kind!=="tp" && kind!=="dp") throw new Error(`kind must be 'tp' or 'dp', got ${kind}`);
   return kind==="tp" ? makeGrid(1, n, gpuKey) : makeGrid(n, 1, gpuKey);
 }
-function currentTopo(){ return makeTopo(state.par, state.ngpu, state.gpu); }
+function currentTopo(){ return makeGrid(state.ngpu / state.tp, state.tp, state.gpu); }
+// divisors of n, ascending — the TP widths that evenly split n GPUs
+function divisors(n){ const d=[]; for (let i=1;i<=n;i++) if (n%i===0) d.push(i); return d; }
+// Snap a TP width to a legal one for `ngpu`: the largest divisor <= tp, so
+// shrinking the GPU count keeps as much TP as still divides evenly rather than
+// resetting the user to pure TP or pure DP. Always returns a divisor of ngpu.
+function clampTp(tp, ngpu){
+  const ds = divisors(ngpu);
+  return ds.includes(tp) ? tp : (ds.filter(d => d <= tp).pop() ?? 1);
+}
 // top stop of the max_seq_len slider for the active model, derived from its
 // max_ctx (1049 for 1M models, 262 for Mistral). At the top stop the workload
 // cap maps to the EXACT model max (1,048,576 / 262,144), everywhere else to
@@ -1148,7 +1178,7 @@ function renderChartA(){
 
 /* ---- Chart B: warm capacity (p5) vs number of H200s, TP vs DP ---- */
 function renderChartB(sc){
-  // sc: {ns, tp5, tp95, dp5, cur:{n, par, p5}}  — dp5 = SYSTEM total (sticky)
+  // sc: {ns, tp5, tp95, dp5, cur:{n, split, p5system}} — dp5 = SYSTEM total (sticky)
   const W=560,H=300, mL=52,mR=16,mT=16,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
   const grid=cssv('--grid'), axis=cssv('--axis'), s1=cssv('--s1'), s3=cssv('--s3'), muted=cssv('--muted');
@@ -1525,7 +1555,8 @@ function computeAndRender(draft){
     }
     sc={ns:scaleNs, tp5, tp95, dp5};
   }
-  sc={...sc, cur:{n:state.ngpu, par:state.par, p5system:lastWarmCur.system5}};
+  sc={...sc, cur:{n:state.ngpu, split:`DP${state.ngpu/state.tp}×TP${state.tp}`,
+                  p5system:lastWarmCur.system5}};
   lastWarmAll=sc;
   renderChartB(sc);
 
@@ -1651,12 +1682,47 @@ function onInput(){
   scheduleFull();           // full on settle
 }
 
+// Rebuild the DP×TP split control for the current GPU count. The valid TP
+// widths are exactly the divisors of ngpu, so the button set changes whenever
+// the slider moves — this is where the hybrid grid becomes reachable from the
+// UI at all (pure TP and pure DP are just its two ends).
+function renderSplitControl(){
+  const seg = document.getElementById('seg-split');
+  if (!seg) return;
+  const need = minTpFor(activeModel(), state.gpu);
+  seg.innerHTML = '';
+  for (const tp of divisors(state.ngpu)){
+    const dp = state.ngpu / tp;
+    const b = document.createElement('button');
+    b.dataset.v = String(tp);
+    b.textContent = state.ngpu === 1 ? '1 GPU'
+                  : dp === 1 ? `TP${tp}`
+                  : tp === 1 ? `DP${dp}`
+                  : `DP${dp}×TP${tp}`;
+    b.setAttribute('aria-pressed', tp === state.tp ? 'true' : 'false');
+    const fits = tp >= need;
+    if (!fits) b.classList.add('nofit');
+    b.title = fits
+      ? `${dp} replica group${dp>1?'s':''} × ${tp} GPU${tp>1?'s':''} — one KV cache per group`
+      : `weights need TP ≥ ${need} on ${state.gpu}; a ${tp}-GPU group holds no cache`;
+    b.addEventListener('click', ()=>{
+      state.tp = tp;
+      enforceConstraints(); syncLabels(); computeAndRender(false);
+    });
+    seg.appendChild(b);
+  }
+}
+
 // Cross-control constraints (mirrors check_dtype_supported / kv_fp16_ok in
 // scenario_model.py): NVFP4 weights only on GPUs with native FP4 (B300);
 // FP16 KV never on GLM-5.2 (vLLM's DSA path asserts a quantized cache).
 // Illegal selections snap back to FP8 rather than silently mis-pricing.
+// Also snaps the TP width to a divisor of the GPU count and rebuilds the split
+// control (whose dimmed buttons depend on the active model and GPU part).
 function enforceConstraints(){
   const m = CONFIG.MODELS[state.model];
+  state.tp = clampTp(state.tp, state.ngpu);
+  renderSplitControl();
   const gpuOk = CONFIG.GPUS[state.gpu].supports_nvfp4;
   if (!gpuOk && state.wdt === "nvfp4") state.wdt = "fp8";
   const fp16Ok = m.kv_fp16_ok !== false;
@@ -1700,6 +1766,10 @@ function enforceConstraints(){
 // segmented controls
 document.querySelectorAll('.seg').forEach(seg=>{
   const key=seg.dataset.key;
+  // #seg-split has no data-key: its buttons are rebuilt per GPU count and carry
+  // their own listeners (renderSplitControl). Without this guard the generic
+  // handler below would assign state[undefined].
+  if (!key) return;
   seg.querySelectorAll('button').forEach(btn=>{
     btn.addEventListener('click',()=>{
       if (btn.disabled) return;
@@ -1739,7 +1809,14 @@ sliderMap.forEach(([id,key,cast])=>{
   // associate the field's visible label with its slider for AT/click-to-focus
   const lab=el.closest('.field')?.querySelector('label.flabel');
   if (lab) lab.setAttribute('for', id);
-  el.addEventListener('input',()=>{ state[key]=cast(el.value); onInput(); });
+  // the GPU count changes which TP widths are legal, so it must re-run the
+  // constraint pass (clamp tp, rebuild the split buttons) before rendering.
+  // Other sliders don't touch the topology — kept off the per-frame drag path.
+  el.addEventListener('input',()=>{
+    state[key]=cast(el.value);
+    if (key==='ngpu') enforceConstraints();
+    onInput();
+  });
 });
 // metric/control explainer tooltips are keyboard-reachable (CSS shows them on
 // :focus-visible); tile tips are stamped in renderTiles' generated markup
