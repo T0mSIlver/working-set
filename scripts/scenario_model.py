@@ -6,7 +6,10 @@ methodology as the baseline scripts (warm_whisker.py / real_mns.py) and
 generalizes it along the axes we now want to explore:
 
   * model         : 27B (dense sibling) vs 35B-A3B (MoE, ~3B active)
-  * topology      : 1xH200, 2xH200 tensor-parallel (TP2), 2xH200 data-parallel (DP2)
+  * topology      : a DP x TP grid of H200s. A replica is a *group* of TP GPUs,
+                    not a single GPU, so configurations whose weights exceed one
+                    GPU are expressible (and infeasible ones raise rather than
+                    silently reporting an empty pool)
   * system prompt : shared-prefix size (e.g. 3k vs 15k vs 30k tokens)
   * subagents     : a second request class with its own length distribution,
                     mixed in at a ratio r (subagent requests per user request)
@@ -38,6 +41,18 @@ KIB, MIB, GIB = 1024, 1024**2, 1024**3
 VRAM_PER_GPU   = 141e9      # H200 HBM3e, bytes (vendor "141 GB")
 HBM_BW         = 4.8e12     # per-GPU HBM bandwidth, bytes/s
 TP_EFFICIENCY  = 0.90       # tensor-parallel comm/overhead haircut on aggregate BW
+
+# TP all-reduces fire twice per layer and are latency-critical, so they are only
+# cheap inside an NVLink/NVSwitch domain. On an HGX H200 baseboard that domain is
+# 8 GPUs; a TP group wider than this crosses the node boundary onto
+# InfiniBand/Ethernet, an order of magnitude less bandwidth at much worse latency.
+# ASSUMPTION: CROSS_DOMAIN_EFFICIENCY is an *unmeasured* penalty applied per
+# doubling beyond the domain. Nothing in this study exercises TP > 8; the constant
+# exists so the model cliffs instead of silently extrapolating the in-domain
+# haircut forever. DP replicas are unaffected — they do no collective work at
+# inference and may span nodes freely.
+NVLINK_DOMAIN            = 8
+CROSS_DOMAIN_EFFICIENCY  = 0.65
 
 # Calibration anchor for 1xH200 + 27B with FP8 KV. NOTE: this is a PROJECTED
 # figure, not a direct measurement — the baseline measured the FP16 pool
@@ -176,49 +191,144 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
 
 
 # ============================================================================
-# TOPOLOGY  — arbitrary numbers of H200s, tensor- or data-parallel
+# TOPOLOGY  — a DP x TP grid of H200s
+# ----------------------------------------------------------------------------
+# The unit that DP replicates is a *group of TP GPUs*, not a GPU. That
+# distinction is invisible while the weights fit in one GPU (the whole baseline
+# study), and load-bearing the moment they do not: a model too large for a
+# single H200 has no valid `tp=1` configuration at all, and DP must replicate
+# whole TP groups. Total GPUs = dp * tp.
+#
+#   weights : sharded across the tp GPUs of a group -> stored ONCE per group
+#   reserve : activation/workspace scratch, charged PER GPU
+#   cache   : one KV pool per group; dp groups means dp independent pools
+#   bandwidth: a group has tp GPUs' worth, haircut by tp_efficiency(tp)
 # ============================================================================
+class InfeasibleTopology(ValueError):
+    """Raised when a model's weights + reserve do not fit in a replica group.
+
+    Subclasses ValueError so existing `except ValueError` call sites still work.
+    """
+
+
 @dataclass
 class Topology:
     name: str
-    n_gpu: int
-    kind: str            # "single" | "tp" | "dp"
-    replicas: int        # independent KV caches (1 for single/tp, n for dp)
+    dp: int                          # replica groups; each owns an independent KV cache
+    tp: int                          # GPUs per group (weights sharded across these)
+    nvlink_domain: int = NVLINK_DOMAIN
+
+    @property
+    def n_gpu(self) -> int:
+        """Total GPUs in the deployment."""
+        return self.dp * self.tp
+
+    @property
+    def replicas(self) -> int:
+        """Independent KV caches (== dp)."""
+        return self.dp
+
+    @property
+    def kind(self) -> str:
+        """Legacy label: "single" | "tp" | "dp" | "hybrid"."""
+        if self.n_gpu == 1:
+            return "single"
+        if self.dp == 1:
+            return "tp"
+        if self.tp == 1:
+            return "dp"
+        return "hybrid"
 
 
-def topology(kind: str, n_gpu: int) -> Topology:
-    """Build a topology for `n_gpu` H200s.
+def topology_grid(dp: int, tp: int, nvlink_domain: int = NVLINK_DOMAIN) -> Topology:
+    """Build an arbitrary DP x TP topology of H200s.
+
+    dp : independent replica groups. They exchange nothing at inference (there
+         are no gradients to all-reduce), so they scale throughput linearly but
+         SPLIT the prefix cache — system warm capacity is dp x per-group, and
+         only with session-sticky routing.
+    tp : GPUs per group. Weights are sharded across them and stored once, so
+         raising tp is what makes a model fit AND frees VRAM for cache.
+
+    topology_grid(1, n) is pure TP; topology_grid(n, 1) is pure DP; the general
+    case (e.g. dp=4, tp=4 on 16 GPUs) is what a model too large for one GPU
+    actually requires.
+    """
+    for label, v in (("dp", dp), ("tp", tp)):
+        if v < 1 or int(v) != v:
+            raise ValueError(f"{label} must be a positive integer, got {v!r}")
+    if nvlink_domain < 1 or int(nvlink_domain) != nvlink_domain:
+        raise ValueError(f"nvlink_domain must be a positive integer, got {nvlink_domain!r}")
+    dp, tp, nvlink_domain = int(dp), int(tp), int(nvlink_domain)
+    if dp * tp == 1:
+        name = "1xH200"
+    elif dp == 1:
+        name = f"{tp}xH200 tensor-par"
+    elif tp == 1:
+        name = f"{dp}xH200 data-par"
+    else:
+        name = f"{dp * tp}xH200 DP{dp}xTP{tp}"
+    return Topology(name, dp, tp, nvlink_domain)
+
+
+def topology(kind: str, n_gpu: int, nvlink_domain: int = NVLINK_DOMAIN) -> Topology:
+    """Build a single-axis topology for `n_gpu` H200s (the study's original API).
 
     kind="tp" : ONE engine — weights sharded (stored once), ONE shared prefix
                 cache, bandwidth = n x HBM x tp_efficiency(n).
     kind="dp" : n independent 1-GPU replicas — aggregate serving scales by n,
-                but the prefix cache SPLITS (system-wide warm capacity is
-                n x per-replica, and only with session-sticky routing).
+                but the prefix cache SPLITS.
     n_gpu=1 collapses both to the single-GPU baseline.
+
+    For a model that does not fit in one GPU, kind="dp" is not expressible here
+    (its replica would be a single GPU); use topology_grid(dp, tp) instead.
     """
     if n_gpu < 1 or int(n_gpu) != n_gpu:
         raise ValueError(f"n_gpu must be a positive integer, got {n_gpu!r}")
     n_gpu = int(n_gpu)
-    if n_gpu == 1:
-        return Topology("1xH200", 1, "single", 1)
     if kind == "tp":
-        return Topology(f"{n_gpu}xH200 tensor-par", n_gpu, "tp", 1)
+        return topology_grid(1, n_gpu, nvlink_domain)
     if kind == "dp":
-        return Topology(f"{n_gpu}xH200 data-par", n_gpu, "dp", n_gpu)
+        return topology_grid(n_gpu, 1, nvlink_domain)
     raise ValueError(f"kind must be 'tp' or 'dp', got {kind!r}")
 
 
-def tp_efficiency(n_gpu: int) -> float:
-    """Aggregate-bandwidth efficiency of TP over n GPUs.
+def tp_efficiency(tp: int, nvlink_domain: int = NVLINK_DOMAIN) -> float:
+    """Aggregate-bandwidth efficiency of a TP group of `tp` GPUs.
 
     ASSUMPTION: the baseline's 0.90 haircut is applied PER DOUBLING
-    (0.90^log2(n)): TP2 -> 0.90 (the original assumption, unchanged),
+    (0.90^log2(tp)): TP2 -> 0.90 (the original assumption, unchanged),
     TP4 -> 0.81, TP8 -> 0.73. Real efficiency depends on interconnect and
     kernel overlap; treat >2 GPUs as a projection needing measurement.
+
+    Beyond `nvlink_domain` GPUs the group leaves the NVSwitch domain and each
+    further doubling takes an additional CROSS_DOMAIN_EFFICIENCY penalty. That
+    second regime is unmeasured and deliberately pessimistic — its purpose is to
+    stop the in-domain haircut from being extrapolated to rack-scale TP, where
+    it would badly overstate throughput.
     """
-    if n_gpu <= 1:
+    if tp <= 1:
         return 1.0
-    return TP_EFFICIENCY ** np.log2(n_gpu)
+    eff = TP_EFFICIENCY ** np.log2(min(tp, nvlink_domain))
+    if tp > nvlink_domain:
+        eff *= CROSS_DOMAIN_EFFICIENCY ** np.log2(tp / nvlink_domain)
+    return float(eff)
+
+
+def min_tp_for(model: Model) -> int:
+    """Smallest TP group size whose VRAM holds `model`'s weights + reserve.
+
+    Each GPU added to a group contributes (VRAM_PER_GPU - ACT_RESERVE) of usable
+    space, so this is the point at which a KV pool of non-zero size first exists.
+    A deployment wants meaningfully more than this — at exactly min_tp the pool
+    is ~empty and no session can be held warm.
+    """
+    usable = VRAM_PER_GPU - ACT_RESERVE
+    if usable <= 0:
+        raise InfeasibleTopology(
+            f"activation reserve ({ACT_RESERVE / GIB:.1f} GiB) exceeds per-GPU "
+            f"VRAM ({VRAM_PER_GPU / GIB:.1f} GiB); no topology can fit any model")
+    return int(np.floor(model.w_resident / usable)) + 1
 
 
 # legacy named topologies (the baseline study's three configurations)
@@ -239,25 +349,48 @@ ACT_RESERVE = _act_reserve()   # per-GPU activation/workspace/fragmentation rese
 
 
 def kv_pool_tokens(model: Model, topo: Topology) -> float:
-    """KV-cache capacity of ONE cache (tokens), from the transparent memory model.
+    """KV-cache capacity of ONE replica group (tokens).
 
-    single : VRAM - weights - reserve
-    tp     : n GPUs act as one engine; weights sharded (counted once),
-             reserve per GPU -> pool = (n*VRAM - weights - n*reserve)
-    dp     : each replica is a 1xH200 engine; this returns the PER-REPLICA pool
+    A group owns `topo.tp` GPUs. The weights are sharded across them and so are
+    counted ONCE; the activation reserve is scratch space and is charged per GPU:
+
+        pool = tp*VRAM - weights - tp*reserve
+
+    This is per-group, i.e. per-cache. A dp>1 deployment has `topo.dp` of these,
+    each independent — multiply by topo.replicas for the system total (and only
+    with session-sticky routing, since a returning user is warm on one group).
+
+    Raises InfeasibleTopology if the group cannot hold the weights + reserve.
+    Returning 0 here would be worse than useless: it reads as a valid deployment
+    that simply holds no sessions, when in fact the engine would not start.
     """
-    if topo.kind == "tp":
-        pool_bytes = topo.n_gpu * VRAM_PER_GPU - model.w_resident - topo.n_gpu * ACT_RESERVE
-    else:  # single or per-replica of dp
-        pool_bytes = VRAM_PER_GPU - model.w_resident - ACT_RESERVE
-    return max(pool_bytes, 0.0) / model.kv_bpt
+    pool_bytes = topo.tp * (VRAM_PER_GPU - ACT_RESERVE) - model.w_resident
+    if pool_bytes <= 0:
+        need = min_tp_for(model)
+        raise InfeasibleTopology(
+            f"{model.name} does not fit a TP group of {topo.tp} GPU(s): weights "
+            f"{model.w_resident / GIB:.1f} GiB + reserve "
+            f"{topo.tp * ACT_RESERVE / GIB:.1f} GiB exceed "
+            f"{topo.tp * VRAM_PER_GPU / GIB:.1f} GiB of group VRAM, leaving no "
+            f"room for KV. Needs tp >= {need} to fit at all (and more than that "
+            f"to hold any session warm); try topology_grid(dp, tp) with a larger "
+            f"tp rather than replicating single GPUs.")
+    return pool_bytes / model.kv_bpt
+
+
+def fits(model: Model, topo: Topology) -> bool:
+    """True if `model` has a non-empty KV pool on one replica group of `topo`."""
+    return topo.tp * (VRAM_PER_GPU - ACT_RESERVE) - model.w_resident > 0
 
 
 def effective_bw(topo: Topology) -> float:
-    """Effective decode bandwidth seen by ONE engine/replica."""
-    if topo.kind == "tp":
-        return topo.n_gpu * HBM_BW * tp_efficiency(topo.n_gpu)
-    return HBM_BW  # single, or per-replica of dp
+    """Effective decode bandwidth seen by ONE replica group.
+
+    A group is `topo.tp` GPUs, so it sees tp x HBM_BW less the TP haircut. DP
+    replicas do not add bandwidth to a group — they add more groups, which is
+    accounted for by topo.replicas at the aggregate level (see decode_curves).
+    """
+    return topo.tp * HBM_BW * tp_efficiency(topo.tp, topo.nvlink_domain)
 
 
 # ============================================================================
@@ -506,6 +639,73 @@ def _selfcheck():
             topology("tp", bad); raise AssertionError("expected ValueError")
         except ValueError:
             pass
+
+    # ---- DP x TP grid: a replica is a GROUP, not a GPU ----------------------
+    # the single-axis API must be exactly the two edges of the grid
+    assert topology("tp", 4) == topology_grid(1, 4)
+    assert topology("dp", 4) == topology_grid(4, 1)
+    assert topology_grid(1, 1) == TOPOLOGIES["1xH200"]
+    g = topology_grid(4, 4)
+    assert (g.dp, g.tp, g.n_gpu, g.replicas, g.kind) == (4, 4, 16, 4, "hybrid")
+    assert topology_grid(1, 2).kind == "tp" and topology_grid(2, 1).kind == "dp"
+    # a group's pool depends ONLY on tp; dp replicates that pool untouched
+    for tp in (1, 2, 4):
+        base = kv_pool_tokens(m35, topology_grid(1, tp))
+        for dp in (1, 3, 8):
+            assert abs(kv_pool_tokens(m35, topology_grid(dp, tp)) - base) < 1, \
+                "per-group pool must be independent of dp"
+    # ...and so does its bandwidth: DP adds groups, never widens one
+    for dp in (1, 4):
+        assert effective_bw(topology_grid(dp, 4)) == effective_bw(topology_grid(1, 4))
+    assert effective_bw(topology_grid(1, 4)) > effective_bw(topology_grid(1, 1))
+    # DP4xTP4 must hold 4x the system capacity of a single TP4 group
+    t_tp4, t_grid = topology_grid(1, 4), topology_grid(4, 4)
+    w_tp4 = warm_capacity(m35, t_tp4, wl, n_iter=120, draw=8000)[1]
+    w_grid = warm_capacity(m35, t_grid, wl, n_iter=120, draw=8000)[1]
+    assert abs(w_grid - w_tp4) < 1e-9, "per-group warm count must match TP4"
+    assert abs(t_grid.replicas * w_grid - 4 * w_tp4) < 1e-9
+    for bad in ((0, 4), (4, 0), (1.5, 4), (4, -1)):
+        try:
+            topology_grid(*bad); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+    # ---- infeasible topologies RAISE, they do not report an empty pool ------
+    # a model whose weights exceed one GPU has no valid tp=1 configuration
+    import dataclasses as _dc
+    huge = _dc.replace(m35, name="oversize", w_resident=3.0 * VRAM_PER_GPU)
+    need = min_tp_for(huge)
+    assert need > 3, f"oversize model should need tp>3, got {need}"
+    assert not fits(huge, topology_grid(8, 1)), "8 single-GPU replicas must not fit it"
+    for tp in range(1, need):
+        try:
+            kv_pool_tokens(huge, topology_grid(1, tp))
+            raise AssertionError(f"expected InfeasibleTopology at tp={tp}")
+        except InfeasibleTopology:
+            pass
+    assert isinstance(InfeasibleTopology("x"), ValueError)  # legacy handlers still catch
+    # at min_tp the pool exists but is ~empty; a real deployment needs more
+    assert fits(huge, topology_grid(1, need))
+    assert kv_pool_tokens(huge, topology_grid(1, need)) < \
+           kv_pool_tokens(huge, topology_grid(1, need + 2))
+    # every model in the study still fits a single GPU (the baseline regime)
+    for mdl in MODELS.values():
+        assert min_tp_for(mdl) == 1 and fits(mdl, TOPOLOGIES["1xH200"])
+
+    # ---- TP past the NVLink domain must cliff, not extrapolate --------------
+    assert tp_efficiency(8) == tp_efficiency(8, nvlink_domain=8)   # at the edge
+    in_dom = tp_efficiency(8) / tp_efficiency(4)                   # a doubling inside
+    out_dom = tp_efficiency(16) / tp_efficiency(8)                 # a doubling outside
+    assert out_dom < in_dom, "crossing the NVLink domain must cost more than a doubling inside"
+    assert abs(out_dom - CROSS_DOMAIN_EFFICIENCY) < 1e-9
+    # the in-domain regime is UNCHANGED from the original study
+    for n in (1, 2, 4, 8):
+        assert abs(tp_efficiency(n) - TP_EFFICIENCY ** np.log2(n)) < 1e-12
+    # a smaller domain moves the cliff earlier
+    assert tp_efficiency(8, nvlink_domain=4) < tp_efficiency(8, nvlink_domain=8)
+    # bandwidth still rises with tp (the cliff is a haircut, not an inversion)
+    bws = [effective_bw(topology_grid(1, n)) for n in (1, 2, 4, 8, 16)]
+    assert bws == sorted(bws)
 
     # warm capacity sanity: pool grows => capacity grows
     lo = warm_capacity(m35, t1, wl, n_iter=120)[1]

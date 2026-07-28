@@ -104,7 +104,10 @@ uv run scripts/tables.py           # regenerates every number quoted in docs/sce
 2.77M-token FP8 anchor — projected from the measured FP16 pool, see
 docs/scenarios.md limitations; 35B-A3B constants from the published
 Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`; an FP8/FP16 KV-cache
-switch is available via `with_kv_dtype`, FP8 being the studied default);
+switch is available via `with_kv_dtype`, FP8 being the studied default;
+topologies are a `DP × TP` grid via `topology_grid(dp, tp)`, so a replica is a
+*group* of GPUs rather than a single GPU, and a model too large for its group
+raises `InfeasibleTopology` instead of reporting an empty pool);
 `scripts/scenarios.py` renders the static figures; and `interactive/index.html`
 is a dependency-free page mirroring the same math with live sliders for the
 workload, model, KV dtype, and topology. See [docs/scenarios.md](docs/scenarios.md).

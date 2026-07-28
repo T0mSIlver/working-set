@@ -93,9 +93,13 @@ activation memory. Calibration fixes the per-GPU activation/workspace reserve at
 ```
 ACT_RESERVE = VRAM_per_GPU − W_resident(27B) − 2.77e6 · KV_bpt(27B)
 
-pool_tokens(single | dp-replica) = (VRAM − W_resident − ACT_RESERVE) / KV_bpt
-pool_tokens(tp2)                 = (2·VRAM − W_resident − 2·ACT_RESERVE) / KV_bpt
+pool_tokens(per replica group) = (tp·VRAM − W_resident − tp·ACT_RESERVE) / KV_bpt
 ```
+
+Weights are sharded across the `tp` GPUs of a group and so are counted **once**;
+the activation reserve is scratch space and is charged **per GPU**. Substituting
+`tp=1` recovers the single-GPU and DP-replica cases, `tp=2` the TP2 case — the
+three configurations the study reports — so every number below is unchanged.
 
 Warm-capacity Monte Carlo (one cache): reserve the distinct shared-prefix blocks once
 (user prefix, and the subagent prefix unless shared); fill the remaining budget in
@@ -117,8 +121,40 @@ w_decode(n)   = w_shared + min(n·w_pertok, w_total)      # conservative default
 per_user      = MTP · BW_eff / step_bytes(n)      aggregate = n · per_user · replicas
 ```
 
-`BW_eff` is `HBM_BW` for single / DP-replica and `2·HBM_BW·0.90` for TP2. Dense:
-`w_decode = W_resident` (every step reads all weights).
+`BW_eff = tp · HBM_BW · tp_efficiency(tp)` — the bandwidth of **one replica
+group**, which is `HBM_BW` at `tp=1` (single / DP replica) and `2·HBM_BW·0.90` at
+`tp=2`. DP adds groups; it never widens one, so `replicas` enters only in the
+aggregate. Dense: `w_decode = W_resident` (every step reads all weights).
+
+### Topology: a DP × TP grid
+
+The unit DP replicates is a **group of `tp` GPUs, not a GPU**. Total GPUs =
+`dp · tp`; each group shards one copy of the weights, owns one independent KV
+cache, and has its own bandwidth. Three consequences the earlier single-axis
+model could not express:
+
+- **A model too large for one GPU has no valid `tp=1` configuration at all.**
+  Replicating single GPUs never makes weights fit — only raising `tp` does. The
+  model now raises `InfeasibleTopology` when a group cannot hold
+  `W_resident + tp·ACT_RESERVE`, and `min_tp_for(model)` reports the smallest
+  group that fits. Returning a zero-token pool (the old behaviour) was worse than
+  useless: it reads as a valid deployment that simply holds no sessions, when in
+  fact the engine would not start.
+- **DP replicas exchange nothing at inference.** There are no gradients to
+  all-reduce, so they scale throughput linearly and may span nodes freely. What
+  they do *not* share is the prefix cache — system warm capacity is
+  `dp × per-group`, and only with session-sticky routing.
+- **TP is bounded by the NVLink domain.** TP all-reduces fire twice per layer and
+  are latency-critical, so they are only cheap inside an NVSwitch domain (8 GPUs
+  on an HGX H200 baseboard). `tp_efficiency` keeps the study's measured-regime
+  `0.90` haircut per doubling up to that boundary, then applies an additional
+  `CROSS_DOMAIN_EFFICIENCY = 0.65` per doubling beyond it.
+
+> **Unmeasured.** Nothing in this study exercises `tp > 2`, let alone `tp > 8`.
+> The cross-domain penalty is a deliberately pessimistic guess whose purpose is
+> to stop the in-domain haircut being extrapolated to rack scale, where it would
+> badly overstate throughput. Treat any `tp > 2` figure as a projection needing
+> measurement, and `tp > 8` as a placeholder.
 
 ### Model constants
 
@@ -337,8 +373,9 @@ adopt).
 
 ![Warm-session scaling with hardware](../figures/scenario_scaling.png)
 
-The model now takes an **arbitrary GPU count** with a TP/DP switch
-(`topology(kind, n)`). Warm p5, 35B-A3B, reference workload:
+The model takes an **arbitrary DP × TP grid** (`topology_grid(dp, tp)`, with
+`topology(kind, n)` as the two single-axis edges). Warm p5, 35B-A3B, reference
+workload:
 
 | N × H200 | TP — one shared cache (p5) | DP — system total (p5, sticky) |
 | --- | --- | --- |
@@ -350,8 +387,10 @@ The model now takes an **arbitrary GPU count** with a TP/DP switch
 TP scales **superlinearly per cache** (each added GPU contributes its full VRAM
 while the single weight copy amortizes) and beats DP's sticky-routed system total
 at every N. The TP bandwidth haircut is assumed **0.90 per GPU-count doubling**
-(0.81 at N=4, 0.73 at N=8) — beyond 2 GPUs this is a projection, and NVLink domain
-size / interconnect will decide whether large-N TP is realistic (see limitations).
+(0.81 at N=4, 0.73 at N=8) — beyond 2 GPUs this is a projection (see limitations).
+Note this table compares TP against DP *of single GPUs*, which is only a
+meaningful comparison because the 35B-A3B fits in one H200; a model that did not
+would have no DP column at these N at all, only DP × TP grids.
 
 ### 6. The remaining knobs: max_seq_len cap and CPU offload
 
@@ -673,11 +712,18 @@ Ordered roughly by how much each could move the numbers:
     compute, TP collectives, and scheduler overhead are not priced, so all tok/s
     figures are upper bounds pending calibration against the real 35B-A3B.
 12. **N > 2 GPUs is a projection.** The TP haircut (0.90 per GPU-count doubling) is
-    an extrapolated assumption — real large-N TP depends on NVLink domain size,
-    interconnect, and kernel overlap, and pipeline parallelism is not modelled at
-    all. For DP, the shared CPU-offload buffer is split evenly across replicas — a
-    simplification of real host-memory contention. Treat every N > 2 number as a
-    shape, not a quote, until one multi-GPU measurement anchors it.
+    an extrapolated assumption — real large-N TP depends on interconnect and
+    kernel overlap, and pipeline parallelism is not modelled at all. The NVLink
+    domain boundary *is* now modelled (an extra 0.65 per doubling past 8 GPUs),
+    but that penalty is itself an unmeasured guess chosen to be pessimistic; it
+    bounds the extrapolation rather than predicting it, and no configuration in
+    this study crosses it. Expert parallelism — the axis a 256-expert MoE would
+    actually be sharded on at scale — is not modelled at all: the study prices
+    the 35B-A3B's experts as a single resident blob, which is correct for the
+    `tp ≤ 2` configurations reported and would not be beyond them. For DP, the
+    shared CPU-offload buffer is split evenly across replicas — a simplification
+    of real host-memory contention. Treat every N > 2 number as a shape, not a
+    quote, until one multi-GPU measurement anchors it.
 13. **vLLM's hybrid-model allocator may not match the byte model.** We price
     attention KV continuously plus one recurrent state per session; vLLM's hybrid
     (attention + GDN) cache unifies page sizes, may pad recurrent state to
