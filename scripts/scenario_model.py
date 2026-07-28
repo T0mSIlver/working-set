@@ -63,6 +63,14 @@ class GPU:
     # exact by construction — but a part WITHOUT the over-provision must add
     # it back explicitly or its pools inherit ~9.75e9/GPU of phantom HBM.
     reserve_extra: float = 0.0
+    # GPUs reachable over NVLink/NVSwitch without leaving the node. TP
+    # all-reduces fire twice per layer and are latency-critical, so a TP group
+    # wider than this crosses onto IB/Ethernet and pays the extra
+    # CROSS_DOMAIN_EFFICIENCY penalty (see tp_efficiency). DP replicas are
+    # unaffected: they run no collectives at inference and may span nodes.
+    # 8 for both parts here — HGX H200 and the 8-GPU HGX B300 baseboard we
+    # actually deploy. A GB300 NVL72 rack would be 72; we do not have one.
+    nvlink_domain: int = 8
 
 
 GPUS = {
@@ -81,6 +89,10 @@ GPUS = {
 VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
 HBM_BW         = GPUS["H200"].hbm_bw
 TP_EFFICIENCY  = 0.90       # tensor-parallel comm/overhead haircut on aggregate BW
+# Extra haircut per GPU-count doubling once a TP group is wider than its part's
+# nvlink_domain (i.e. spans nodes). UNMEASURED and deliberately pessimistic —
+# see tp_efficiency(). No configuration in this study crosses the boundary.
+CROSS_DOMAIN_EFFICIENCY = 0.65
 
 # Calibration anchor for 1xH200 + 27B with FP8 KV. NOTE: this is a PROJECTED
 # figure, not a direct measurement — the baseline measured the FP16 pool
@@ -366,53 +378,164 @@ def check_dtype_supported(model: Model, topo: Topology) -> None:
 
 
 # ============================================================================
-# TOPOLOGY  — arbitrary numbers of GPUs, tensor- or data-parallel
+# TOPOLOGY  — a DP x TP grid of GPUs
+# ----------------------------------------------------------------------------
+# The unit DP replicates is a GROUP of `tp` GPUs, not a GPU. That distinction is
+# invisible while a model fits in one GPU (the 27B and 35B-A3B on either part)
+# and load-bearing for the models added in 2026-07, which do not:
+#
+#     min TP to fit FP8 weights      H200    B300
+#       Mistral-Medium-3.5-128B         2       1
+#       GLM-5.2 (744B-A40B)             7       3
+#
+# For those, `topology("dp", n)` — n INDEPENDENT SINGLE GPUs — is not a
+# deployment that exists: no count of single GPUs ever holds the weights, so the
+# whole DP axis reported a 0 pool. Data parallelism for them means replicating
+# whole TP groups: on one 8-GPU node, GLM-5.2 runs DP2xTP4 and
+# Mistral-Medium-3.5 runs DP4xTP2. Total GPUs = dp * tp.
+#
+#   weights  : sharded across a group's tp GPUs -> stored ONCE per group
+#   reserve  : activation/workspace scratch, charged PER GPU
+#   cache    : one KV pool per group; dp groups means dp independent pools
+#   bandwidth: a group has tp GPUs' worth, less tp_efficiency(tp)
 # ============================================================================
 @dataclass
 class Topology:
     name: str
-    n_gpu: int
-    kind: str            # "single" | "tp" | "dp"
-    replicas: int        # independent KV caches (1 for single/tp, n for dp)
+    dp: int                          # replica groups; each owns one KV cache
+    tp: int                          # GPUs per group (weights sharded across these)
     gpu: GPU = GPUS["H200"]
+
+    @property
+    def n_gpu(self) -> int:
+        """Total GPUs in the deployment."""
+        return self.dp * self.tp
+
+    @property
+    def replicas(self) -> int:
+        """Independent KV caches (== dp)."""
+        return self.dp
+
+    @property
+    def kind(self) -> str:
+        """Legacy label: "single" | "tp" | "dp" | "hybrid"."""
+        if self.n_gpu == 1:
+            return "single"
+        if self.dp == 1:
+            return "tp"
+        if self.tp == 1:
+            return "dp"
+        return "hybrid"
+
+    @property
+    def crosses_node(self) -> bool:
+        """True if a single TP group is wider than the part's NVLink domain."""
+        return self.tp > self.gpu.nvlink_domain
+
+
+def topology_grid(dp: int, tp: int, gpu: str = "H200") -> Topology:
+    """Build an arbitrary DP x TP topology of `gpu` parts.
+
+    dp : independent replica groups. They exchange NOTHING at inference (there
+         are no gradients to all-reduce), so they scale aggregate throughput
+         linearly and may span nodes — but the prefix cache SPLITS, so system
+         warm capacity is dp x per-group and only with session-sticky routing.
+    tp : GPUs per group. Weights are sharded across them and stored once, so
+         raising tp is what makes a model FIT and what frees VRAM for cache.
+
+    topology_grid(1, n) is pure TP, topology_grid(n, 1) is pure DP, and the
+    general case is what the models too large for one GPU actually require.
+    """
+    for label, v in (("dp", dp), ("tp", tp)):
+        if v < 1 or int(v) != v:
+            raise ValueError(f"{label} must be a positive integer, got {v!r}")
+    if gpu not in GPUS:
+        raise ValueError(f"gpu must be one of {tuple(GPUS)}, got {gpu!r}")
+    g = GPUS[gpu]
+    dp, tp = int(dp), int(tp)
+    if dp * tp == 1:
+        name = f"1x{g.name}"
+    elif dp == 1:
+        name = f"{tp}x{g.name} tensor-par"
+    elif tp == 1:
+        name = f"{dp}x{g.name} data-par"
+    else:
+        name = f"{dp * tp}x{g.name} DP{dp}xTP{tp}"
+    return Topology(name, dp, tp, g)
 
 
 def topology(kind: str, n_gpu: int, gpu: str = "H200") -> Topology:
-    """Build a topology for `n_gpu` GPUs of the given part (default H200).
+    """Build a single-axis topology for `n_gpu` GPUs of the given part.
 
     kind="tp" : ONE engine — weights sharded (stored once), ONE shared prefix
                 cache, bandwidth = n x HBM x tp_efficiency(n).
     kind="dp" : n independent 1-GPU replicas — aggregate serving scales by n,
-                but the prefix cache SPLITS (system-wide warm capacity is
-                n x per-replica, and only with session-sticky routing).
+                but the prefix cache SPLITS.
     n_gpu=1 collapses both to the single-GPU baseline.
+
+    For a model that does not fit one GPU, kind="dp" is not a real deployment
+    (its replica would be a single GPU); use topology_grid(dp, tp) instead.
     """
     if n_gpu < 1 or int(n_gpu) != n_gpu:
         raise ValueError(f"n_gpu must be a positive integer, got {n_gpu!r}")
-    if gpu not in GPUS:
-        raise ValueError(f"gpu must be one of {tuple(GPUS)}, got {gpu!r}")
-    g = GPUS[gpu]
     n_gpu = int(n_gpu)
-    if n_gpu == 1:
-        return Topology(f"1x{g.name}", 1, "single", 1, g)
     if kind == "tp":
-        return Topology(f"{n_gpu}x{g.name} tensor-par", n_gpu, "tp", 1, g)
+        return topology_grid(1, n_gpu, gpu)
     if kind == "dp":
-        return Topology(f"{n_gpu}x{g.name} data-par", n_gpu, "dp", n_gpu, g)
+        return topology_grid(n_gpu, 1, gpu)
     raise ValueError(f"kind must be 'tp' or 'dp', got {kind!r}")
 
 
-def tp_efficiency(n_gpu: int) -> float:
-    """Aggregate-bandwidth efficiency of TP over n GPUs.
+def tp_efficiency(tp: int, nvlink_domain: int = 8) -> float:
+    """Aggregate-bandwidth efficiency of a TP group of `tp` GPUs.
 
     ASSUMPTION: the baseline's 0.90 haircut is applied PER DOUBLING
-    (0.90^log2(n)): TP2 -> 0.90 (the original assumption, unchanged),
+    (0.90^log2(tp)): TP2 -> 0.90 (the original assumption, unchanged),
     TP4 -> 0.81, TP8 -> 0.73. Real efficiency depends on interconnect and
     kernel overlap; treat >2 GPUs as a projection needing measurement.
+
+    Past `nvlink_domain` GPUs the group leaves the node's NVSwitch fabric and
+    each further doubling takes an additional CROSS_DOMAIN_EFFICIENCY penalty.
+    That second regime is UNMEASURED and deliberately pessimistic: its purpose
+    is to stop the in-node haircut being extrapolated to multi-node TP, where it
+    would badly overstate throughput. Both parts here are 8-GPU nodes, so every
+    configuration the study reports stays in the first regime.
     """
-    if n_gpu <= 1:
+    if tp <= 1:
         return 1.0
-    return TP_EFFICIENCY ** np.log2(n_gpu)
+    eff = TP_EFFICIENCY ** np.log2(min(tp, nvlink_domain))
+    if tp > nvlink_domain:
+        eff *= CROSS_DOMAIN_EFFICIENCY ** np.log2(tp / nvlink_domain)
+    return float(eff)
+
+
+def min_tp_for(model: Model, gpu: str = "H200") -> int:
+    """Smallest TP group size whose VRAM holds `model`'s weights + reserve.
+
+    Each GPU in a group contributes (vram - reserve) of usable space, so this is
+    where a non-empty KV pool first exists. A real deployment wants meaningfully
+    more than this: at exactly min_tp the pool is ~empty and holds no session.
+    """
+    if gpu not in GPUS:
+        raise ValueError(f"gpu must be one of {tuple(GPUS)}, got {gpu!r}")
+    g = GPUS[gpu]
+    usable = g.vram - (ACT_RESERVE + g.reserve_extra)
+    if usable <= 0:
+        raise ValueError(f"{g.name}: reserve exceeds VRAM; no topology can fit")
+    return int(np.floor(model.w_resident / usable)) + 1
+
+
+def node_splits(model: Model, gpu: str = "H200", node: int = 8):
+    """Every (dp, tp) split of ONE `node`-GPU node that actually fits `model`.
+
+    Returns topologies with dp*tp == node and tp >= min_tp_for(model, gpu),
+    widest-DP first — the real menu for a model that needs more than one GPU.
+    Empty if the model does not fit the whole node.
+    """
+    need = min_tp_for(model, gpu)
+    return [topology_grid(node // tp, tp, gpu)
+            for tp in sorted(d for d in range(1, node + 1) if node % d == 0)
+            if tp >= need]
 
 
 # legacy named topologies (the baseline study's three configurations)
@@ -435,10 +558,19 @@ ACT_RESERVE = _act_reserve()   # per-GPU activation/workspace/fragmentation rese
 def kv_pool_tokens(model: Model, topo: Topology) -> float:
     """KV-cache capacity of ONE cache (tokens), from the transparent memory model.
 
-    single : VRAM - weights - reserve
-    tp     : n GPUs act as one engine; weights sharded (counted once),
-             reserve per GPU -> pool = (n*VRAM - weights - n*reserve)
-    dp     : each replica is a single-GPU engine; this returns the PER-REPLICA pool
+    A replica group owns `topo.tp` GPUs. The weights are sharded across them and
+    so are counted ONCE; the reserve is scratch space and is charged per GPU:
+
+        pool = tp*vram - weights - tp*reserve
+
+    This is per-GROUP, i.e. per-cache. A dp>1 deployment has topo.replicas of
+    them, each independent — multiply for the system total, and only with
+    session-sticky routing. Substituting tp=1 recovers the old single/DP-replica
+    branch and tp=n the old TP branch, so every published number is unchanged.
+
+    A model too large for its group still clamps to 0 (the study's existing
+    "does not fit" sentinel, asserted for GLM-5.2 on one GPU in _selfcheck).
+    min_tp_for() reports the group size that would fit.
 
     The activation reserve is the H200-calibrated ACT_RESERVE applied per GPU
     on every part, plus the part's reserve_extra — the measured H200 HBM
@@ -446,20 +578,20 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     that do not share it (see GPU.reserve_extra and docs/scenarios.md).
     """
     check_dtype_supported(model, topo)
-    vram = topo.gpu.vram
     reserve = ACT_RESERVE + topo.gpu.reserve_extra
-    if topo.kind == "tp":
-        pool_bytes = topo.n_gpu * vram - model.w_resident - topo.n_gpu * reserve
-    else:  # single or per-replica of dp
-        pool_bytes = vram - model.w_resident - reserve
+    pool_bytes = topo.tp * (topo.gpu.vram - reserve) - model.w_resident
     return max(pool_bytes, 0.0) / model.kv_bpt
 
 
 def effective_bw(topo: Topology) -> float:
-    """Effective decode bandwidth seen by ONE engine/replica."""
-    if topo.kind == "tp":
-        return topo.n_gpu * topo.gpu.hbm_bw * tp_efficiency(topo.n_gpu)
-    return topo.gpu.hbm_bw  # single, or per-replica of dp
+    """Effective decode bandwidth seen by ONE replica group.
+
+    A group is `topo.tp` GPUs, so it sees tp x HBM less the TP haircut. DP adds
+    groups, it never widens one — topo.replicas enters only in the aggregate
+    (see decode_curves).
+    """
+    return (topo.tp * topo.gpu.hbm_bw
+            * tp_efficiency(topo.tp, topo.gpu.nvlink_domain))
 
 
 # ============================================================================
@@ -733,6 +865,94 @@ def _selfcheck():
             topology("tp", bad); raise AssertionError("expected ValueError")
         except ValueError:
             pass
+
+    # ---- DP x TP grid: a replica is a GROUP, not a GPU ----------------------
+    # the single-axis API is exactly the two edges of the grid
+    assert topology("tp", 4) == topology_grid(1, 4)
+    assert topology("dp", 4) == topology_grid(4, 1)
+    assert topology_grid(1, 1) == TOPOLOGIES["1xH200"]
+    g = topology_grid(2, 4, "B300")
+    assert (g.dp, g.tp, g.n_gpu, g.replicas, g.kind) == (2, 4, 8, 2, "hybrid")
+    assert g.gpu is GPUS["B300"] and g.name == "8xB300 DP2xTP4"
+    assert topology_grid(1, 2).kind == "tp" and topology_grid(2, 1).kind == "dp"
+    # a group's pool and bandwidth depend ONLY on tp; dp replicates them untouched
+    for tp in (1, 2, 4):
+        base_pool = kv_pool_tokens(m35, topology_grid(1, tp))
+        base_bw = effective_bw(topology_grid(1, tp))
+        for dp in (1, 3, 8):
+            t = topology_grid(dp, tp)
+            assert abs(kv_pool_tokens(m35, t) - base_pool) < 1, \
+                "per-group pool must be independent of dp"
+            assert effective_bw(t) == base_bw, "DP adds groups, never widens one"
+    for bad in ((0, 4), (4, 0), (1.5, 4), (4, -1)):
+        try:
+            topology_grid(*bad); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+    try:
+        topology_grid(1, 2, "H100"); raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+    # ---- the grid is what makes DP expressible for the 2026-07 models -------
+    # MM35 and GLM-5.2 fit no single H200, so pure DP is a 0 pool at every N --
+    # that is the study's existing "does not fit" sentinel, and it stands.
+    for mdl in (MODELS["MM35"], MODELS["GLM52"]):
+        for n in (1, 2, 4, 8):
+            assert kv_pool_tokens(mdl, topology("dp", n)) == 0
+    # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
+    assert min_tp_for(MODELS["MM35"], "H200") == 2
+    assert min_tp_for(MODELS["MM35"], "B300") == 1
+    assert min_tp_for(MODELS["GLM52"], "H200") == 7
+    assert min_tp_for(MODELS["GLM52"], "B300") == 3
+    assert kv_pool_tokens(MODELS["MM35"], topology_grid(4, 2)) > 0    # DP4xTP2
+    assert kv_pool_tokens(MODELS["GLM52"], topology_grid(2, 4, "B300")) > 0
+    # min_tp is exactly the boundary: one GPU less holds nothing
+    for mk, gk in (("MM35", "H200"), ("MM35", "B300"),
+                   ("GLM52", "H200"), ("GLM52", "B300")):
+        need = min_tp_for(MODELS[mk], gk)
+        assert kv_pool_tokens(MODELS[mk], topology_grid(1, need, gk)) > 0
+        if need > 1:
+            assert kv_pool_tokens(MODELS[mk], topology_grid(1, need - 1, gk)) == 0
+    # node_splits offers exactly the fitting divisors of the node, widest DP first
+    for mk, gk, want in (("MM35",  "H200", [(4, 2), (2, 4), (1, 8)]),
+                         ("MM35",  "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
+                         ("GLM52", "H200", [(1, 8)]),
+                         ("GLM52", "B300", [(2, 4), (1, 8)])):
+        got = [(t.dp, t.tp) for t in node_splits(MODELS[mk], gk, node=8)]
+        assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
+        for t in node_splits(MODELS[mk], gk, node=8):
+            assert t.n_gpu == 8 and kv_pool_tokens(MODELS[mk], t) > 0
+    # Within a FIXED node, widening TP strictly raises the SYSTEM total, because
+    # every DP group re-pays for its own full copy of the weights. node_splits
+    # is ordered widest-DP first, so the system totals must rise along it. The
+    # margin scales with how heavy the weights are: on 8 GPUs, TP8 beats the
+    # widest DP by 1.36x for the 35B-A3B (35.5 GB), 1.91x for MM35 (133.6 GB)
+    # and 2.34x for GLM-5.2 (755.5 GB). DP buys cache isolation and routing
+    # headroom, never capacity.
+    for mk, gk in (("GLM52", "B300"), ("MM35", "H200"),
+                   ("MM35", "B300"), ("35BA3B", "H200")):
+        sys_tot = [t.replicas * kv_pool_tokens(MODELS[mk], t)
+                   for t in node_splits(MODELS[mk], gk, node=8)]
+        assert sys_tot == sorted(sys_tot), \
+            f"{mk}/{gk}: system total must rise as TP widens, got {sys_tot}"
+        if len(sys_tot) > 1:
+            assert sys_tot[-1] > sys_tot[0], "TP8 must beat the widest DP split"
+
+    # ---- TP past the node's NVLink domain must cliff, not extrapolate ------
+    assert all(g.nvlink_domain == 8 for g in GPUS.values())   # 8-GPU nodes
+    assert not topology_grid(1, 8).crosses_node and topology_grid(1, 16).crosses_node
+    in_node = tp_efficiency(8) / tp_efficiency(4)             # a doubling inside
+    cross = tp_efficiency(16) / tp_efficiency(8)              # a doubling outside
+    assert cross < in_node, "crossing nodes must cost more than an in-node doubling"
+    assert abs(cross - CROSS_DOMAIN_EFFICIENCY) < 1e-9
+    # the in-node regime is UNCHANGED from the pre-grid study
+    for n in (1, 2, 4, 8):
+        assert abs(tp_efficiency(n) - TP_EFFICIENCY ** np.log2(n)) < 1e-12
+    assert tp_efficiency(8, nvlink_domain=4) < tp_efficiency(8, nvlink_domain=8)
+    # bandwidth still rises with tp (the cliff is a haircut, not an inversion)
+    bws = [effective_bw(topology_grid(1, n)) for n in (1, 2, 4, 8, 16)]
+    assert bws == sorted(bws)
 
     # ---- B300 GPU + NVFP4 weight dtype + new models ------------------------
     b1, b4 = topology("tp", 1, "B300"), topology("tp", 4, "B300")

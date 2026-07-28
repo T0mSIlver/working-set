@@ -96,9 +96,13 @@ activation memory. Calibration fixes the per-GPU activation/workspace reserve at
 ```
 ACT_RESERVE = VRAM_per_GPU − W_resident(27B) − 2.77e6 · KV_bpt(27B)
 
-pool_tokens(single | dp-replica) = (VRAM − W_resident − ACT_RESERVE) / KV_bpt
-pool_tokens(tp2)                 = (2·VRAM − W_resident − 2·ACT_RESERVE) / KV_bpt
+pool_tokens(per replica group)   = (tp·VRAM − W_resident − tp·ACT_RESERVE) / KV_bpt
 ```
+
+Weights are sharded across the `tp` GPUs of a replica group and so are counted
+**once**; the activation reserve is scratch and charged **per GPU**. Substituting
+`tp=1` recovers the single-GPU and DP-replica cases and `tp=2` the TP2 case, so
+every number in this study is unchanged. See [§ Topology](#topology-a-dp--tp-grid).
 
 Warm-capacity Monte Carlo (one cache): reserve the distinct shared-prefix blocks once
 (user prefix, and the subagent prefix unless shared); fill the remaining budget in
@@ -120,8 +124,59 @@ w_decode(n)   = w_shared + min(n·w_pertok, w_total)      # conservative default
 per_user      = MTP · BW_eff / step_bytes(n)      aggregate = n · per_user · replicas
 ```
 
-`BW_eff` is `HBM_BW` for single / DP-replica and `2·HBM_BW·0.90` for TP2. Dense:
-`w_decode = W_resident` (every step reads all weights).
+`BW_eff = tp · HBM_BW · tp_efficiency(tp)` — the bandwidth of **one replica
+group**, i.e. `HBM_BW` at `tp=1` (single / DP replica) and `2·HBM_BW·0.90` at
+`tp=2`. DP adds groups; it never widens one, so `replicas` enters only in the
+aggregate. Dense: `w_decode = W_resident` (every step reads all weights).
+
+### Topology: a DP × TP grid
+
+The unit DP replicates is a **group of `tp` GPUs, not a GPU**. Total GPUs =
+`dp · tp`; each group shards one copy of the weights, owns one independent KV
+cache, and has its own bandwidth.
+
+That distinction is invisible for the 27B and 35B-A3B, which fit in one GPU, and
+**load-bearing for the two models added in 2026-07, which do not**:
+
+| min TP to fit FP8 weights | H200 | B300 |
+| --- | --- | --- |
+| Mistral-Medium-3.5-128B (133.6 GB) | **2** | 1 |
+| GLM-5.2 (755.5 GB) | **7** | **3** |
+
+For those, `topology("dp", n)` — *n* independent **single** GPUs — is not a
+deployment that exists: no number of single GPUs ever holds the weights, so the
+entire DP axis reported a 0-token pool at every *N*. Data parallelism for them
+means replicating whole **TP groups**, which `topology_grid(dp, tp)` now
+expresses. The splits of one 8-GPU node that actually fit (FP8 weights, FP8 KV;
+`system = replicas × per-group`, and only with session-sticky routing):
+
+| Model | Part | DP8×TP1 | DP4×TP2 | DP2×TP4 | TP8 |
+| --- | --- | --- | --- | --- | --- |
+| Mistral-Medium-3.5 | H200 | — *(no fit)* | 0.61M ×4 = **2.44M** | 1.96M ×2 = **3.92M** | 4.66M = **4.66M** |
+| Mistral-Medium-3.5 | B300 | 0.70M ×8 = **5.58M** | 2.14M ×4 = **8.55M** | 5.01M ×2 = **10.03M** | 10.77M = **10.77M** |
+| GLM-5.2 | H200 | — | — | — *(needs TP7)* | 4.50M = **4.50M** |
+| GLM-5.2 | B300 | — | — | 5.82M ×2 = **11.65M** | 27.25M = **27.25M** |
+
+**Widening TP strictly raises the system total**, because every DP group re-pays
+for its own full copy of the weights. The margin scales with weight size — on 8
+GPUs, TP8 beats the widest fitting DP split by **1.36×** for the 35B-A3B
+(35.5 GB), **1.91×** for Mistral-Medium-3.5 (133.6 GB) and **2.34×** for GLM-5.2
+(755.5 GB). DP buys cache isolation and routing headroom, never capacity — the
+same conclusion [§ 5](#5-scaling-to-n--h200) reached for the 35B-A3B, but far
+sharper the heavier the weights.
+
+**TP is bounded by the node.** TP all-reduces fire twice per layer and are
+latency-critical, so they are only cheap inside the node's NVSwitch fabric.
+`GPU.nvlink_domain` is **8 for both parts** — HGX H200 and the 8-GPU HGX B300
+baseboard we deploy. `tp_efficiency` keeps the measured-regime `0.90` haircut per
+doubling up to that boundary, then applies an additional
+`CROSS_DOMAIN_EFFICIENCY = 0.65` per doubling beyond it.
+
+> **Unmeasured.** The cross-node penalty is a deliberately pessimistic guess
+> whose purpose is to stop the in-node haircut being extrapolated to multi-node
+> TP, where it would badly overstate throughput. **No configuration in this study
+> crosses the boundary**, so it bounds the extrapolation rather than predicting
+> it. Treat any `tp > 2` figure as a projection needing measurement.
 
 ### Model constants
 
@@ -340,8 +395,10 @@ adopt).
 
 ![Warm-session scaling with hardware](../figures/scenario_scaling.png)
 
-The model now takes an **arbitrary GPU count** with a TP/DP switch
-(`topology(kind, n)`). Warm p5, 35B-A3B, reference workload:
+The model takes an **arbitrary DP × TP grid** (`topology_grid(dp, tp)`, with
+`topology(kind, n)` as the two single-axis edges). Warm p5, 35B-A3B, reference
+workload — the DP column here is DP of **single** GPUs, which is a meaningful
+comparison only because the 35B-A3B fits in one H200:
 
 | N × H200 | TP — one shared cache (p5) | DP — system total (p5, sticky) |
 | --- | --- | --- |
@@ -353,8 +410,11 @@ The model now takes an **arbitrary GPU count** with a TP/DP switch
 TP scales **superlinearly per cache** (each added GPU contributes its full VRAM
 while the single weight copy amortizes) and beats DP's sticky-routed system total
 at every N. The TP bandwidth haircut is assumed **0.90 per GPU-count doubling**
-(0.81 at N=4, 0.73 at N=8) — beyond 2 GPUs this is a projection, and NVLink domain
-size / interconnect will decide whether large-N TP is realistic (see limitations).
+(0.81 at N=4, 0.73 at N=8) — beyond 2 GPUs this is a projection (see limitations);
+past the node's 8 GPUs a steeper cross-node penalty applies
+([§ Topology](#topology-a-dp--tp-grid)). For a model that does **not** fit one
+GPU there is no DP column at these N at all, only DP × TP grids — see the
+node-split table in that section.
 
 ### 6. The remaining knobs: max_seq_len cap and CPU offload
 
@@ -848,11 +908,21 @@ Ordered roughly by how much each could move the numbers:
     compute, TP collectives, and scheduler overhead are not priced, so all tok/s
     figures are upper bounds pending calibration against the real 35B-A3B.
 12. **N > 2 GPUs is a projection.** The TP haircut (0.90 per GPU-count doubling) is
-    an extrapolated assumption — real large-N TP depends on NVLink domain size,
-    interconnect, and kernel overlap, and pipeline parallelism is not modelled at
-    all. For DP, the shared CPU-offload buffer is split evenly across replicas — a
-    simplification of real host-memory contention. Treat every N > 2 number as a
-    shape, not a quote, until one multi-GPU measurement anchors it.
+    an extrapolated assumption — real large-N TP depends on interconnect and
+    kernel overlap, and pipeline parallelism is not modelled at all. The node
+    boundary *is* now modelled (`GPU.nvlink_domain = 8` on both parts, plus a
+    0.65-per-doubling cross-node penalty), but that penalty is itself an
+    unmeasured pessimistic guess and nothing in the study crosses it, so it
+    bounds the extrapolation rather than predicting it. **Expert parallelism is
+    not modelled at all** — for GLM-5.2's 256 experts that is the axis a real
+    large deployment would shard the FFN on, and the study instead prices all
+    experts as one resident blob (correct for the reported configurations, and
+    not correct for a rack-scale one). Likewise no attention-DP: a TP group is
+    assumed to shard KV heads cleanly, which stops being true once `tp` exceeds
+    the KV-head count. For DP, the shared CPU-offload buffer is split evenly
+    across replicas — a simplification of real host-memory contention. Treat
+    every N > 2 number as a shape, not a quote, until one multi-GPU measurement
+    anchors it.
 13. **vLLM's hybrid-model allocator may not match the byte model.** We price
     attention KV continuously plus one recurrent state per session; vLLM's hybrid
     (attention + GDN) cache unifies page sizes, may pad recurrent state to
