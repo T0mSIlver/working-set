@@ -124,5 +124,8 @@ fitting splits of an 8-GPU node);
 `scripts/scenarios.py` renders the static figures; and `interactive/index.html`
 is a dependency-free page mirroring the same math with live sliders for the
 workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 / GLM-5.2), GPU
-(H200 / B300), weight & KV dtypes, and topology. See
+(H200 / B300), weight & KV dtypes, and topology — the **Split (DP × TP)** control
+offers the legal splits of the chosen GPU count (its divisors), so hybrid grids
+like GLM-5.2 `DP2×TP4` are reachable, with non-fitting splits struck through and
+their TP threshold reported. See
 [docs/scenarios.md](docs/scenarios.md).
