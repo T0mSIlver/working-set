@@ -13,6 +13,8 @@ from scenario_model import Workload, MODELS, TOPOLOGIES
 
 MODELS_K = ["27B", "35BA3B"]
 TOPOS_K = ["1xH200", "2xH200-TP2", "2xH200-DP2"]
+# the 2026-07 models, which fit no single H200 — the DP x TP node-split table
+MODELS_EXT_K = ["MM35", "GLM52"]
 
 
 def wl(**kw):
@@ -314,6 +316,42 @@ def main():
         p5, p50, _ = M.warm_capacity(MODELS["35BA3B"], TOPOLOGIES["2xH200-TP2"],
                                      wl(cap=cap), n_iter=1500)
         print(f"  cap={cap:>9,}  {p5:5.0f} / {p50:5.0f}")
+
+    print("\n== DP x TP splits of ONE 8-GPU node (fp8 weights, fp8 KV) ==")
+    print("  MM35 and GLM-5.2 fit no single H200 (min TP 2 and 7), so pure DP -")
+    print("  N independent SINGLE GPUs - is not a deployment that exists there:")
+    print("  the whole DP axis reports a 0 pool. Data parallelism then means")
+    print("  replicating whole TP GROUPS, which the grid now expresses. (MM35 on")
+    print("  B300 is the exception: min TP 1, so its DP8xTP1 column is real.)")
+    print("  min TP is CENTRAL-case (ACT_RESERVE ~18.0 GiB); the explorer's")
+    print("  conservative assumption raises it (GLM-5.2 -> 8 on H200, 4 on B300).")
+    print("  system = replicas x per-group pool (needs session-sticky routing)")
+    for mk in MODELS_EXT_K:
+        for gpu in ("H200", "B300"):
+            mdl = MODELS[mk]
+            need = M.min_tp_for(mdl, gpu)
+            splits = M.node_splits(mdl, gpu, node=8)
+            if not splits:
+                print(f"  {mk:7} {gpu}  does not fit a node of 8 (min TP {need})")
+                continue
+            row = []
+            for t in splits:
+                pool = M.kv_pool_tokens(mdl, t)
+                row.append(f"DP{t.dp}xTP{t.tp}: {pool / 1e6:6.2f}M x{t.replicas} "
+                           f"= {t.replicas * pool / 1e6:6.2f}M")
+            print(f"  {mk:7} {gpu} (min TP {need})  " + " | ".join(row))
+    print("  -> widening TP RAISES the system total: every DP group re-pays for")
+    print("     its own full copy of the weights. Closed form on N GPUs:")
+    print("       system(tp) = [N*(V-R) - N*W/tp] / kv_bpt")
+    print("     depends on tp ONLY through -N*W/tp, so it is strictly increasing")
+    print("     exactly when the weight charge W is positive and material (a")
+    print("     weightless model is flat). On 8 GPUs, TP8 beats the widest DP by:")
+    for mk, gpu in (("35BA3B", "H200"), ("MM35", "H200"), ("GLM52", "B300")):
+        mdl = MODELS[mk]
+        tots = [t.replicas * M.kv_pool_tokens(mdl, t)
+                for t in M.node_splits(mdl, gpu, node=8)]
+        print(f"       {mk:7} {gpu} ({mdl.w_resident / 1e9:5.1f} GB weights): "
+              f"{tots[-1] / tots[0]:.2f}x")
 
     print("\n== B300 reserve transfer: measured correction (now CENTRAL) ==")
     print("  Measured 2026-07-27: the H200 delivers ~150.75e9 usable bytes against")

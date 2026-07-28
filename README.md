@@ -115,7 +115,12 @@ docs/scenarios.md limitations; 35B-A3B constants from the published
 Qwen3.6-35B-A3B config — see `research/model_35ba3b.md`; an FP8/FP16 KV-cache
 switch is available via `with_kv_dtype`, FP8 being the studied default, and an
 FP8/NVFP4 *weight* switch via `with_weight_dtype` — NVFP4 being gated to the
-B300's native FP4 tensor cores and never applied to the KV cache);
+B300's native FP4 tensor cores and never applied to the KV cache; topologies are
+a `DP × TP` grid via `topology_grid(dp, tp, gpu)`, so a replica is a *group* of
+GPUs — the only way a model that does not fit a single GPU can be data-parallel
+at all (Mistral-Medium-3.5 needs TP2 on H200 though it fits one B300; GLM-5.2
+needs TP7 on H200, TP3 on B300), with `min_tp_for` / `node_splits` giving the
+fitting splits of an 8-GPU node);
 `scripts/scenarios.py` renders the static figures; and `interactive/index.html`
 is a dependency-free page mirroring the same math with live sliders for the
 workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 / GLM-5.2), GPU
