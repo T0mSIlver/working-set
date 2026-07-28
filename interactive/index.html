@@ -507,6 +507,8 @@ const CONFIG = {
   // A DP x TP grid: the unit DP replicates is a GROUP of `tp` GPUs, not a GPU.
   // n_gpu/kind/replicas are derived (dp*tp / label / dp) and spelled out here
   // only because these literals are built before the helpers exist.
+  // `gpu` is filled in below (the GPUS literal is not in scope yet), so these
+  // are structurally identical to makeGrid(dp, tp) — asserted in unitChecks.
   TOPOLOGIES: {
     "1xH200":     { name: "1×H200",            dp: 1, tp: 1, n_gpu: 1, kind: "single", replicas: 1 },
     "2xH200-TP2": { name: "2×H200 tensor-par", dp: 1, tp: 2, n_gpu: 2, kind: "tp",     replicas: 1 },
@@ -535,6 +537,12 @@ const CONFIG = {
            DECODE_BUDGET: 400_000, DECODE_ITER_MIN: 30,
            WARM_BUDGET: 200_000, WARM_BUDGET_SCAN: 35_000 },
 };
+
+// Backfill the GPU object onto the legacy topology literals — GPUS is not in
+// scope inside the CONFIG object literal, and without this `topo.gpu` is
+// undefined there and only survives via `|| GPUS["H200"]` fallbacks. Python's
+// Topology carries the GPU directly; this makes the mirror structurally exact.
+for (const t of Object.values(CONFIG.TOPOLOGIES)) t.gpu = CONFIG.GPUS["H200"];
 
 /* ---- model helpers ---- */
 function is_moe(m){ return m.w_route_total > 0; }
@@ -579,11 +587,22 @@ function kv_pool_tokens(m, topo){
   checkDtypeSupported(m, topo);
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
   const R = reserveNow() + (gpu.reserve_extra || 0);
-  const poolBytes = topo.tp * (gpu.vram - R) - m.w_resident;
+  // NOT factored as tp*(vram - R) - w: the three terms in this order make every
+  // pre-existing configuration bit-identical to the pre-grid code (and to
+  // Python's kv_pool_tokens), rather than merely equal after formatting.
+  const poolBytes = topo.tp * gpu.vram - m.w_resident - topo.tp * R;
   return Math.max(poolBytes, 0) / m.kv_bpt;
 }
 
 // Smallest TP group size with a non-empty pool on this part.
+//
+// Deliberately reads reserveNow(), so it answers under the ACTIVE structural
+// assumption and always agrees with the kv_pool_tokens sitting next to it.
+// Under "conservative" the reserve is larger and the answer therefore rises
+// (GLM-5.2 goes 7 -> 8 on H200, 3 -> 4 on B300). Python has no conservative
+// mode, so its min_tp_for is the CENTRAL answer — which is what docs quote.
+// Pass the model from currentModel() so the weight bump and the reserve come
+// from the same assumption set; passing a raw CONFIG.MODELS literal mixes them.
 function minTpFor(m, gpuKey){
   const gpu = CONFIG.GPUS[gpuKey || "H200"];
   return Math.floor(m.w_resident / (gpu.vram - (reserveNow() + (gpu.reserve_extra || 0)))) + 1;
@@ -640,10 +659,28 @@ function effective_bw(topo){
       console.assert(effective_bw(makeGrid(dp,tp))===baseBw, "DP must not widen a group");
     }
   }
+  // legacy literals must be STRUCTURALLY exact mirrors of makeGrid — name and
+  // gpu included, not just the numeric fields
   for (const [k,t] of Object.entries(CONFIG.TOPOLOGIES)){
     const g = makeGrid(t.dp, t.tp);
     console.assert(g.n_gpu===t.n_gpu && g.kind===t.kind && g.replicas===t.replicas,
       "TOPOLOGIES literal "+k+" must match makeGrid(dp,tp)");
+    console.assert(g.name===t.name, `TOPOLOGIES ${k} name "${t.name}" != makeGrid "${g.name}"`);
+    console.assert(t.gpu===CONFIG.GPUS["H200"], `TOPOLOGIES ${k} must carry its GPU object`);
+  }
+  // validation parity with topology_grid()/topology(): bad input throws
+  for (const [dp,tp] of [[0,2],[2,0],[1.5,2],[2,-1]]){
+    let threw=false; try { makeGrid(dp,tp); } catch(e){ threw=true; }
+    console.assert(threw, `makeGrid(${dp},${tp}) must throw`);
+  }
+  {
+    let threw=false; try { makeGrid(1,2,"H100"); } catch(e){ threw=true; }
+    console.assert(threw, "makeGrid with an unknown gpu key must throw");
+    threw=false; try { makeTopo("bogus",2); } catch(e){ threw=true; }
+    console.assert(threw, "makeTopo with a bad kind must throw, not silently mean DP");
+    threw=false; try { tpEff(4,0); } catch(e){ threw=true; }
+    console.assert(threw, "tpEff with domain 0 must throw, not fall back to 8");
+    console.assert(tpEff(4,undefined)===tpEff(4,8), "undefined domain falls back to 8");
   }
   // the grid is what makes DP expressible for the models that fit no single GPU
   console.assert(minTpFor(CONFIG.MODELS["MM35"],"H200")===2 &&
@@ -956,8 +993,13 @@ const state = {
 // 0.90 bandwidth haircut per GPU-count doubling inside the node, then a steeper
 // CROSS_DOMAIN_EFFICIENCY penalty per doubling once a TP group spans nodes.
 function tpEff(n, domain){
+  // an explicit 0/negative domain is an ERROR, not a request for the default —
+  // `domain || 8` would silently mask a non-NVLink part as an 8-GPU node while
+  // Python's tp_efficiency raises. Only undefined/null falls back.
+  const d = (domain === undefined || domain === null) ? 8 : domain;
+  if (!(d >= 1) || Math.floor(d) !== d)
+    throw new Error(`nvlink_domain must be a positive integer, got ${domain}`);
   if (n<=1) return 1.0;
-  const d = domain || 8;
   let eff = Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(Math.min(n, d)));
   if (n > d) eff *= Math.pow(CONFIG.CROSS_DOMAIN_EFFICIENCY, Math.log2(n/d));
   return eff;
@@ -966,16 +1008,25 @@ function tpEff(n, domain){
 // whole GROUPS of `tp` GPUs — the only way the models that fit no single GPU
 // (Mistral-Medium-3.5, GLM-5.2) can be data-parallel at all.
 function makeGrid(dp, tp, gpuKey){
-  const g = CONFIG.GPUS[gpuKey || "H200"], n = dp*tp;
+  // mirror topology_grid()'s validation: a silently-accepted dp=0 would build a
+  // zero-GPU topology whose pool still reads non-empty (the pool depends on tp)
+  for (const [label, v] of [["dp", dp], ["tp", tp]])
+    if (!(v >= 1) || Math.floor(v) !== v)
+      throw new Error(`${label} must be a positive integer, got ${v}`);
+  const key = gpuKey || "H200";
+  if (!CONFIG.GPUS[key]) throw new Error(`unknown gpu ${key}`);
+  const g = CONFIG.GPUS[key], n = dp*tp;
+  // names match Python's topology_grid() exactly (× for x)
   const name = n===1 ? `1×${g.name}`
-             : dp===1 ? `${tp}×${g.name} TP`
-             : tp===1 ? `${dp}×${g.name} DP`
+             : dp===1 ? `${tp}×${g.name} tensor-par`
+             : tp===1 ? `${dp}×${g.name} data-par`
              : `${n}×${g.name} DP${dp}×TP${tp}`;
   const kind = n===1 ? "single" : dp===1 ? "tp" : tp===1 ? "dp" : "hybrid";
   return {name, dp, tp, n_gpu:n, kind, replicas:dp, gpu:g};
 }
 // single-axis helper for the explorer's TP/DP toggle: the two grid edges
 function makeTopo(kind, n, gpuKey){
+  if (kind!=="tp" && kind!=="dp") throw new Error(`kind must be 'tp' or 'dp', got ${kind}`);
   return kind==="tp" ? makeGrid(1, n, gpuKey) : makeGrid(n, 1, gpuKey);
 }
 function currentTopo(){ return makeTopo(state.par, state.ngpu, state.gpu); }
@@ -1533,6 +1584,14 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // a zero pool means the weights don't fit this configuration at all — a
   // decode readout evaluated at n=1 would show a meaningless green number
   const noFit = pool <= 0;
+  // ...and if it doesn't fit, say what WOULD. minTpFor gets the same model
+  // object the pool was computed from, so the reserve and any conservative
+  // weight bump come from one assumption set (see minTpFor's contract).
+  const needTp = noFit ? minTpFor(model, topo.gpu.name) : 0;
+  const fitHint = noFit
+    ? `needs TP ≥ ${needTp} on ${topo.gpu.name}`
+      + (needTp <= 8 ? ` (this node has 8)` : ` — more than one 8-GPU node`)
+    : "";
   const floorClass = noFit ? undefined : (puOp>=50?'good':(puOp>=40?'warn':'crit'));
   // true whenever the cache SPLITS across >1 replica group (pure DP or a DP×TP
   // grid) — that is what makes the headline a per-replica number
@@ -1549,23 +1608,23 @@ function renderTiles(model,topo,wl,dc,warm,stress){
     // is a floor, not an estimate — say so rather than quietly under-reporting
     {k:"Warm sessions · p5", hero:true, v:noFit?"—":(warm.censored?"≥ ":"")+fmt(warm.p5,0),
      u:noFit?"":(dp?"per replica":"sessions"),
-     sub: noFit ? "model weights do not fit this configuration — zero at any CPU offload"
+     sub: noFit ? `model weights do not fit this configuration (${fitHint}) — zero at any CPU offload`
         : (dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`
               : `the planning number — 95% of draws hold at least this many · ≈ ${fmt(warm.p5*(1-p_sub(wl)),0)} distinct users`)
           + (offl>=1 ? ` · by tier, p5 each: ${fmt(warm.g5,0)} HBM-resident · ${fmt(offl,0)} offloaded (storage)` : ''),
      tip:"THE number this study is built to produce. A warm session's KV + recurrent state sit in cache, so its next request prefills only the new turn — served well and comfortably. A cold request re-prefills everything and briefly thrashes the GPU for every active user. p5 = conservative tail: 95% of draws keep at least this many warm. With CPU offload on, this counts both HBM-resident and host-RAM sessions — the RAM tier is storage, and must be restored over PCIe before it can decode."},
     {k:"Warm p50 / p95", v:noFit?"—":fmt(warm.p50,0), u:noFit?"":"sessions",
-     sub:noFit?"model weights do not fit this configuration":`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
+     sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
      tip:"Same metric, median (p50) and optimistic (p95) draws. Plan on p5; use p50 to compare configurations."},
     {k:"KV pool", v:fmt(pool/1e6,2), u:"M tok", sub:topo.name,
      tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
     {k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
      tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
     {k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
-     sub:noFit?"model weights do not fit this configuration":`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
+     sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥50 tok/s (comfortable), amber ≥40 (at the hard floor), red below. If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
     {k:"Aggregate, all GPU-resident p5 warm active", wide:true, v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
-     sub:noFit?"model weights do not fit this configuration":`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
+     sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
      tip:"System-wide token throughput at that same stress point — the GPU-resident p5-warm sessions all decoding at once, summed over DP replicas. A capacity ceiling for batch/offline work, not a latency promise."},
   ];
   const good=cssv('--good'),warn=cssv('--warn'),crit=cssv('--crit');
