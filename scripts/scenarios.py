@@ -261,14 +261,100 @@ def fig_scaling():
     plt.close(fig)
 
 
+# ============================================================================
+# FIG 6: the OTHER roofline — prefill duty cycle vs cache-miss rate
+# ----------------------------------------------------------------------------
+# Every other figure here answers "how many sessions fit?". This one answers
+# "at what miss rate does fitting them stop being the question?" — the point
+# where re-prefilling alone saturates the group and warm capacity is no longer
+# the binding constraint. research/prefill.md.
+# ============================================================================
+def fig_prefill_thrash():
+    CH, TURN, RATE = 32_768, 2_000, 2.13     # chunk, warm turn, 64 users @ 1/30s
+    wl = base_workload()
+    configs = [("27B", 1, 1, "H200", MUTED, "27B 1xH200"),
+               ("27B", 1, 2, "H200", BLUE, "27B TP2"),
+               ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
+               ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
+               ("GLM52", 1, 8, "H200", AQUA, "GLM-5.2 TP8")]
+    fs = np.linspace(0, 0.5, 101)
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
+
+    # -- left: duty cycle vs miss rate ------------------------------------
+    for mk, dp, tp, gk, col, lab in configs:
+        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        duty = [M.prefill_duty(m, t, base_workload(invalidation=f), RATE, CH, TURN)
+                for f in fs]
+        axL.plot(fs * 100, np.array(duty) * 100, color=col, lw=2, label=lab)
+        fstar = M.breakeven_miss_rate(m, t, wl, RATE, CH, TURN)
+        if 0 < fstar <= 0.5:
+            axL.plot([fstar * 100], [100], "o", color=col, ms=7, zorder=5)
+            # stagger the labels below the line: at 7% and 15% they would
+            # otherwise sit on top of each other and on the threshold caption
+            axL.annotate(f"{fstar:.0%}", (fstar * 100, 100), xytext=(0, -15),
+                         textcoords="offset points", fontsize=8.5, ha="center",
+                         color=col, fontweight="bold",
+                         bbox=dict(boxstyle="round,pad=0.15", fc="white",
+                                   ec="none", alpha=.85))
+    axL.axhline(100, color=RED, lw=1.4, ls="--")
+    axL.text(49.4, 103, "prefill alone saturates the group", color=RED,
+             fontsize=8.5, ha="right")
+    axL.axvspan(0, 1, color=GREEN, alpha=.16)
+    axL.annotate("reference f = 1%", (1, 4), xytext=(6, 0),
+                 textcoords="offset points", fontsize=8, color=MUTED, va="bottom")
+    axL.set_xlim(0, 50); axL.set_ylim(0, 185)
+    axL.set_xlabel("cache-miss rate  f  (%)")
+    axL.set_ylabel("share of the replica group spent prefilling (%)")
+    axL.legend(frameon=False, fontsize=8.5, loc="upper left",
+               bbox_to_anchor=(0.30, 1.0))
+    axL.set_title(f"Prefill duty cycle at {RATE:.2f} req/s\n"
+                  "(64 users, one turn every 30 s; warm turns included)",
+                  fontsize=10.5)
+
+    # -- right: what a miss costs everyone else ---------------------------
+    labels, ratios, cols = [], [], []
+    for mk, dp, tp, gk, col, lab in configs:
+        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        _, _, r = M.itl_spike(m, t, wl, 64, CH, n_iter=800)
+        labels.append(lab); ratios.append(r); cols.append(col)
+    y = np.arange(len(labels))
+    axR.barh(y, ratios, color=cols, height=.62)
+    for i, r in enumerate(ratios):
+        axR.annotate(f"{r:.0f}x", (r, i), xytext=(4, 0), textcoords="offset points",
+                     va="center", fontsize=9, fontweight="bold", color=cols[i])
+    axR.set_yticks(y); axR.set_yticklabels(labels, fontsize=9)
+    axR.invert_yaxis()
+    axR.set_xlim(0, max(ratios) * 1.18)
+    axR.set_xlabel("inter-token latency spike, x normal  (64 concurrent decoders)")
+    axR.grid(axis="y", alpha=0)
+    axR.set_title("What ONE cold chunk does to everyone else\n"
+                  "a 32k prefill lands in the batch: every decoder waits a\n"
+                  "prefill instead of a decode step", fontsize=10.5)
+
+    fig.suptitle("Prefill is the other roofline — and the constraint the capacity "
+                 "model cannot see", fontsize=12, y=1.005)
+    fig.tight_layout()
+    fig.savefig(out("scenario_prefill_thrash.png"), bbox_inches="tight")
+    plt.close(fig)
+    return {lab: M.breakeven_miss_rate(MODELS[mk], M.topology_grid(dp, tp, gk),
+                                       wl, RATE, CH, TURN)
+            for mk, dp, tp, gk, _, lab in configs}
+
+
 if __name__ == "__main__":
     res = fig_capacity()
     fig_sysprompt()
     fig_mns()
     fig_subagent_invalidation()
     fig_scaling()
+    fstars = fig_prefill_thrash()
     print("saved: scenario_capacity.png, scenario_sysprompt.png, scenario_mns.png, "
-          "scenario_subagent_invalidation.png, scenario_scaling.png")
+          "scenario_subagent_invalidation.png, scenario_scaling.png, "
+          "scenario_prefill_thrash.png")
+    print("\nbreakeven miss rate (prefill duty = 100% at 2.13 req/s):")
+    for lab, f in fstars.items():
+        print(f"  {lab:18} {f:6.0%}")
     print("\nwarm reusable p50 (0GB offload), reference workload:")
     for (mk, tk), (p5, p50, p95) in res.items():
         print(f"  {mk:7} {tk:12} {p5:5.0f} / {p50:5.0f} / {p95:5.0f}")

@@ -399,5 +399,94 @@ def main():
               f"uncorrected={pool_old / 1e6:6.2f}M  ({(pool / pool_old - 1) * 100:+.1f}%)")
 
 
+def prefill_tables():
+    """The cost of a cache MISS (research/prefill.md). Analytic, unvalidated."""
+    w0 = wl()
+    CH = 32_768          # vLLM max_num_batched_tokens
+    TURN = 2_000         # tokens a warm hit still prefills (the new turn)
+    RATE = 2.13          # req/s: 64 users, one turn every 30 s
+
+    print("\n== Prefill is the OTHER roofline (research/prefill.md) ==")
+    print("  Every capacity/decode figure above prices HBM bytes. Prefill prices")
+    print("  FLOPs: it reads the weights ONCE and does 2 x params x tokens on them.")
+    print(f"  H200 roofline ridge = {M.ridge_point(M.GPUS['H200']):.0f} FLOP/byte")
+    m27, tp2 = MODELS["27B"], TOPOLOGIES["2xH200-TP2"]
+    dec = m27.w_decode(64) + 64 * M.mean_context(w0) * m27.kv_bpt + 2 * 64 * m27.deltanet_state
+    print(f"  27B prefill 32k chunk : {M.arithmetic_intensity(m27, CH):9,.0f} FLOP/byte "
+          f"-> COMPUTE-bound ({M.arithmetic_intensity(m27, CH) / M.ridge_point(M.GPUS['H200']):.0f}x over)")
+    print(f"  27B decode  at n=64   : {2 * m27.params_prefill * 64 / dec:9,.0f} FLOP/byte "
+          f"-> MEMORY-bound  ({M.ridge_point(M.GPUS['H200']) / (2 * m27.params_prefill * 64 / dec):.0f}x under)")
+    print("  ~3 orders of magnitude apart: that is WHY they interfere, and why the")
+    print("  bandwidth-only decode model structurally cannot see the interference.")
+
+    print(f"\n== One prefill chunk ({CH} tokens), MFU {M.MFU_DEFAULT:.0%} "
+          f"[{M.MFU_LOW:.0%}-{M.MFU_HIGH:.0%}] ==")
+    print("  attn% = share of the pass spent on the QUADRATIC term (chunking caps it)")
+    rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"), ("35BA3B", 1, 1, "H200"),
+            ("35BA3B", 1, 2, "H200"), ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
+            ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
+    for mk, dp, tp, gk in rows:
+        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        if M.kv_pool_tokens(m, t) <= 0:
+            continue
+        _, a, tot = M.prefill_flops(m, CH)
+        lo = M.prefill_seconds(m, t, CH, M.MFU_HIGH) * 1e3
+        hi = M.prefill_seconds(m, t, CH, M.MFU_LOW) * 1e3
+        print(f"  {mk:7} {t.name:16} {tot / 1e12:6.0f} TFLOP  attn {a / tot:4.0%}  "
+              f"{M.prefill_seconds(m, t, CH) * 1e3:6.0f} ms [{lo:5.0f}-{hi:5.0f}]  "
+              f"{M.prefill_tokens_per_s(m, t, CH) / 1e3:6.1f} k tok/s")
+    print("  NOTE the MoE rows: 35B-A3B prefills ~7x FASTER than the SMALLER dense")
+    print("  27B. A token routes to 8 of 256 experts however long the chunk is, so")
+    print("  ~3B params do the GEMM, not 35B. Prefill resilience follows ACTIVE")
+    print("  parameters; warm capacity follows KV bytes. The MoE wins both.")
+
+    print(f"\n== The hypothesis, quantified: miss vs hit (mean context "
+          f"{M.mean_context(w0) / 1e3:.1f}k, warm turn {TURN / 1e3:.0f}k) ==")
+    print("  thrash = machine time of a cache MISS / a cache HIT. Invariant to MFU")
+    print("  and to the GPU part (both cancel) — the most robust number here.")
+    print("  ITLx   = what the OTHER users see: a chunk lands in their batch and")
+    print("           every one of them waits a prefill instead of a decode step.")
+    for mk, dp, tp, gk in rows:
+        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        if M.kv_pool_tokens(m, t) <= 0:
+            continue
+        cold = M.cold_request_seconds(m, t, w0, CH)
+        warm = M.warm_request_seconds(m, t, TURN, CH)
+        d_ms, x_ms, ratio = M.itl_spike(m, t, w0, 64, CH, n_iter=800)
+        print(f"  {mk:7} {t.name:16} miss {cold * 1e3:6.0f} ms  hit {warm * 1e3:5.0f} ms  "
+              f"thrash {cold / warm:3.0f}x   ITL {d_ms:5.1f} -> {x_ms:6.0f} ms ({ratio:3.0f}x)")
+
+    print("\n== The ceiling the capacity model cannot see ==")
+    print("  max cold req/s = rate at which re-prefilling alone eats the whole group.")
+    print("  Set by FLOPs, so NO amount of KV pool, CPU offload or warm headroom")
+    print("  raises it. f* = miss rate at which prefill duty hits 100% at")
+    print(f"  {RATE:.2f} req/s (64 users, one turn every 30 s), warm turns included.")
+    print("  f* > 100% means prefill never binds first at this rate.")
+    for mk, dp, tp, gk in rows:
+        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        if M.kv_pool_tokens(m, t) <= 0:
+            continue
+        fstar = M.breakeven_miss_rate(m, t, w0, RATE, CH, TURN)
+        warm_p5 = M.warm_capacity(m, t, w0, n_iter=400,
+                                  draw=int(4000 + M.kv_pool_tokens(m, t) / 8000))[0]
+        verdict = "PREFILL binds first" if fstar < 0.10 else (
+            "prefill binds under stress" if fstar < 0.50 else "KV capacity binds")
+        print(f"  {mk:7} {t.name:16} warm p5={warm_p5:5.0f}  "
+              f"max cold {M.max_cold_rate(m, t, w0, CH):5.2f} req/s  "
+              f"f*={fstar:6.0%}  {verdict}")
+
+    print(f"\n== Prefill duty cycle vs miss rate (27B TP2, {RATE:.2f} req/s) ==")
+    print("  the curve behind the explorer's 0-50% cache-miss slider")
+    for f in (0.00, 0.01, 0.05, 0.10, 0.25, 0.50):
+        w = wl(invalidation=f)
+        duty = M.prefill_duty(m27, tp2, w, RATE, CH, TURN)
+        bar = "#" * min(int(duty * 40), 60)
+        flag = "  <-- OVERSUBSCRIBED" if duty > 1 else ""
+        print(f"  f={f:5.0%}  duty {duty:6.1%} {bar}{flag}")
+    print("  Even at f=0 the warm turns alone cost ~15% of the pair: a warm hit is")
+    print("  cheap, not free (docs/scenarios.md limitation 9).")
+
+
 if __name__ == "__main__":
     main()
+    prefill_tables()
