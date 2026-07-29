@@ -125,8 +125,6 @@ input[type=range]::-moz-range-thumb{
   width:15px; height:15px; border-radius:50%; background:var(--s1); cursor:pointer;
   border:2px solid var(--surface); box-shadow:var(--shadow);
 }
-.ticks{display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-top:-2px}
-.ticks span{position:relative}
 
 /* toggle */
 .toggle{display:inline-flex; align-items:center; gap:9px; cursor:pointer; font-size:12.5px; color:var(--text-2)}
@@ -215,9 +213,10 @@ svg text{fill:var(--text-2)}
         <li><b>DP (data-parallel, any N)</b> keeps N per-replica caches. Aggregate throughput scales ~N×, but a returning user is only <em>warm on their home replica</em> (sticky routing), and a shared CPU-offload buffer splits N ways.</li>
         <li><b>Monte-Carlo jitter:</b> every render redraws the workload, so repeated runs (and neighbouring slider positions) can differ by a few sessions — that is sampling noise, not a real effect. The Python sweeps in <code>tables.py</code> use a fixed seed instead and are smooth. Real non-linearities (the expert-union kink at n=32, the cap's tail-truncation, the prefix floor) are explained in docs/scenarios.md.</li>
         <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts. The explorer uses the conservative no-overlap union bound (docs also show the optimistic expected-union bracket).</li>
-        <li><b>Structural assumptions &amp; MTP knob:</b> "Conservative" applies the stacked-adverse case from the docs (low anchor, fp32 state, +15% weights — add 10% invalidation manually for the full 403-session TP2 case); the MTP slider sets the speculative-decode speedup (1.0× = off) and shows the implied per-draft acceptance α it is computed from (speedup = 1 + α + α²; 1.7× ⇔ α ≈ 47%, the measured fit). The purchasing base excludes MTP, CPU offload and N&gt;2 TP; these controls exist so that headroom stays visible, not hidden.</li>
+        <li><b>The two un-measured structural knobs.</b> Everything else on this page is either a measured constant or a published config number; these two are not, so they are separate, named controls rather than a bundle. <b>Recurrent state dtype</b> (bf16/fp32): bf16 is inferred from the baseline's observed 75 MiB, not measured — fp32 would double a flat per-session charge and costs the Qwens ~10% of warm capacity (Mistral-3.5 and GLM-5.2 hold no recurrent state, so the control is disabled there). <b>Deployed-weight overhead</b> (as-published/+15%): three of the four models' <code>w_resident</code> figures are raw or on-disk checkpoint bytes, and the only calibration for the gap is the 27B's as-deployed 28.8 GiB running ~15% above its raw params — so the knob is disabled on the 27B, where that 15% came from. <b>Retired 2026-07-29:</b> a third ingredient used to ride along here — a calibration anchor at 2× the measured FP16 <em>lower</em> bound (2.278M tokens ⇒ a 33.0 GiB per-GPU reserve). The TP2 measurement below refutes it outright: it predicts a 2.750M-token pool where 3,233,564 were reported (−14.9%), against −0.26% for the anchor in use. An adverse case has to be one the hardware has not already ruled out.</li>
+        <li><b>MTP knob:</b> the slider sets the speculative-decode speedup (1.0× = off) and shows the implied per-draft acceptance α it is computed from (speedup = 1 + α + α²; 1.7× ⇔ α ≈ 47%, the measured fit). The purchasing base excludes MTP, CPU offload and N&gt;2 TP; these controls exist so that headroom stays visible, not hidden.</li>
         <li><b>KV dtype:</b> all constants assume the FP8 KV cache (<code>--kv-cache-dtype fp8_e4m3</code>), as tested in the baseline. The FP16 switch doubles KV bytes/token (half the pool, heavier decode reads); weights and the DeltaNet state are unaffected, and the activation-reserve calibration stays pinned to the FP8 anchor. Sanity: FP16 + 27B + 1×H200 gives a 1.39M-token pool, inside the baseline's measured [1.14M, 1.40M].</li>
-        <li><b>Measured cross-check (2026-07-22):</b> a real 27B + FP16-KV + TP2 bring-up reported <span class="tnum">3,233,564</span> KV tokens at startup (110.59 GiB per worker; 17.54× concurrency at 184,320 tokens) — within 0.3% of this model's 3.24M prediction, with nothing about TP2 or FP16 fitted. First non-circular validation of the reserve + TP arithmetic + FP16 doubling; see docs/scenarios.md § Measured cross-check.</li>
+        <li><b>Measured cross-check (2026-07-22):</b> a real 27B + FP16-KV + TP2 bring-up reported <span class="tnum">3,233,564</span> KV tokens at startup (110.59 GiB per worker; 17.54× concurrency at 184,320 tokens) — within 0.3% of this model's 3.24M prediction, with nothing about TP2 or FP16 fitted. First non-circular validation of the reserve + TP arithmetic + FP16 doubling. Run backwards it pins the per-GPU reserve at <b>18.24 GiB</b> against the anchor-solved 17.98 GiB, i.e. an equivalent 1×H200 FP8 anchor of <b>2.762M</b> tokens against the projected 2.77M — which is why the low-anchor case is gone from this page (the ~1.4% residual is left in the constants rather than re-anchored: it would move every published figure by under 0.5%). What it still does <em>not</em> settle: the recurrent-state dtype, the other three models, and — since a globally wrong anchor shifts prediction and measurement together — the FP8 path itself. See docs/scenarios.md § Measured cross-check.</li>
         <li><b>CPU offload is storage only.</b> A session offloaded to host RAM still counts as warm <em>capacity</em>, but only sessions whose KV is resident in GPU HBM can decode — an offloaded one must be restored over PCIe first (a latency the model does not price). Every decode-side readout (the per-user/aggregate stress tiles, chart C's capacity zone) is therefore computed over <b>HBM-resident warm sessions only</b>, so moving the offload slider never changes per-user decode speed.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
@@ -261,6 +260,13 @@ svg text{fill:var(--text-2)}
           </div>
         </div>
         <div class="field">
+          <label class="flabel"><span class="tip" id="wover-tip" data-tip="">Deployed-weight overhead</span></label>
+          <div class="seg" id="seg-wover" data-key="wover">
+            <button data-v="pub" aria-pressed="true">As published</button>
+            <button data-v="p15" aria-pressed="false">+15%</button>
+          </div>
+        </div>
+        <div class="field">
           <label class="flabel"><span class="tip" id="kv-tip" data-tip="">KV cache dtype</span></label>
           <div class="seg" id="seg-kv" data-key="kv">
             <button data-v="fp8" aria-pressed="true">FP8</button>
@@ -268,10 +274,10 @@ svg text{fill:var(--text-2)}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Central = the study's calibrated constants. Conservative = the stacked-adverse structural case: calibration anchor at 2× the measured FP16 LOWER bound (2.278M vs 2.77M), fp32/doubled recurrent state, and +15% deployed-weight overhead on every model whose resident bytes are raw/checkpoint figures (all but the 27B, whose 28.8 GiB is already as-deployed). For the FULL stacked case from the docs, also set invalidation to 10%.">Structural assumptions</span></label>
-          <div class="seg" id="seg-assume" data-key="assume">
-            <button data-v="central" aria-pressed="true">Central</button>
-            <button data-v="conservative" aria-pressed="false">Conservative</button>
+          <label class="flabel"><span class="tip" id="state-tip" data-tip="">Recurrent state dtype</span></label>
+          <div class="seg" id="seg-state" data-key="state_dt">
+            <button data-v="bf16" aria-pressed="true">bf16</button>
+            <button data-v="fp32" aria-pressed="false">fp32</button>
           </div>
         </div>
         <div class="field">
@@ -330,14 +336,12 @@ svg text{fill:var(--text-2)}
           </label>
         </div>
         <div class="field">
-          <label class="flabel">System / shared prefix <span class="val"><span id="v-sys">15</span>k</span></label>
-          <input type="range" id="s-sys" min="1" max="40" step="1" value="15" list="sys-ticks">
-          <datalist id="sys-ticks"><option value="3"></option><option value="15"></option><option value="30"></option></datalist>
-          <div class="ticks"><span>3</span><span style="margin-left:22%">15</span><span style="margin-left:20%">30</span></div>
+          <label class="flabel"><span class="tip" data-tip="Tokens of stable prefix every user request shares — the coding agent's system prompt plus its skills, rules and tool definitions. One block is reserved per cache and deduplicated across every session, so a bigger shared prefix costs the pool once and saves it on every session: raising it RAISES warm capacity. The reference workload uses 15k; the baseline's real agent already exceeded 30k, and 3k is the lean subagent prefix. This only pays off if the prefix is byte-stable across users and turns — a per-tenant salt or an edited tool list turns it into per-session bytes (see the invalidation control).">System / shared prefix</span> <span class="val"><span id="v-sys">15</span>k</span></label>
+          <input type="range" id="s-sys" min="1" max="40" step="1" value="15">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools…) — 1% = 1 in 100. Cold requests occupy pool space but never count as warm, so they cap the warm-hit ceiling at 1 − f.">Cache-invalidation rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
-          <input type="range" id="s-inval" min="0" max="10" step="0.5" value="1">
+          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt, a prompt-template deploy…) — 1% = 1 in 100. Cold requests occupy pool space but never count as warm, so they cap the warm-hit ceiling at 1 − f. The range runs to 50% so the badly-behaved end is reachable: 10% is the docs' adverse planning case, and past ~25% the pool is mostly paying for sessions that will never be reused. Modelled as an i.i.d. per-request draw — a correlated flush (one deploy colding every session at once) is worse than anything this slider can show.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
+          <input type="range" id="s-inval" min="0" max="50" step="0.5" value="1">
         </div>
       </div>
     </div>
@@ -560,15 +564,11 @@ function actReserve(){
   const poolBytes = CONFIG.BASELINE_POOL_TOKENS_27B_1GPU * m.kv_bpt;
   return CONFIG.VRAM_PER_GPU - m.w_resident - poolBytes;
 }
+// 17.98 GiB. Independently corroborated: the 2xH200 TP2 FP16 startup log
+// implies 18.24 GiB per GPU (+1.4%), with nothing about TP2 or FP16 fitted.
+// There is deliberately no second, "conservative" reserve any more — see
+// activeModel() for why the low anchor was retired.
 const ACT_RESERVE = actReserve();
-
-// per-GPU reserve for the active structural-assumption set. The try/catch
-// covers the load-time unit checks, which run before `state` is initialized
-// (temporal dead zone) and always use the central calibration.
-function reserveNow(){
-  try { return state.assume==="conservative" ? ACT_RESERVE_CONSERVATIVE : ACT_RESERVE; }
-  catch(e){ return ACT_RESERVE; }
-}
 
 // NVFP4 weights require native FP4 tensor cores (B300) — the UI greys the
 // option out on the H200; this guard backstops any programmatic path.
@@ -587,7 +587,7 @@ function checkDtypeSupported(m, topo){
 function kv_pool_tokens(m, topo){
   checkDtypeSupported(m, topo);
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
-  const R = reserveNow() + (gpu.reserve_extra || 0);
+  const R = ACT_RESERVE + (gpu.reserve_extra || 0);
   // NOT factored as tp*(vram - R) - w: the three terms in this order make every
   // pre-existing configuration bit-identical to the pre-grid code (and to
   // Python's kv_pool_tokens), rather than merely equal after formatting.
@@ -595,18 +595,15 @@ function kv_pool_tokens(m, topo){
   return Math.max(poolBytes, 0) / m.kv_bpt;
 }
 
-// Smallest TP group size with a non-empty pool on this part.
-//
-// Deliberately reads reserveNow(), so it answers under the ACTIVE structural
-// assumption and always agrees with the kv_pool_tokens sitting next to it.
-// Under "conservative" the reserve is larger and the answer therefore rises
-// (GLM-5.2 goes 7 -> 8 on H200, 3 -> 4 on B300). Python has no conservative
-// mode, so its min_tp_for is the CENTRAL answer — which is what docs quote.
-// Pass the model from currentModel() so the weight bump and the reserve come
-// from the same assumption set; passing a raw CONFIG.MODELS literal mixes them.
+// Smallest TP group size with a non-empty pool on this part. Shares the single
+// ACT_RESERVE with the kv_pool_tokens sitting next to it, so the two always
+// agree — and, now that the low anchor is gone, so does Python's min_tp_for
+// (the reserve no longer depends on any UI state, so JS and Python cannot
+// diverge here at all). Pass the model from activeModel() so a +15% weight
+// bump is reflected in the threshold the Split control reports.
 function minTpFor(m, gpuKey){
   const gpu = CONFIG.GPUS[gpuKey || "H200"];
-  return Math.floor(m.w_resident / (gpu.vram - (reserveNow() + (gpu.reserve_extra || 0)))) + 1;
+  return Math.floor(m.w_resident / (gpu.vram - (ACT_RESERVE + (gpu.reserve_extra || 0)))) + 1;
 }
 
 // Bandwidth seen by ONE replica group. DP adds groups, it never widens one.
@@ -1002,7 +999,10 @@ const state = {
   // clamps it). tp === ngpu is pure TP (the old par:"tp"), tp === 1 is pure DP.
   model: "27B", gpu: "H200", wdt: "fp8", ngpu: 1, tp: 1, ram: 0,
   kv: "fp8", cap: 180,
-  assume: "central", mtp: 1.7,
+  // state_dt: recurrent-state dtype (bf16 = the study default, inferred from
+  // the baseline's 75 MiB); wover: deployed-weight overhead over the raw or
+  // on-disk checkpoint bytes ("pub" = as published, "p15" = +15%).
+  state_dt: "bf16", wover: "pub", mtp: 1.7,
   user_median: 31, user_sigma: 0.81,
   sub_median: 8, sub_sigma: 0.90,
   sub_ratio: 0.10, sub_shares_prefix: false,
@@ -1478,12 +1478,19 @@ function removeCross(svg){ const e=svg.querySelector('.xcross'); if(e) e.remove(
    ========================================================================== */
 let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null;
 
-// active model with the KV-dtype, structural-assumption and MTP-speedup
-// knobs applied. FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py). The
-// "conservative" structural set = stacked-adverse case from docs/scenarios.md:
-// fp32/doubled recurrent state (2x), +15% deployed-weight overhead (every
-// model but the 27B, whose 28.8 GiB is already an as-deployed figure), and a
-// low calibration anchor (applied in kv_pool_tokens via reserveNow()).
+// active model with the dtype, weight-overhead and MTP-speedup knobs applied.
+// FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py); fp32 doubles the
+// recurrent state; +15% covers deployed-weight overhead on the models whose
+// resident bytes are raw/checkpoint figures.
+//
+// These two are what remains of the old bundled "Conservative" set. Its third
+// ingredient — a calibration anchor at 2x the measured FP16 LOWER bound
+// (2.278M, a 33.0 GiB per-GPU reserve) — was RETIRED 2026-07-29: the TP2 FP16
+// startup log pins the real per-GPU reserve at 18.24 GiB and the equivalent
+// FP8 anchor at 2.762M tokens. The low anchor would have predicted a 2.750M-
+// token TP2 pool against 3,233,564 measured (-14.9%), so it is not a
+// plausible-adverse case any more, it is a refuted one. See docs/scenarios.md
+// § Measured cross-check.
 function activeModel(){
   let m = CONFIG.MODELS[state.model];
   // NVFP4 weights (B300-only; the UI disables the option elsewhere): swap in
@@ -1497,20 +1504,18 @@ function activeModel(){
   // the UI disables the toggle — this guard keeps the math honest anyway
   if (state.kv === "fp16" && m.kv_fp16_ok !== false)
     m = { ...m, kv_bpt: m.kv_bpt*2, name: m.name + " [FP16 KV]" };
-  if (state.assume === "conservative"){
-    m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [conservative]" };
-    if (state.model !== "27B") m = { ...m, w_resident: m.w_resident*1.15 };
-  }
+  // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.2
+  // carry no state at all) — the UI disables the control for those.
+  if (state.state_dt === "fp32" && m.deltanet_state > 0)
+    m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [fp32 state]" };
+  // +15% deployed-weight overhead. Never applied to the 27B, whose 28.8 GiB is
+  // already the as-deployed footprint (that is where the 15% came from) — the
+  // UI disables the control on that model.
+  if (state.wover === "p15" && state.model !== "27B")
+    m = { ...m, w_resident: m.w_resident*1.15, name: m.name + " [+15% weights]" };
   m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
   return m;
 }
-
-// low-anchor reserve for the conservative set: anchor at 2x the measured FP16
-// LOWER bound (2.278M tokens) instead of the projected 2.77M
-const ACT_RESERVE_CONSERVATIVE = (()=>{
-  const m = CONFIG.MODELS["27B"];
-  return CONFIG.VRAM_PER_GPU - m.w_resident - 2*1.139e6*m.kv_bpt;
-})();
 
 function computeAndRender(draft){
   const model=activeModel();
@@ -1616,8 +1621,8 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // decode readout evaluated at n=1 would show a meaningless green number
   const noFit = pool <= 0;
   // ...and if it doesn't fit, say what WOULD. minTpFor gets the same model
-  // object the pool was computed from, so the reserve and any conservative
-  // weight bump come from one assumption set (see minTpFor's contract).
+  // object the pool was computed from, so a +15% weight bump is reflected in
+  // the reported threshold (see minTpFor's contract).
   const needTp = noFit ? minTpFor(model, topo.gpu.name) : 0;
   const fitHint = noFit
     ? `needs TP ≥ ${needTp} on ${topo.gpu.name}`
@@ -1717,6 +1722,9 @@ function renderSplitControl(){
 // scenario_model.py): NVFP4 weights only on GPUs with native FP4 (B300);
 // FP16 KV never on GLM-5.2 (vLLM's DSA path asserts a quantized cache).
 // Illegal selections snap back to FP8 rather than silently mis-pricing.
+// The two structural knobs are disabled where they would be no-ops — fp32
+// state on a model with no recurrent state, +15% weights on the 27B — and
+// snapped back, so a stale selection can never read as if it were applied.
 // Also snaps the TP width to a divisor of the GPU count and rebuilds the split
 // control (whose dimmed buttons depend on the active model and GPU part).
 function enforceConstraints(){
@@ -1727,17 +1735,30 @@ function enforceConstraints(){
   if (!gpuOk && state.wdt === "nvfp4") state.wdt = "fp8";
   const fp16Ok = m.kv_fp16_ok !== false;
   if (!fp16Ok && state.kv === "fp16") state.kv = "fp8";
+  const stateOk = m.deltanet_state > 0;
+  if (!stateOk && state.state_dt === "fp32") state.state_dt = "bf16";
+  const woverOk = state.model !== "27B";
+  if (!woverOk && state.wover === "p15") state.wover = "pub";
   // reflect state + disabled flags back into the segmented controls
   const sync = (segId, val)=>document.querySelectorAll(`#${segId} button`).forEach(
     b=>b.setAttribute('aria-pressed', b.dataset.v===val?'true':'false'));
   sync('seg-wdt', state.wdt); sync('seg-kv', state.kv);
+  sync('seg-state', state.state_dt); sync('seg-wover', state.wover);
   document.querySelector('#seg-wdt button[data-v="nvfp4"]').disabled = !gpuOk;
   document.querySelector('#seg-kv button[data-v="fp16"]').disabled = !fp16Ok;
+  document.querySelector('#seg-state button[data-v="fp32"]').disabled = !stateOk;
+  document.querySelector('#seg-wover button[data-v="p15"]').disabled = !woverOk;
   // control explanations live in the label tooltips, not under the knobs;
   // the state-dependent ones are re-stamped here on every constraint pass
   document.getElementById('kv-tip').setAttribute('data-tip', fp16Ok
     ? "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
     : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable, so the toggle is disabled.");
+  document.getElementById('state-tip').setAttribute('data-tip', stateOk
+    ? `Dtype vLLM keeps the Gated-DeltaNet recurrent state in. Every resident session is charged one constant state on top of its attention KV, so this is a flat per-session tax: ${fmt(m.deltanet_state/MIB,1)} MiB at bf16, double at fp32. bf16 is ASSUMED, not measured — it is what makes the baseline's observed 75 MiB match the 27B's state arithmetic. The 2xH200 log does not settle it: its 23.8 GiB of allocator state pages would be ~325 sessions at bf16 or ~162 at fp32, and neither matches the 17 concurrent sequences, so that pool looks pre-allocated from max_num_seqs rather than per-session. The single largest un-measured structural knob on the Qwens (~-10% warm capacity).`
+    : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention, everything lives in the KV cache — so this control does nothing here and is disabled.`);
+  document.getElementById('wover-tip').setAttribute('data-tip', woverOk
+    ? "Slack between a checkpoint's stated parameter bytes and what the server actually resides: fused/padded kernel buffers, non-quantized odds and ends, allocator rounding. This model's w_resident is a raw or on-disk-checkpoint figure, so it is an UNDER-estimate of the deployed footprint by an unknown margin. +15% is the one calibrated data point available: the 27B's as-deployed 28.8 GiB runs ~15% above its raw param bytes. Transferring that ratio to a different architecture and quantization recipe is an extrapolation — it is the reason this knob exists rather than being folded into the constants."
+    : "Qwen3.6-27B's 28.8 GiB is already the measured AS-DEPLOYED footprint, not a raw parameter count — the +15% overhead was derived FROM it, so applying it here would double-count. Disabled on this model; it applies to the three whose resident bytes come from checkpoint figures.");
   const modelTips = {
     "27B": "Qwen3.6-27B — dense hybrid, the calibrated baseline: 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.",
     "35BA3B": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN.",
