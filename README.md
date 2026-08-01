@@ -36,15 +36,17 @@ The full write-up — setup, method, results, and recommendations — is in
   **retires** the study's low-calibration-anchor hedge, which predicted that
   same pool 15% low: the stacked-adverse TP2 planning figure rises from 403 to
   **483** warm sessions with no change to the central case.
-- **A cache miss costs 22–37× the machine time of a hit**, and one 32k prefill
-  chunk spikes the inter-token latency of *every* concurrently decoding user by
-  **24–98×** — the study's founding hypothesis, finally priced
-  (docs/scenarios.md § 8). Prefill is compute-bound where decode is
-  memory-bound, so it imposes a cold-request ceiling no amount of KV pool can
-  raise: Mistral-Medium-3.5 on TP4 saturates on prefill alone at a **7%** miss
-  rate while still holding 56 warm sessions. Non-obvious corollary: the
-  **35B-A3B MoE prefills ~7× faster than the smaller dense 27B**, because only
-  its ~3B active parameters do the GEMM.
+- **A cache miss costs 18–19× the machine time of a hit — near-identical
+  across all four architectures** — and one 32k prefill chunk spikes the
+  inter-token latency of *every* concurrently decoding user by **31–122×** —
+  the study's founding hypothesis, finally priced (docs/scenarios.md § 8).
+  Prefill is compute-bound where decode is memory-bound, so it imposes a
+  cold-request ceiling no amount of KV pool can raise: Mistral-Medium-3.5 on
+  TP4 saturates on prefill alone at a **3%** miss rate — while its 56 warm
+  sessions also fall short of the 64-user reference load, a doubly-constrained
+  deployment. Non-obvious corollary: the **35B-A3B MoE prefills ~7× faster
+  than the smaller dense 27B**, because only its ~2.4B active GEMM parameters
+  prefill.
 
 ![Cache hit-rate sweep](figures/prefix_cache_sweep.png)
 

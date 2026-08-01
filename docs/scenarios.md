@@ -564,29 +564,37 @@ does ~2 × params × tokens FLOPs on them.
 
 | 27B, H200 | arithmetic intensity | verdict |
 | --- | --- | --- |
-| prefill, 32k chunk | 60,656 FLOP/byte | **compute**-bound, 147× over the ridge |
-| decode, n=64 | 26 FLOP/byte | **memory**-bound, 16× under |
+| prefill, 32k chunk | 58,749 FLOP/byte | **compute**-bound, 142× over the ridge |
+| decode, n=64 | 25 FLOP/byte | **memory**-bound, 16× under |
 | *(H200 ridge point)* | *412 FLOP/byte* | |
 
 Three orders of magnitude apart. That is *why* they interfere when batched
 together, and why a bandwidth-only decode model structurally cannot see the
 interference.
 
-#### One chunk (32,768 tokens = `max_num_batched_tokens`), MFU 45% [30–60%]
+*(Numbers in this section were re-derived 2026-08-01 after cross-review: the
+B300's FP8 rate, three of the four `params_prefill` constants, cross-chunk
+attention and the E[L²] tail pricing were all corrected — see
+`research/prefill.md` for what changed and why.)*
+
+#### One first chunk (32,768 tokens = `max_num_batched_tokens`), MFU 45% [30–60%]
+
+Attn share is the *cache-empty* first chunk's; later chunks of the same
+context pay their cross-attention over the cache on top.
 
 | Model | topology | TFLOP | attn share | time | throughput |
 | --- | --- | --- | --- | --- | --- |
-| Qwen3.6-27B | 1×H200 | 1,876 | 11% | **2,106 ms** [1,580–3,159] | 15.6 k tok/s |
-| Qwen3.6-27B | TP2 | 1,876 | 11% | **1,170 ms** [878–1,755] | 28.0 k tok/s |
-| **35B-A3B** | 1×H200 | 278 | 32% | **312 ms** [234–468] | 105.0 k tok/s |
-| **35B-A3B** | TP2 | 278 | 32% | **173 ms** [130–260] | 188.9 k tok/s |
-| Mistral-3.5 | TP4 | 10,501 | 22% | **3,639 ms** [2,730–5,459] | 9.0 k tok/s |
-| GLM-5.2 | TP8 | 5,241 | 52% | **1,009 ms** [757–1,514] | 32.5 k tok/s |
-| Qwen3.6-27B | 1×B300 | 1,876 | 11% | **618 ms** [463–926] | 53.1 k tok/s |
+| Qwen3.6-27B | 1×H200 | 1,817 | 12% | **2,040 ms** [1,530–3,060] | 16.1 k tok/s |
+| Qwen3.6-27B | TP2 | 1,817 | 12% | **1,133 ms** [850–1,700] | 28.9 k tok/s |
+| **35B-A3B** | 1×H200 | 248 | 35% | **278 ms** [209–417] | 117.7 k tok/s |
+| **35B-A3B** | TP2 | 248 | 35% | **155 ms** [116–232] | 211.9 k tok/s |
+| Mistral-3.5 | TP4 | 10,304 | 23% | **3,571 ms** [2,678–5,357] | 9.2 k tok/s |
+| GLM-5.2 | TP8 | 5,195 | 53% | **1,000 ms** [750–1,501] | 32.8 k tok/s |
+| Qwen3.6-27B | 1×B300 | 1,817 | 12% | **897 ms** [673–1,346] | 36.5 k tok/s |
 
 **The MoE result is the surprise.** The 35B-A3B prefills **~7× faster than the
 smaller dense 27B**. A token routes to 8 of 256 experts however long the chunk
-is, so ~3B parameters do the GEMM, not 35B. Prefill resilience follows *active*
+is, so ~2.4B parameters do the GEMM, not 35B. Prefill resilience follows *active*
 parameters; warm capacity follows *KV bytes*. The 35B-A3B wins both axes, which
 strengthens the H2 recommendation on a dimension the study had not priced.
 Symmetrically, Mistral-Medium-3.5's dense 88-layer GQA makes it the most
@@ -594,71 +602,92 @@ prefill-fragile model here by a wide margin.
 
 #### The hypothesis, quantified
 
-Mean sampled context 40.1k; a warm hit still prefills its new ~2k turn.
+Mean sampled context 40.1k; a warm hit still prefills its new ~2k turn — and
+that turn attends over the whole cached context, so a hit's price carries a
+term linear in the cache it sits on (the cache spares recomputing keys and
+values, not attending over them). A miss re-pays everything.
 
 | Model / topology | miss | hit | **thrash** | ITL spike, 64 decoders |
 | --- | --- | --- | --- | --- |
-| 27B, 1×H200 | 2,539 ms | 115 ms | **22×** | 25.9 → 2,132 ms (**82×**) |
-| 27B, TP2 | 1,410 ms | 64 ms | **22×** | 14.4 → 1,185 ms (**82×**) |
-| 35B-A3B, TP2 | 203 ms | 7 ms | **27×** | 7.5 → 181 ms (**24×**) |
-| Mistral-3.5, TP4 | 4,318 ms | 176 ms | **25×** | 37.6 → 3,677 ms (**98×**) |
-| GLM-5.2, TP8 | 1,144 ms | 31 ms | **37×** | 27.0 → 1,036 ms (**38×**) |
+| 27B, 1×H200 | 2,826 ms | 146 ms | **19×** | 25.9 → 2,356 ms (**91×**) |
+| 27B, TP2 | 1,570 ms | 81 ms | **19×** | 14.4 → 1,309 ms (**91×**) |
+| 35B-A3B, TP2 | 265 ms | 14 ms | **18×** | 7.5 → 229 ms (**31×**) |
+| Mistral-3.5, TP4 | 5,485 ms | 292 ms | **19×** | 37.6 → 4,595 ms (**122×**) |
+| GLM-5.2, TP8 | 1,954 ms | 110 ms | **18×** | 27.0 → 1,675 ms (**62×**) |
 
-**A cache miss costs 22–37× the machine time of a hit.** That ratio is the most
-robust number in this document: it cancels MFU and it cancels the GPU part, so
-it survives the section's softest assumptions untouched.
+**A cache miss costs 18–19× the machine time of a hit — near-identical across
+all four architectures.** The ratio cancels MFU and the GPU part, and once
+warm hits are charged their cross-attention it stops rewarding attention-heavy
+geometries with inflated ratios (the first revision's 22–37× spread, GLM-5.2
+at the top, was an artifact of pricing hits at turn² only). What the ratio
+does *not* cancel is the attention model itself: GLM-5.2's row prices MLA as
+dense attention, a flagged upper bound (`research/prefill.md` weakness #2).
 
 The ITL column is the "*for every active user*" half of the claim, and it is
 worth being precise about the mechanism. With chunked prefill vLLM batches the
 chunk *with* the running decodes, so nobody is starved — the forward pass
 containing the chunk simply takes prefill-time instead of decode-time, and all
-64 waiting users see one inter-token gap **24–98× their normal** latency. Not a
-stall: a synchronised latency spike. That is the thrash.
+64 waiting users see one inter-token gap **31–122× their normal** latency (the
+chunk is priced mid-re-prefill, at E[L]/2 of cache; the last chunk of a mean
+context roughly doubles the cross term). Not a stall: a synchronised latency
+spike. That is the thrash.
 
 #### The ceiling the capacity model cannot see
 
 Because prefill is FLOP-bound, no amount of KV pool, CPU offload or warm
 headroom raises this. `f*` is the miss rate at which prefill duty reaches 100%
-at 2.13 req/s (64 users, one turn every 30 s), warm turns included.
+at 2.13 req/s (64 users, one turn every 30 s), warm turns included. The last
+column is a **sensitivity band for the prefill axis alone**, not a two-axis
+planner — KV capacity is a separate constraint in different units (sessions
+held vs work rate), and the bracketed flag marks rows where the cache is
+*also* short of the 64-user reference load before a single miss.
 
-| Model / topology | warm p5 | max cold req/s | `f*` | binding constraint |
+| Model / topology | warm p5 | max cold req/s | `f*` | prefill sensitivity |
 | --- | --- | --- | --- | --- |
-| 27B, 1×H200 | 77 | 0.39 | **15%** | prefill binds under stress |
-| 27B, TP2 | 194 | 0.71 | **30%** | prefill binds under stress |
-| 35B-A3B, 1×H200 | 250 | 2.74 | 130% | KV capacity binds |
-| 35B-A3B, TP2 | 634 | 4.93 | 236% | KV capacity binds |
-| Mistral-3.5, TP4 | 56 | 0.23 | **7%** | **PREFILL binds first** |
-| GLM-5.2, TP8 | 143 | 0.87 | **39%** | prefill binds under stress |
-| 35B-A3B, 2×B300 | 1,509 | 16.81 | 815% | KV capacity binds |
+| 27B, 1×H200 | 77 | 0.35 | **12%** | binds under stress |
+| 27B, TP2 | 194 | 0.64 | **26%** | binds under stress |
+| 35B-A3B, 1×H200 | 250 | 2.10 | 98% | never binds at this rate |
+| 35B-A3B, TP2 | 634 | 3.77 | 182% | never binds at this rate |
+| Mistral-3.5, TP4 | 56 | 0.18 | **3%** | **FRAGILE — f\* inside the slider range** *[cache also < 64 users]* |
+| GLM-5.2, TP8 | 143 | 0.51 | **20%** | binds under stress |
+| 35B-A3B, 2×B300 | 1,509 | 8.58 | 420% | never binds at this rate |
 
-Read the Mistral row carefully: it holds 56 warm sessions, and a **7%** miss
-rate saturates the machine on prefill alone. Sizing that deployment from warm
-capacity would be sizing it on the wrong constraint entirely.
+Read the Mistral row carefully — it is doubly constrained: 56 warm sessions
+cannot even hold the 64-user reference population, *and* a **3%** miss rate
+saturates the machine on prefill alone. Neither axis alone describes that
+deployment; sizing it from warm capacity alone would miss the tighter of the
+two constraints.
 
 Duty vs miss rate for the 27B on TP2 — the curve behind the explorer's 0–50%
 cache-miss slider:
 
 | f | 0% | 1% | 5% | 10% | 25% | 50% |
 | --- | --- | --- | --- | --- | --- | --- |
-| prefill duty | 13.6% | 16.5% | 27.9% | 42.3% | 85.3% | **157%** |
+| prefill duty | 17.3% | 20.5% | 33.2% | 49.0% | 96.6% | **176%** |
 
-Even at f = 0 the warm turns alone cost ~14% of the pair. **A warm hit is cheap,
-not free** — the same point limitation 9 makes about "warm ≠ SLA", now priced.
+Even at f = 0 the warm turns alone cost ~17% of the pair. **A warm hit is
+cheap, not free** — the same point limitation 9 makes about "warm ≠ SLA", now
+priced including the turn's attention over its cached context.
 
 #### What this does and does not establish
 
-It **supports** the founding hypothesis with a consistent 22–37× cost ratio and
-a 24–98× latency spike, and it adds a constraint the capacity model never had:
-a hard cold-request ceiling, with two of the seven configurations above binding
-on prefill before they bind on cache.
+It **supports** the founding hypothesis with a cost ratio of 18–19× —
+strikingly consistent across all four architectures — and a 31–122× latency
+spike, and it adds a constraint the capacity model never had: a hard
+cold-request ceiling. One configuration (Mistral-3.5 TP4) saturates on prefill
+within the explorer's miss-rate range; three more do so under stress
+(f* = 12–26%).
 
 It is **analytic and unvalidated**. The baseline collected prefill speeds but
 kept only the `ttft < 0.4 × cold` heuristic, so there is no measured prefill
 number in this repository to check against. MFU is the soft input — the 30–60%
 bracket moves every absolute millisecond figure by 2×, though not the ratios.
-And the model omits queueing, preemption/recompute, PCIe restore contention and
-cross-chunk attention, **all of which make the real machine worse than this**.
-The thrash finding is a lower bound. One `vllm bench` prefill run at
+The model omits queueing, preemption/recompute and PCIe restore contention,
+**all of which make the real machine worse than this**; cross-chunk attention,
+formerly on that list, is now charged. The thrash finding is a lower bound —
+except on NVFP4 configurations, which are priced at the FP8 tensor rate and
+therefore overstate prefill cost by an unknown factor ≤~3×
+(`research/prefill.md` #1). One `vllm bench` prefill run at
 `max_num_batched_tokens=32768` on the 27B TP2 would settle the absolute scale.
 
 ## Why some knobs act non-linearly (or non-monotonically)
@@ -1075,10 +1104,11 @@ Ordered roughly by how much each could move the numbers:
    still move the most.
 2. **Prefill/decode interference: bounded, not integrated.** *Partially retired
    2026-07-29.* § 8 now prices prefill on its own (compute) roofline: a cache miss
-   costs 22–37× a hit, one 32k chunk spikes every concurrent decoder's
-   inter-token latency 24–98×, and the FLOP-bound cold-request ceiling binds
-   before KV capacity on some configurations (Mistral-3.5 TP4 at a 7% miss
-   rate). What remains unmodelled: the two rooflines are still reported
+   costs 18–19× a hit, one 32k chunk spikes every concurrent decoder's
+   inter-token latency 31–122×, and the FLOP-bound cold-request ceiling
+   saturates within the explorer's miss-rate range on one configuration
+   (Mistral-3.5 TP4 at 3% — whose cache is *also* short of the reference
+   load). What remains unmodelled: the two rooflines are still reported
    *separately* — no scheduler model mixes a chunk and a decode batch in one
    forward pass, so `decode_curves` still reports pure-decode speed and warm
    capacity is still computed as if prefill were free. Queueing, preemption/
