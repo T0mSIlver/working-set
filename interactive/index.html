@@ -135,7 +135,7 @@ input[type=range]::-moz-range-thumb{
 .toggle input:checked + .track::after{transform:translateX(17px)}
 
 /* stat tiles */
-/* 6 tiles = 8 column units (hero + aggregate span 2 each): two full rows of 4,
+/* 7 tiles = 8 column units (only the hero spans 2): two full rows of 4,
    so no tile ever wraps onto a line of its own */
 .tiles{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:16px 0;}
 .tile.wide{grid-column:span 2}
@@ -219,6 +219,7 @@ svg text{fill:var(--text-2)}
         <li><b>Measured cross-check (2026-07-22):</b> a real 27B + FP16-KV + TP2 bring-up reported <span class="tnum">3,233,564</span> KV tokens at startup (110.59 GiB per worker; 17.54× concurrency at 184,320 tokens) — within 0.3% of this model's 3.24M prediction, with nothing about TP2 or FP16 fitted. First non-circular validation of the reserve + TP arithmetic + FP16 doubling. Run backwards it pins the per-GPU reserve at <b>18.24 GiB</b> against the anchor-solved 17.98 GiB, i.e. an equivalent 1×H200 FP8 anchor of <b>2.762M</b> tokens against the projected 2.77M — which is why the low-anchor case is gone from this page (the ~1.4% residual is left in the constants rather than re-anchored: it would move every published figure by under 0.5%). What it still does <em>not</em> settle: the recurrent-state dtype, the other three models, and — since a globally wrong anchor shifts prediction and measurement together — the FP8 path itself. See docs/scenarios.md § Measured cross-check.</li>
         <li><b>CPU offload is storage only.</b> A session offloaded to host RAM still counts as warm <em>capacity</em>, but only sessions whose KV is resident in GPU HBM can decode — an offloaded one must be restored over PCIe first (a latency the model does not price). Every decode-side readout (the per-user/aggregate stress tiles, chart C's capacity zone) is therefore computed over <b>HBM-resident warm sessions only</b>, so moving the offload slider never changes per-user decode speed.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
+        <li><b>Max cold req/s (prefill ceiling):</b> the one tile priced in FLOPs, not HBM bytes (<code>research/prefill.md</code>). A miss re-prefills the mean sampled context in 32k chunks (GEMM + the quadratic attention term) against the part's <em>dense</em> FP8 peak at MFU 45% — the soft input: the plausible [30–60%] bracket moves the absolute number 2× either way, and the figure is <span class="prov">analytic and unvalidated</span>. It is a per-replica-group ceiling that no KV pool, CPU offload or warm headroom can raise; f* is the miss rate that saturates the group at the reference 2.13 req/s (64 users, one turn every 30 s), warm turns included, and the tile turns amber/red as the invalidation slider approaches/passes it.</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
         <li><b>GPU choice (H200 / B300):</b> the H200 is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve, <b>plus a measured +9.75 GB/GPU correction</b>: the H200 actually delivers ~150.75 GB usable against its 141 GB vendor figure (the calibration silently absorbs that margin), while a real B300 <code>nvidia-smi</code> dump shows 275,040 MiB = 288.4 GB — nominal bytes, no Hopper-style over-provision — so the transferred reserve must add the hidden margin back (<code>research/gpu_b300.md</code>; formerly a sensitivity, measured 2026-07-27).</li>
         <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; what stays high-precision is recipe-specific — see <code>research/nvfp4.md</code> — e.g. RedHatAI's 35B-A3B keeps the DeltaNet blocks BF16 while NVIDIA's GLM recipe quantizes only the routed experts). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug (open as of 2026-07-27), so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — an owner policy: vLLM's nvfp4 KV shipped 2026-05 (Blackwell-datacenter-only, values dequantized to FP8 before attention) but is not modelled in this study (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
@@ -422,9 +423,13 @@ const CONFIG = {
   // group wider than this crosses onto IB/Ethernet and pays the extra
   // CROSS_DOMAIN_EFFICIENCY penalty. 8 for both parts — HGX H200 and the 8-GPU
   // HGX B300 baseboard we deploy (a GB300 NVL72 rack would be 72; we have none).
+  // peak_flops_fp8: DENSE FP8 tensor-core FLOP/s, used ONLY by the prefill
+  // ceiling (research/prefill.md). NVIDIA's headline "3,958 TFLOPS" is WITH
+  // 2:4 sparsity, which no dense LLM GEMM reaches — halve it. B300: 13.5
+  // PFLOPS dense FP4 per HGX-baseboard GPU / 2 for the FP8 path.
   GPUS: {
-    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8 },
-    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8 },
+    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8, peak_flops_fp8: 1.979e15 },
+    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8, peak_flops_fp8: 6.75e15 },
   },
   VRAM_PER_GPU: 141e9,     // calibration-anchor GPU (H200) HBM bytes
   HBM_BW:       4.8e12,    // calibration-anchor GPU bandwidth, bytes/s
@@ -449,6 +454,12 @@ const CONFIG = {
   //          attention models omit them (decode reads the full cache at kv_bpt).
   // kv_fp16_ok: false = vLLM can only serve this model with a quantized KV
   //          cache (GLM-5.2's DSA path) -> the FP16 toggle is disabled.
+  // params_prefill/attn_layers/attn_d: prefill-ceiling constants (research/
+  //          prefill.md). params_prefill = parameters doing a GEMM per token
+  //          (dense: total minus embeddings+lm_head; MoE: ACTIVE params — a
+  //          token routes to 8 experts however long the chunk is). attn_d x
+  //          attn_layers price the quadratic QK^T/AV term of full-attention
+  //          layers only (DeltaNet layers contribute nothing quadratic).
   MODELS: {
     "27B": {
       name: "Qwen3.6-27B (dense)",
@@ -461,6 +472,8 @@ const CONFIG = {
       mtp: 1.7,
       // nvidia/Qwen3.6-27B-NVFP4, MEASURED safetensors total (21.92e9 B)
       nvfp4_w: [21.92e9, 21.92e9, 0.0, 0.0],
+      params_prefill: 25.4e9,      // 27B dense less ~1.6e9 embed + lm_head
+      attn_layers: 16, attn_d: 24*256,
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
     },
     "35BA3B": {                    // published Qwen3.6-35B-A3B config; see research/model_35ba3b.md
@@ -475,6 +488,8 @@ const CONFIG = {
       // RedHatAI NVFP4 recipe: experts+attn NVFP4; DeltaNet/lm_head/router/MTP BF16
       // -> shared per-step read GROWS 1.7x while expert reads shrink 1.78x
       nvfp4_w: [24.13e9, 3.308e9, 566231040, 18119393280],
+      params_prefill: 2.9e9,       // MoE: the ACTIVE ~3B prefills, not the 35B
+      attn_layers: 10, attn_d: 16*256,
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
     },
     "MM35": {                      // research/model_mistral_medium35.md
@@ -487,6 +502,8 @@ const CONFIG = {
       w_route_total: 0.0,
       mtp: 1.0,                    // NO MTP module (external EAGLE draft exists)
       nvfp4_w: [95.2e9, 86.6e9, 0.0, 0.0],  // nvidia mixed recipe, MEASURED safetensors total
+      params_prefill: 124.8e9,     // dense 128B less ~3.2e9 embed + lm_head
+      attn_layers: 88, attn_d: 96*128,
       max_ctx: 262144,             // hard model max (YaRN x64 over a 4k base)
     },
     "GLM52": {                     // research/model_glm52.md
@@ -504,6 +521,8 @@ const CONFIG = {
       kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
       kv_decode_topk: 2048,        // ...scaled by min(len, topk)/topk per sequence
       kv_fp16_ok: false,           // vLLM DSA path asserts a quantized KV cache
+      params_prefill: 38.1e9,      // MoE: ~40B active less ~1.9e9 embed + lm_head
+      attn_layers: 78, attn_d: 64*256,
       max_ctx: 1048576,            // native 1M context
     },
   },
@@ -610,6 +629,72 @@ function minTpFor(m, gpuKey){
 function effective_bw(topo){
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
   return topo.tp * gpu.hbm_bw * tpEff(topo.tp, gpu.nvlink_domain);
+}
+
+/* ============================================================================
+   PREFILL — the compute roofline (mirrors scenario_model.py's prefill section;
+   research/prefill.md). Everything else on this page prices HBM bytes; a cache
+   MISS prices FLOPs: it reads the weights once and does 2 x params x tokens on
+   them. ANALYTIC AND UNVALIDATED — MFU is the soft input (the 30–60% bracket
+   moves every absolute figure by 2x, though not the ratios).
+   ========================================================================== */
+const PREFILL_MFU   = 0.45;    // mid of the plausible [0.30, 0.60] FP8 bracket
+const PREFILL_CHUNK = 32768;   // vLLM max_num_batched_tokens
+const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn)
+const REF_REQ_RATE  = 2.13;    // req/s: 64 users, one turn every 30 s (docs' f* load)
+
+// FLOPs of ONE forward pass over T tokens: GEMM + the quadratic attention term
+// (QK^T and AV are 2 x T^2 x d each; causal masking halves the pair). Chunked
+// prefill caps the quadratic share by construction — price chunks, not prompts.
+function prefillFlops(m, T){
+  return 2*m.params_prefill*T + 2*T*T*m.attn_d*m.attn_layers;
+}
+// Dense FP8 FLOP/s of one replica group. Reusing the BANDWIDTH-fitted tpEff
+// haircut is an assumption (prefill collectives likely amortise better); it
+// errs toward slower prefill, i.e. against the deployment.
+function peakFlops(topo){
+  const gpu = topo.gpu || CONFIG.GPUS["H200"];
+  return topo.tp * gpu.peak_flops_fp8 * tpEff(topo.tp, gpu.nvlink_domain);
+}
+function prefillSeconds(m, topo, T){
+  return prefillFlops(m, T) / (peakFlops(topo) * PREFILL_MFU);
+}
+// Whole context, chunked: full chunks plus a remainder priced at its own
+// (smaller-quadratic) size — not simply ceil(context/chunk) x chunk_time.
+function prefillContextSeconds(m, topo, context){
+  const nFull = Math.floor(context / PREFILL_CHUNK);
+  const rem = context - nFull * PREFILL_CHUNK;
+  let s = nFull * prefillSeconds(m, topo, PREFILL_CHUNK);
+  if (rem > 0) s += prefillSeconds(m, topo, rem);
+  return s;
+}
+// The MEAN sampled context is what a miss re-prefills (same reason the mean,
+// not the median, drives warm capacity). Monte-Carlo like everything else on
+// the page, so the tile jitters ~1% between renders.
+function meanContext(wl, n){
+  n = n || 20000;
+  let s = 0;
+  for (let i = 0; i < n; i++) s += sampleFull(wl);
+  return s / n;
+}
+// Machine time of one MISS (re-prefill the whole mean context) / one warm HIT
+// (the new turn only — a warm hit is cheap, not free).
+function coldRequestSeconds(m, topo, wl){
+  return prefillContextSeconds(m, topo, meanContext(wl));
+}
+// Cold req/s at which prefill alone consumes the whole replica group — the
+// hard ceiling the capacity model cannot see: set by FLOPs, so no KV pool,
+// CPU offload or warm-session headroom raises it.
+function maxColdRate(m, topo, wl){
+  return 1 / coldRequestSeconds(m, topo, wl);
+}
+// Miss rate at which prefill duty hits 100% at `rate` req/s, warm turns
+// included (duty is linear in f: f x cold + (1-f) x warm = 1/rate). Can
+// exceed 1 (unreachable — KV capacity binds first, not prefill).
+function breakevenMissRate(m, topo, wl, rate){
+  const cold = coldRequestSeconds(m, topo, wl);
+  const warm = prefillContextSeconds(m, topo, WARM_TURN_TOK);
+  return (1/(rate || REF_REQ_RATE) - warm) / (cold - warm);
 }
 
 /* ============================================================================
@@ -759,6 +844,15 @@ function effective_bw(topo){
   const zr = warmCapacity(glm, makeTopo("tp",1,"H200"), null, 512, 3, 1000);
   console.assert(zr.all[2] === 0 && zr.gpu[2] === 0,
     "no-fit config must stay at zero warm regardless of offload");
+  // ---- prefill ceiling, deterministic part (mirrors scenario_model.py's
+  // prefill section; the sampled-mean checks live in a second block AFTER the
+  // RNG section — its `let _spare` state is TDZ-dead while this one runs) ----
+  const t1H = CONFIG.TOPOLOGIES["1xH200"];
+  console.assert(approx(prefillContextSeconds(CONFIG.MODELS["27B"], t1H, WARM_TURN_TOK), 0.115, 0.02),
+    "27B/1xH200 warm-turn prefill ~115 ms");
+  console.assert(prefillSeconds(CONFIG.MODELS["35BA3B"], t1H, PREFILL_CHUNK) * 5
+                 < prefillSeconds(CONFIG.MODELS["27B"], t1H, PREFILL_CHUNK),
+    "the MoE must prefill a chunk >5x faster than the smaller dense 27B (active params)");
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -823,6 +917,30 @@ function sampleFull(wl){
   const prefix = isSub ? (wl.sub_shares_prefix ? wl.sys_user : wl.sys_sub) : wl.sys_user;
   return clip(length, Math.min(prefix, wl.cap), wl.cap);
 }
+
+// prefill-ceiling unit checks, sampled part — a separate block because it
+// draws from the RNG, whose `let _spare` state does not exist yet when the
+// main unitChecks IIFE (above the RNG section) runs. Expected values are
+// docs/scenarios.md § 8's table, so the tile can never silently drift from
+// the numbers the study quotes.
+(function prefillSampledChecks(){
+  const approx = (a,b,rt)=>Math.abs(a-b) <= Math.abs(b)*rt;
+  // the reference workload (Python Workload defaults); the mean over 200k
+  // draws has ~0.2% sampling error, so a 5% tolerance is all jitter headroom
+  const wlRef = { user_median:31000, user_sigma:0.81, sub_median:8000, sub_sigma:0.9,
+                  sub_ratio:0.10, sys_user:15000, sys_sub:3000, sub_shares_prefix:false,
+                  invalidation:0.01, cap:180000 };
+  const ctxRef = meanContext(wlRef, 200000);
+  const t1H = CONFIG.TOPOLOGIES["1xH200"];
+  console.assert(approx(1/prefillContextSeconds(CONFIG.MODELS["27B"], t1H, ctxRef), 0.394, 0.05),
+    "27B/1xH200 max cold rate ~0.39 req/s");
+  const tp4H = makeTopo("tp", 4);
+  const coldMM = prefillContextSeconds(CONFIG.MODELS["MM35"], tp4H, ctxRef);
+  const warmMM = prefillContextSeconds(CONFIG.MODELS["MM35"], tp4H, WARM_TURN_TOK);
+  console.assert(approx(1/coldMM, 0.232, 0.05), "MM35/TP4 max cold rate ~0.23 req/s");
+  console.assert(approx((1/REF_REQ_RATE - warmMM)/(coldMM - warmMM), 0.071, 0.10),
+    "MM35/TP4 f* ~7% — the row where prefill binds before cache");
+})();
 
 /* ============================================================================
    CAPACITY — warm reusable sessions in one cache  (mirrors _warm_once)
@@ -1632,6 +1750,17 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // true whenever the cache SPLITS across >1 replica group (pure DP or a DP×TP
   // grid) — that is what makes the headline a per-replica number
   const dp = topo.replicas>1;
+  // Prefill ceiling (analytic, unvalidated — research/prefill.md). ONE mean-
+  // context draw feeds both the ceiling and f*, so the pair stays consistent
+  // within a render; the colour compares the invalidation slider f to f*.
+  const meanCtx = noFit ? 0 : meanContext(wl);
+  const coldS = noFit ? 0 : prefillContextSeconds(model, topo, meanCtx);
+  const warmS = noFit ? 0 : prefillContextSeconds(model, topo, WARM_TURN_TOK);
+  const coldRate = noFit ? 0 : 1/coldS;
+  const fstar = noFit ? 0 : (1/REF_REQ_RATE - warmS)/(coldS - warmS);
+  const prefillClass = noFit ? undefined
+    : (wl.invalidation >= fstar ? 'crit'
+      : (wl.invalidation >= fstar/2 ? 'warn' : 'good'));
   // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
   // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
   // different draws and is not a count of anything.
@@ -1656,10 +1785,15 @@ function renderTiles(model,topo,wl,dc,warm,stress){
      tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
     {k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
      tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
+    {k:"Max cold req/s", v:noFit?"—":fmt(coldRate,2), u:noFit?"":"req/s",
+     sub:noFit?`model weights do not fit this configuration — ${fitHint}`
+        :`one miss ≈ ${fmt(coldS,1)} s of group compute · f* ${fstar>10?"> 1,000":"= "+fmt(fstar*100,0)}% at ${REF_REQ_RATE} req/s`
+         + (dp?` · ×${topo.replicas} replicas`:""), cls:prefillClass,
+     tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group. Set by FLOPs, so no KV pool, CPU offload or warm-session headroom raises it — above this rate the deployment is prefill-bound and warm capacity has stopped being the binding constraint. One miss re-prefills the MEAN sampled context in 32k chunks at MFU 45% (the [30–60%] bracket moves it 2×). f* = the miss rate that saturates the group at the reference 2.13 req/s (64 users, one turn every 30 s), warm turns included; colour compares the invalidation slider f against it — green f < f*/2, amber f ≥ f*/2, red f ≥ f* (prefill binds before cache). Analytic and UNVALIDATED — see research/prefill.md."},
     {k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥50 tok/s (comfortable), amber ≥40 (at the hard floor), red below. If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
-    {k:"Aggregate, all GPU-resident p5 warm active", wide:true, v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
+    {k:"Aggregate, all GPU-resident p5 warm active", v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
      tip:"System-wide token throughput at that same stress point — the GPU-resident p5-warm sessions all decoding at once, summed over DP replicas. A capacity ceiling for batch/offline work, not a latency promise."},
   ];
