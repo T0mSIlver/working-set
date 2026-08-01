@@ -36,6 +36,17 @@ The full write-up — setup, method, results, and recommendations — is in
   **retires** the study's low-calibration-anchor hedge, which predicted that
   same pool 15% low: the stacked-adverse TP2 planning figure rises from 403 to
   **483** warm sessions with no change to the central case.
+- **A cache miss costs 18–19× the machine time of a hit — near-identical
+  across all four architectures** — and one 32k prefill chunk spikes the
+  inter-token latency of *every* concurrently decoding user by **31–122×** —
+  the study's founding hypothesis, finally priced (docs/scenarios.md § 8).
+  Prefill is compute-bound where decode is memory-bound, so it imposes a
+  cold-request ceiling no amount of KV pool can raise: Mistral-Medium-3.5 on
+  TP4 saturates on prefill alone at a **3%** miss rate — while its 56 warm
+  sessions also fall short of the 64-user reference load, a doubly-constrained
+  deployment. Non-obvious corollary: the **35B-A3B MoE prefills ~7× faster
+  than the smaller dense 27B**, because only its ~2.4B active GEMM parameters
+  prefill.
 
 ![Cache hit-rate sweep](figures/prefix_cache_sweep.png)
 
@@ -64,7 +75,8 @@ The full write-up — setup, method, results, and recommendations — is in
 │   ├── model_mistral_medium35.md  # Mistral-Medium-3.5-128B constants + sources
 │   ├── model_glm52.md        # GLM-5.2 (MLA+DSA) constants + sources
 │   ├── gpu_b300.md           # B300 (Blackwell Ultra) hardware constants
-│   └── nvfp4.md              # NVFP4 format, B300-only gate, Qwen NVFP4 bytes
+│   ├── nvfp4.md              # NVFP4 format, B300-only gate, Qwen NVFP4 bytes
+│   └── prefill.md            # prefill (compute-roofline) constants + confidence tiers
 ├── figures/                  # generated figures used in the write-ups
 └── data/                     # provider CSVs (not committed — see data/README.md)
 ```
@@ -108,7 +120,7 @@ prompt-caching sweep (not one of these scripts).
 
 ```bash
 uv run scripts/scenario_model.py   # self-checks (calibration + published-config identities)
-uv run scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation .png
+uv run scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation / prefill_thrash .png
 uv run scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
 ```
 

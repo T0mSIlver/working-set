@@ -71,10 +71,20 @@ class GPU:
     # 8 for both parts here — HGX H200 and the 8-GPU HGX B300 baseboard we
     # actually deploy. A GB300 NVL72 rack would be 72; we do not have one.
     nvlink_domain: int = 8
+    # DENSE FP8 tensor-core throughput, FLOP/s. Used ONLY by the prefill model
+    # (research/prefill.md) — every capacity and decode figure in this study is
+    # an HBM roofline and never reads this. "Dense" matters: NVIDIA heads its
+    # spec sheets with the 2x structured-sparsity number, which no LLM serving
+    # path achieves. See research/prefill.md #1 for the per-part derivation.
+    peak_flops_fp8: float = 0.0
 
 
 GPUS = {
-    "H200": GPU("H200", 141e9, 4.8e12, supports_nvfp4=False),
+    # peak_flops_fp8: 1,979 TFLOPS DENSE. NVIDIA's H200 datasheet leads with
+    # "3,958 TFLOPS FP8" — that figure is WITH 2:4 structured sparsity, which
+    # no dense LLM GEMM reaches. Halve it. research/prefill.md #1.
+    "H200": GPU("H200", 141e9, 4.8e12, supports_nvfp4=False,
+                peak_flops_fp8=1.979e15),
     # Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores.
     # vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
     # quickstart, driver 590.48.01) shows 275,040 MiB = 288.4e9 B per GPU:
@@ -82,8 +92,15 @@ GPUS = {
     # over-provision. reserve_extra: the measured H200 hidden margin that the
     # transferred reserve must therefore add back (research/gpu_b300.md #3 —
     # formerly a flagged sensitivity, now the measured central case).
+    # peak_flops_fp8: 4.5 PFLOPS dense. The DGX B300 datasheet quotes
+    # "72 PFLOPS FP8" for 8 GPUs WITH 2:4 sparsity -> 9 PFLOPS sparse/GPU ->
+    # 4.5 dense (corroborated by third-party spec tables listing HGX B300
+    # FP8 dense at 4,500 TFLOPS). NOTE the trap this replaces: Blackwell
+    # Ultra's 1.5x FP4 uplift (13.5 PFLOPS dense, research/gpu_b300.md) did
+    # NOT carry to FP8 — "FP8 = half of FP4", true on Hopper, over-credits
+    # the B300 by 1.5x. Never measured here. research/prefill.md #1.
     "B300": GPU("B300", 288.4e9, 8.0e12, supports_nvfp4=True,
-                reserve_extra=9.75e9),
+                reserve_extra=9.75e9, peak_flops_fp8=4.5e15),
 }
 
 VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
@@ -177,6 +194,25 @@ class Model:
     # (1M native); Mistral-Medium-3.5 stays at its 262,144 model max.
     max_ctx: float = 262_144
 
+    # ---- PREFILL constants (research/prefill.md) -----------------------
+    # Prefill is COMPUTE-bound, so it is priced in FLOPs, not bytes — the only
+    # part of this study that is. These three fields exist solely for that.
+    #
+    # params_prefill: parameters doing a GEMM per token. Dense: total minus
+    #   embeddings (a lookup, no matmul) and lm_head (fires on the LAST token
+    #   of a prefill only). MoE: ACTIVE params per token — a routed token
+    #   touches k of E experts however long the chunk is, which is why an MoE
+    #   prefills far cheaper than its parameter count suggests.
+    # attn_layers / attn_d: the quadratic term. Only layers with real
+    #   attention pay O(L^2); linear-attention (DeltaNet) layers do not.
+    #   attn_d = n_query_heads x head_dim, i.e. the width QK^T and AV run at.
+    # Deliberately biased AGAINST the thrash hypothesis: excluding lm_head and
+    # embeddings makes prefill look cheaper, so a cold request's cost is a
+    # slight UNDER-estimate rather than a convenient over-estimate.
+    params_prefill: float = 0.0
+    attn_layers: int = 0
+    attn_d: float = 0.0
+
     @property
     def is_moe(self) -> bool:
         return self.w_route_total > 0
@@ -215,6 +251,11 @@ MODELS = {
         # scaling was a mis-derivation. Dense: decode reads everything.
         nvfp4_w=(21.92e9, 21.92e9, 0.0, 0.0),
         max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
+        # prefill (research/prefill.md #2): 27B dense, less ~2.5e9 of
+        # embed + untied lm_head (vocab 248,320 — the family figure the
+        # 35B-A3B ledger reads from config.json — x hidden 5,120, x2).
+        # 64 layers, interval 4 -> 16 full-attention; 24 Q heads x 256.
+        params_prefill=24.5e9, attn_layers=16, attn_d=24 * 256,
     ),
     # MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
     "35BA3B": Model(
@@ -238,6 +279,14 @@ MODELS = {
                  566_231_040,            # measured 566,238,720 (+1.4e-5)
                  18_119_393_280),        # measured 18,119,639,040 (kink stays n=32)
         max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
+        # prefill: MoE — a token routes to 8 of 256 experts no matter how
+        # long the chunk is, so the ACTIVE parameters prefill, not the 35B.
+        # From this model's own component ledger (model_35ba3b.md): per-step
+        # shared read 1.940e9 MINUS lm_head 0.509e9 (fires once per prefill,
+        # not per token) PLUS the 8 routed experts 1.007e9 = 2.44e9. (The
+        # published "~3B active" includes embed + lm_head.)
+        # 40 layers, 10 full-attention; 16 Q heads x 256.
+        params_prefill=2.44e9, attn_layers=10, attn_d=16 * 256,
     ),
     # Dense 128B, open weights (2026-04), 88 uniform full-attention GQA layers
     # (8 KV heads x 128) — the study's KV-hungriest model: 176 KiB/token FP8,
@@ -259,6 +308,15 @@ MODELS = {
         # 2026-07-27 re-verification); decode read measured 86.643e9.
         nvfp4_w=(95.2e9, 86.6e9, 0.0, 0.0),
         max_ctx=262_144,                 # hard model max (YaRN x64 over a 4k base)
+        # prefill: the TEXT DECODER only — model_mistral_medium35.md's shard
+        # ledger gives 121.8e9 decoder-layer params exactly; embeddings and
+        # lm_head (2 x 131,072 x 12,288 = 3.22e9) are outside it, and the
+        # ~2.7e9-param vision tower is an ENCODER, never executed when
+        # re-prefilling these text contexts (subtracting embed+lm_head from
+        # the 128B multimodal total, as this constant first did, left the
+        # tower inside the GEMM). ALL 88 layers are full GQA -> the study's
+        # heaviest quadratic term by far; 96 Q heads x 128.
+        params_prefill=121.8e9, attn_layers=88, attn_d=96 * 128,
     ),
     # MoE 744B-A40B (753B incl. MTP), MLA + DeepSeek Sparse Attention, open
     # weights (2026-06). Cached: 576-B MLA latent/layer + 132-B indexer keys
@@ -286,6 +344,17 @@ MODELS = {
         kv_decode_topk=2_048,            # ...scaled down for sequences < 2,048 tokens
         kv_fp16_ok=False,                # vLLM DSA path asserts a quantized KV cache
         max_ctx=1_048_576,               # native 1M context (theta 8e6)
+        # prefill: MoE — model_glm52.md's derivation gives 39.3e9 active
+        # EXCLUDING embeddings (vLLM "39B"); less lm_head 1.903e9 (fires
+        # once per prefill) = 37.4e9. (The round "~40B active less embed +
+        # lm_head" this constant first used double-trusted the marketing
+        # figure over the ledger's own sum.)
+        # attn_layers/attn_d price MLA as DENSE attention over all 78 layers:
+        # an UPPER BOUND. DSA's top-2048 sparsity is established for decode
+        # (kv_decode_*) but its prefill behaviour is not characterised in
+        # research/model_glm52.md, so the quadratic term here is pessimistic
+        # and flagged. 64 heads x 256 (qk_nope 192 + rope 64 = v_head_dim).
+        params_prefill=37.4e9, attn_layers=78, attn_d=64 * 256,
     ),
 }
 
@@ -600,6 +669,317 @@ def effective_bw(topo: Topology) -> float:
     """
     return (topo.tp * topo.gpu.hbm_bw
             * tp_efficiency(topo.tp, topo.gpu.nvlink_domain))
+
+
+# ============================================================================
+# PREFILL  — the cost of a cache MISS, and what it does to everyone else
+# ----------------------------------------------------------------------------
+# Everything above this line prices HBM bandwidth, because decode is memory-
+# bound. Prefill is not: a 32k-token chunk reads the weights ONCE and does
+# ~2 x params x tokens FLOPs on them, which puts it four orders of magnitude
+# above the roofline ridge point. Bytes are free there; FLOPs are the budget.
+#
+# This section exists to put a number on the study's founding hypothesis —
+# "a cold request re-prefills its whole context and briefly thrashes the GPU
+# for every active user". Until now that was an assertion. The quantities that
+# make it checkable:
+#
+#   prefill_seconds()      how long one forward pass over T tokens takes
+#   thrash_ratio()         cold request cost / warm request cost
+#   itl_spike()            what a decoding user sees when a chunk lands in
+#                          their batch — the "for every active user" part
+#   max_cold_rate()        cold requests/s before prefill alone saturates
+#   prefill_duty()         share of the machine spent re-prefilling, vs miss
+#                          rate — the curve that decides whether KV capacity
+#                          or prefill throughput is the binding constraint
+#
+# STATUS: analytic, UNVALIDATED. The baseline collected prefill speeds but
+# recorded only the ttft < 0.4 x cold warm/cold heuristic, so there is no
+# measured prefill number in this repo to check against. MFU is the soft spot
+# (see MFU_* below): the plausible range moves every figure here by 2x. Treat
+# these as order-of-magnitude bounds that rank configurations, exactly as the
+# rest of the study does — not as latency commitments.
+# ============================================================================
+
+# Model FLOP Utilisation: achieved FLOPs / dense peak on a large prefill GEMM.
+# Not measured here. 45% is a mid-range figure for FP8 attention+MLP prefill on
+# Hopper-class parts with TP2 collectives in the loop; the bracket is what
+# published vLLM/TensorRT-LLM prefill benchmarks generally span. Every prefill
+# number in this study should be read with the bracket, not the point.
+MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.30, 0.45, 0.60
+
+
+def prefill_flops(model: Model, tokens: float, prior: float = 0.0) -> tuple:
+    """(gemm, attention, total) FLOPs to prefill `tokens` in ONE forward pass,
+    with `prior` tokens already sitting in the KV cache.
+
+    gemm      = 2 x params_prefill x tokens   (multiply-accumulate = 2 FLOPs)
+    attention = 2 x tokens^2 x attn_d x attn_layers        (intra-chunk, causal)
+              + 4 x tokens x prior x attn_d x attn_layers  (queries vs cache)
+                QK^T and AV are 2 x pairs x d each; causal masking halves the
+                intra-chunk pairs, but every new query attends to ALL `prior`
+                cached tokens — the KV cache saves recomputing their keys and
+                values, not attending over them. Linear-attention (DeltaNet)
+                layers contribute nothing quadratic and are already inside
+                params_prefill.
+
+    Because pair-counting telescopes (sum of Ti x Pi + Ti^2/2 over any
+    partition = L^2/2), the TOTAL attention work of a context is independent
+    of how it is chunked. Chunking bounds the per-forward-pass latency (the
+    ITL spike a decode batch sees), NOT the total machine time — that is
+    exactly what max_num_batched_tokens trades.
+    """
+    if tokens < 0:
+        raise ValueError(f"tokens must be >= 0, got {tokens!r}")
+    if prior < 0:
+        raise ValueError(f"prior must be >= 0, got {prior!r}")
+    if model.params_prefill <= 0:
+        raise ValueError(f"{model.name}: no prefill constants "
+                         "(params_prefill unset — see research/prefill.md)")
+    gemm = 2.0 * model.params_prefill * tokens
+    attn = (2.0 * tokens ** 2 * model.attn_d * model.attn_layers
+            + 4.0 * tokens * prior * model.attn_d * model.attn_layers)
+    return gemm, attn, gemm + attn
+
+
+def peak_flops(topo: Topology) -> float:
+    """Dense FP8 FLOP/s of one replica GROUP, with the same TP haircut the
+    bandwidth model uses.
+
+    Reusing tp_efficiency() here is an ASSUMPTION: it was fitted (loosely) to
+    bandwidth scaling, and prefill collectives have a different shape —
+    prefill all-reduces move more bytes but amortise over far more compute, so
+    the real prefill TP haircut is probably GENTLER than 0.90/doubling. Erring
+    that way makes prefill look slower and the thrash claim stronger, so the
+    conservative choice would be no haircut at all; the study keeps the haircut
+    for consistency with every other topology figure and flags it here.
+
+    WEIGHT DTYPE IS NOT PRICED: every prefill figure reads peak_flops_fp8,
+    NVFP4 checkpoints included. The NVFP4 recipes are model-specific mixtures
+    of W4A4 layers (faster than FP8), FP8 layers, and BF16 layers (SLOWER
+    than FP8, ~half rate), so the mixture's true rate can land on either
+    side of the FP8 line — unknowable without per-layer benchmarks. For
+    NVFP4 configurations these figures are a modeling CHOICE, not a bound;
+    the section's "every bias points against the hypothesis" bookkeeping
+    cannot be claimed there. Flagged in research/prefill.md #1 and on the
+    explorer tile.
+    """
+    if topo.gpu.peak_flops_fp8 <= 0:
+        raise ValueError(f"{topo.gpu.name}: peak_flops_fp8 unset")
+    return (topo.tp * topo.gpu.peak_flops_fp8
+            * tp_efficiency(topo.tp, topo.gpu.nvlink_domain))
+
+
+def prefill_seconds(model: Model, topo: Topology, tokens: float,
+                    mfu: float = MFU_DEFAULT, prior: float = 0.0) -> float:
+    """Wall-clock of ONE prefill forward pass over `tokens`, with `prior`
+    tokens already cached (0 = the first chunk of a cold context)."""
+    if not 0 < mfu <= 1:
+        raise ValueError(f"mfu must be in (0, 1], got {mfu!r}")
+    check_dtype_supported(model, topo)
+    return prefill_flops(model, tokens, prior)[2] / (peak_flops(topo) * mfu)
+
+
+def prefill_tokens_per_s(model: Model, topo: Topology, chunk: float,
+                         mfu: float = MFU_DEFAULT) -> float:
+    """Sustained prefill throughput at a given chunk size (tokens/s).
+
+    Chunk-size dependent: the quadratic term means a bigger chunk prefills a
+    token more slowly. vLLM's max_num_batched_tokens sets this.
+    """
+    return chunk / prefill_seconds(model, topo, chunk, mfu)
+
+
+def prefill_context_seconds(model: Model, topo: Topology, context: float,
+                            chunk: float, mfu: float = MFU_DEFAULT,
+                            prior: float = 0.0) -> float:
+    """Machine time to prefill a whole `context`, chunked at `chunk` tokens,
+    on top of `prior` already-cached tokens.
+
+    Each chunk is priced with the cache it actually attends over, so later
+    chunks cost more than earlier ones. The pair-count telescopes: the total
+    equals a single unchunked pass exactly (see prefill_flops), making this
+    chunk-size INVARIANT — the slider trades spike size, not total work.
+    """
+    if chunk <= 0:
+        raise ValueError(f"chunk must be > 0, got {chunk!r}")
+    total, done = 0.0, 0.0
+    context = float(context)
+    while done < context:
+        step = min(chunk, context - done)
+        total += prefill_seconds(model, topo, step, mfu, prior=prior + done)
+        done += step
+    return total
+
+
+def context_moments(wl, n: int = 200_000, seed: int = 0) -> tuple:
+    """(E[L], E[L^2]) of the workload's context length.
+
+    Prefill cost is quadratic in the context, so its EXPECTATION needs the
+    second moment — pricing the mean length would underprice the heavy tail
+    (E[L^2] >= E[L]^2, strictly so for these lognormal mixtures).
+    """
+    full, _, _, _ = wl.sample(np.random.default_rng(seed), n)
+    return float(full.mean()), float((full.astype(float) ** 2).mean())
+
+
+def arithmetic_intensity(model: Model, tokens: float) -> float:
+    """FLOPs per byte of weight traffic for a prefill of `tokens`.
+
+    Compare against gpu.peak_flops_fp8 / gpu.hbm_bw (the roofline ridge, ~412
+    on the H200): far above it means compute-bound, far below means
+    memory-bound. Prefill and decode land on opposite sides by ~3 orders of
+    magnitude, which is exactly why they interfere so badly when batched
+    together — and why the bandwidth-only decode model cannot see it.
+    """
+    return prefill_flops(model, tokens)[2] / model.w_resident
+
+
+def ridge_point(gpu: GPU) -> float:
+    """FLOP/byte at which a kernel stops being memory-bound on this part."""
+    return gpu.peak_flops_fp8 / gpu.hbm_bw
+
+
+def mean_context(wl, n: int = 200_000, seed: int = 0) -> float:
+    """Mean sampled context length of a workload (tokens).
+
+    The MEAN, not the median, is what prefill cost scales with — same reason
+    it drives warm capacity (docs/scenarios.md, "What sigma means here").
+    """
+    full, _, _, _ = wl.sample(np.random.default_rng(seed), n)
+    return float(full.mean())
+
+
+def cold_request_seconds(model: Model, topo: Topology, wl, chunk: float,
+                         mfu: float = MFU_DEFAULT) -> float:
+    """EXPECTED machine time to serve one CACHE MISS: re-prefill the whole
+    context, averaged over the workload's context-length distribution.
+
+    Uses the closed form the telescoping pair-count allows (total FLOPs of a
+    chunked context L = gemm(L) + 2 L^2 d n_layers, independent of chunking):
+        E[cost] = (2 params E[L] + 2 attn_d attn_layers E[L^2]) / (peak x mfu)
+    E[L^2], not E[L]^2 — the quadratic term must be priced on the heavy tail,
+    not on the mean draw.
+    """
+    check_dtype_supported(model, topo)
+    if not 0 < mfu <= 1:
+        raise ValueError(f"mfu must be in (0, 1], got {mfu!r}")
+    el, el2 = context_moments(wl)
+    flops = (2.0 * model.params_prefill * el
+             + 2.0 * model.attn_d * model.attn_layers * el2)
+    return flops / (peak_flops(topo) * mfu)
+
+
+def warm_request_seconds(model: Model, topo: Topology, turn_tokens: float,
+                         chunk: float, mfu: float = MFU_DEFAULT,
+                         prior: float = 0.0) -> float:
+    """Machine time to serve one WARM HIT: prefill the new turn's suffix on
+    top of the `prior` cached context.
+
+    A warm hit is not free — the study is explicit that it still prefills the
+    new turn (docs/scenarios.md limitation 9, "Warm != SLA"). Nor is the
+    cached context free: the new turn's queries attend over ALL of it (the
+    cache spares recomputing its keys/values, not attending over them), so a
+    warm hit carries a term LINEAR in the cached length. Callers price it at
+    prior = E[L]; the earlier accounting (prior = 0) inflated the thrash
+    ratio by making hits look cheaper than the machine serves them.
+    """
+    return prefill_context_seconds(model, topo, turn_tokens, chunk, mfu,
+                                   prior=prior)
+
+
+def thrash_ratio(model: Model, topo: Topology, wl, turn_tokens: float,
+                 chunk: float, mfu: float = MFU_DEFAULT) -> float:
+    """How many times more machine time a miss costs than a hit.
+
+    THE number behind the study's hypothesis. Independent of MFU and of the
+    GPU part (both cancel) — a property of the workload's context-length
+    distribution against the turn length. It is NOT independent of the
+    attention model itself: on attention-heavy rows (GLM-5.2's dense-MLA
+    upper bound above all) the quadratic term drives both numerator and the
+    warm hit's cross term, so those rows inherit research/prefill.md
+    weakness #2 rather than escaping it.
+    """
+    return (cold_request_seconds(model, topo, wl, chunk, mfu)
+            / warm_request_seconds(model, topo, turn_tokens, chunk, mfu,
+                                   prior=mean_context(wl)))
+
+
+def itl_spike(model: Model, topo: Topology, wl, n_decode: int, chunk: float,
+              mfu: float = MFU_DEFAULT, n_iter: int = 2000, seed: int = 0):
+    """What a prefill chunk does to the OTHER users in the batch.
+
+    Returns (decode_ms, mixed_ms, ratio). With chunked prefill, vLLM batches
+    the chunk together with the running decodes, so nobody is starved — the
+    forward pass containing the chunk simply takes prefill-time instead of
+    decode-time, and every one of the `n_decode` users waiting on it sees a
+    single inter-token gap that long.
+
+    That is the precise sense in which one cold request "thrashes the GPU for
+    every active user": not a stall, a synchronised latency spike whose size
+    is the ratio returned here.
+    """
+    _, p50, _, _ = decode_curves(model, topo, wl, [n_decode], n_iter=n_iter,
+                                 seed=seed)
+    decode_s = model.mtp / p50[0]          # seconds per token, per user
+    # the chunk is priced mid-re-prefill (prior = E[L]/2, the average cache
+    # it attends over during a full cold re-prefill); the LAST chunk of a
+    # mean-length context runs ~prior = E[L], about twice this cross term
+    mixed_s = decode_s + prefill_seconds(model, topo, chunk, mfu,
+                                         prior=mean_context(wl) / 2)
+    return decode_s * 1e3, mixed_s * 1e3, mixed_s / decode_s
+
+
+def max_cold_rate(model: Model, topo: Topology, wl, chunk: float,
+                  mfu: float = MFU_DEFAULT) -> float:
+    """Cold requests/second at which prefill alone consumes the whole machine.
+
+    A hard ceiling the capacity model cannot see: it is set by FLOPs, so no
+    amount of KV pool, CPU offload or warm-session headroom raises it. Above
+    this rate the deployment is prefill-bound and warm capacity has stopped
+    being the binding constraint.
+    """
+    return 1.0 / cold_request_seconds(model, topo, wl, chunk, mfu)
+
+
+def prefill_duty(model: Model, topo: Topology, wl, req_rate: float,
+                 chunk: float, turn_tokens: float = 0.0,
+                 mfu: float = MFU_DEFAULT) -> float:
+    """Fraction of the replica group spent prefilling at `req_rate` req/s.
+
+    Counts the cold re-prefills (wl.invalidation of the traffic) plus, if
+    turn_tokens > 0, the new-turn prefill every WARM hit still pays. Values
+    above 1.0 mean prefill alone oversubscribes the group: the queue grows
+    without bound and TTFT diverges, whatever the warm-session count says.
+    """
+    if req_rate < 0:
+        raise ValueError(f"req_rate must be >= 0, got {req_rate!r}")
+    f = wl.invalidation
+    per_s = f * cold_request_seconds(model, topo, wl, chunk, mfu)
+    if turn_tokens > 0:
+        per_s += (1 - f) * warm_request_seconds(model, topo, turn_tokens,
+                                                chunk, mfu,
+                                                prior=mean_context(wl))
+    return req_rate * per_s
+
+
+def breakeven_miss_rate(model: Model, topo: Topology, wl, req_rate: float,
+                        chunk: float, turn_tokens: float = 0.0,
+                        mfu: float = MFU_DEFAULT) -> float:
+    """Miss rate at which prefill duty hits 1.0 for this request rate.
+
+    Returns >1 (i.e. unreachable) when even an all-cold workload fits, and can
+    return <=0 when the warm-turn prefill alone already saturates the group.
+    Solving duty(f) = 1 for f, with duty linear in f:
+        f x cold + (1-f) x warm = 1 / rate
+    """
+    cold = cold_request_seconds(model, topo, wl, chunk, mfu)
+    warm = (warm_request_seconds(model, topo, turn_tokens, chunk, mfu,
+                                 prior=mean_context(wl))
+            if turn_tokens > 0 else 0.0)
+    if cold == warm:
+        return float("inf")
+    return (1.0 / req_rate - warm) / (cold - warm)
 
 
 # ============================================================================
@@ -1103,8 +1483,90 @@ def _selfcheck():
         except ValueError:
             pass
 
+    # ---- PREFILL (research/prefill.md) ------------------------------------
+    CH = 32_768                              # vLLM max_num_batched_tokens
+    # roofline sides: prefill is compute-bound by ~2 orders over the ridge,
+    # decode is memory-bound by ~1.5 — the whole reason they interfere
+    ridge = ridge_point(GPUS["H200"])
+    assert arithmetic_intensity(m27, CH) > 100 * ridge, "prefill must be compute-bound"
+    dec_bytes = m27.w_decode(64) + 64 * 40_000 * m27.kv_bpt + 2 * 64 * m27.deltanet_state
+    assert (2 * m27.params_prefill * 64) / dec_bytes < ridge / 10, \
+        "decode must be memory-bound"
+    # FLOP split: gemm dominates a 32k chunk, but attention is not negligible
+    g, a, tot = prefill_flops(m27, CH)
+    assert abs(g - 2 * m27.params_prefill * CH) < 1, "gemm = 2 x params x tokens"
+    assert 0.05 < a / tot < 0.20, f"27B attention share at 32k ~12%, got {a / tot:.1%}"
+    # ...and it is genuinely quadratic: 2x the chunk, >2x the attention share
+    assert prefill_flops(m27, 2 * CH)[1] / prefill_flops(m27, CH)[1] == 4.0
+    # a chunk costs ~1 s on TP2 — the headline order of magnitude
+    assert 0.5 < prefill_seconds(m27, tp2, CH) < 2.0, "27B TP2 32k chunk ~1 s"
+    # MFU bracket brackets it monotonically
+    assert (prefill_seconds(m27, tp2, CH, MFU_HIGH)
+            < prefill_seconds(m27, tp2, CH, MFU_DEFAULT)
+            < prefill_seconds(m27, tp2, CH, MFU_LOW))
+    # THE hypothesis: a miss costs an order of magnitude more than a hit, and
+    # the ratio is invariant to MFU and to the GPU part (both cancel)
+    th = thrash_ratio(m27, tp2, wl, 2_000, CH)
+    assert 10 < th < 100, f"cold/warm cost ratio should be ~19x, got {th:.0f}"
+    for other in (topology("tp", 1), topology("tp", 1, "B300")):
+        assert abs(thrash_ratio(m27, other, wl, 2_000, CH, MFU_LOW) - th) < 0.5, \
+            "thrash ratio must not depend on MFU or GPU part"
+    # MoE prefills far cheaper than a SMALLER dense model: a token routes to
+    # 8 of 256 experts however long the chunk is. This is the extension's most
+    # load-bearing new claim, so it is asserted, not just printed.
+    assert (prefill_tokens_per_s(m35, tp2, CH)
+            > 5 * prefill_tokens_per_s(m27, tp2, CH)), \
+        "35B-A3B must prefill >5x faster than the dense 27B"
+    # the pair-count telescopes: a chunked context costs exactly one big pass
+    # (chunking bounds the spike, not the total), and the second chunk pays
+    # its cross-attention over the first
+    assert abs(prefill_context_seconds(m27, tp2, 2 * CH, CH)
+               - prefill_seconds(m27, tp2, 2 * CH)) < 1e-9, \
+        "chunked total must equal the unchunked pass (telescoping pairs)"
+    assert (prefill_seconds(m27, tp2, CH, prior=CH)
+            > prefill_seconds(m27, tp2, CH)), "later chunks cost more"
+    assert abs(prefill_flops(m27, CH, prior=CH)[1]
+               - 3 * prefill_flops(m27, CH)[1]) < 1, \
+        "chunk 2's attention = intra + 2x cross = 3x chunk 1's"
+    # a warm hit is charged its attention over the cached context: linear in
+    # the cache, so it cannot be cheaper than the cold turn-only pass
+    assert (warm_request_seconds(m27, tp2, 2_000, CH, prior=100_000)
+            > warm_request_seconds(m27, tp2, 2_000, CH)), \
+        "cached context is not free to attend over"
+    # E[L^2] > E[L]^2 must make the expected miss dearer than the mean-length miss
+    _el, _el2 = context_moments(wl)
+    assert _el2 > _el ** 2, "second moment sanity"
+    assert (cold_request_seconds(m27, tp2, wl, CH)
+            > prefill_context_seconds(m27, tp2, _el, CH)), \
+        "expected miss cost must price the heavy tail, not the mean draw"
+    # duty cycle is linear in miss rate and crosses 1.0 at breakeven_miss_rate
+    fstar = breakeven_miss_rate(m27, tp2, wl, 2.13, CH, 2_000)
+    assert 0 < fstar < 1, f"27B TP2 breakeven miss rate should be ~26%, got {fstar:.0%}"
+    assert abs(prefill_duty(m27, tp2, replace(wl, invalidation=fstar), 2.13,
+                            CH, 2_000) - 1.0) < 1e-9, "breakeven must give duty 1.0"
+    # max_cold_rate is the all-cold case of the same arithmetic
+    assert abs(prefill_duty(m27, tp2, replace(wl, invalidation=1.0),
+                            max_cold_rate(m27, tp2, wl, CH), CH) - 1.0) < 1e-9
+    # guards
+    for bad_mfu in (0.0, -0.1, 1.5):
+        try:
+            prefill_seconds(m27, tp2, CH, bad_mfu)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+    try:
+        prefill_flops(replace(m27, params_prefill=0.0), CH)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
     print("selfcheck OK")
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
+    print(f"  prefill 27B TP2 32k  = {prefill_seconds(m27, tp2, CH) * 1e3:6.0f} ms "
+          f"({prefill_flops(m27, CH)[2] / 1e12:.0f} TFLOP, "
+          f"{prefill_flops(m27, CH)[1] / prefill_flops(m27, CH)[2]:.0%} attention)")
+    print(f"  cold/warm cost ratio = {th:6.0f}x   breakeven miss rate "
+          f"{fstar:.0%} @ 2.13 req/s")
     for dtype in KV_DTYPES:
         for mk in MODELS:
             if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:
