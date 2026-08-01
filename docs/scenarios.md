@@ -151,11 +151,11 @@ on B300 is the exception — min TP 1, so pure DP is real there, and it appears 
 the `DP8×TP1` column below.) Data parallelism in the other cells means
 replicating whole **TP groups**, which `topology_grid(dp, tp)` now expresses.
 
-These min-TP figures are **central-case**: they use the calibrated
-`ACT_RESERVE ≈ 18.0 GiB`. Under the explorer's *conservative* structural
-assumption the reserve is larger and the thresholds rise (GLM-5.2 → 8 on H200,
-4 on B300); the explorer reports that number, Python's `min_tp_for` reports this
-one.
+These min-TP figures use the calibrated `ACT_RESERVE ≈ 18.0 GiB`, and there is
+now only one such figure per configuration: the explorer's low-anchor case —
+which raised the reserve to 33.0 GiB and pushed GLM-5.2 to 8 on H200 / 4 on
+B300 — was retired 2026-07-29 (§ Measured cross-check). The explorer's
+`minTpFor` and Python's `min_tp_for` therefore always agree.
 
 The splits of one 8-GPU node that actually fit (FP8 weights, FP8 KV;
 `system = replicas × per-group`, and only with session-sticky routing):
@@ -297,7 +297,7 @@ Three consistency checks, all passing:
    hybrid allocator carving Gated-DeltaNet state pages from the same pool —
    directionally matching this study's separate per-session state charge —
    but its sizing is internal to the allocator: at 75 MiB/session it would
-   cover ~320 sessions' states, far more than the 17 concurrent max-length
+   cover ~325 sessions' states, far more than the 17 concurrent max-length
    sequences, suggesting a pre-allocation (e.g. sized to `max_num_seqs` and
    page granularity) rather than per-live-session accounting. The gap's
    *existence* supports charging state separately; its *magnitude* is not
@@ -311,6 +311,40 @@ weights-counted-once TP arithmetic, the FP16 KV doubling, and the reserve's
 *transferability* to a second GPU (the reserve's absolute magnitude is defined
 by the anchor, so a globally-wrong anchor would shift both numbers together —
 this check cannot catch that; only a direct FP8 re-measurement can).
+
+#### Consequence: the low-anchor assumption is retired (2026-07-29)
+
+Until this log existed, the anchor was the study's single largest structural
+unknown, and both `tables.py`'s stacked case and the explorer's *Conservative*
+toggle hedged it by re-solving the reserve from **2 × the measured FP16 lower
+bound** (2.278M FP8 tokens ⇒ a 33.0 GiB per-GPU reserve). Run through the same
+pool arithmetic as the log (regenerate: the "Retired assumption" section of
+`tables.py`):
+
+| 1×H200 FP8 anchor | per-GPU reserve | predicted 27B FP16 TP2 pool | vs the 3,233,564 measured |
+| --- | --- | --- | --- |
+| 2.770M *(in use)* | 17.98 GiB | 3.242M | **+0.26%** |
+| 2.278M *(the hedge)* | 33.00 GiB | 2.750M | **−14.96%** |
+| 2.762M *(implied by the log)* | 18.24 GiB | 3.234M | — |
+
+A plausible-adverse assumption has to be one the hardware has not already ruled
+out, and this one is off by fifteen percent in the direction the measurement
+closes. The refutation is internal to the model's own reserve arithmetic — it
+assumes the non-KV reserve transfers across KV dtype and topology, the same
+assumption every projection in this study makes (see the transferability caveat
+above). A reserve that were strongly dtype- or topology-dependent could in
+principle resurrect a low FP8 anchor, but it would also make the central
+anchor's +0.26% match a coincidence; only a direct FP8 re-measurement settles
+that residual. It is gone from both the explorer and the stacked case; `tables.py`
+keeps the three-way comparison above as a regression check so the refutation
+stays reproducible rather than becoming folklore.
+
+Two things this deliberately does **not** do. It does not re-anchor the model
+to the measured 18.24 GiB: the 1.4% reserve gap is worth under 0.5% on every
+published figure, which is not worth invalidating every number in this document
+for. And it does not retire the *other* structural knobs — the recurrent-state
+dtype and the deployed-weight overhead are untouched by this log (see
+§ Statistical honesty).
 
 Reference workload for all static figures: users ~ log-normal(median 31k, σ 0.81)
 behind a **15k** system prompt; subagents ~ log-normal(median 8k, σ 0.9) behind a
@@ -629,26 +663,39 @@ a 95%-confidence forecast of production capacity — parameter and structural
 uncertainty are far larger than sampling spread. For the headline 35B-A3B TP2 case
 (p5 632, p50 678; MC estimator jitter ~1–3 sessions):
 
-| Structural assumption flipped (one at a time) | Δ warm sessions |
-| --- | --- |
-| +15% deployed-weight overhead | ~ −17 |
-| fp32 (not bf16) DeltaNet state | ~ −68 |
-| 10% (not 1%) invalidation | ~ −87 |
-| anchor at 2× the measured FP16 *lower* bound (2.278M, not 2.77M) | ~ −105 |
-| loss of global prefix sharing (per-tenant prefixes) | ~ −200 (proxy) |
-| FP16 KV instead of FP8 | ~ −320 |
+| Structural assumption flipped (one at a time) | Δ warm sessions (p50) | still live? |
+| --- | --- | --- |
+| +15% deployed-weight overhead | ~ −17 | yes — unmeasured on 3 of 4 models |
+| fp32 (not bf16) DeltaNet state | ~ −68 | yes — dtype never observed |
+| 10% (not 1%) invalidation | ~ −87 | yes — a workload input, not a constant |
+| ~~anchor at 2× the measured FP16 *lower* bound (2.278M, not 2.77M)~~ | ~~−105~~ | **no — refuted 2026-07-29** |
+| loss of global prefix sharing (per-tenant prefixes) | ~ −200 (proxy) | yes — a policy risk |
+| FP16 KV instead of FP8 | ~ −320 | n/a — a configuration choice, not an unknown |
 
-**Stacking** the first four plausible-adverse assumptions (low anchor + fp32 state
-+ weight overhead + 10% invalidation) moves TP2 warm p5 from **632 to 403** (user
-class ~367) — a ~230-session structural downside against a 46-session p5-vs-p50
+**Stacking** the three plausible-adverse assumptions that survive (fp32 state +
+weight overhead + 10% invalidation) moves TP2 warm p5 from **632 to 483** (user
+class ~439) — a ~149-session structural downside against a 46-session p5-vs-p50
 cushion (regenerate: the "Structural-uncertainty stack" section of `tables.py`).
-Note the stack is smaller than the −277 sum of the one-at-a-time rows: the
-effects interact (each assumption shrinks the pool the next one acts on, so
+Note the p5 stack delta (−149) is smaller even than the −172 sum of the
+surviving one-at-a-time rows — and those are p50 deltas, so the comparison
+crosses percentiles; the like-for-like point is that at either percentile
+the stack undershoots the sum: the effects interact (each assumption shrinks the pool the next one acts on, so
 marginal costs shrink as the stack deepens).
+
+The stack read **403** before the 2×H200 log; the 80-session difference is
+entirely the retired low anchor (§ Measured cross-check). That is the shape of
+the trust upgrade a single measurement bought: not a better central estimate —
+the central case moved by nothing — but a smaller *downside*, because the worst
+case the numbers had to defend against turned out to be excluded by hardware.
+The two assumptions still in the stack are exactly the two the log cannot
+speak to, which is why the explorer now exposes them as two separately-named
+controls (**Recurrent state dtype**, **Deployed-weight overhead**) instead of
+one word.
 The whiskers in the figures show *packing variability*, not forecast confidence.
-Until one exact-configuration measurement re-anchors the model, purchasing-grade
-planning should either use a stacked-conservative scenario like the 403 figure or
-apply an explicit structural haircut to the central p5.
+Until an exact-configuration **FP8** measurement re-anchors the model — the TP2
+log settled the reserve, not the FP8 path or the 35B-A3B — purchasing-grade
+planning should either use a stacked-conservative scenario like the 483 figure
+or apply an explicit structural haircut to the central p5.
 
 Related honesty note: the FP16-path "cross-check" (1.39M inside the measured
 FP16 interval) is **partially circular** — the FP8 anchor was constructed as
@@ -681,23 +728,34 @@ Recorded so the numbers below are read the way they were decided:
 4. **Reporting: conservative base, visible headroom.** The purchasing-facing
    number excludes the immature serving paths — **no CPU offload, no MTP speedup,
    no N > 2 TP** — on top of the stacked-adverse structural case. The excluded
-   upside stays fully explorable: the interactive explorer has switches for the
-   structural assumption set (Central/Conservative), an MTP-speedup knob
-   (1.0× = off, up to 3.0×, with the implied per-draft acceptance shown),
-   offload (0–1024 GiB) and GPU count, so every tradeoff is playable rather
-   than hidden.
+   upside stays fully explorable: the interactive explorer has an MTP-speedup
+   knob (1.0× = off, up to 3.0×, with the implied per-draft acceptance shown),
+   offload (0–1024 GiB), GPU count, and the two surviving structural
+   assumptions as separate named controls — **Recurrent state dtype**
+   (bf16/fp32) and **Deployed-weight overhead** (as-published/+15%), each
+   disabled on the models where it would be a no-op. So every tradeoff is
+   playable rather than hidden, and each one says what it is.
 
 **Conservative purchasing view** (stacked structural case + immature paths off;
 regenerate via the "Structural-uncertainty stack" section of `tables.py`):
 
 | Config | Warm p5 (stacked) | user-class p5 | v@p5-warm, MTP off |
 | --- | --- | --- | --- |
-| 35B-A3B, 1×H200 | **144** | **130** | 43 tok/s |
-| 35B-A3B, TP2 | **403** | **367** | 34 tok/s |
+| 35B-A3B, 1×H200 | **184** | **167** | 36 tok/s |
+| 35B-A3B, TP2 | **483** | **439** | 29 tok/s |
 
-Note the MTP-off stress speed on TP2 (34 tok/s) sits below the 40 tok/s hard
-floor: without the speculative-decoding path, holding the floor at full warm
-load depends on duty cycle < 100%.
+These are up from 144 / 403 in the pre-measurement stance, purely because the
+low anchor left the stack (§ Measured cross-check) — the constants behind the
+central case did not move.
+
+Note the MTP-off stress speeds (36 and 29 tok/s) sit below the 40 tok/s hard
+floor, and *lower* than the 43 / 34 tok/s quoted before: the stress point is
+"every p5-warm session decoding at once", so a larger warm population is read
+at a higher concurrency. Without the speculative-decoding path, holding the
+floor at full warm load depends on duty cycle < 100% — a little more so now,
+not less. This is the one place where retiring a pessimistic assumption makes a
+readout look worse, and it is not an artefact: the extra sessions are real, and
+so is the bandwidth they would share.
 
 ## Outcomes
 
@@ -896,8 +954,9 @@ Ordered roughly by how much each could move the numbers:
    worth removing when the anchor is re-measured). *Partial mitigation:* the
    TP2 FP16 startup log (§ Measured cross-check) independently lands within
    0.3% of the model's prediction, implying the anchor-derived reserve is
-   about right — but it shares the anchor's 27B lineage, so a direct FP8
-   and 35B-A3B measurement would still move the most.
+   about right — enough to retire the low-anchor hedge outright, but it shares
+   the anchor's 27B lineage, so a direct FP8 and 35B-A3B measurement would
+   still move the most.
 2. **No prefill/decode interference.** The decode model prices bandwidth only; chunked
    prefill of cold 100k+ prompts steals decode bandwidth and adds TTFT queueing not
    modelled here. At high invalidation or cold-start rates this is first-order.
@@ -907,13 +966,22 @@ Ordered roughly by how much each could move the numbers:
    study should be re-anchored with one measurement run once the model is deployed.
 4. **DeltaNet state dtype assumed bf16** (31.9 MiB/session), inferred from the
    baseline's 75 MiB fitting the 27B's bf16 arithmetic. If vLLM keeps fp32 state,
-   warm capacity drops ~10% (sensitivity in `tables.py`).
+   warm capacity drops ~10% (sensitivity in `tables.py`; explorer control
+   **Recurrent state dtype**, disabled on Mistral-Medium-3.5 and GLM-5.2, which
+   hold no recurrent state). The 2×H200 log does **not** settle this: its 23.8 GiB
+   of allocator state pages would be ~325 sessions at bf16 or ~162 at fp32, and
+   neither matches the 17 concurrent max-length sequences — that pool reads as a
+   `max_num_seqs`-sized pre-allocation, so it cannot discriminate the dtype. With
+   the anchor now measured, this is the largest remaining structural unknown.
 5. **Deployed-weight overhead.** 35B-A3B resident bytes are raw param bytes; the 27B's
    stated footprint runs ~15% above raw. Applying +15% costs 6.2% of the 1×H200 pool
-   (2.6% on TP2). The explorer's Conservative toggle applies the same +15% to every
+   (2.6% on TP2). Explorer control **Deployed-weight overhead**, offered on every
    model whose resident bytes are raw or on-disk-checkpoint figures — all but the
-   27B (Mistral-Medium-3.5 and GLM-5.2 included); the `tables.py` stacked case
-   stays 35B-A3B-scoped by definition.
+   27B (Mistral-Medium-3.5 and GLM-5.2 included), and disabled *on* the 27B, since
+   that is where the 15% was derived from and applying it there would double-count.
+   The `tables.py` stacked case stays 35B-A3B-scoped by definition. Note the log
+   corroborates the 27B's as-deployed 28.8 GiB — the *basis* of the 15% — without
+   saying anything about whether the ratio transfers to another architecture.
 6. **Expert-union models, not measurement.** The linear bound is a true byte upper
    bound; the coverage curve is an i.i.d.-routing reference, not a lower bound. Their
    gap peaks ~30% at n ≈ 32 and closes above saturation.

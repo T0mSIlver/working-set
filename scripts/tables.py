@@ -9,7 +9,7 @@ import dataclasses
 import numpy as np
 
 import scenario_model as M
-from scenario_model import Workload, MODELS, TOPOLOGIES
+from scenario_model import GIB, Workload, MODELS, TOPOLOGIES
 
 MODELS_K = ["27B", "35BA3B"]
 TOPOS_K = ["1xH200", "2xH200-TP2", "2xH200-DP2"]
@@ -219,34 +219,60 @@ def main():
         b = M.kv_pool_tokens(m_ovh, TOPOLOGIES[tk])
         print(f"  {tk:12} raw={a / 1e6:.2f}M  +15%={b / 1e6:.2f}M  ({(b / a - 1) * 100:+.1f}%)")
 
-    print("\n== Structural-uncertainty stack (35B-A3B, warm p5) ==")
-    print("  MC sampling spread (p50->p5 ~ 46 sessions) is SMALL next to structural")
-    print("  unknowns. Stacking plausible adverse assumptions bounds the downside:")
-    print("  anchor at 2x the measured FP16 LOWER bound (2.278M), fp32 recurrent")
-    print("  state, +15% deployed-weight overhead, 10% invalidation.")
-    print("  (This stacked case is 35B-A3B-scoped by definition. The explorer's")
-    print("  Conservative toggle applies the same +15% to every model whose")
-    print("  resident bytes are raw/checkpoint figures — all but the 27B.)")
-    base_p5 = M.warm_capacity(m, TOPOLOGIES["2xH200-TP2"], w0, n_iter=1500)[0]
+    print("\n== Retired assumption: low calibration anchor (2.278M) ==")
+    print("  Kept as a REGRESSION CHECK, not as a planning case. The stack below")
+    print("  used to include an anchor at 2x the measured FP16 LOWER bound; the")
+    print("  2xH200 TP2 FP16 startup log (3,233,564 tokens) refutes it directly.")
     saved_anchor, saved_reserve = M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE
+    t_tp2 = TOPOLOGIES["2xH200-TP2"]
+    m27_16 = M.with_kv_dtype(MODELS["27B"], "fp16")
+    measured_tp2 = 3_233_564
     try:
+        central_tp2 = M.kv_pool_tokens(m27_16, t_tp2)
         M.BASELINE_POOL_TOKENS_27B_1GPU = 2 * 1.139e6
         M.ACT_RESERVE = M._act_reserve()
-        m_stack = dataclasses.replace(m, deltanet_state=m.deltanet_state * 2,
-                                      w_resident=m.w_resident * 1.15)
-        w_stack = wl(invalidation=0.10)
-        m_nomtp = dataclasses.replace(m_stack, mtp=1.0)   # MTP = immature path, excluded
-        for tk in ["1xH200", "2xH200-TP2"]:
-            s5, s50, _ = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500)
-            s5u = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500,
-                                  which="user")[0]
-            _, v, _, _ = M.decode_curves(m_nomtp, TOPOLOGIES[tk], w_stack, [int(s5)],
-                                         n_iter=800)
-            print(f"  {tk:12} stacked p5={s5:4.0f} p50={s50:4.0f} (user p5 {s5u:4.0f})  "
-                  f"v@p5warm MTP-off={v[0]:3.0f} tok/s")
+        low_tp2, low_reserve = M.kv_pool_tokens(m27_16, t_tp2), M.ACT_RESERVE
     finally:
         M.BASELINE_POOL_TOKENS_27B_1GPU, M.ACT_RESERVE = saved_anchor, saved_reserve
-    print(f"  (central TP2 p5 = {base_p5:.0f}; stacked downside ~{base_p5 - 403:.0f} sessions)")
+    # reserve the log implies, run backwards through the same pool arithmetic
+    meas_reserve = (t_tp2.n_gpu * M.VRAM_PER_GPU - MODELS["27B"].w_resident
+                    - measured_tp2 * m27_16.kv_bpt) / t_tp2.n_gpu
+    for label, pool, res in [("in use  (2.77M) ", central_tp2, saved_reserve),
+                             ("retired (2.278M)", low_tp2, low_reserve),
+                             ("MEASURED log    ", measured_tp2, meas_reserve)]:
+        print(f"  27B FP16 TP2 pool, anchor {label}: {pool / 1e6:5.3f}M tokens "
+              f"({pool / measured_tp2 - 1:+6.2%} vs log)  reserve={res / GIB:5.2f} GiB")
+    print(f"  -> the anchor in use is within 0.3%; the retired one is off by 15%.")
+    print(f"     Equivalent 1xH200 FP8 anchor implied by the log: "
+          f"{(M.VRAM_PER_GPU - MODELS['27B'].w_resident - meas_reserve) / MODELS['27B'].kv_bpt / 1e6:.3f}M")
+
+    print("\n== Structural-uncertainty stack (35B-A3B, warm p5) ==")
+    print("  MC sampling spread (p50->p5 ~ 46 sessions) is SMALL next to structural")
+    print("  unknowns. Stacking the assumptions that remain UNMEASURED bounds the")
+    print("  downside: fp32 recurrent state, +15% deployed-weight overhead, 10%")
+    print("  invalidation. (The low anchor was dropped from this stack 2026-07-29 —")
+    print("  see the section above; that is the whole 403 -> 483 move on TP2.)")
+    print("  (This stacked case is 35B-A3B-scoped by definition. The explorer")
+    print("  offers the same +15% on every model whose resident bytes are")
+    print("  raw/checkpoint figures — all but the 27B.)")
+    base_p5 = M.warm_capacity(m, TOPOLOGIES["2xH200-TP2"], w0, n_iter=1500)[0]
+    m_stack = dataclasses.replace(m, deltanet_state=m.deltanet_state * 2,
+                                  w_resident=m.w_resident * 1.15)
+    w_stack = wl(invalidation=0.10)
+    m_nomtp = dataclasses.replace(m_stack, mtp=1.0)   # MTP = immature path, excluded
+    stacked_tp2 = None
+    for tk in ["1xH200", "2xH200-TP2"]:
+        s5, s50, _ = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500)
+        s5u = M.warm_capacity(m_stack, TOPOLOGIES[tk], w_stack, n_iter=1500,
+                              which="user")[0]
+        _, v, _, _ = M.decode_curves(m_nomtp, TOPOLOGIES[tk], w_stack, [int(s5)],
+                                     n_iter=800)
+        if tk == "2xH200-TP2":
+            stacked_tp2 = s5
+        print(f"  {tk:12} stacked p5={s5:4.0f} p50={s50:4.0f} (user p5 {s5u:4.0f})  "
+              f"v@p5warm MTP-off={v[0]:3.0f} tok/s")
+    print(f"  (central TP2 p5 = {base_p5:.0f}; stacked downside "
+          f"~{base_p5 - stacked_tp2:.0f} sessions)")
 
     # ------------------------------------------------------------------
     # 2026-07 extension: B300 GPUs, NVFP4 weights, Mistral-Medium-3.5, GLM-5.2
@@ -323,8 +349,10 @@ def main():
     print("  the whole DP axis reports a 0 pool. Data parallelism then means")
     print("  replicating whole TP GROUPS, which the grid now expresses. (MM35 on")
     print("  B300 is the exception: min TP 1, so its DP8xTP1 column is real.)")
-    print("  min TP is CENTRAL-case (ACT_RESERVE ~18.0 GiB); the explorer's")
-    print("  conservative assumption raises it (GLM-5.2 -> 8 on H200, 4 on B300).")
+    print("  min TP uses ACT_RESERVE ~18.0 GiB, and the explorer now agrees")
+    print("  exactly: its low-anchor reserve (which pushed GLM-5.2 to 8 on H200,")
+    print("  4 on B300) was retired 2026-07-29 - see the 'Retired assumption'")
+    print("  section above.")
     print("  system = replicas x per-group pool (needs session-sticky routing)")
     for mk in MODELS_EXT_K:
         for gpu in ("H200", "B300"):

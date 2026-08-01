@@ -32,7 +32,10 @@ The full write-up — setup, method, results, and recommendations — is in
 - A 2×H200 tensor-parallel bring-up of the 27B (FP8 weights, FP16 KV) reported
   **3,233,564** KV-cache tokens at startup — within 0.3% of the extended
   model's prediction, its first non-circular validation (see
-  [docs/scenarios.md](docs/scenarios.md), § Measured cross-check).
+  [docs/scenarios.md](docs/scenarios.md), § Measured cross-check). It also
+  **retires** the study's low-calibration-anchor hedge, which predicted that
+  same pool 15% low: the stacked-adverse TP2 planning figure rises from 403 to
+  **483** warm sessions with no change to the central case.
 
 ![Cache hit-rate sweep](figures/prefix_cache_sweep.png)
 
@@ -127,5 +130,9 @@ workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 / GLM-5.2), GPU
 (H200 / B300), weight & KV dtypes, and topology — the **Split (DP × TP)** control
 offers the legal splits of the chosen GPU count (its divisors), so hybrid grids
 like GLM-5.2 `DP2×TP4` are reachable, with non-fitting splits struck through and
-their TP threshold reported. See
+their TP threshold reported. The study's two remaining un-measured structural
+assumptions are separate named controls — **Recurrent state dtype** (bf16/fp32)
+and **Deployed-weight overhead** (as-published/+15%) — each disabled on the
+models where it would be a no-op; the low-calibration-anchor case that used to
+sit alongside them was retired once the 2×H200 log refuted it. See
 [docs/scenarios.md](docs/scenarios.md).
