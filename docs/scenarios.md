@@ -297,7 +297,7 @@ Three consistency checks, all passing:
    hybrid allocator carving Gated-DeltaNet state pages from the same pool —
    directionally matching this study's separate per-session state charge —
    but its sizing is internal to the allocator: at 75 MiB/session it would
-   cover ~320 sessions' states, far more than the 17 concurrent max-length
+   cover ~325 sessions' states, far more than the 17 concurrent max-length
    sequences, suggesting a pre-allocation (e.g. sized to `max_num_seqs` and
    page granularity) rather than per-live-session accounting. The gap's
    *existence* supports charging state separately; its *magnitude* is not
@@ -329,7 +329,13 @@ pool arithmetic as the log (regenerate: the "Retired assumption" section of
 
 A plausible-adverse assumption has to be one the hardware has not already ruled
 out, and this one is off by fifteen percent in the direction the measurement
-closes. It is gone from both the explorer and the stacked case; `tables.py`
+closes. The refutation is internal to the model's own reserve arithmetic — it
+assumes the non-KV reserve transfers across KV dtype and topology, the same
+assumption every projection in this study makes (see the transferability caveat
+above). A reserve that were strongly dtype- or topology-dependent could in
+principle resurrect a low FP8 anchor, but it would also make the central
+anchor's +0.26% match a coincidence; only a direct FP8 re-measurement settles
+that residual. It is gone from both the explorer and the stacked case; `tables.py`
 keeps the three-way comparison above as a regression check so the refutation
 stays reproducible rather than becoming folklore.
 
@@ -657,12 +663,12 @@ a 95%-confidence forecast of production capacity — parameter and structural
 uncertainty are far larger than sampling spread. For the headline 35B-A3B TP2 case
 (p5 632, p50 678; MC estimator jitter ~1–3 sessions):
 
-| Structural assumption flipped (one at a time) | Δ warm sessions | still live? |
+| Structural assumption flipped (one at a time) | Δ warm sessions (p50) | still live? |
 | --- | --- | --- |
 | +15% deployed-weight overhead | ~ −17 | yes — unmeasured on 3 of 4 models |
 | fp32 (not bf16) DeltaNet state | ~ −68 | yes — dtype never observed |
 | 10% (not 1%) invalidation | ~ −87 | yes — a workload input, not a constant |
-| ~~anchor at 2× the measured FP16 *lower* bound (2.278M, not 2.77M)~~ | ~~~ −105~~ | **no — refuted 2026-07-29** |
+| ~~anchor at 2× the measured FP16 *lower* bound (2.278M, not 2.77M)~~ | ~~−105~~ | **no — refuted 2026-07-29** |
 | loss of global prefix sharing (per-tenant prefixes) | ~ −200 (proxy) | yes — a policy risk |
 | FP16 KV instead of FP8 | ~ −320 | n/a — a configuration choice, not an unknown |
 
@@ -670,8 +676,10 @@ uncertainty are far larger than sampling spread. For the headline 35B-A3B TP2 ca
 weight overhead + 10% invalidation) moves TP2 warm p5 from **632 to 483** (user
 class ~439) — a ~149-session structural downside against a 46-session p5-vs-p50
 cushion (regenerate: the "Structural-uncertainty stack" section of `tables.py`).
-Note the stack is smaller than the −172 sum of the surviving one-at-a-time rows:
-the effects interact (each assumption shrinks the pool the next one acts on, so
+Note the p5 stack delta (−149) is smaller even than the −172 sum of the
+surviving one-at-a-time rows — and those are p50 deltas, so the comparison
+crosses percentiles; the like-for-like point is that at either percentile
+the stack undershoots the sum: the effects interact (each assumption shrinks the pool the next one acts on, so
 marginal costs shrink as the stack deepens).
 
 The stack read **403** before the 2×H200 log; the 80-session difference is
