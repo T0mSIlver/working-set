@@ -30,7 +30,7 @@ H200 baseline.
 | Usable bytes | **288.4e9 B** (275,040 MiB = 268.6 GiB) — nominal decimal bytes, NO Hopper-style ~7% over-provision | VERIFIED (measured) | Real nvidia-smi dump, Oracle OCI BM.GPU.B300.8 quickstart README |
 | Memory bandwidth | **8.0 TB/s** (8.0e12 B/s) | HIGH | GB300 NVL72 "576 TB/s"/72 = HGX B300 "64 TB/s"/8 = 8.0 exactly |
 | FP4 tensor cores | **Native NVFP4** (5th-gen tensor cores, ~15 PFLOPS dense/GPU GB300 form) | HIGH (support) / MEDIUM (PFLOPS) | NVIDIA Blackwell Ultra materials; 72 × 15 ≈ the published "1.1 EF dense NVFP4" for NVL72 |
-| FP8 | Supported (≈ half the FP4 rate) | HIGH | Blackwell tensor-core path |
+| FP8 | Supported — **4.5 PFLOPS dense/GPU** (72 PFLOPS sparse per DGX B300 ÷ 8 ÷ 2). NOT half the FP4 rate: the Ultra FP4 uplift did not carry to FP8 (corrected 2026-08-01) | HIGH | DGX B300 datasheet; third-party spec tables |
 | NVLink | 5th gen, 1.8 TB/s/GPU; domain **8** (HGX/DGX B300) or **72** (GB300 NVL72) | HIGH | NVIDIA GB300 NVL72 page (snippet), CoreWeave, Introl |
 | TDP | 1,400 W | HIGH | multiple secondary |
 | vs B200 | +50% HBM (288 vs 192 GB), same 8 TB/s, 1.5× dense FP4 | HIGH | Tom's Hardware headline claim |
@@ -77,10 +77,12 @@ domain at 8 the way single-node H200 systems do.
    phantom margin does not transfer. Effect vs the uncorrected model:
    −9.35e9 B of pool per B300 (−4% for the 35B-A3B on 1×B300, −12% for
    GLM-5.2 FP8 on 4×B300); `tables.py` prints central vs uncorrected.
-3. **B300 FLOPS are not modelled.** The decode model is an HBM roofline;
-   FP4 compute throughput only matters if compute becomes the binding
-   constraint, which the roofline model cannot see (limitation carried from
-   the baseline).
+3. **B300 FLOPS are not modelled** ~~at all~~ — *partially retired
+   2026-08-01*: `research/prefill.md` now models the **FP8** rate for the
+   prefill ceiling (4.5 PFLOPS dense — the DGX B300 datasheet's 72 PFLOPS
+   sparse per 8 GPUs; note the Ultra FP4 uplift did **not** carry to FP8,
+   so the "≈ half the FP4 rate" rule of thumb in the table above is wrong
+   for this part). Decode remains an HBM roofline that reads no FLOPS.
 
 ## Sources
 

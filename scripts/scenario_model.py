@@ -756,13 +756,13 @@ def peak_flops(topo: Topology) -> float:
 
     WEIGHT DTYPE IS NOT PRICED: every prefill figure reads peak_flops_fp8,
     NVFP4 checkpoints included. The NVFP4 recipes are model-specific mixtures
-    of W4A4, FP8 and BF16 layers, so their true tensor-core rate sits
-    somewhere between the FP8 rate and the ~3x-higher B300 dense-FP4 rate —
-    unknowable without per-layer benchmarks. This is the ONE place the
-    section's "every bias points against the hypothesis" rule fails: for
-    NVFP4 configurations prefill times are overstated and cold-rate ceilings
-    understated, by up to that factor. Flagged in research/prefill.md #1 and
-    on the explorer tile.
+    of W4A4 layers (faster than FP8), FP8 layers, and BF16 layers (SLOWER
+    than FP8, ~half rate), so the mixture's true rate can land on either
+    side of the FP8 line — unknowable without per-layer benchmarks. For
+    NVFP4 configurations these figures are a modeling CHOICE, not a bound;
+    the section's "every bias points against the hypothesis" bookkeeping
+    cannot be claimed there. Flagged in research/prefill.md #1 and on the
+    explorer tile.
     """
     if topo.gpu.peak_flops_fp8 <= 0:
         raise ValueError(f"{topo.gpu.name}: peak_flops_fp8 unset")

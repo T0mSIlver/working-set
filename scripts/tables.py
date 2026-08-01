@@ -482,8 +482,9 @@ def prefill_tables():
         warm_p5 = M.warm_capacity(m, t, w0, n_iter=400,
                                   draw=int(4000 + M.kv_pool_tokens(m, t) / 8000))[0]
         verdict = "prefill-FRAGILE (f* in slider range)" if fstar < 0.10 else (
-            "prefill binds under stress" if fstar < 0.50 else
-            "prefill never binds at this rate")
+            "prefill binds under stress" if fstar < 0.50 else (
+                "prefill binds only past the slider range" if fstar <= 1.0 else
+                "prefill never binds at this rate"))
         cache_flag = "  [cache ALSO < 64 users]" if warm_p5 < 64 else ""
         print(f"  {mk:7} {t.name:16} warm p5={warm_p5:5.0f}  "
               f"max cold {M.max_cold_rate(m, t, w0, CH):5.2f} req/s  "
