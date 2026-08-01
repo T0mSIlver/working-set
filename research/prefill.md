@@ -38,11 +38,13 @@ wrong for a revision.
 
 **Weight dtype is NOT priced.** Every prefill figure uses the dense FP8 rate,
 NVFP4 checkpoints included. The NVFP4 recipes are model-specific mixtures of
-W4A4, FP8 and BF16 layers, so their true rate sits somewhere between the FP8
-rate and the ~3× higher B300 dense-FP4 rate — unknowable without per-layer
-benchmarks. This is the ONE place the section's "every bias points against
-the hypothesis" rule fails: NVFP4 prefill times are overstated, NVFP4
-cold-rate ceilings understated, by up to that factor.
+W4A4 layers (faster than FP8, up to the ~3× B300 dense-FP4 rate), FP8 layers,
+and BF16 layers (*slower* than FP8 — roughly half rate), so the mixture's
+true throughput could land on **either side** of the FP8 line depending on
+the per-layer split; without per-layer benchmarks the direction is unknown.
+For NVFP4 configurations the prefill figures are therefore a modeling
+*choice*, not a bound — the one family where the section's "every bias
+points against the hypothesis" bookkeeping cannot be claimed.
 
 `gpu_b300.md` limitation 3 ("B300 FLOPS are not modelled") is now partially
 retired: they are modelled, at HIGH confidence after the 2026-08-01
@@ -175,5 +177,5 @@ other topology figure and flags the direction here.
 
 Every one of these makes the real machine **worse** than this model, not
 better. The thrash finding is a lower bound — with one flagged exception:
-NVFP4 configurations are priced at the FP8 tensor rate (§1), which errs the
-other way for them.
+NVFP4 configurations are priced at the FP8 tensor rate (§1), whose error
+direction is unknown, so no bound can be claimed for them.

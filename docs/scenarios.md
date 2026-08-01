@@ -646,7 +646,7 @@ held vs work rate), and the bracketed flag marks rows where the cache is
 | --- | --- | --- | --- | --- |
 | 27B, 1×H200 | 77 | 0.35 | **12%** | binds under stress |
 | 27B, TP2 | 194 | 0.64 | **26%** | binds under stress |
-| 35B-A3B, 1×H200 | 250 | 2.10 | 98% | never binds at this rate |
+| 35B-A3B, 1×H200 | 250 | 2.10 | 98% | binds only past the slider range |
 | 35B-A3B, TP2 | 634 | 3.77 | 182% | never binds at this rate |
 | Mistral-3.5, TP4 | 56 | 0.18 | **3%** | **FRAGILE — f\* inside the slider range** *[cache also < 64 users]* |
 | GLM-5.2, TP8 | 143 | 0.51 | **20%** | binds under stress |
@@ -685,10 +685,11 @@ bracket moves every absolute millisecond figure by 2×, though not the ratios.
 The model omits queueing, preemption/recompute and PCIe restore contention,
 **all of which make the real machine worse than this**; cross-chunk attention,
 formerly on that list, is now charged. The thrash finding is a lower bound —
-except on NVFP4 configurations, which are priced at the FP8 tensor rate and
-therefore overstate prefill cost by an unknown factor ≤~3×
-(`research/prefill.md` #1). One `vllm bench` prefill run at
-`max_num_batched_tokens=32768` on the 27B TP2 would settle the absolute scale.
+except on NVFP4 configurations, which are priced at the FP8 tensor rate even
+though their mixed W4A4/FP8/BF16 recipes could run faster *or* slower than
+it; no bound is claimed there (`research/prefill.md` #1). One `vllm bench`
+prefill run at `max_num_batched_tokens=32768` on the 27B TP2 would settle the
+absolute scale.
 
 ## Why some knobs act non-linearly (or non-monotonically)
 
