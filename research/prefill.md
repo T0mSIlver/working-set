@@ -170,10 +170,19 @@ an additive no-overlap roofline. `MFU_ceil` is solved per (model, topology)
 so that a first chunk at the 32,768 default nets **exactly the calibrated
 45%** effective MFU — the anchor absorbs whatever compute/stream overlap
 the real machine achieves there, and every previously published figure
-stays put (exactly for one pass; within <1% for a chunked context, so the
-flat-MFU tables in docs/ remain valid and the published Python functions
-keep their old default behaviour — the overhead pricing is opt-in there,
-`per_pass_overhead=True`).
+stays put: exactly for one first pass; within <0.2% for a chunked dense
+context; within ~2% — *under*, i.e. the flat tables err conservative — for
+the MoEs, whose later passes run at their higher solved ceiling. One class
+of figures moves by design: a context *shorter* than the chunk is a single
+small pass whose effective MFU sits below the anchor, so short misses now
+cost genuinely more than the flat model said (~+10% at the reference p5
+length for the 35B-A3B, ~+13% for GLM-5.2 — the explorer tile's p5 miss
+cost reflects this). That increase is the model's content, not drift. The
+flat-MFU tables in docs/ therefore remain valid, and the published Python
+functions keep their old default behaviour — the overhead pricing is
+opt-in there (`per_pass_overhead=True`, threaded through
+`cold_request_seconds` / `max_cold_rate` / `thrash_ratio` /
+`prefill_duty` / `breakeven_miss_rate`).
 
 What it says: the **27B barely cares** (42.7% effective MFU at a 2,048
 chunk — a dense pass has plenty of compute to hide its own weight stream);

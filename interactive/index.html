@@ -650,8 +650,13 @@ function effective_bw(topo){
 // the effective MFU moves with the chunk size (see mfuCeil/prefillPassSeconds
 // below and chart E) — smaller chunks amortise the per-pass overhead over
 // fewer FLOPs and achieve less of peak, which is the real reason vLLM's
-// default is high. At C = 32,768 every published figure reproduces the old
-// flat-45% model (exactly for one pass, within <1% for a chunked context).
+// default is high. At C = 32,768 the published figures reproduce the old
+// flat-45% model: exactly for one first pass, within <0.2% for a chunked
+// dense context and within ~2% (under — the flat tables err conservative)
+// for the MoEs, whose later passes run at their higher solved ceiling.
+// Deliberate exception: a context SHORTER than the chunk is one small pass
+// below the anchor's efficiency, so short (p5-ish) misses now read ~10%
+// dearer on the MoEs — that is the model's content, not drift.
 const PREFILL_MFU   = 0.45;    // mid of the plausible [0.30, 0.60] FP8 bracket
 const PREFILL_CHUNK = 32768;   // vLLM max_num_batched_tokens (the study default)
 const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn)
@@ -661,8 +666,9 @@ const REF_REQ_RATE  = 2.13;    // req/s: 64 users, one turn every 30 s (docs' f*
 // GEMM + intra-chunk attention (causal halves the pair) + cross-attention of
 // the new queries over ALL cached tokens (the KV cache saves recomputing
 // their keys/values, not attending over them). Pair-counting telescopes, so
-// a context's TOTAL is chunk-size invariant: chunking bounds the per-pass
-// spike, not the machine time.
+// a context's TOTAL FLOPs are chunk-size invariant: chunking bounds the
+// per-pass spike, not the FLOP count. Machine TIME is another matter — the
+// per-pass overhead below does not telescope (missContextSeconds).
 function prefillFlops(m, T, P){
   P = P || 0;
   return 2*m.params_prefill*T
@@ -715,7 +721,10 @@ function prefillContextSeconds(m, topo, context, chunk, prior){
    term exists to price. MFU_CEIL is solved per (model, topo) so that the
    EFFECTIVE MFU of a first chunk at the 32,768 default is exactly the
    calibrated 0.45 — the anchor absorbs whatever overlap the real machine
-   achieves there, and every published figure stays put. Kernel-launch and
+   achieves there, and every published figure stays put. The anchor chunk
+   and MFU are deliberately hard-wired below (Python's mirrors expose them
+   as mfu_anchor/chunk parameters; the explorer has exactly one anchor).
+   Kernel-launch and
    scheduler overheads are still unpriced (no constant for them exists in
    this study), so the small-chunk end still reads somewhat BETTER than a
    real machine would: the honest direction for a curve whose message is
@@ -1010,7 +1019,10 @@ function breakevenMissRate(m, topo, wl, rate, cs){
     "miss cost must fall as the chunk grows (fewer passes pay the overhead)");
   console.assert(approx(missContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, PREFILL_CHUNK),
                         prefillContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, PREFILL_CHUNK), 0.01),
-    "at the 32,768 default the miss cost must reproduce the flat-45% model within 1%");
+    "at the 32,768 default the dense miss cost must reproduce the flat-45% model within 1%");
+  console.assert(approx(missContextSeconds(CONFIG.MODELS["35BA3B"], t1H, 180000, PREFILL_CHUNK),
+                        prefillContextSeconds(CONFIG.MODELS["35BA3B"], t1H, 180000, PREFILL_CHUNK), 0.02),
+    "…and the MoE within 2% (under: its later passes run at the higher solved ceiling)");
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -1522,11 +1534,11 @@ function xTicks(nMax){
 // curve there prices reads from weights that were never loaded. Charts C and D
 // show this empty state instead (the tiles already say "—"), and null geometry
 // switches the hover layer off.
-function renderNoFit(divId){
-  const W=560,H=300;
+function renderNoFit(divId, what){
+  const W=560,H=300, curve = what || 'decode curve';
   const g=`<text x="${W/2}" y="${H/2-8}" text-anchor="middle" class="axlbl" font-size="13">model weights do not fit this configuration</text>`+
-          `<text x="${W/2}" y="${H/2+12}" text-anchor="middle" class="axtick">no decode curve — add GPUs, or switch GPU / weight dtype</text>`;
-  document.getElementById(divId).innerHTML = svgEl(g,W,H,'Model weights do not fit this configuration; no decode curve');
+          `<text x="${W/2}" y="${H/2+12}" text-anchor="middle" class="axtick">no ${curve} — add GPUs, or switch GPU / weight dtype</text>`;
+  document.getElementById(divId).innerHTML = svgEl(g,W,H,`Model weights do not fit this configuration; no ${curve}`);
 }
 let chartCGeom=null;
 function renderChartC(dc, zone, stress){
@@ -1685,7 +1697,12 @@ function interpE(data, key, C){
 }
 function renderChartE(data){
   lastChartE = data;
-  if(!data){ renderNoFit('chartE'); chartEGeom=null; return; }
+  if(!data){
+    renderNoFit('chartE', 'chunk-size trade');
+    chartEGeom=null;
+    document.getElementById('ttE').style.opacity=0;  // clear a stale hover
+    return;
+  }
   const W=560, H=396, mL=52, mR=14, mT=14, sh=92, sg=30, mB=34;
   const pw=W-mL-mR;
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
@@ -1713,6 +1730,7 @@ function renderChartE(data){
   xt.forEach(t=>{
     const X=sx(t);
     strips.forEach(s=>{
+      if(s.key==='spike' && !data.hasSpike) return;  // no half-empty panel
       g+=`<line x1="${X}" y1="${s.y0}" x2="${X}" y2="${s.y0+sh}" stroke="${grid}" stroke-width="1"/>`;
     });
     g+=`<text class="axtick" x="${X}" y="${yBot+15}" text-anchor="middle">${t/1024}k</text>`;
