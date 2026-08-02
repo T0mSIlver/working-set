@@ -726,8 +726,9 @@ def prefill_flops(model: Model, tokens: float, prior: float = 0.0) -> tuple:
     Because pair-counting telescopes (sum of Ti x Pi + Ti^2/2 over any
     partition = L^2/2), the TOTAL attention work of a context is independent
     of how it is chunked. Chunking bounds the per-forward-pass latency (the
-    ITL spike a decode batch sees), NOT the total machine time — that is
-    exactly what max_num_batched_tokens trades.
+    ITL spike a decode batch sees), not the total FLOP count. The total
+    machine TIME is another matter: per-pass overheads do not telescope, so
+    a miss's time IS chunk-dependent — see miss_context_seconds.
     """
     if tokens < 0:
         raise ValueError(f"tokens must be >= 0, got {tokens!r}")
@@ -799,7 +800,9 @@ def prefill_context_seconds(model: Model, topo: Topology, context: float,
     Each chunk is priced with the cache it actually attends over, so later
     chunks cost more than earlier ones. The pair-count telescopes: the total
     equals a single unchunked pass exactly (see prefill_flops), making this
-    chunk-size INVARIANT — the slider trades spike size, not total work.
+    chunk-size INVARIANT — but only under this MARGINAL flat-MFU pricing.
+    The miss-side cost with per-pass overhead is chunk-dependent; that
+    version is miss_context_seconds.
     """
     if chunk <= 0:
         raise ValueError(f"chunk must be > 0, got {chunk!r}")
@@ -848,8 +851,8 @@ def mfu_ceiling(model: Model, topo: Topology,
                 mfu_anchor: float = MFU_DEFAULT) -> float:
     """Compute-leg MFU solved so that a first (cache-empty) chunk of `chunk`
     tokens nets exactly `mfu_anchor` effective MFU once the per-pass
-    overhead is added. Slightly above the anchor (0.4506 for the 27B on one
-    H200, 0.463 for the 35B-A3B — the more overhead, the more headroom the
+    overhead is added. Slightly above the anchor (0.4514 for the 27B on one
+    H200, 0.4623 for the 35B-A3B — the more overhead, the more headroom the
     compute leg must carry)."""
     ref = prefill_flops(model, chunk)[2]
     inv = (1.0 / mfu_anchor
@@ -895,8 +898,16 @@ def miss_context_seconds(model: Model, topo: Topology, context: float,
     ever, the overhead multiplies by the pass count — so unlike
     prefill_context_seconds this is NOT chunk-size invariant; smaller chunks
     cost more total machine time. At chunk=32,768 it reproduces the flat-MFU
-    prefill_context_seconds within <1% (the anchor pins the first pass
-    exactly; later passes differ only in how their overhead amortises)."""
+    prefill_context_seconds within <0.2% on the dense models and within ~2%
+    (UNDER, i.e. the flat tables err conservative) on the MoEs at long
+    contexts — the anchor pins a first cache-empty pass exactly, and the
+    MoEs' later passes run at a visibly higher mfu_ceiling than 45%, which
+    their small overhead does not fully pay back. Contexts SHORTER than the
+    chunk are the deliberate exception: they are one small pass whose
+    effective MFU sits below the anchor, so they cost genuinely more than
+    the flat model said (~+10% at the reference workload's p5 length for
+    the 35B-A3B, ~+13% for GLM-5.2) — that increase is the model's point
+    (short passes amortise the weight stream worse), not an artefact."""
     if chunk <= 0:
         raise ValueError(f"chunk must be > 0, got {chunk!r}")
     ceil = mfu_ceiling(model, topo, mfu_anchor=mfu_anchor)
@@ -986,6 +997,8 @@ def cold_request_seconds(model: Model, topo: Topology, wl, chunk: float,
              + 2.0 * model.attn_d * model.attn_layers * el2)
     if not per_pass_overhead:
         return flops / (peak_flops(topo) * mfu)
+    if chunk <= 0:
+        raise ValueError(f"chunk must be > 0, got {chunk!r}")
     return (flops / (peak_flops(topo)
                      * mfu_ceiling(model, topo, mfu_anchor=mfu))
             + mean_passes(wl, chunk) * prefill_overhead_seconds(model, topo))
@@ -1010,18 +1023,22 @@ def warm_request_seconds(model: Model, topo: Topology, turn_tokens: float,
 
 
 def thrash_ratio(model: Model, topo: Topology, wl, turn_tokens: float,
-                 chunk: float, mfu: float = MFU_DEFAULT) -> float:
+                 chunk: float, mfu: float = MFU_DEFAULT,
+                 per_pass_overhead: bool = False) -> float:
     """How many times more machine time a miss costs than a hit.
 
-    THE number behind the study's hypothesis. Independent of MFU and of the
-    GPU part (both cancel) — a property of the workload's context-length
-    distribution against the turn length. It is NOT independent of the
-    attention model itself: on attention-heavy rows (GLM-5.2's dense-MLA
-    upper bound above all) the quadratic term drives both numerator and the
-    warm hit's cross term, so those rows inherit research/prefill.md
-    weakness #2 rather than escaping it.
+    THE number behind the study's hypothesis. With per_pass_overhead=False
+    (the published default) it is independent of MFU and of the GPU part
+    (both cancel) — a property of the workload's context-length distribution
+    against the turn length; with the opt-in overhead pricing the miss side
+    gains a weight-stream term and the exact cancellation no longer holds.
+    It is NOT independent of the attention model itself: on attention-heavy
+    rows (GLM-5.2's dense-MLA upper bound above all) the quadratic term
+    drives both numerator and the warm hit's cross term, so those rows
+    inherit research/prefill.md weakness #2 rather than escaping it.
     """
-    return (cold_request_seconds(model, topo, wl, chunk, mfu)
+    return (cold_request_seconds(model, topo, wl, chunk, mfu,
+                                 per_pass_overhead=per_pass_overhead)
             / warm_request_seconds(model, topo, turn_tokens, chunk, mfu,
                                    prior=mean_context(wl)))
 
@@ -1052,31 +1069,41 @@ def itl_spike(model: Model, topo: Topology, wl, n_decode: int, chunk: float,
 
 
 def max_cold_rate(model: Model, topo: Topology, wl, chunk: float,
-                  mfu: float = MFU_DEFAULT) -> float:
+                  mfu: float = MFU_DEFAULT,
+                  per_pass_overhead: bool = False) -> float:
     """Cold requests/second at which prefill alone consumes the whole machine.
 
     A hard ceiling the capacity model cannot see: it is set by FLOPs, so no
     amount of KV pool, CPU offload or warm-session headroom raises it. Above
     this rate the deployment is prefill-bound and warm capacity has stopped
     being the binding constraint.
+
+    per_pass_overhead: the explorer prices this with True (chunk-dependent,
+    see cold_request_seconds); the published tables use the False default.
     """
-    return 1.0 / cold_request_seconds(model, topo, wl, chunk, mfu)
+    return 1.0 / cold_request_seconds(model, topo, wl, chunk, mfu,
+                                      per_pass_overhead=per_pass_overhead)
 
 
 def prefill_duty(model: Model, topo: Topology, wl, req_rate: float,
                  chunk: float, turn_tokens: float = 0.0,
-                 mfu: float = MFU_DEFAULT) -> float:
+                 mfu: float = MFU_DEFAULT,
+                 per_pass_overhead: bool = False) -> float:
     """Fraction of the replica group spent prefilling at `req_rate` req/s.
 
     Counts the cold re-prefills (wl.invalidation of the traffic) plus, if
     turn_tokens > 0, the new-turn prefill every WARM hit still pays. Values
     above 1.0 mean prefill alone oversubscribes the group: the queue grows
     without bound and TTFT diverges, whatever the warm-session count says.
+
+    per_pass_overhead prices the MISS side only (warm turns stay marginal —
+    see prefill_pass_seconds for the boundary); the explorer uses True.
     """
     if req_rate < 0:
         raise ValueError(f"req_rate must be >= 0, got {req_rate!r}")
     f = wl.invalidation
-    per_s = f * cold_request_seconds(model, topo, wl, chunk, mfu)
+    per_s = f * cold_request_seconds(model, topo, wl, chunk, mfu,
+                                     per_pass_overhead=per_pass_overhead)
     if turn_tokens > 0:
         per_s += (1 - f) * warm_request_seconds(model, topo, turn_tokens,
                                                 chunk, mfu,
@@ -1086,15 +1113,19 @@ def prefill_duty(model: Model, topo: Topology, wl, req_rate: float,
 
 def breakeven_miss_rate(model: Model, topo: Topology, wl, req_rate: float,
                         chunk: float, turn_tokens: float = 0.0,
-                        mfu: float = MFU_DEFAULT) -> float:
+                        mfu: float = MFU_DEFAULT,
+                        per_pass_overhead: bool = False) -> float:
     """Miss rate at which prefill duty hits 1.0 for this request rate.
 
     Returns >1 (i.e. unreachable) when even an all-cold workload fits, and can
     return <=0 when the warm-turn prefill alone already saturates the group.
     Solving duty(f) = 1 for f, with duty linear in f:
         f x cold + (1-f) x warm = 1 / rate
+    per_pass_overhead prices the miss side only, as in prefill_duty; the
+    explorer's f* uses True.
     """
-    cold = cold_request_seconds(model, topo, wl, chunk, mfu)
+    cold = cold_request_seconds(model, topo, wl, chunk, mfu,
+                                per_pass_overhead=per_pass_overhead)
     warm = (warm_request_seconds(model, topo, turn_tokens, chunk, mfu,
                                  prior=mean_context(wl))
             if turn_tokens > 0 else 0.0)
@@ -1674,10 +1705,12 @@ def _selfcheck():
             > miss_context_seconds(m27, tp2, 180_000, 16_384)
             > miss_context_seconds(m27, tp2, 180_000, 65_536)), \
         "miss cost must fall as the chunk grows (fewer passes pay overhead)"
-    assert abs(miss_context_seconds(m27, tp2, 180_000, CHUNK_DEFAULT)
-               / prefill_context_seconds(m27, tp2, 180_000, CHUNK_DEFAULT)
-               - 1) < 0.01, \
-        "at the default chunk the miss cost reproduces the flat-MFU model <1%"
+    for mdl, tol in ((m27, 0.01), (m35, 0.02)):
+        assert abs(miss_context_seconds(mdl, tp2, 180_000, CHUNK_DEFAULT)
+                   / prefill_context_seconds(mdl, tp2, 180_000, CHUNK_DEFAULT)
+                   - 1) < tol, \
+            "at the default chunk the miss cost reproduces the flat-MFU " \
+            f"model within {tol:.0%} ({mdl.name})"
     assert abs(cold_request_seconds(m27, tp2, wl, CHUNK_DEFAULT,
                                     per_pass_overhead=True)
                / cold_request_seconds(m27, tp2, wl, CHUNK_DEFAULT)
