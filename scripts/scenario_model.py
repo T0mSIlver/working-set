@@ -812,6 +812,114 @@ def prefill_context_seconds(model: Model, topo: Topology, context: float,
     return total
 
 
+# ---------------------------------------------------------------------------
+# MFU as a function of chunk size (mirrors the explorer's chart E; added
+# 2026-08-02, research/prefill.md #3). The FLOPs of a context telescope
+# across chunks, but each forward pass also pays costs that do not: it
+# streams the full resident weights once (a chunk of any practical size
+# touches every routed expert on a MoE, so the whole expert bank streams —
+# the MoE curves degrade hardest), plus kernel launches and collectives.
+# Model: one MISS-side pass costs
+#     flops / (peak x mfu_ceiling)  +  w_resident / effective_bw(topo)
+# an additive no-overlap roofline, conservative exactly at small chunks
+# where there is too little compute to hide the stream. mfu_ceiling is
+# solved per (model, topo) so the EFFECTIVE MFU of a first chunk at the
+# 32,768 default equals the calibrated MFU_DEFAULT — the anchor absorbs
+# whatever overlap the real machine achieves there, and every table built
+# on the flat-MFU functions above stays put (those functions keep their
+# published behaviour; these are OPT-IN and price the chunk-size trade).
+# Kernel-launch/scheduler costs remain unpriced: the small-chunk end still
+# reads BETTER than a real machine, the honest direction for a family of
+# functions whose message is "small chunks are not free".
+# ---------------------------------------------------------------------------
+
+CHUNK_DEFAULT = 32_768   # vLLM max_num_batched_tokens, the study's default
+
+
+def prefill_overhead_seconds(model: Model, topo: Topology) -> float:
+    """Per-forward-pass cost that does NOT telescope: the resident-weight
+    stream. w_resident, not w_decode_shared — prefill activates every routed
+    expert at any practical chunk size."""
+    return model.w_resident / effective_bw(topo)
+
+
+def mfu_ceiling(model: Model, topo: Topology,
+                chunk: float = CHUNK_DEFAULT,
+                mfu_anchor: float = MFU_DEFAULT) -> float:
+    """Compute-leg MFU solved so that a first (cache-empty) chunk of `chunk`
+    tokens nets exactly `mfu_anchor` effective MFU once the per-pass
+    overhead is added. Slightly above the anchor (0.4506 for the 27B on one
+    H200, 0.463 for the 35B-A3B — the more overhead, the more headroom the
+    compute leg must carry)."""
+    ref = prefill_flops(model, chunk)[2]
+    inv = (1.0 / mfu_anchor
+           - peak_flops(topo) * prefill_overhead_seconds(model, topo) / ref)
+    if inv <= 0:
+        raise ValueError(f"{model.name}: per-pass overhead exceeds the whole "
+                         f"MFU budget at chunk={chunk} — anchor unsolvable")
+    return 1.0 / inv
+
+
+def prefill_pass_seconds(model: Model, topo: Topology, tokens: float,
+                         prior: float = 0.0,
+                         mfu_anchor: float = MFU_DEFAULT) -> float:
+    """One MISS-side forward pass: FLOPs at the solved ceiling + overhead.
+    (A warm hit's small pass and the ITL-spike chunk stay on the MARGINAL
+    prefill_seconds pricing: they join passes whose weight stream is already
+    paid — by the decode batch — so charging them the stream twice would be
+    wrong. A miss at the duty ceiling has no host pass; every one of its
+    chunks pays.)"""
+    return (prefill_flops(model, tokens, prior)[2]
+            / (peak_flops(topo) * mfu_ceiling(model, topo,
+                                              mfu_anchor=mfu_anchor))
+            + prefill_overhead_seconds(model, topo))
+
+
+def mfu_effective(model: Model, topo: Topology, chunk: float,
+                  mfu_anchor: float = MFU_DEFAULT) -> float:
+    """Achieved fraction of dense peak for a first chunk of `chunk` tokens —
+    the curve that answers why max_num_batched_tokens sits high: at the
+    32,768 anchor this is mfu_anchor by construction; at 2,048 the 27B still
+    holds ~43% but the 35B-A3B falls to ~28% and GLM-5.2/TP8 to ~25% (too
+    little active-param compute to hide the full expert-bank stream)."""
+    return (prefill_flops(model, chunk)[2]
+            / (peak_flops(topo)
+               * prefill_pass_seconds(model, topo, chunk,
+                                      mfu_anchor=mfu_anchor)))
+
+
+def miss_context_seconds(model: Model, topo: Topology, context: float,
+                         chunk: float, prior: float = 0.0,
+                         mfu_anchor: float = MFU_DEFAULT) -> float:
+    """A miss's whole context, chunked at `chunk`: the FLOPs telescope as
+    ever, the overhead multiplies by the pass count — so unlike
+    prefill_context_seconds this is NOT chunk-size invariant; smaller chunks
+    cost more total machine time. At chunk=32,768 it reproduces the flat-MFU
+    prefill_context_seconds within <1% (the anchor pins the first pass
+    exactly; later passes differ only in how their overhead amortises)."""
+    if chunk <= 0:
+        raise ValueError(f"chunk must be > 0, got {chunk!r}")
+    ceil = mfu_ceiling(model, topo, mfu_anchor=mfu_anchor)
+    over = prefill_overhead_seconds(model, topo)
+    total, done = 0.0, 0.0
+    context = float(context)
+    while done < context:
+        step = min(chunk, context - done)
+        total += (prefill_flops(model, step, prior + done)[2]
+                  / (peak_flops(topo) * ceil) + over)
+        done += step
+    return total
+
+
+def mean_passes(wl, chunk: float, n: int = 200_000, seed: int = 0) -> float:
+    """E[ceil(L / chunk)] over the workload's context lengths — the expected
+    pass count a miss's per-pass overhead multiplies by. Sampled, not
+    E[L]/chunk + 0.5: truncation at the cap makes the fractional parts
+    anything but uniform."""
+    full, _, _, _ = wl.sample(np.random.default_rng(seed), n)
+    return float(np.ceil(full.astype(float) / chunk).mean())
+
+
 def context_moments(wl, n: int = 200_000, seed: int = 0) -> tuple:
     """(E[L], E[L^2]) of the workload's context length.
 
@@ -851,7 +959,8 @@ def mean_context(wl, n: int = 200_000, seed: int = 0) -> float:
 
 
 def cold_request_seconds(model: Model, topo: Topology, wl, chunk: float,
-                         mfu: float = MFU_DEFAULT) -> float:
+                         mfu: float = MFU_DEFAULT,
+                         per_pass_overhead: bool = False) -> float:
     """EXPECTED machine time to serve one CACHE MISS: re-prefill the whole
     context, averaged over the workload's context-length distribution.
 
@@ -860,6 +969,14 @@ def cold_request_seconds(model: Model, topo: Topology, wl, chunk: float,
         E[cost] = (2 params E[L] + 2 attn_d attn_layers E[L^2]) / (peak x mfu)
     E[L^2], not E[L]^2 — the quadratic term must be priced on the heavy tail,
     not on the mean draw.
+
+    per_pass_overhead=False keeps the published flat-MFU pricing every table
+    in docs/ was built on (chunk is then unused — the FLOPs telescope).
+    per_pass_overhead=True is what the explorer prices since 2026-08-02: the
+    FLOPs leg runs at mfu_ceiling and each of the E[ceil(L/chunk)] passes
+    adds the weight-stream overhead, making the cost chunk-dependent (`mfu`
+    is then the anchor, see mfu_ceiling). At chunk=32,768 the two agree
+    within <1%.
     """
     check_dtype_supported(model, topo)
     if not 0 < mfu <= 1:
@@ -867,7 +984,11 @@ def cold_request_seconds(model: Model, topo: Topology, wl, chunk: float,
     el, el2 = context_moments(wl)
     flops = (2.0 * model.params_prefill * el
              + 2.0 * model.attn_d * model.attn_layers * el2)
-    return flops / (peak_flops(topo) * mfu)
+    if not per_pass_overhead:
+        return flops / (peak_flops(topo) * mfu)
+    return (flops / (peak_flops(topo)
+                     * mfu_ceiling(model, topo, mfu_anchor=mfu))
+            + mean_passes(wl, chunk) * prefill_overhead_seconds(model, topo))
 
 
 def warm_request_seconds(model: Model, topo: Topology, turn_tokens: float,
@@ -1539,6 +1660,29 @@ def _selfcheck():
     assert (cold_request_seconds(m27, tp2, wl, CH)
             > prefill_context_seconds(m27, tp2, _el, CH)), \
         "expected miss cost must price the heavy tail, not the mean draw"
+    # ---- MFU(chunk): anchor, monotonicity, and who pays most (chart E) -----
+    for mdl in (m27, m35):
+        assert abs(mfu_effective(mdl, tp2, CHUNK_DEFAULT) - MFU_DEFAULT) < 1e-12, \
+            "effective MFU at the 32,768 anchor must equal the calibrated default"
+    assert (mfu_effective(m27, tp2, 2_048)
+            < mfu_effective(m27, tp2, 8_192)
+            < mfu_effective(m27, tp2, CHUNK_DEFAULT)), \
+        "effective MFU must rise with chunk size (overhead amortises)"
+    assert mfu_effective(m35, tp2, 2_048) < mfu_effective(m27, tp2, 2_048), \
+        "the MoE must degrade harder at small chunks (full expert-bank stream)"
+    assert (miss_context_seconds(m27, tp2, 180_000, 2_048)
+            > miss_context_seconds(m27, tp2, 180_000, 16_384)
+            > miss_context_seconds(m27, tp2, 180_000, 65_536)), \
+        "miss cost must fall as the chunk grows (fewer passes pay overhead)"
+    assert abs(miss_context_seconds(m27, tp2, 180_000, CHUNK_DEFAULT)
+               / prefill_context_seconds(m27, tp2, 180_000, CHUNK_DEFAULT)
+               - 1) < 0.01, \
+        "at the default chunk the miss cost reproduces the flat-MFU model <1%"
+    assert abs(cold_request_seconds(m27, tp2, wl, CHUNK_DEFAULT,
+                                    per_pass_overhead=True)
+               / cold_request_seconds(m27, tp2, wl, CHUNK_DEFAULT)
+               - 1) < 0.01, \
+        "opt-in overhead pricing agrees with the published tables at 32,768"
     # duty cycle is linear in miss rate and crosses 1.0 at breakeven_miss_rate
     fstar = breakeven_miss_rate(m27, tp2, wl, 2.13, CH, 2_000)
     assert 0 < fstar < 1, f"27B TP2 breakeven miss rate should be ~26%, got {fstar:.0%}"
