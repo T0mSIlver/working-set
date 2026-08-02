@@ -219,7 +219,7 @@ svg text{fill:var(--text-2)}
         <li><b>Measured cross-check (2026-07-22):</b> a real 27B + FP16-KV + TP2 bring-up reported <span class="tnum">3,233,564</span> KV tokens at startup (110.59 GiB per worker; 17.54× concurrency at 184,320 tokens) — within 0.3% of this model's 3.24M prediction, with nothing about TP2 or FP16 fitted. First non-circular validation of the reserve + TP arithmetic + FP16 doubling. Run backwards it pins the per-GPU reserve at <b>18.24 GiB</b> against the anchor-solved 17.98 GiB, i.e. an equivalent 1×H200 FP8 anchor of <b>2.762M</b> tokens against the projected 2.77M — which is why the low-anchor case is gone from this page (the ~1.4% residual is left in the constants rather than re-anchored: it would move every published figure by under 0.5%). What it still does <em>not</em> settle: the recurrent-state dtype, the other three models, and — since a globally wrong anchor shifts prediction and measurement together — the FP8 path itself. See docs/scenarios.md § Measured cross-check.</li>
         <li><b>CPU offload is storage only.</b> A session offloaded to host RAM still counts as warm <em>capacity</em>, but only sessions whose KV is resident in GPU HBM can decode — an offloaded one must be restored over PCIe first (a latency the model does not price). Every decode-side readout (the per-user/aggregate stress tiles, chart C's capacity zone) is therefore computed over <b>HBM-resident warm sessions only</b>, so moving the offload slider never changes per-user decode speed.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
-        <li><b>Max cold req/s (prefill ceiling):</b> the one tile priced in FLOPs, not HBM bytes (<code>research/prefill.md</code>). A miss re-prefills its whole context in <code>max_num_batched_tokens</code> chunks (GEMM + the quadratic attention term) against the part's <em>dense</em> FP8 peak at MFU 45% — the soft input: the plausible [30–60%] bracket moves the absolute number 2× either way, and the figure is <span class="prov">analytic and unvalidated</span>. The headline is 1/(<em>expected</em> miss cost), priced on the context distribution's heavy tail (E[L²] — the quadratic attention term must not be priced at the mean length); the p5–p95 in the sub-line is the cost spread of a <em>single</em> miss. Every chunk is charged its attention over the cache it lands on, so a context's total cost is <em>chunk-size invariant</em> (the pair count telescopes), and a warm hit pays its new turn's attention over the whole cached context. It is a per-replica-group ceiling that no KV pool, CPU offload or warm headroom can raise; f* is the miss rate that saturates the group at its share of the reference 2.13 req/s (64 users, one turn every 30 s; a DP grid splits the load across replicas), warm turns included, and the tile turns amber/red as the invalidation slider approaches/passes it. The chunk slider therefore trades ONLY the ITL spike every concurrent decoder sees (near-linear in chunk size) against passes per context — at no total-work cost. Not priced: MFU is held at 45% at every size (tiny chunks dodge per-pass overheads they would actually pay), and NVFP4 checkpoints are charged the FP8 tensor rate — their mixed W4A4/FP8/BF16 recipes could really run faster <em>or</em> slower than that, so for NVFP4 configs these figures are a modeling choice, not a bound.</li>
+        <li><b>Max cold req/s (prefill ceiling):</b> the one tile priced in FLOPs, not HBM bytes (<code>research/prefill.md</code>). A miss re-prefills its whole context in <code>max_num_batched_tokens</code> chunks (GEMM + the quadratic attention term) against the part's <em>dense</em> FP8 peak; every readout is pinned to vLLM's 32,768 default, where the effective MFU is the calibrated 45% — the soft input: the plausible [30–60%] bracket moves the absolute number 2× either way, and the figure is <span class="prov">analytic and unvalidated</span>. The headline is 1/(<em>expected</em> miss cost), priced on the context distribution's heavy tail (E[L²] — the quadratic attention term must not be priced at the mean length); the p5–p95 in the sub-line is the cost spread of a <em>single</em> miss. Every chunk is charged its attention over the cache it lands on, so a miss's FLOPs are <em>chunk-size invariant</em> (the pair count telescopes) — but each of its passes also streams the resident weights, an overhead that multiplies by the pass count, so its total <em>machine time</em> is not: that per-pass roofline is what makes the effective MFU fall at small chunk sizes (<b>chart E</b> sweeps the whole trade — throughput lost vs ITL spike shrunk — which is why the old chunk slider is gone). A warm hit pays its new turn's attention over the whole cached context at the <em>marginal</em> rate (its small pass rides the serving steady state; so does the ITL-spike chunk, which joins a decode pass that streams the weights anyway). It is a per-replica-group ceiling that no KV pool, CPU offload or warm headroom can raise; f* is the miss rate that saturates the group at its share of the reference 2.13 req/s (64 users, one turn every 30 s; a DP grid splits the load across replicas), warm turns included, and the tile turns amber/red as the invalidation slider approaches/passes it. Not priced: kernel-launch/scheduler per-pass costs (the small-chunk end of chart E still reads <em>better</em> than a real machine), and NVFP4 checkpoints are charged the FP8 tensor rate — their mixed W4A4/FP8/BF16 recipes could really run faster <em>or</em> slower than that, so for NVFP4 configs these figures are a modeling choice, not a bound.</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
         <li><b>GPU choice (H200 / B300):</b> the H200 is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve, <b>plus a measured +9.75 GB/GPU correction</b>: the H200 actually delivers ~150.75 GB usable against its 141 GB vendor figure (the calibration silently absorbs that margin), while a real B300 <code>nvidia-smi</code> dump shows 275,040 MiB = 288.4 GB — nominal bytes, no Hopper-style over-provision — so the transferred reserve must add the hidden margin back (<code>research/gpu_b300.md</code>; formerly a sensitivity, measured 2026-07-27).</li>
         <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; what stays high-precision is recipe-specific — see <code>research/nvfp4.md</code> — e.g. RedHatAI's 35B-A3B keeps the DeltaNet blocks BF16 while NVIDIA's GLM recipe quantizes only the routed experts). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug (open as of 2026-07-27), so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — an owner policy: vLLM's nvfp4 KV shipped 2026-05 (Blackwell-datacenter-only, values dequantized to FP8 before attention) but is not modelled in this study (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
@@ -300,10 +300,6 @@ svg text{fill:var(--text-2)}
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="vLLM max_seq_len. Prompts longer than this are truncated. A lower cap trims the log-normal tail: smaller worst-case cold prefill, less pool hogging by huge sessions — more sessions warm. Allowed range is per model: up to 1,048,576 for the Qwens (262k native, 1M via YaRN) and GLM-5.2 (1M native); Mistral-Medium-3.5 hard-caps at 262,144. The top stop maps to the exact model max.">max_seq_len cap</span> <span class="val"><span id="v-cap">180</span>k</span></label>
           <input type="range" id="s-cap" min="30" max="262" step="2" value="180">
-        </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="vLLM max_num_batched_tokens — the prefill CHUNK size. Chunked prefill puts one chunk of a cold prompt into the same forward pass as the running decodes, so every concurrent decoder sees one inter-token gap of chunk-prefill length: a smaller chunk shrinks that ITL spike near-linearly, at the cost of more passes per context. The TOTAL machine time of a miss is chunk-size invariant (every chunk is charged its attention over the cache it lands on, and the pair count telescopes) — this slider trades spike size against pass count, nothing else. MFU is held at 45% at every size — real per-pass overheads at tiny chunks are not priced, so the low end looks somewhat better than the real machine would. Feeds ONLY the Max-cold tile's readouts (miss cost, f*, ITL spike); capacity and decode metrics don't read it.">max_num_batched_tokens</span> <span class="val"><span id="v-chunk">32,768</span> tok</span></label>
-          <input type="range" id="s-chunk" min="2" max="64" step="2" value="32">
         </div>
       </div>
 
@@ -397,6 +393,12 @@ svg text{fill:var(--text-2)}
         <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
       </div>
       <div class="chartbox"><div id="chartD"></div><div class="tt" id="ttD"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">E · The max_num_batched_tokens trade</p>
+      <p class="cs">Why vLLM's prefill chunk is 32k, not 2k: three views of one knob, sharing a log axis. Small chunks shrink the ITL spike (bottom) but amortise the per-pass weight stream over fewer FLOPs, so effective MFU falls (top) and the cold-request ceiling falls with it (middle). Dashed line = the 32,768 default every tile is priced at; the spike prices the chunk's marginal FLOPs (its host pass streams the weights anyway). Kernel-launch overheads are unpriced — the left edge reads better than a real machine.</p>
+      <div class="chartbox"><div id="chartE"></div><div class="tt" id="ttE"></div></div>
     </div>
   </div>
 
@@ -643,8 +645,20 @@ function effective_bw(topo){
    them. ANALYTIC AND UNVALIDATED — MFU is the soft input (the 30–60% bracket
    moves every absolute figure by 2x, though not the ratios).
    ========================================================================== */
+// 0.45 is now a CALIBRATION POINT, not a flat rate: it is the effective MFU
+// of a first chunk at the study's 32,768-token default. Away from that point
+// the effective MFU moves with the chunk size (see mfuCeil/prefillPassSeconds
+// below and chart E) — smaller chunks amortise the per-pass overhead over
+// fewer FLOPs and achieve less of peak, which is the real reason vLLM's
+// default is high. At C = 32,768 the published figures reproduce the old
+// flat-45% model: exactly for one first pass, within <0.2% for a chunked
+// dense context and within ~2% (under — the flat tables err conservative)
+// for the MoEs, whose later passes run at their higher solved ceiling.
+// Deliberate exception: a context SHORTER than the chunk is one small pass
+// below the anchor's efficiency, so short (p5-ish) misses now read ~10%
+// dearer on the MoEs — that is the model's content, not drift.
 const PREFILL_MFU   = 0.45;    // mid of the plausible [0.30, 0.60] FP8 bracket
-const PREFILL_CHUNK = 32768;   // vLLM max_num_batched_tokens
+const PREFILL_CHUNK = 32768;   // vLLM max_num_batched_tokens (the study default)
 const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn)
 const REF_REQ_RATE  = 2.13;    // req/s: 64 users, one turn every 30 s (docs' f* load)
 
@@ -652,8 +666,9 @@ const REF_REQ_RATE  = 2.13;    // req/s: 64 users, one turn every 30 s (docs' f*
 // GEMM + intra-chunk attention (causal halves the pair) + cross-attention of
 // the new queries over ALL cached tokens (the KV cache saves recomputing
 // their keys/values, not attending over them). Pair-counting telescopes, so
-// a context's TOTAL is chunk-size invariant: chunking bounds the per-pass
-// spike, not the machine time.
+// a context's TOTAL FLOPs are chunk-size invariant: chunking bounds the
+// per-pass spike, not the FLOP count. Machine TIME is another matter — the
+// per-pass overhead below does not telescope (missContextSeconds).
 function prefillFlops(m, T, P){
   P = P || 0;
   return 2*m.params_prefill*T
@@ -667,13 +682,21 @@ function peakFlops(topo){
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
   return topo.tp * gpu.peak_flops_fp8 * tpEff(topo.tp, gpu.nvlink_domain);
 }
+// MARGINAL pass time at the calibrated flat MFU — the FLOPs-only price, no
+// per-pass overhead. Still the right price for work that PIGGYBACKS on a
+// forward pass someone else already pays for: the ITL-spike chunk joins a
+// decode batch whose pass streams the weights regardless, and a warm hit's
+// small turn rides the serving steady state the same way. A MISS at the
+// prefill-duty ceiling has no such host — its passes run back-to-back and
+// each pays the overhead — so misses are priced by prefillPassSeconds below.
 function prefillSeconds(m, topo, T, P){
   return prefillFlops(m, T, P) / (peakFlops(topo) * PREFILL_MFU);
 }
 // Whole context, chunked, on top of `prior` cached tokens: each chunk is
 // priced with the cache it actually attends over, so later chunks cost more.
-// The total equals one unchunked pass exactly (telescoping pairs) — the
-// chunk slider trades spike size, not total work.
+// MARGINAL (no per-pass overhead): the total equals one unchunked pass
+// exactly (telescoping pairs), i.e. chunk-size invariant. Used for the warm
+// hit; a miss's chunked cost is missContextSeconds, which is NOT invariant.
 function prefillContextSeconds(m, topo, context, chunk, prior){
   const C = chunk || PREFILL_CHUNK;
   let s = 0, done = 0, P = prior || 0;
@@ -683,6 +706,74 @@ function prefillContextSeconds(m, topo, context, chunk, prior){
     done += step;
   }
   return s;
+}
+
+/* ---- MFU as a function of chunk size (chart E; research/prefill.md #3) ----
+   Why a real machine keeps max_num_batched_tokens HIGH: the FLOPs of a
+   context telescope across chunks, but each forward pass also pays costs
+   that do NOT — it must stream the full resident weights once (on a MoE a
+   chunk of any practical size touches every routed expert, so the whole
+   expert bank streams; this is why the MoE curve degrades hardest), plus
+   kernel launches and collectives. Model: one pass costs
+       FLOPs/(peak x MFU_CEIL)  +  w_resident / effective_bw(topo)
+   an additive (no-overlap) roofline — conservative at small chunks, where
+   there is too little compute to hide the stream, which is the regime the
+   term exists to price. MFU_CEIL is solved per (model, topo) so that the
+   EFFECTIVE MFU of a first chunk at the 32,768 default is exactly the
+   calibrated 0.45 — the anchor absorbs whatever overlap the real machine
+   achieves there, and every published figure stays put. The anchor chunk
+   and MFU are deliberately hard-wired below (Python's mirrors expose them
+   as mfu_anchor/chunk parameters; the explorer has exactly one anchor).
+   Kernel-launch and
+   scheduler overheads are still unpriced (no constant for them exists in
+   this study), so the small-chunk end still reads somewhat BETTER than a
+   real machine would: the honest direction for a curve whose message is
+   "small chunks are not free". */
+function prefillOverheadSeconds(m, topo){
+  return m.w_resident / effective_bw(topo);
+}
+function mfuCeil(m, topo){
+  const ref = prefillFlops(m, PREFILL_CHUNK, 0);
+  const inv = 1/PREFILL_MFU
+            - peakFlops(topo) * prefillOverheadSeconds(m, topo) / ref;
+  if (!(inv > 0)) throw new Error(
+    `${m.name}: per-pass overhead exceeds the whole 45% budget at C=32,768 — `
+    + `the anchor cannot be solved on this topology`);
+  return 1/inv;
+}
+// One MISS-side forward pass: FLOPs at the solved ceiling + the overhead.
+function prefillPassSeconds(m, topo, T, P){
+  return prefillFlops(m, T, P) / (peakFlops(topo) * mfuCeil(m, topo))
+       + prefillOverheadSeconds(m, topo);
+}
+// Effective MFU of a first (cache-empty) chunk of C tokens — chart E's top
+// strip, and the quantity the 0.45 anchor is stated in.
+function mfuEff(m, topo, C){
+  return prefillFlops(m, C, 0)
+       / (peakFlops(topo) * prefillPassSeconds(m, topo, C, 0));
+}
+// A miss's whole context, chunked at C: the FLOPs part telescopes as ever,
+// the overhead multiplies by the pass count — smaller chunks now cost MORE
+// total machine time, which is the throughput side of the chunk-size trade.
+function missContextSeconds(m, topo, context, chunk, prior){
+  const C = chunk || PREFILL_CHUNK;
+  const ceil = mfuCeil(m, topo), over = prefillOverheadSeconds(m, topo);
+  let s = 0, done = 0, P = prior || 0;
+  while (done < context){
+    const step = Math.min(C, context - done);
+    s += prefillFlops(m, step, P + done) / (peakFlops(topo) * ceil) + over;
+    done += step;
+  }
+  return s;
+}
+// E[ceil(L/C)] over the sampled context lengths — the expected pass count a
+// miss's overhead multiplies by. Sampled, not E[L]/C + 0.5: the truncation
+// at the cap makes the fractional parts anything but uniform.
+function meanPasses(cs, C){
+  const a = cs.samples;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += Math.ceil(a[i]/C);
+  return s / a.length;
 }
 // Context-length statistics of the workload. A miss re-prefills the WHOLE
 // context of whichever session missed, so its cost inherits this spread:
@@ -696,19 +787,25 @@ function contextStats(wl, n){
   let s = 0, s2 = 0;
   for (let i = 0; i < n; i++){ a[i] = sampleFull(wl); s += a[i]; s2 += a[i]*a[i]; }
   const [p5, p95] = percentiles(a, [5, 95]);
-  return { mean: s/n, meanSq: s2/n, p5, p95 };
+  // samples ride along for meanPasses (E[ceil(L/C)] has no clean closed form)
+  return { mean: s/n, meanSq: s2/n, p5, p95, samples: a };
 }
 function meanContext(wl, n){ return contextStats(wl, n).mean; }
 // EXPECTED machine time of one MISS, averaged over the context-length
-// distribution. Closed form via the telescoping pair-count (a chunked
-// context L costs gemm(L) + 2 L^2 d n_layers however it is chunked):
-//   E[cost] = (2 params E[L] + 2 d n_layers E[L^2]) / (peak x MFU)
+// distribution. The FLOPs part keeps its closed form via the telescoping
+// pair-count (a chunked context L costs gemm(L) + 2 L^2 d n_layers however
+// it is chunked); the per-pass overhead does NOT telescope and multiplies
+// by the expected pass count instead:
+//   E[cost] = (2 params E[L] + 2 d n_layers E[L^2]) / (peak x MFU_CEIL)
+//           + E[ceil(L/C)] x overhead
 // E[L^2], not E[L]^2 — the quadratic term is priced on the heavy tail.
-function coldRequestSeconds(m, topo, wl, cs){
+function coldRequestSeconds(m, topo, wl, cs, chunk){
   const st = cs || contextStats(wl);
+  const C = chunk || PREFILL_CHUNK;
   const flops = 2*m.params_prefill*st.mean
               + 2*m.attn_d*m.attn_layers*st.meanSq;
-  return flops / (peakFlops(topo) * PREFILL_MFU);
+  return flops / (peakFlops(topo) * mfuCeil(m, topo))
+       + meanPasses(st, C) * prefillOverheadSeconds(m, topo);
 }
 // Cold req/s at which prefill alone consumes the whole replica group — the
 // hard ceiling the capacity model cannot see: set by FLOPs, so no KV pool,
@@ -716,8 +813,8 @@ function coldRequestSeconds(m, topo, wl, cs){
 // percentile: a sustained rate averages over many misses, so the mean is the
 // only statistic that yields a throughput ceiling (a "p5 rate" would just be
 // the reciprocal cost of an unusually long single miss, not a capacity).
-function maxColdRate(m, topo, wl){
-  return 1 / coldRequestSeconds(m, topo, wl);
+function maxColdRate(m, topo, wl, chunk){
+  return 1 / coldRequestSeconds(m, topo, wl, null, chunk);
 }
 // Miss rate at which prefill duty hits 100% at `rate` req/s, warm turns
 // included (duty is linear in f: f x cold + (1-f) x warm = 1/rate). Can
@@ -887,21 +984,45 @@ function breakevenMissRate(m, topo, wl, rate, cs){
   console.assert(prefillSeconds(CONFIG.MODELS["35BA3B"], t1H, PREFILL_CHUNK) * 5
                  < prefillSeconds(CONFIG.MODELS["27B"], t1H, PREFILL_CHUNK),
     "the MoE must prefill a chunk >5x faster than the smaller dense 27B (active params)");
-  // chunk-size behaviour: one isolated pass is superlinear in its size, but a
-  // whole context is chunk-size INVARIANT (the pair-count telescopes) — the
-  // slider trades spike size, not total machine time
+  // chunk-size behaviour: one isolated pass is superlinear in its size; the
+  // MARGINAL whole-context cost is chunk-size invariant (the pair-count
+  // telescopes); the MISS cost is not — its per-pass overhead multiplies by
+  // the pass count, so smaller chunks cost MORE total machine time
   console.assert(prefillSeconds(CONFIG.MODELS["27B"], t1H, 65536)
                  > 2 * prefillSeconds(CONFIG.MODELS["27B"], t1H, 32768),
     "isolated prefill pass must be superlinear in chunk size (quadratic term)");
   console.assert(approx(prefillContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, 16384),
                         prefillContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, 65536), 1e-9),
-    "whole-context cost must be chunk-size invariant (telescoping pairs)");
+    "marginal whole-context cost must be chunk-size invariant (telescoping pairs)");
   console.assert(prefillSeconds(CONFIG.MODELS["27B"], t1H, PREFILL_CHUNK, PREFILL_CHUNK)
                  > prefillSeconds(CONFIG.MODELS["27B"], t1H, PREFILL_CHUNK),
     "a later chunk pays cross-attention over the cache");
   console.assert(prefillContextSeconds(CONFIG.MODELS["27B"], t1H, 180000)
                  === prefillContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, PREFILL_CHUNK),
     "omitted chunk must default to the study's 32,768");
+  // ---- MFU(chunk) model: anchor, monotonicity, and who pays most ----
+  for (const mk of ["27B","35BA3B"])
+    console.assert(approx(mfuEff(CONFIG.MODELS[mk], t1H, PREFILL_CHUNK), PREFILL_MFU, 1e-9),
+      `${mk}: effective MFU at the 32,768 anchor must be exactly the calibrated 0.45`);
+  console.assert(mfuEff(CONFIG.MODELS["27B"], t1H, 2048)
+                 < mfuEff(CONFIG.MODELS["27B"], t1H, 8192)
+              && mfuEff(CONFIG.MODELS["27B"], t1H, 8192)
+                 < mfuEff(CONFIG.MODELS["27B"], t1H, 32768),
+    "effective MFU must rise with chunk size (overhead amortises)");
+  console.assert(mfuEff(CONFIG.MODELS["35BA3B"], t1H, 2048)
+                 < mfuEff(CONFIG.MODELS["27B"], t1H, 2048),
+    "the MoE must degrade harder at small chunks (little compute, full expert-bank stream)");
+  console.assert(missContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, 2048)
+                 > missContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, 16384)
+              && missContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, 16384)
+                 > missContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, 65536),
+    "miss cost must fall as the chunk grows (fewer passes pay the overhead)");
+  console.assert(approx(missContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, PREFILL_CHUNK),
+                        prefillContextSeconds(CONFIG.MODELS["27B"], t1H, 180000, PREFILL_CHUNK), 0.01),
+    "at the 32,768 default the dense miss cost must reproduce the flat-45% model within 1%");
+  console.assert(approx(missContextSeconds(CONFIG.MODELS["35BA3B"], t1H, 180000, PREFILL_CHUNK),
+                        prefillContextSeconds(CONFIG.MODELS["35BA3B"], t1H, 180000, PREFILL_CHUNK), 0.02),
+    "…and the MoE within 2% (under: its later passes run at the higher solved ceiling)");
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
 })();
@@ -1170,7 +1291,8 @@ const state = {
   // the baseline's 75 MiB); wover: deployed-weight overhead over the raw or
   // on-disk checkpoint bytes ("pub" = as published, "p15" = +15%).
   state_dt: "bf16", wover: "pub", mtp: 1.7,
-  chunk: 32,   // max_num_batched_tokens in KiB-tokens: 32 -> 32,768
+  // max_num_batched_tokens is no longer state: every readout is pinned to the
+  // study's 32,768 default (PREFILL_CHUNK) and chart E sweeps the trade
   user_median: 31, user_sigma: 0.81,
   sub_median: 8, sub_sigma: 0.90,
   sub_ratio: 0.10, sub_shares_prefix: false,
@@ -1412,11 +1534,11 @@ function xTicks(nMax){
 // curve there prices reads from weights that were never loaded. Charts C and D
 // show this empty state instead (the tiles already say "—"), and null geometry
 // switches the hover layer off.
-function renderNoFit(divId){
-  const W=560,H=300;
+function renderNoFit(divId, what){
+  const W=560,H=300, curve = what || 'decode curve';
   const g=`<text x="${W/2}" y="${H/2-8}" text-anchor="middle" class="axlbl" font-size="13">model weights do not fit this configuration</text>`+
-          `<text x="${W/2}" y="${H/2+12}" text-anchor="middle" class="axtick">no decode curve — add GPUs, or switch GPU / weight dtype</text>`;
-  document.getElementById(divId).innerHTML = svgEl(g,W,H,'Model weights do not fit this configuration; no decode curve');
+          `<text x="${W/2}" y="${H/2+12}" text-anchor="middle" class="axtick">no ${curve} — add GPUs, or switch GPU / weight dtype</text>`;
+  document.getElementById(divId).innerHTML = svgEl(g,W,H,`Model weights do not fit this configuration; no ${curve}`);
 }
 let chartCGeom=null;
 function renderChartC(dc, zone, stress){
@@ -1544,6 +1666,147 @@ function renderChartD(dc, stress, kink){
   chartDGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax,ymax, dc, sx:(x)=>sx(x), sy:(y)=>sy(y) };
 }
 
+/* ---- Chart E: the max_num_batched_tokens trade (replaces the old slider —
+   a slider showed one operating point; the trade is a curve) ---- */
+const CHUNK_LO = 2048, CHUNK_HI = 65536;   // the retired slider's range
+let chartEGeom=null, lastChartE=null;
+// One sample per eighth-octave so the 32,768 default lands exactly on the
+// grid (i = 32). Everything here is analytic given the shared context draw,
+// so the sweep costs ~41 closed forms + 41 mean-pass scans per render.
+function chartEData(model, topo, wl, cs, stress){
+  const Cs=[], mfu=[], cold=[], spike=[];
+  const stepS = (stress && stress.pu > 0) ? model.mtp / stress.pu : 0;
+  for(let i=0;i<=40;i++){
+    const C = Math.round(Math.pow(2, 11 + i/8));
+    Cs.push(C);
+    mfu.push(mfuEff(model, topo, C));
+    cold.push(1/coldRequestSeconds(model, topo, wl, cs, C));
+    // the spike prices the chunk's MARGINAL FLOPs (its host pass streams the
+    // weights for the decode batch anyway), mid-re-prefill (prior = E[L]/2)
+    spike.push(stepS > 0
+      ? (stepS + prefillSeconds(model, topo, C, cs.mean/2)) / stepS : 0);
+  }
+  return {Cs, mfu, cold, spike, hasSpike: stepS > 0};
+}
+// linear interpolation on the drawn segments (x is log-spaced, so screen-x
+// linear == linear in ln C — exactly what the polyline shows)
+function interpE(data, key, C){
+  const f = clip((Math.log2(C) - 11) * 8, 0, 40);
+  const i = Math.min(Math.floor(f), 39), t = f - i;
+  return data[key][i] + t*(data[key][i+1] - data[key][i]);
+}
+function renderChartE(data){
+  lastChartE = data;
+  if(!data){
+    renderNoFit('chartE', 'chunk-size trade');
+    chartEGeom=null;
+    document.getElementById('ttE').style.opacity=0;  // clear a stale hover
+    return;
+  }
+  const W=560, H=396, mL=52, mR=14, mT=14, sh=92, sg=30, mB=34;
+  const pw=W-mL-mR;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const surface=cssv('--surface');
+  const sx=logScale(CHUNK_LO, CHUNK_HI, mL, mL+pw);
+  // three stacked strips, one measure each — same knob, three consequences
+  // (a dual axis is how this would go wrong as a single panel)
+  const strips=[
+    { y0:mT,            key:'mfu',   color:cssv('--s1'), lo:0, hi:0.60,
+      title:'effective MFU of a first chunk',
+      ticks:[0,0.15,0.30,0.45,0.60], tfmt:v=>fmt(v*100,0)+'%', dfmt:v=>fmt(v*100,0)+'%' },
+    { y0:mT+sh+sg,      key:'cold',  color:cssv('--s2'), lo:0,
+      hi:Math.max(...data.cold)*1.15,
+      title:'max cold req/s (per replica group)',
+      nticks:3, tfmt:v=>fmt(v,2), dfmt:v=>fmt(v,2)+' req/s' },
+    { y0:mT+2*(sh+sg),  key:'spike', color:cssv('--s3'), lo:1,
+      hi:Math.max(...data.spike, 2)*1.08,
+      title:'ITL spike every decoder sees (× one inter-token gap)',
+      nticks:3, tfmt:v=>'×'+fmt(v,0), dfmt:v=>'×'+fmt(v,0) },
+  ];
+  let g='';
+  // x grid: powers of two, labels under the bottom strip only
+  const xt=[2048,4096,8192,16384,32768,65536];
+  const yBot = mT + 3*sh + 2*sg;
+  xt.forEach(t=>{
+    const X=sx(t);
+    strips.forEach(s=>{
+      if(s.key==='spike' && !data.hasSpike) return;  // no half-empty panel
+      g+=`<line x1="${X}" y1="${s.y0}" x2="${X}" y2="${s.y0+sh}" stroke="${grid}" stroke-width="1"/>`;
+    });
+    g+=`<text class="axtick" x="${X}" y="${yBot+15}" text-anchor="middle">${t/1024}k</text>`;
+  });
+  const CH=PREFILL_CHUNK, XD=sx(CH);
+  for(const s of strips){
+    if(s.key==='spike' && !data.hasSpike) continue;
+    const sy=linScale(s.lo, s.hi, s.y0+sh, s.y0);
+    const tks = s.ticks || Array.from({length:s.nticks+1},(_,i)=>s.lo+(s.hi-s.lo)*i/s.nticks);
+    tks.forEach(v=>{
+      const Y=sy(v);
+      g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+      g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${s.tfmt(v)}</text>`;
+    });
+    g+=`<line x1="${mL}" y1="${s.y0+sh}" x2="${mL+pw}" y2="${s.y0+sh}" stroke="${axis}" stroke-width="1"/>`;
+    g+=`<text class="axlbl" x="${mL}" y="${s.y0-5}" text-anchor="start">${s.title}</text>`;
+    let ln=`M ${sx(data.Cs[0])} ${sy(clip(data[s.key][0],s.lo,s.hi))}`;
+    for(let i=1;i<data.Cs.length;i++)
+      ln+=` L ${sx(data.Cs[i])} ${sy(clip(data[s.key][i],s.lo,s.hi))}`;
+    g+=`<path d="${ln}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+    // the operating point every tile is priced at, direct-labeled
+    const vD=interpE(data, s.key, CH), YD=sy(clip(vD,s.lo,s.hi));
+    g+=`<circle cx="${XD}" cy="${YD}" r="4" fill="${s.color}" stroke="${surface}" stroke-width="1.5"/>`;
+    g+=`<text class="dlabel" x="${XD-8}" y="${YD-7}" text-anchor="end" fill="${s.color}">${s.dfmt(vD)}</text>`;
+    s.sy=sy;
+  }
+  // the 32,768 default, across all strips
+  g+=`<line x1="${XD}" y1="${mT}" x2="${XD}" y2="${yBot}" stroke="${muted}" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.8"/>`;
+  g+=`<text class="axtick" x="${XD+5}" y="${mT+10}" text-anchor="start" fill="${muted}">default 32,768</text>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-4}" text-anchor="middle">max_num_batched_tokens (log)</text>`;
+  document.getElementById('chartE').innerHTML =
+    svgEl(g,W,H,'Effective MFU, max cold request rate and ITL spike versus max_num_batched_tokens');
+  chartEGeom={ W,H,mL,mR,mT,pw, ph:yBot-mT, data, strips,
+    sx:(x)=>sx(x) };
+}
+// bespoke hover: chart E's x is logarithmic and its crosshair spans three
+// strips, so setupHover's linear invert does not apply
+(function hoverE(){
+  const box=document.getElementById('chartE'), tt=document.getElementById('ttE');
+  function handler(e){
+    const geom=chartEGeom; if(!geom) return;
+    const svg=box.querySelector('svg'); if(!svg) return;
+    const rect=svg.getBoundingClientRect();
+    const vx=(e.clientX-rect.left)/rect.width*geom.W;
+    if(vx<geom.mL || vx>geom.mL+geom.pw){ tt.style.opacity=0; removeCross(svg); return; }
+    const C=Math.round(clip(
+      Math.exp(Math.log(CHUNK_LO) + (vx-geom.mL)/geom.pw*Math.log(CHUNK_HI/CHUNK_LO)),
+      CHUNK_LO, CHUNK_HI));
+    const px=geom.sx(C), d=geom.data;
+    const marks=geom.strips.filter(s=>s.sy)
+      .map(s=>({v:interpE(d,s.key,C), color:s.color, r:3.5,
+                y:s.sy(clip(interpE(d,s.key,C), s.lo, s.hi))}));
+    drawCross(svg, px, geom, marks);
+    const rows=geom.strips.filter(s=>s.sy).map(s=>
+      `<div class="row"><span class="sw" style="background:${s.color}"></span>`
+      +`${esc(s.title.split(' (')[0])} <b class="tnum">${s.dfmt(interpE(d,s.key,C))}</b></div>`).join('');
+    tt.innerHTML=`<div class="tth tnum">chunk = ${fmt(C,0)} tok</div>`+rows;
+    const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();
+    const scale=rect.width/geom.W;
+    const cx=(rect.left-parRect.left)+px*scale;
+    const cy=(rect.top-parRect.top)+(marks.length?marks[0].y:geom.mT)*scale;
+    const tw=tt.offsetWidth, th=tt.offsetHeight, pad=4, gap=12;
+    let left=cx+gap;
+    if(left+tw>parRect.width-pad) left=cx-gap-tw;
+    let top=cy-th-gap;
+    if(top<pad) top=cy+gap;
+    tt.style.left=Math.max(pad,Math.min(left,parRect.width-tw-pad))+'px';
+    tt.style.top =Math.max(pad,Math.min(top, parRect.height-th-pad))+'px';
+    tt.style.opacity=1;
+  }
+  function leave(){ tt.style.opacity=0; const svg=box.querySelector('svg'); if(svg) removeCross(svg); }
+  box.addEventListener('mousemove', handler);
+  box.addEventListener('mouseleave', leave);
+  box.addEventListener('touchmove',(e)=>{ if(e.touches[0]) handler(e.touches[0]); },{passive:true});
+})();
+
 /* ============================================================================
    TOOLTIP / crosshair for C and D
    ========================================================================== */
@@ -1644,7 +1907,7 @@ function removeCross(svg){ const e=svg.querySelector('.xcross'); if(e) e.remove(
 /* ============================================================================
    RENDER pipeline
    ========================================================================== */
-let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null;
+let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null, lastCS=null;
 
 // active model with the dtype, weight-overhead and MTP-speedup knobs applied.
 // FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py); fp32 doubles the
@@ -1742,7 +2005,8 @@ function computeAndRender(draft){
   // computed once here rather than three times with three different draws
   lastStress=stressPoint(dc,topo,lastWarmCur);
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
-  if (kv_pool_tokens(model,topo) <= 0){
+  const noFit = kv_pool_tokens(model,topo) <= 0;
+  if (noFit){
     renderNoFit('chartC'); renderNoFit('chartD');
     chartCGeom=null; chartDGeom=null;
   } else {
@@ -1751,7 +2015,12 @@ function computeAndRender(draft){
   }
   updateCsD(model);
 
-  renderTiles(model,topo,wl,dc,lastWarmCur,lastStress);
+  // ONE context-length draw feeds chart E and every prefill readout on the
+  // tiles, so the two can never disagree within a render
+  lastCS = noFit ? null : contextStats(wl);
+  renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
+
+  renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS);
 }
 
 // chart D's subtitle explains the n=32 slope break, but only when the active
@@ -1775,7 +2044,7 @@ function stressPoint(dc, topo, warm){
   return { n, pu, agg:n*pu*topo.replicas };
 }
 
-function renderTiles(model,topo,wl,dc,warm,stress){
+function renderTiles(model,topo,wl,dc,warm,stress,cs){
   const pool=kv_pool_tokens(model,topo);
   const ceiling=(1-wl.invalidation)*100;
   // Stress point (computed once in stressPoint(), marked on charts C and D):
@@ -1801,20 +2070,22 @@ function renderTiles(model,topo,wl,dc,warm,stress){
   // grid) — that is what makes the headline a per-replica number
   const dp = topo.replicas>1;
   // Prefill ceiling (analytic, unvalidated — research/prefill.md). ONE
-  // context-length draw feeds the ceiling, the p5/p95 miss costs and f*, so
-  // they stay consistent within a render; the colour compares the
-  // invalidation slider f to f*. The chunk slider (max_num_batched_tokens)
-  // feeds everything here and nothing outside this block.
-  const CH = state.chunk * 1024;
-  const cs = noFit ? null : contextStats(wl);
+  // context-length draw (shared with chart E via computeAndRender) feeds the
+  // ceiling, the p5/p95 miss costs and f*, so they stay consistent within a
+  // render; the colour compares the invalidation slider f to f*. The tile is
+  // PINNED to the study's 32,768 default — the chunk-size trade itself lives
+  // in chart E, which sweeps what the retired slider used to set.
+  const CH = PREFILL_CHUNK;
+  if (cs === undefined) cs = noFit ? null : contextStats(wl);
   // per-miss cost is monotone in context length, so its percentiles are the
   // priced percentiles of the length distribution
   // expected miss cost prices the heavy tail (E[L^2]); the p5/p95 costs are
   // the priced percentiles of the length draw (cost is monotone in length)
-  const coldS   = noFit ? 0 : coldRequestSeconds(model, topo, wl, cs);
-  const coldP5  = noFit ? 0 : prefillContextSeconds(model, topo, cs.p5,  CH);
-  const coldP95 = noFit ? 0 : prefillContextSeconds(model, topo, cs.p95, CH);
-  // a warm hit's new turn attends over the whole cached context
+  const coldS   = noFit ? 0 : coldRequestSeconds(model, topo, wl, cs, CH);
+  const coldP5  = noFit ? 0 : missContextSeconds(model, topo, cs.p5,  CH);
+  const coldP95 = noFit ? 0 : missContextSeconds(model, topo, cs.p95, CH);
+  // a warm hit's new turn attends over the whole cached context; MARGINAL
+  // pricing (no per-pass overhead) — it rides the serving steady state
   const warmS = noFit ? 0 : prefillContextSeconds(model, topo, WARM_TURN_TOK, CH, cs.mean);
   const coldRate = noFit ? 0 : 1/coldS;
   // the reference load is SYSTEM-wide; each of the `replicas` groups takes
@@ -1862,7 +2133,7 @@ function renderTiles(model,topo,wl,dc,warm,stress){
         :`miss ≈ ${fmt(coldS,1)} s (p5–p95 ${fmt(coldP5,1)}–${fmt(coldP95,1)}) · f* ${fstar>10?"> 1,000":"= "+fmt(fstar*100,0)}% at ${fmt(groupRate,2)} req/s${dp?"/replica":""}`
          + (spike>0?` · chunk spikes ITL ×${fmt(spike,0)}`:"")
          + (dp?` · ×${topo.replicas} replicas`:""), cls:prefillClass,
-     tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group. Set by FLOPs, so no KV pool, CPU offload or warm-session headroom raises it. The headline is 1/(EXPECTED miss cost), priced on the context distribution's heavy tail (E[L²], not the mean length); the p5–p95 range is the cost SPREAD of a single miss. A miss re-pays its full attention however it is chunked, and a warm hit is charged its new turn's attention over the whole cached context. MFU 45% (the [30–60%] bracket moves absolutes 2×). f* = the miss rate that saturates the group at its share of the reference 2.13 req/s (64 users, one turn every 30 s; a DP grid splits that load across replicas), warm turns included; colour compares the invalidation slider f against it — green f < f*/2, amber f ≥ f*/2, red f ≥ f* (prefill saturates before the slider's miss rate). 'Chunk spikes ITL' = the one inter-token gap every decoder AT THE STRESS POINT (the n shown in the per-user tile, not the docs' fixed 64) sees when a mid-re-prefill chunk shares their forward pass — shrink it with the chunk slider, at no total-work cost: chunking bounds the spike, not the machine time. WEIGHT DTYPE IS NOT PRICED: NVFP4 configs are charged the FP8 tensor rate; their mixed W4A4/FP8/BF16 recipes could really run faster OR slower, so for them this tile is a modeling choice, not a bound. Analytic and UNVALIDATED — see research/prefill.md."},
+     tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group. Set by FLOPs, so no KV pool, CPU offload or warm-session headroom raises it. The headline is 1/(EXPECTED miss cost), priced on the context distribution's heavy tail (E[L²], not the mean length); the p5–p95 range is the cost SPREAD of a single miss. A miss re-pays its full attention however it is chunked, plus a per-pass overhead (the weight stream) for each of its chunks; a warm hit is charged its new turn's attention over the whole cached context at the marginal rate. Everything here is PINNED to vLLM's max_num_batched_tokens = 32,768, where the effective MFU is the calibrated 45% (the [30–60%] bracket moves absolutes 2×) — chart E below sweeps the chunk size and shows why it sits that high. f* = the miss rate that saturates the group at its share of the reference 2.13 req/s (64 users, one turn every 30 s; a DP grid splits that load across replicas), warm turns included; colour compares the invalidation slider f against it — green f < f*/2, amber f ≥ f*/2, red f ≥ f* (prefill saturates before the slider's miss rate). 'Chunk spikes ITL' = the one inter-token gap every decoder AT THE STRESS POINT (the n shown in the per-user tile, not the docs' fixed 64) sees when a mid-re-prefill 32,768-token chunk shares their forward pass. WEIGHT DTYPE IS NOT PRICED: NVFP4 configs are charged the FP8 tensor rate; their mixed W4A4/FP8/BF16 recipes could really run faster OR slower, so for them this tile is a modeling choice, not a bound. Analytic and UNVALIDATED — see research/prefill.md."},
     {k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥50 tok/s (comfortable), amber ≥40 (at the hard floor), red below. If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
@@ -2024,7 +2295,6 @@ const sliderMap=[
   ['s-mtp','mtp',v=>parseFloat(v)],
   ['s-ram','ram',v=>parseInt(v,10)],
   ['s-cap','cap',v=>parseInt(v,10)],
-  ['s-chunk','chunk',v=>parseInt(v,10)],
   ['s-user_median','user_median',v=>parseFloat(v)],
   ['s-user_sigma','user_sigma',v=>parseFloat(v)],
   ['s-sub_median','sub_median',v=>parseFloat(v)],
@@ -2072,7 +2342,6 @@ function syncLabels(){
     'Multi-Token Prediction speculative decoding. The base quantity is the per-draft acceptance α: with 2 draft tokens, speedup = 1 + α + α². 1.7× is the 27B\'s measured fit (α ≈ 47%); a measured 87% acceptance would be ≈ 2.6×. MTP + hybrid-model prefix caching is an immature serving path — the conservative purchasing view keeps this at 1.0× (off). Switching model resets the slider to that model\'s default (1.7× Qwen/GLM, 1.0× Mistral). ' + aLine);
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
-  document.getElementById('v-chunk').textContent=fmt(state.chunk*1024,0);
   document.getElementById('v-user_median').textContent=fmt(state.user_median,0);
   document.getElementById('v-user_sigma').textContent=state.user_sigma.toFixed(2);
   document.getElementById('v-sub_median').textContent=fmt(state.sub_median,0);
@@ -2111,7 +2380,8 @@ function redrawCharts(){
     renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress);
     renderChartD(lastDC,lastStress,unionKink(activeModel()));
   }
-  renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress);
+  renderChartE(lastChartE);   // re-render from cached series, no new draws
+  renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress,lastCS);
 }
 themeBtn.addEventListener('click',()=>{
   const next = currentTheme()==='dark'?'light':'dark';

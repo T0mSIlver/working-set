@@ -105,10 +105,13 @@ conservative accounting.
 4. **~~Cross-chunk attention is not charged.~~ RESOLVED 2026-08-01 (cross
    review):** every chunk is now charged its attention over the tokens
    already cached (§3), warm hits included. Two consequences worth naming:
-   a context's **total** prefill cost became chunk-size *invariant* (the
+   a context's **total** prefill *FLOPs* became chunk-size *invariant* (the
    pair count telescopes — chunking bounds the per-pass spike, not the
-   machine time), and the expected miss cost is priced on **E[L²]**, not the
-   mean length, so the heavy tail is no longer underpriced.
+   FLOP count), and the expected miss cost is priced on **E[L²]**, not the
+   mean length, so the heavy tail is no longer underpriced. **Refined
+   2026-08-02:** invariance holds for FLOPs only — per-pass overheads
+   (the weight stream) do not telescope, so a miss's machine *time* is
+   chunk-dependent after all; see "MFU as a function of chunk size" in §3.
 
 ---
 
@@ -139,10 +142,67 @@ cached context (a term linear in E[L]); the first revision priced hits at
 turn² only, which *inflated* the thrash ratio (~22–37× then; 18–19× now).
 
 Chunking (`max_num_batched_tokens`) therefore bounds the per-forward-pass
-latency — the ITL spike a decode batch sees — and nothing else. At the 27B's
-32k first chunk the attention term is **12%** of that pass; a mid-re-prefill
-chunk carries its cross term on top, roughly doubling by the last chunk of a
-mean-length context.
+latency — the ITL spike a decode batch sees — *as far as FLOPs are
+concerned*. At the 27B's 32k first chunk the attention term is **12%** of
+that pass; a mid-re-prefill chunk carries its cross term on top, roughly
+doubling by the last chunk of a mean-length context.
+
+### MFU as a function of chunk size (added 2026-08-02)
+
+The invariance above is a statement about FLOPs, and the first revision let
+it stand for machine time too ("chunking trades spike size and nothing
+else") — which made the explorer's chunk slider read as a free lunch:
+shrink the chunk, shrink the spike, pay nothing. That is not how a real
+machine behaves, and the reason is exactly what the flat-MFU model omits:
+**per-pass costs do not telescope.** Every forward pass streams the full
+resident weights once (`w_resident`, not the decode-side active subset — a
+chunk of any practical size touches every routed expert on a MoE), plus
+kernel launches and collectives the study has no constants for.
+
+The model (`mfu_ceiling` / `prefill_pass_seconds` / `miss_context_seconds`
+in `scenario_model.py`, mirrored in the explorer, drawn as its chart E):
+
+```
+pass(T, P) = flops(T, P) / (peak × MFU_ceil)  +  w_resident / effective_bw
+```
+
+an additive no-overlap roofline. `MFU_ceil` is solved per (model, topology)
+so that a first chunk at the 32,768 default nets **exactly the calibrated
+45%** effective MFU — the anchor absorbs whatever compute/stream overlap
+the real machine achieves there, and every previously published figure
+stays put: exactly for one first pass; within <0.2% for a chunked dense
+context; within ~2% — *under*, i.e. the flat tables err conservative — for
+the MoEs, whose later passes run at their higher solved ceiling. One class
+of figures moves by design: a context *shorter* than the chunk is a single
+small pass whose effective MFU sits below the anchor, so short misses now
+cost genuinely more than the flat model said (~+10% at the reference p5
+length for the 35B-A3B, ~+13% for GLM-5.2 — the explorer tile's p5 miss
+cost reflects this). That increase is the model's content, not drift. The
+flat-MFU tables in docs/ therefore remain valid, and the published Python
+functions keep their old default behaviour — the overhead pricing is
+opt-in there (`per_pass_overhead=True`, threaded through
+`cold_request_seconds` / `max_cold_rate` / `thrash_ratio` /
+`prefill_duty` / `breakeven_miss_rate`).
+
+What it says: the **27B barely cares** (42.7% effective MFU at a 2,048
+chunk — a dense pass has plenty of compute to hide its own weight stream);
+the **35B-A3B falls to ~28%** and **GLM-5.2/TP8 to ~25%** at 2,048 — an MoE
+prefills with its few active params but streams its entire expert bank per
+pass, so small chunks cost it a fifth of its cold-request ceiling
+(1.63 vs 2.10 req/s on 1×H200). That asymmetry, not the spike, is the real
+content of the `max_num_batched_tokens` knob, and it is why vLLM's default
+sits high: **the chunk buys ITL smoothness with prefill throughput, at a
+price set by how MoE the model is.**
+
+Pricing boundary, stated once: the overhead is charged to **miss-side
+passes only** (a miss at the duty ceiling runs back-to-back prefill passes
+with no host to share a weight stream with). The warm hit's small turn and
+the ITL-spike chunk keep the *marginal* flat-MFU price — they join a decode
+batch whose pass streams the weights regardless, so charging them the
+stream again would double-count. Kernel-launch/scheduler per-pass costs
+remain unpriced on both sides: the small-chunk end of the curve still reads
+**better** than a real machine would, the honest direction for a model
+whose message is "small chunks are not free".
 
 ---
 
