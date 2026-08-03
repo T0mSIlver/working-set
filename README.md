@@ -10,7 +10,9 @@ The full write-up — setup, method, results, and recommendations — is in
 > **Extended study:** [docs/scenarios.md](docs/scenarios.md) carries the same
 > methodology to **2×H200** (tensor- vs data-parallel), the **35B-A3B MoE** model,
 > **subagent** workloads, **system-prompt size**, and a **cache-invalidation** rate —
-> with an interactive explorer at [`interactive/index.html`](interactive/index.html).
+> with an interactive explorer, hosted at
+> [workingset.tomvaucourt.com](https://workingset.tomvaucourt.com/) (source:
+> [`interactive/index.html`](interactive/index.html)).
 > The 2026-07 extension adds the **B300** (Blackwell Ultra) as a selectable GPU,
 > **NVFP4 weight quantization** (B300-only, weights-never-KV, available for all
 > models), and two more models: **Mistral-Medium-3.5-128B** (dense GQA,
