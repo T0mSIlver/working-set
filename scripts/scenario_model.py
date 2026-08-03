@@ -433,8 +433,9 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
         return model
     if not model.kv_fp16_ok:
         raise ValueError(
-            f"{model.name}: FP16 KV is not servable (vLLM's sparse-MLA/DSA "
-            "path requires a quantized KV cache; see research/model_glm52.md)")
+            f"{model.name}: FP16 KV is not servable (vLLM requires a quantized "
+            "KV cache on this model's sparse-attention path — GLM-5.2's DSA, "
+            "DSv4-Flash's CSA; see the model's research note)")
     return replace(model, kv_bpt=model.kv_bpt * 2, name=model.name + " [FP16 KV]")
 
 
@@ -1823,7 +1824,7 @@ def _selfcheck():
     for dtype in KV_DTYPES:
         for mk in MODELS:
             if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:
-                continue   # GLM-5.2: FP16 KV not servable on the DSA path
+                continue   # GLM-5.2 (DSA) / DSv4-Flash (CSA): FP16 KV not servable
             for tk in TOPOLOGIES:
                 p = kv_pool_tokens(with_kv_dtype(MODELS[mk], dtype), TOPOLOGIES[tk])
                 print(f"  pool {mk:7} {tk:12} {dtype:5} = {p / 1e6:6.2f} M tokens")
