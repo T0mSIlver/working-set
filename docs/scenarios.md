@@ -650,6 +650,12 @@ planner — KV capacity is a separate constraint in different units (sessions
 held vs work rate), and the bracketed flag marks rows where the cache is
 *also* short of the 64-user reference load before a single miss.
 
+> *§ 9's "Reading the two-axis planner" does combine the axes, by converting
+> every constraint into **max concurrent users**. It costs two stated
+> assumptions (one user holds one session; a user turns every `think_time`
+> seconds), and it does not retire this table — read its caveats before
+> treating the combined view as a replacement.*
+
 | Model / topology | warm p5 | max cold req/s | `f*` | prefill sensitivity |
 | --- | --- | --- | --- | --- |
 | 27B, 1×H200 | 77 | 0.35 | **12%** | binds under stress |
@@ -851,6 +857,91 @@ the standing traffic stays at 1% misses, which is exactly what a flush makes
 untrue. Recovery there is set by admission control, which this study does not
 model.
 
+#### Reading the two-axis planner
+
+![The two-axis planner](../figures/scenario_binding_map.png)
+
+§ 8 ends by refusing to combine the study's constraints: the prefill band is
+"a **sensitivity band for the prefill axis alone, not a two-axis planner** — KV
+capacity is a separate constraint in different units (sessions held vs work
+rate)". That refusal was right, and it is also why sizing a deployment has meant
+holding two incompatible numbers in your head.
+
+They can be made commensurable, and it costs exactly **two assumptions** — both
+load-bearing, so both are stated here rather than buried in the code:
+
+1. **One user holds one session.** A session count becomes a user count.
+2. **A user sends a turn every `think_time` seconds.** A user count becomes a
+   request rate, and a work rate converts back into users.
+
+Under those, all four constraints become the same quantity — **max concurrent
+users** — and the binding one is simply the smallest:
+
+| ceiling | what it is | already published? |
+| --- | --- | --- |
+| **cache** | warm p5 user-class sessions that fit the pool | ✅ § 7 ("warm users p5") |
+| **decode** | concurrency where per-user p50 hits the 40 tok/s floor | ✅ § 7 ("mns@40") |
+| **latency** | load where a miss's mean TTFT reaches the budget | new (§ 9) |
+| **saturation** | load where prefill duty reaches 100% — f\*, in users | new (§ 8, re-expressed) |
+
+**Two of the four are not new, and that is the point.** At the reference
+workload the planner returns 70 and 118 users for the 27B on 1×H200 against § 7's
+published 69 and 118 — it *reproduces* the decision table rather than restating
+it differently, which is what makes the two new columns trustworthy alongside
+them. The self-checks assert this so the planner cannot silently fork from the
+numbers the rest of the study plans on.
+
+| Config (f = 1%, 30 s think, 10 s budget) | cache | decode | latency | saturation | **binds** |
+| --- | --- | --- | --- | --- | --- |
+| 27B, 1×H200 | **70** | 118 | 161 | 173 | cache |
+| 27B, TP2 | **177** | 228 | 301 | 312 | cache |
+| 35B-A3B, TP2 | **575** | 697 | 1,752 | 1,764 | cache |
+| Mistral-3.5, TP4 | 51 | **36** | 68 | 87 | **decode** |
+| GLM-5.2, TP8 | **130** | 2,196 | 218 | 234 | cache |
+| 35B-A3B, 2×B300 | 1,369 | **1,210** | 3,999 | 4,012 | **decode** |
+
+**Which constraint binds changes with the miss rate.** Cache and decode barely
+move with f; latency and saturation collapse. On the 27B/TP2 the crossover lands
+at **f ≈ 6%** — inside the explorer's own slider range, and invisible to either
+axis alone:
+
+| f | cache | decode | latency | saturation | binds |
+| --- | --- | --- | --- | --- | --- |
+| 1% | **177** | 228 | 301 | 312 | cache |
+| 5% | **166** | 228 | 174 | 193 | cache |
+| **6%** | 162 | 228 | **158** | 176 | **latency** |
+| 10% | 152 | 228 | **114** | 130 | latency |
+| 25% | 117 | 228 | **56** | 66 | latency |
+
+Two results fall out that neither axis produced on its own:
+
+- **Mistral-Medium-3.5/TP4 is decode-bound at 36 users**, below the 64-user
+  reference load and below its own 51-session cache ceiling. This is *not* a
+  contradiction of H7: that model ships **no MTP module** (`mtp = 1.0`), so the
+  study's documented "without MTP the ordering flips" case is its **central**
+  case rather than an adverse one. It was already doubly constrained (§ 8) and
+  triply so once spikes were priced; the planner names which of the three is
+  actually tightest.
+- **The 35B-A3B on 2×B300 crosses over to decode-bound too** (1,210 vs a 1,369
+  cache ceiling) — on a big enough pool, capacity stops being the binding
+  constraint and H7 reverses on hardware rather than on a knob.
+
+**Both assumptions bite, in opposite directions.** Think time scales the latency
+and saturation ceilings linearly and leaves cache and decode untouched: halving
+it to 15 s flips the 27B/TP2 from cache-bound to latency-bound with no change to
+hardware or workload. The sessions-per-user assumption acts on the other pair — a
+user holding *k* concurrent sessions divides the cache ceiling by *k* and leaves
+latency alone, since the work rate is unchanged. Neither is a fact about the
+deployment; both are inputs, and the explorer exposes think time as a control for
+exactly that reason.
+
+The planner inherits every limitation of the ceilings it combines — the cache
+column is a packing limit (limitation 14), the decode column is an uncalibrated
+roofline (11) conditional on MTP, and the latency column is a mean rather than a
+percentile (`research/spike.md` #4). It adds one of its own: **the two
+conversions above**, which are honest arithmetic on assumptions the study cannot
+check without a session trace.
+
 #### What this does and does not establish
 
 It **supports H8** and sharpens two limitations into results: queueing (2) and
@@ -978,6 +1069,11 @@ So for agentic coding on this hardware:
   is *zero* at f\*. The second number to carry is **B\***, the simultaneous-miss
   spike a configuration absorbs: 5.1 on the 27B/TP2, 36.4 on the 35B-A3B/TP2, and
   0.5 — less than one request — on Mistral-Medium-3.5/TP4.
+- **Or read all four ceilings at once** (§ 9, "Reading the two-axis planner"):
+  converting cache, decode, latency and saturation into **max concurrent users**
+  makes the binding one the smallest, and shows it changing hands at f ≈ 6% on the
+  27B/TP2. The conversion costs two stated assumptions (limitation 20), and it
+  reproduces this table's own warm-users and mns@40 columns exactly.
 
 **Suggested vLLM setup** (per the model above): `--kv-cache-dtype fp8_e4m3`;
 `--enable-prefix-caching`; `max_seq_len` 180k (caps worst-case cold prefill and pool
@@ -1100,7 +1196,7 @@ so is the bandwidth they would share.
 | H5 subagents raise warm count | **Supported** (640 → 918 across r = 0 → 1) |
 | H6 invalidation ≈ linear, ceiling 1 − f | **Supported** (−1.5% at f = 1%, −14% at 10%) |
 | H7 cache binds before bandwidth | **Supported in all 6 configs — with MTP** (warm < mns@40; v@warm ≥ 41 tok/s). **Reversed in all 6 without it** (mns@40 falls 1.8–2.0×, e.g. 118 → 60 on the 27B / 1×H200) |
-| H8 spikes bind below f\*; MoE compounds | **Supported** (§ 9). f_sla is 0.35–0.93× f\* (tightest on Mistral-3.5/TP4) and duty still reads 76–93% there; B\* → 0 at f\*. MoE spike tolerance beats dense **8.8× (1×H200) / 7.2× (TP2)** against a 5.9× prefill-speed gap — and, as predicted, the advantage **shrinks to ~2.2–2.7× on a global flush**. Unpredicted corollary: under FCFS the miss tax lands on *hits* (74× their own service time at f = 20%) |
+| H8 spikes bind below f\*; MoE compounds | **Supported** (§ 9). f_sla is 0.35–0.93× f\* (tightest on Mistral-3.5/TP4) and duty still reads 76–93% there; B\* → 0 at f\*. MoE spike tolerance beats dense **8.8× (1×H200) / 7.2× (TP2)** against a 5.9× prefill-speed gap — and, as predicted, the advantage **shrinks to ~2.2–2.7× on a global flush**. Unpredicted corollary: under FCFS the miss tax lands on *hits* (74× their own service time at f = 20%). The § 9 planner adds a second: **which** constraint binds switches from cache to latency at f ≈ 6% on the 27B/TP2, and Mistral-3.5/TP4 turns out **decode**-bound at 36 users (it ships no MTP module) |
 
 ## Extension (2026-07): B300 GPUs, NVFP4 weights, Mistral-Medium-3.5, GLM-5.2
 
@@ -1237,7 +1333,7 @@ Observations:
    mns 64, +2% at 120) — so the flat tail is robust to the union
    assumption even though the kink region itself is not.
 
-### New limitations 16–19 (extending the general list 1–15, which follows in § Limitations below)
+### New limitations 16–19 (extending the general list, 1–15 and 20, which follows in § Limitations below)
 
 16. **The B300 reserve is transferred, then corrected by measurement — but
     still not observed end-to-end.** The hardware constants themselves are
@@ -1396,12 +1492,26 @@ Ordered roughly by how much each could move the numbers:
     salts (deliberate isolation) split it into many equivalence classes. A rough
     no-global-dedup proxy costs ~200 sessions on TP2. The sharing/isolation domain
     is a policy decision, not a modelling detail.
+20. **The two-axis planner rests on two conversions, not on measurements**
+    (§ 9, "Reading the two-axis planner"; added 2026-08-03 — numbered 20 because
+    the 2026-07 extension already owns 16–19). Combining the study's four
+    ceilings into one unit requires assuming **one user holds one session** and
+    **a user sends a turn every `think_time` seconds**. Neither is checkable
+    without a session trace, and they bite in *opposite* directions: a user
+    holding *k* concurrent sessions divides the cache ceiling by *k* while
+    leaving the latency ceiling alone, and think time scales latency and
+    saturation linearly while leaving cache and decode untouched — halving it to
+    15 s flips the 27B/TP2 from cache-bound to latency-bound with no change to
+    hardware or workload. The planner also inherits every limitation of the
+    ceilings it combines (14 for cache, 11 for decode, `research/spike.md` #4 for
+    latency). It reproduces § 7's published cache and decode columns exactly,
+    which is evidence the arithmetic is right — not that the conversions are.
 
 ## Reproducibility
 
 ```
 uv run scripts/scenario_model.py   # self-checks: calibration + config identities
-uv run scripts/scenarios.py        # regenerates the figures
+uv run scripts/scenarios.py        # regenerates the figures (incl. cold_spike, binding_map)
 uv run scripts/tables.py           # regenerates every number quoted above
 ```
 

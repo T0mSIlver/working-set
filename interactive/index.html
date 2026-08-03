@@ -191,6 +191,17 @@ svg text{fill:var(--text-2)}
 .dlabel{fill:var(--text); font-size:10.5px; font-weight:600}
 .foot{color:var(--muted); font-size:11.5px; margin-top:22px; text-align:center}
 .foot code{background:var(--control); padding:1px 5px; border-radius:4px}
+.ftable{width:100%; border-collapse:collapse; font-size:12px; margin-top:4px}
+.ftable th{text-align:left; font-weight:600; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; padding:4px 8px 6px; border-bottom:1px solid var(--border)}
+.ftable td{padding:5px 8px; border-bottom:1px solid var(--border)}
+.ftable tr.you td{background:var(--tile); font-weight:600}
+.ftable td.num{text-align:right; font-variant-numeric:tabular-nums}
+.ftable .bind{font-weight:650; font-size:11px; text-transform:uppercase; letter-spacing:.03em}
+.planner-h{margin:22px 0 -4px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.planner-h .lede{font-size:12px; color:var(--text-2); font-weight:400; text-transform:none; letter-spacing:0}
+.preset{display:inline-flex; gap:6px; margin-top:6px}
+.preset button{font:inherit; font-size:11px; padding:3px 9px; border-radius:7px; border:1px solid var(--border); background:var(--tile); color:var(--text-2); cursor:pointer}
+.preset button:hover{border-color:var(--s1); color:var(--s1)}
 </style>
 </head>
 <body>
@@ -346,6 +357,30 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-inval" min="0" max="50" step="0.5" value="1">
         </div>
       </div>
+      <div class="ctl-group">
+        <div class="ctl-sec">Load &amp; latency budget</div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Concurrent users the deployment serves. This is the knob that turns every constraint into the SAME unit: one user is assumed to hold one session (so it compares against warm capacity) and to send a turn every `think time` seconds (so it compares against a work rate). The study's reference load is 64 users at one turn per 30 s = 2.13 req/s, and at those defaults every figure on this page reproduces the published tables exactly. Both conversions are assumptions, not facts — a user running several concurrent sessions divides the cache ceiling, and bursty think time invalidates the Poisson arrival model.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
+          <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Seconds between one user's turns — their think/edit/read time. Scales the request rate inversely, so it moves the latency and saturation ceilings LINEARLY while leaving cache and decode untouched: halving it can flip which constraint binds with no change to hardware or workload. The study's reference is 30 s (one turn every 30 s per user).">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
+          <input type="range" id="s-think" min="5" max="180" step="5" value="30">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Time-to-first-token budget a cache MISS must meet. Sets the latency ceiling and the cold-spike tolerance B*, which is exactly LINEAR in it — halving the budget halves every B* and reorders nothing. A budget below one miss's own prefill cost cannot be met at any load, and the tile says so. Solved against the MEAN TTFT, so a p95 budget binds at a lower miss rate than anything shown here.">TTFT budget</span> <span class="val"><span id="v-sla">10</span> s</span></label>
+          <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Tokens a warm HIT still prefills — the new turn's suffix on top of its cached context. Hardcoded at 2,000 before this page priced queueing, and a bigger lever than it looks: at low miss rates the HIT leg dominates the duty cycle, so turn size sets the standing load (and therefore the headroom a burst drains into) more than miss cost does. 500 to 8,000 tokens moves B* by ~3.5x on the 27B/TP2.">Warm turn size</span> <span class="val"><span id="v-turn">2,000</span> tok</span></label>
+          <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="How many cache misses arrive AT ONCE — a correlated invalidation event, which the per-request miss-rate slider deliberately cannot express (that one is an i.i.d. draw). Drives the drain time, the last request's TTFT and the output tokens the bystanding warm users lose while it clears. The 'flush' preset sets it to the whole warm population, the event limitation 8 names: a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
+          <input type="range" id="s-burst" min="1" max="512" step="1" value="32">
+          <span class="preset"><button type="button" data-burst="1">1</button><button type="button" data-burst="32">32</button><button type="button" data-burst="flush">= full flush</button></span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -401,6 +436,46 @@ svg text{fill:var(--text-2)}
       <p class="cs">Why vLLM's prefill chunk is 32k, not 2k: three views of one knob, sharing a log axis. Small chunks shrink the ITL spike (bottom) but amortise the per-pass weight stream over fewer FLOPs, so effective MFU falls (top) and the cold-request ceiling falls with it (middle). Dashed line = the 32,768 default every tile is priced at; the spike prices the chunk's marginal FLOPs (its host pass streams the weights anyway). Kernel-launch overheads are unpriced — the left edge reads better than a real machine.</p>
       <div class="chartbox"><div id="chartE"></div><div class="tt" id="ttE"></div></div>
     </div>
+  </div>
+
+  <!-- COLD-SPIKE PLANNER -->
+  <div class="planner-h">
+    <div class="section-h">The operating point — every constraint in one unit</div>
+    <div class="lede">The study has always reported its ceilings in different units and refused to combine them. Two stated assumptions — <b>one user holds one session</b>, and sends a turn every <b>think time</b> seconds — turn all four into <b>max concurrent users</b>, so the binding one is simply the smallest. Two of them barely move with the miss rate and two collapse, so which one binds <b>changes hands</b> inside this page's own slider range.</div>
+  </div>
+  <div class="tiles" id="spikeTiles"></div>
+
+  <div class="charts">
+    <div class="panel card">
+      <p class="ct">F · The binding constraint vs cache-miss rate</p>
+      <p class="cs">All four ceilings for the current configuration, in max concurrent users. Dashed black = what you actually get (the smallest). Dot = your current load. Where the envelope changes colour, the binding constraint changes hands — the one thing neither axis can show alone.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>decode</span>
+        <span class="li"><span class="sw" style="background:var(--s2)"></span>latency</span>
+        <span class="li"><span class="sw" style="background:var(--crit)"></span>saturation</span>
+        <span class="li"><span class="sw dot" style="background:var(--text)"></span>your load</span>
+      </div>
+      <div class="chartbox"><div id="chartF"></div><div class="tt" id="ttF"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">G · Cold-spike tolerance</p>
+      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses whose last request still gets a first token inside the budget — against the standing miss rate. Band = the MFU [30–60%] bracket, the soft input every prefill figure carries. Each curve reaches zero at its own f*, which is what makes f* a limit rather than an operating point.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>this configuration</span>
+        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 30–60%</span>
+        <span class="li"><span class="sw" style="background:var(--muted)"></span>other topologies</span>
+        <span class="li"><span class="sw dot" style="background:var(--crit)"></span>absorbs &lt; 1 miss</span>
+      </div>
+      <div class="chartbox"><div id="chartG"></div><div class="tt" id="ttG"></div></div>
+    </div>
+  </div>
+
+  <div class="panel card" style="margin-top:14px">
+    <p class="ct">The frontier — every configuration at the current workload</p>
+    <p class="cs">What binds, and where, without clicking through combinations. Sorted by the ceiling that actually binds; your configuration is highlighted. DP rows show the per-group limit — a burst spreads across replicas only as well as the router balances it, which the sticky routing DP needs for cache reasons works against.</p>
+    <div id="frontierTable"></div>
   </div>
 
   <p class="foot">Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>. Constants live in the <code>CONFIG</code> block. Model/GPU provenance: <code>research/model_35ba3b.md</code>, <code>model_mistral_medium35.md</code>, <code>model_glm52.md</code>, <code>gpu_b300.md</code>, <code>nvfp4.md</code>.</p>
@@ -659,8 +734,18 @@ function effective_bw(topo){
 // below the anchor's efficiency, so short (p5-ish) misses now read ~10%
 // dearer on the MoEs — that is the model's content, not drift.
 const PREFILL_MFU   = 0.45;    // mid of the plausible [0.30, 0.60] FP8 bracket
+const PREFILL_MFU_LO = 0.30, PREFILL_MFU_HI = 0.60;  // the bracket itself:
+// an ERROR BAR on every prefill-derived figure, not a knob anyone chooses
 const PREFILL_CHUNK = 32768;   // vLLM max_num_batched_tokens (the study default)
-const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn)
+const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn).
+// The study's reference value and the Warm turn size slider's default.
+// The prefill functions below are defined ABOVE the state object and are also
+// exercised by the unit checks, which run before any slider exists — so they
+// read these two live mirrors rather than `state` directly (a const in its
+// temporal dead zone throws even for typeof). syncState() keeps them equal to
+// the sliders; at their defaults these ARE the published reference values, so
+// the unit checks pin the page to the docs' tables by construction.
+let liveTurn = WARM_TURN_TOK, liveThink = 30;
 const REF_REQ_RATE  = 2.13;    // req/s: 64 users, one turn every 30 s (docs' f* load)
 
 // FLOPs of ONE forward pass over T tokens with P tokens already cached:
@@ -690,20 +775,20 @@ function peakFlops(topo){
 // small turn rides the serving steady state the same way. A MISS at the
 // prefill-duty ceiling has no such host — its passes run back-to-back and
 // each pays the overhead — so misses are priced by prefillPassSeconds below.
-function prefillSeconds(m, topo, T, P){
-  return prefillFlops(m, T, P) / (peakFlops(topo) * PREFILL_MFU);
+function prefillSeconds(m, topo, T, P, mfu){
+  return prefillFlops(m, T, P) / (peakFlops(topo) * (mfu || PREFILL_MFU));
 }
 // Whole context, chunked, on top of `prior` cached tokens: each chunk is
 // priced with the cache it actually attends over, so later chunks cost more.
 // MARGINAL (no per-pass overhead): the total equals one unchunked pass
 // exactly (telescoping pairs), i.e. chunk-size invariant. Used for the warm
 // hit; a miss's chunked cost is missContextSeconds, which is NOT invariant.
-function prefillContextSeconds(m, topo, context, chunk, prior){
+function prefillContextSeconds(m, topo, context, chunk, prior, mfu){
   const C = chunk || PREFILL_CHUNK;
   let s = 0, done = 0, P = prior || 0;
   while (done < context){
     const step = Math.min(C, context - done);
-    s += prefillSeconds(m, topo, step, P + done);
+    s += prefillSeconds(m, topo, step, P + done, mfu);
     done += step;
   }
   return s;
@@ -733,13 +818,14 @@ function prefillContextSeconds(m, topo, context, chunk, prior){
 function prefillOverheadSeconds(m, topo){
   return m.w_resident / effective_bw(topo);
 }
-function mfuCeil(m, topo){
+function mfuCeil(m, topo, anchor){
+  const A = anchor || PREFILL_MFU;
   const ref = prefillFlops(m, PREFILL_CHUNK, 0);
-  const inv = 1/PREFILL_MFU
+  const inv = 1/A
             - peakFlops(topo) * prefillOverheadSeconds(m, topo) / ref;
   if (!(inv > 0)) throw new Error(
-    `${m.name}: per-pass overhead exceeds the whole 45% budget at C=32,768 — `
-    + `the anchor cannot be solved on this topology`);
+    `${m.name}: per-pass overhead exceeds the whole ${(A*100).toFixed(0)}% budget `
+    + `at C=32,768 — the anchor cannot be solved on this topology`);
   return 1/inv;
 }
 // One MISS-side forward pass: FLOPs at the solved ceiling + the overhead.
@@ -825,7 +911,7 @@ function breakevenMissRate(m, topo, wl, rate, cs){
   const st = cs || contextStats(wl);
   const cold = coldRequestSeconds(m, topo, wl, st);
   // a warm hit's new turn attends over the whole cached context (prior=E[L])
-  const warm = prefillContextSeconds(m, topo, WARM_TURN_TOK, 0, st.mean);
+  const warm = prefillContextSeconds(m, topo, liveTurn, 0, st.mean);
   return (1/(rate || REF_REQ_RATE) - warm) / (cold - warm);
 }
 
@@ -843,17 +929,18 @@ const SPIKE_BURST = 32;   // reference simultaneous-miss spike, for the drain li
 // First AND second moments of the prefill service time, per request class.
 // The second moment is the new quantity: the Pollaczek-Khinchine wait is
 // proportional to it, and here it is dominated by the rare long miss.
-function prefillServiceMoments(m, topo, wl, cs, chunk){
+function prefillServiceMoments(m, topo, wl, cs, chunk, mfuAnchor){
   const st = cs || contextStats(wl);
   const C = chunk || PREFILL_CHUNK;
   const a = st.samples, n = a.length;
-  const peak = peakFlops(topo), ceil = mfuCeil(m, topo);
+  const peak = peakFlops(topo), ceil = mfuCeil(m, topo, mfuAnchor);
   const over = prefillOverheadSeconds(m, topo);
   const gemm = 2*m.params_prefill, quad = 2*m.attn_d*m.attn_layers;
   // a hit's cost is AFFINE in the cached length it attends over (the cross
   // term is linear in `prior` chunk by chunk), so two evaluations pin the line
-  const w0 = prefillContextSeconds(m, topo, WARM_TURN_TOK, C, 0);
-  const wSlope = (prefillContextSeconds(m, topo, WARM_TURN_TOK, C, 1e6) - w0)/1e6;
+  const TURN = liveTurn;
+  const w0 = prefillContextSeconds(m, topo, TURN, C, 0, mfuAnchor);
+  const wSlope = (prefillContextSeconds(m, topo, TURN, C, 1e6, mfuAnchor) - w0)/1e6;
   let c1=0, c2=0, h1=0, h2=0;
   for (let i=0; i<n; i++){
     const L = a[i];
@@ -896,6 +983,78 @@ function spikeMetrics(m, topo, wl, cs, rate, chunk){
     drain:   live ? SPIKE_BURST*mo.miss/(1-rho) : Infinity,
     allCold: lam*mo.miss,
   };
+}
+
+/* ---- THE OPERATING POINT (research/spike.md) -------------------------------
+   The study reports its constraints in DIFFERENT UNITS and has always refused
+   to combine them — section 8 says so outright. Two assumptions make them
+   commensurable, and both are stated on the Concurrent users control rather
+   than hidden here:
+     1. one user holds one session      (a session count becomes a user count)
+     2. a user turns every `think` s    (a user count becomes a work rate)
+   Under those, all four ceilings become MAX CONCURRENT USERS and the binding
+   one is simply the smallest. Mirrors operating_point() in scenario_model.py.
+   -------------------------------------------------------------------------- */
+const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor
+
+function requestRate(users, think){ return users / (think || liveThink); }
+
+// Concurrency at which per-user p50 falls to `floor` tok/s. Bisection: speed
+// is monotone decreasing in n (every extra sequence adds KV bytes to the same
+// step), so ~11 evaluations replace a linear scan. Mirrors max_users_decode.
+function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
+  const F = floor || DECODE_FLOOR_TOKS, HI = hi || 4096;
+  const p50 = n => decodeCurves(model, topo, wl, n, Math.max(1,n-1), n_iter||220).p50.slice(-1)[0];
+  if (!(p50(1) >= F)) return { n: 0, censored: false };
+  // a crossing beyond HI is CENSORED, not "exactly HI" — the study does not
+  // do silent caps, so the flag rides along and the readouts print "≥"
+  if (p50(HI) >= F) return { n: HI, censored: true };
+  let lo = 1, up = HI;
+  while (up - lo > 1){ const mid = (lo+up)>>1; if (p50(mid) >= F) lo = mid; else up = mid; }
+  return { n: lo, censored: false };
+}
+
+// Users at which prefill duty reaches 100% — section 8's f*, in users.
+function maxUsersSaturation(mo, f, think){
+  const eS = f*mo.miss + (1-f)*mo.hit;
+  return eS > 0 ? (think||liveThink)/eS : Infinity;
+}
+
+// Users at which a MISS's mean TTFT reaches the budget. Closed form in both
+// disciplines (E[S] and E[S^2] do not depend on the arrival rate):
+//   FCFS  lam a/(2(1-lam b)) + c = SLA  ->  lam = k/(a + k b),  k = 2(SLA - c)
+//   PS    c/(1-lam b) = SLA            ->  lam = (1 - c/SLA)/b
+// ALWAYS strictly inside saturation, since k/(a+kb) < 1/b for any a > 0 — the
+// algebraic form of "the queue diverges before the server does".
+function maxUsersLatency(mo, f, sla, think, discipline){
+  const b = f*mo.miss + (1-f)*mo.hit;
+  const a = f*mo.missSq + (1-f)*mo.hitSq, c = mo.miss;
+  if (c >= sla || b <= 0) return 0;
+  const lam = discipline === 'ps' ? (1 - c/sla)/b : (2*(sla-c))/(a + 2*(sla-c)*b);
+  return Math.max(0, lam*(think||liveThink));
+}
+
+// All four ceilings in one unit, plus which binds. `warmUsers` is passed in
+// because the caller has already paid for the Monte-Carlo warm fill.
+function operatingPoint(model, topo, wl, cs, opts){
+  const o = opts || {};
+  const sla = o.sla ?? state.sla, think = o.think ?? state.think;
+  const mo = o.mo || prefillServiceMoments(model, topo, wl, cs, o.chunk);
+  const f = wl.invalidation;
+  const ceilings = {
+    cache:      o.warmUsers,
+    decode:     o.decodeUsers,
+    latency:    maxUsersLatency(mo, f, sla, think, o.discipline),
+    saturation: maxUsersSaturation(mo, f, think),
+  };
+  let binding = 'cache';
+  for (const k in ceilings) if (ceilings[k] < ceilings[binding]) binding = k;
+  const limit = ceilings[binding];
+  const users = o.users ?? state.users;
+  return { ceilings, binding, limit, users,
+           reqRate: requestRate(users, think),
+           headroom: limit > 0 ? users/limit : Infinity,
+           fits: users <= limit };
 }
 
 /* ============================================================================
@@ -1207,6 +1366,37 @@ function sampleFull(wl){
   // a global flush = f 100%: only the MoE on TP2 can serve its own recovery
   console.assert(sp2.allCold > 1 && spX.allCold > 1 && spM.allCold < 1,
     "all-cold duty: dense configs must shed load on a flush, the MoE/TP2 serves it");
+  // ---- the operating point (research/spike.md, the two-axis planner) ----
+  // these run before any slider exists, so they price the PUBLISHED reference
+  // values; the live mirrors start equal to them by construction
+  console.assert(liveTurn === WARM_TURN_TOK && liveThink === 30,
+    "unit checks must run at the published reference turn size and think time");
+  console.assert(approx(requestRate(64, 30), REF_REQ_RATE, 0.01),
+    "64 users at one turn per 30 s must reproduce the 2.13 req/s reference");
+  // the algebraic heart of the section: the queue diverges before the server,
+  // so the latency ceiling is ALWAYS strictly inside saturation
+  for (const [mk, tt] of [["27B", t1H], ["27B", tp2H], ["35BA3B", tp2H]]){
+    const mo = prefillServiceMoments(CONFIG.MODELS[mk], tt, wlRef, csRef);
+    const lat = maxUsersLatency(mo, wlRef.invalidation, 10, 30);
+    const sat = maxUsersSaturation(mo, wlRef.invalidation, 30);
+    console.assert(lat > 0 && lat < sat,
+      `${mk}: latency ceiling ${lat.toFixed(0)} must sit inside saturation ${sat.toFixed(0)}`);
+    console.assert(maxUsersLatency(mo, wlRef.invalidation, 10, 30, 'ps') < lat,
+      "processor sharing must admit fewer users than FCFS on the MISS side");
+    console.assert(maxUsersLatency(mo, wlRef.invalidation, mo.miss*0.5, 30) === 0,
+      "a budget below one miss's own prefill cannot be met at any load");
+    console.assert(approx(maxUsersLatency(mo, wlRef.invalidation, 10, 60)/lat, 2, 1e-9),
+      "think time scales the user ceilings linearly");
+  }
+  // The planner's two SAMPLED ceilings (cache, decode) are pinned against
+  // section 7's published table in scenario_model.py's self-checks, not here:
+  // this browser suite is deliberately the closed-form subset, since the
+  // Monte-Carlo assertions run only in Python (docs/scenarios.md,
+  // Reproducibility) — and warmCapacity's scratch buffer is not even
+  // initialised this early in the file.
+  // B* factored out of spikeMetrics must agree with it exactly
+  console.assert(approx(bStar(sp2.mo, wlRef.invalidation, SPIKE_SLA_S, REF_REQ_RATE),
+                        sp2.bstar, 1e-9), "bStar must agree with spikeMetrics");
 })();
 
 /* ============================================================================
@@ -1394,6 +1584,10 @@ const state = {
   sub_median: 8, sub_sigma: 0.90,
   sub_ratio: 0.10, sub_shares_prefix: false,
   sys: 15, inval: 1.0,
+  // load & latency budget. The defaults ARE the study's reference load
+  // (64 users x one turn / 30 s = 2.13 req/s, a 2,000-token warm turn), so at
+  // slider defaults every readout reproduces the published tables exactly.
+  users: 64, think: 30, sla: 10, turn: 2000, burst: 32,
 };
 
 // topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
@@ -2019,8 +2213,12 @@ let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null, lastCS=nul
 // token TP2 pool against 3,233,564 measured (-14.9%), so it is not a
 // plausible-adverse case any more, it is a refuted one. See docs/scenarios.md
 // § Measured cross-check.
-function activeModel(){
-  let m = CONFIG.MODELS[state.model];
+function activeModel(){ return modelFor(state.model); }
+// The same dtype / deployed-overhead switches applied to an ARBITRARY model —
+// what the frontier table needs to price every configuration on equal terms
+// (and what activeModel() has always done for the selected one).
+function modelFor(key){
+  let m = CONFIG.MODELS[key];
   // NVFP4 weights (B300-only; the UI disables the option elsewhere): swap in
   // the NVFP4-checkpoint weight bytes — KV and recurrent state are untouched
   if (state.wdt === "nvfp4" && m.nvfp4_w){
@@ -2045,7 +2243,10 @@ function activeModel(){
   return m;
 }
 
+function syncState(){ liveTurn = state.turn; liveThink = state.think; }
+
 function computeAndRender(draft){
+  syncState();
   const model=activeModel();
   const topo=currentTopo();
   const wl=currentWL();
@@ -2118,6 +2319,110 @@ function computeAndRender(draft){
   renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
 
   renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS);
+  renderPlanner(model, topo, wl, lastCS, noFit, draft, q);
+}
+
+/* ---- the planner: tiles, charts F & G, the frontier table ------------------
+   The expensive halves — the warm-capacity-vs-f anchors, the decode-ceiling
+   bisections and the whole frontier table — run only on a SETTLED render and
+   are reused while a slider is being dragged, the same split chart B uses.
+   The closed-form halves (latency, saturation, B*, TTFT) are cheap and update
+   live on every frame, so dragging the load or budget sliders is immediate.
+   -------------------------------------------------------------------------- */
+let lastPlanner = null, lastFrontier = null, lastDecodeCeil = null;
+function renderPlanner(model, topo, wl, cs, noFit, draft, q){
+  if (noFit){
+    renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
+    renderChartF(null); renderChartG(null);
+    document.getElementById('frontierTable').innerHTML = '';
+    lastPlanner = null; lastFrontier = null; lastDecodeCeil = null;
+    return;
+  }
+  const reps = topo.replicas || 1;
+  const rate = requestRate(state.users, state.think)/reps;
+  const mo = prefillServiceMoments(model, topo, wl, cs);
+  const moLo = prefillServiceMoments(model, topo, wl, cs, null, PREFILL_MFU_LO);
+  const moHi = prefillServiceMoments(model, topo, wl, cs, null, PREFILL_MFU_HI);
+  const f = wl.invalidation;
+  const warmUsersNow = lastWarmCur.p5 * (1 - p_sub(wl));
+
+  // --- the sampled halves, on settled renders only ---
+  const sig = `${state.model}|${state.gpu}|${state.wdt}|${state.ngpu}|${state.tp}|`
+            + `${state.kv}|${state.cap}|${state.ram}|${state.state_dt}|${state.wover}|`
+            + `${state.mtp}|${state.user_median}|${state.user_sigma}|${state.sub_median}|`
+            + `${state.sub_sigma}|${state.sub_ratio}|${state.sub_shares_prefix}|${state.sys}`;
+  let warmFn, decodeUsers, decodeCensored = false;
+  if (!draft || !lastPlanner || lastPlanner.sig !== sig){
+    decodeUsers = maxUsersDecode(model, topo, wl, DECODE_FLOOR_TOKS, q.DECODE_ITER || 220);
+    decodeCensored = decodeUsers.censored; decodeUsers = decodeUsers.n;
+    warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
+                            q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
+    lastPlanner = { sig, warmFn, decodeUsers, decodeCensored };
+  } else {
+    warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
+    decodeCensored = lastPlanner.decodeCensored;
+  }
+
+  const d = plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo);
+  const op = operatingPoint(model, topo, wl, cs, {
+    mo, warmUsers: warmUsersNow*reps, decodeUsers: decodeUsers*reps });
+  // per-group quantities the tiles quote alongside the user ceilings
+  const sp = spikeMetrics(model, topo, wl, cs, rate);
+  const drain = state.burst * mo.miss / Math.max(1e-9, 1 - sp.rho);
+  const dm = itlSpikeRatio(model, topo, wl, cs);
+  Object.assign(op, {
+    bstar:   bStar(mo,   f, state.sla, rate),
+    bstarLo: bStar(moLo, f, state.sla, rate),
+    bstarHi: bStar(moHi, f, state.sla, rate),
+    fstar:   breakevenMissRate(model, topo, wl, rate, cs),
+    fsla:    sp.fsla, duty: sp.rho,
+    burstDrain: sp.rho >= 1 ? Infinity : drain,
+    tokensLost: (sp.rho >= 1 || !(dm.ratio > 1)) ? 0
+              : drain * (1/dm.decodeS - 1/dm.mixedS),
+    ttftMiss:    sp.rho >= 1 ? Infinity : (rate*(f*mo.missSq+(1-f)*mo.hitSq))/(2*(1-sp.rho)) + mo.miss,
+    ttftHitFcfs: sp.rho >= 1 ? Infinity : (rate*(f*mo.missSq+(1-f)*mo.hitSq))/(2*(1-sp.rho)) + mo.hit,
+    ttftHitPs:   sp.rho >= 1 ? Infinity : mo.hit/(1-sp.rho),
+  });
+  renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
+  renderChartF(d, op);
+
+  // context lines on chart G: the same model at the other TP widths that fit
+  const others = [];
+  for (const n of [1,2,4,8]){
+    if (n === topo.n_gpu) continue;
+    const t2 = makeTopo('tp', n, state.gpu);
+    if (kv_pool_tokens(model, t2) <= 0) continue;
+    const m2 = prefillServiceMoments(model, t2, wl, cs);
+    const r2 = requestRate(state.users, state.think);
+    others.push({ fs: d.fs, b: d.fs.map(x => bStar(m2, x, state.sla, r2)) });
+  }
+  renderChartG(d, others);
+
+  // --- the frontier table, settled renders only ---
+  if (!draft || !lastFrontier){
+    const rows = [];
+    for (const mk of Object.keys(CONFIG.MODELS))
+      for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
+        if (dp*tp > 8) continue;
+        const m2 = modelFor(mk), t2 = makeGrid(dp, tp, state.gpu);
+        if (kv_pool_tokens(m2, t2) <= 0) continue;
+        const r2 = requestRate(state.users, state.think)/(t2.replicas||1);
+        const mo2 = prefillServiceMoments(m2, t2, wl, cs);
+        const wc2 = warmCapacity(m2, t2, wl, ramPerCache(t2),
+                                 Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
+        const du2 = maxUsersDecode(m2, t2, wl, DECODE_FLOOR_TOKS, 160);
+        const op2 = operatingPoint(m2, t2, wl, cs, {
+          mo: mo2, warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1),
+          decodeUsers: du2.n*(t2.replicas||1) });
+        rows.push({ key:`${mk}|${dp}x${tp}`, label:`${m2.name} · ${t2.name}`,
+                    op:op2, reps:t2.replicas||1, censored:du2.censored,
+                    bstar: bStar(mo2, f, state.sla, r2) });
+      }
+    rows.sort((a,b)=>b.op.limit-a.op.limit);
+    lastFrontier = rows;
+  }
+  renderFrontierTable(lastFrontier,
+    `${state.model}|${state.ngpu/state.tp}x${state.tp}`);
 }
 
 // chart D's subtitle explains the n=32 slope break, but only when the active
@@ -2135,6 +2440,28 @@ function updateCsD(model){
 // it by construction (decodePlan), so this is never an extrapolation, it costs
 // nothing, and the tile can no longer disagree with the point chart C marks
 // (both are the p50 curve at the same x, interpolated the same way).
+// The fit hint the tiles show, factored out so the planner panel can say the
+// same thing rather than a second, subtly different thing.
+function fitHintFor(model, topo){
+  const needTp = minTpFor(model, topo.gpu.name);
+  return `needs TP ≥ ${needTp} on ${topo.gpu.name}`
+       + (needTp <= 8 ? ` (this node has 8)` : ` — more than one 8-GPU node`);
+}
+// Inter-token latency with and without a prefill chunk sharing the forward
+// pass, at the current stress point — section 8's ITL spike, returned in
+// seconds so the planner can integrate it over a whole drain. Mirrors
+// itl_spike() in scenario_model.py.
+function itlSpikeRatio(model, topo, wl, cs){
+  const st = lastStress;
+  const pu = st && st.pu > 0 ? st.pu : 0;
+  if (!(pu > 0)) return { decodeS: 0, mixedS: 0, ratio: 0 };
+  const decodeS = model.mtp / pu;
+  // priced mid-re-prefill: prior = E[L]/2, the average cache a chunk attends
+  // over during a full cold re-prefill
+  const mixedS = decodeS + prefillSeconds(model, topo, PREFILL_CHUNK, cs.mean/2);
+  return { decodeS, mixedS, ratio: mixedS/decodeS };
+}
+
 function stressPoint(dc, topo, warm){
   const n=Math.max(1,Math.round(warm.g5));
   const pu=interpAt(dc,'p50',n,true);
@@ -2183,11 +2510,13 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs){
   const coldP95 = noFit ? 0 : missContextSeconds(model, topo, cs.p95, CH);
   // a warm hit's new turn attends over the whole cached context; MARGINAL
   // pricing (no per-pass overhead) — it rides the serving steady state
-  const warmS = noFit ? 0 : prefillContextSeconds(model, topo, WARM_TURN_TOK, CH, cs.mean);
+  const warmS = noFit ? 0 : prefillContextSeconds(model, topo, state.turn, CH, cs.mean);
   const coldRate = noFit ? 0 : 1/coldS;
-  // the reference load is SYSTEM-wide; each of the `replicas` groups takes
-  // its share, so f* for a DP grid is solved at the per-group rate
-  const groupRate = REF_REQ_RATE / (topo.replicas || 1);
+  // the load is SYSTEM-wide; each of the `replicas` groups takes its share, so
+  // f* for a DP grid is solved at the per-group rate. Driven by the Concurrent
+  // users / Think time controls since 2026-08-03 — at their defaults (64 users,
+  // one turn per 30 s) this is exactly the published 2.13 req/s reference.
+  const groupRate = requestRate(state.users, state.think) / (topo.replicas || 1);
   const fstar = noFit ? 0 : (1/groupRate - warmS)/(coldS - warmS);
   const prefillClass = noFit ? undefined
     : (wl.invalidation >= fstar ? 'crit'
@@ -2258,6 +2587,262 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs){
     const kk = t.tip? `<span class="tip" tabindex="0" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
     return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
   }).join('');
+}
+
+/* ============================================================================
+   THE PLANNER PANEL — spike tiles, charts F & G, the frontier table
+   ========================================================================== */
+const PLANNER_COLORS = () => ({
+  cache: cssv('--s1'), decode: cssv('--s3'),
+  latency: cssv('--s2'), saturation: cssv('--crit'),
+});
+const PLANNER_LABEL = { cache:'cache', decode:'decode', latency:'latency',
+                        saturation:'saturation' };
+
+// Warm USER capacity as a function of f, from a few Monte-Carlo anchors.
+// Warm capacity falls smoothly and near-linearly with the miss rate (H6:
+// ~1.5 x f), so five fills plus the CURRENT f — included as an anchor so the
+// curve passes exactly through the value the tiles quote — beat 50 fills for
+// any resolution this chart can show. Interpolation is stated in the caption
+// rather than hidden: this is the one series on the panel that is sampled.
+function warmUsersCurve(model, topo, ram, iter, budget, wl0, fNow, warmNow){
+  const anchors = [0, 0.125, 0.25, 0.375, 0.5];
+  if (!anchors.includes(fNow)) anchors.push(fNow);
+  anchors.sort((a,b)=>a-b);
+  const pts = anchors.map(f => {
+    if (f === fNow && warmNow !== undefined) return {f, u: warmNow};
+    const wl = {...wl0, invalidation: f};
+    const wc = warmCapacity(model, topo, wl, ram, iter, budget);
+    return { f, u: wc.all[0] * (1 - p_sub(wl)) };
+  });
+  return f => {
+    if (f <= pts[0].f) return pts[0].u;
+    for (let i=1;i<pts.length;i++)
+      if (f <= pts[i].f){
+        const a=pts[i-1], b=pts[i];
+        return a.u + (b.u-a.u)*(f-a.f)/((b.f-a.f)||1);
+      }
+    return pts[pts.length-1].u;
+  };
+}
+
+// Everything charts F and G draw, for the CURRENT configuration.
+function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
+  const fs = [];
+  for (let i=0;i<=50;i++) fs.push(i/100);
+  const think = state.think, sla = state.sla, reps = topo.replicas || 1;
+  // the ceilings are per replica GROUP, so the load one group sees is the
+  // system population divided by the replica count
+  const perGroup = u => u * reps;
+  const series = { cache:[], decode:[], latency:[], saturation:[], env:[], binding:[] };
+  const spike = { mid:[], lo:[], hi:[] };
+  const moLo = prefillServiceMoments(model, topo, wl, cs, null, PREFILL_MFU_LO);
+  const moHi = prefillServiceMoments(model, topo, wl, cs, null, PREFILL_MFU_HI);
+  for (const f of fs){
+    const c = {
+      cache: warmFn(f) * reps,
+      decode: decodeUsers * reps,
+      latency: perGroup(maxUsersLatency(mo, f, sla, think)),
+      saturation: perGroup(maxUsersSaturation(mo, f, think)),
+    };
+    let bind='cache'; for (const k in c) if (c[k] < c[bind]) bind = k;
+    for (const k in c) series[k].push(c[k]);
+    series.env.push(c[bind]); series.binding.push(bind);
+    const rate = requestRate(state.users, think)/reps;
+    spike.mid.push(bStar(mo,   f, sla, rate));
+    spike.lo .push(bStar(moLo, f, sla, rate));
+    spike.hi .push(bStar(moHi, f, sla, rate));
+  }
+  return { fs, ...series, spike, mo, moLo, moHi };
+}
+
+// B* from a moments bundle — the same arithmetic spikeMetrics does, factored
+// out so the MFU bracket and the f sweep can reuse it without re-sampling.
+function bStar(mo, f, sla, rate){
+  const rho = rate * (f*mo.miss + (1-f)*mo.hit);
+  return rho >= 1 ? 0 : Math.max(0, sla*(1-rho)/mo.miss);
+}
+
+function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
+  const box = document.getElementById('spikeTiles');
+  if (noFit){
+    box.innerHTML = `<div class="tile wide"><div class="k">The operating point</div>`
+      + `<div class="v tnum">—</div><div class="sub2">model weights do not fit this `
+      + `configuration — ${esc(fitHint)}</div></div>`;
+    return;
+  }
+  const C = PLANNER_COLORS();
+  const bind = op.binding, reps = topo.replicas || 1;
+  const drain = op.burstDrain, lastTTFT = drain;
+  const good=cssv('--good'), warn=cssv('--warn'), crit=cssv('--crit');
+  const headClass = op.headroom >= 1 ? crit : (op.headroom >= 0.8 ? warn : good);
+  const others = Object.keys(op.ceilings).filter(k=>k!==bind)
+    .sort((a,b)=>op.ceilings[a]-op.ceilings[b])
+    .map(k=>`${PLANNER_LABEL[k]} ${fmt(op.ceilings[k],0)}`).join(' · ');
+  const tiles = [
+    {k:'Binding constraint', hero:true, v:PLANNER_LABEL[bind].toUpperCase(),
+     u: op.limit >= 1 ? `at ${fmt(op.limit,0)} users` : 'at no load at all',
+     sub: op.limit >= 1
+        ? `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`
+          + ` · next: ${others}`
+        : `the ${fmt(state.sla,0)} s budget is below one miss's own prefill `
+          + `(${fmt(sp.mo.miss,1)} s) — unachievable at any load`
+          + ` · next: ${others}`,
+     cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
+     tip:"The whole point of this panel: all four of the study's ceilings converted into ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm user-class p5 population that fits in the KV pool. decode = the concurrency at which per-user p50 falls to the 40 tok/s hard floor. latency = the load at which a miss's MEAN TTFT reaches your budget. saturation = the load at which prefill duty reaches 100% (section 8's f*, in users). The conversion costs two assumptions, both on the Concurrent users control: one user holds one session, and turns every `think time` seconds. Two ceilings barely move with the miss rate and two collapse, so which one binds CHANGES HANDS as f rises — chart F shows where. Per replica group, scaled by the replica count for DP; a DP burst spreads across replicas only as well as the router balances it."},
+    {k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
+     sub:`MFU 30–60% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
+        + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
+        + ` · latency ceiling f_sla ${op.fsla>=1?'> 100':fmt(op.fsla*100,0)}%`,
+     cls: op.bstar<1?'crit':(op.bstar<5?'warn':'good'),
+     tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside the TTFT budget — the correlated event the i.i.d. miss-rate slider cannot express. Exactly LINEAR in the budget, so halving it halves this and reorders nothing. The band is the MFU [30–60%] bracket re-priced end to end, not scaled: it is the soft input every prefill figure on this page carries, and it is wide. B* reaches zero exactly at f*, which is what makes f* a limit rather than an operating point — and f_sla, where mean TTFT reaches the budget, binds earlier still."},
+    {k:`A burst of ${fmt(state.burst,0)} at once`,
+     v: drain>=90? fmt(drain/60,1) : fmt(drain,1), u: drain>=90?'min to clear':'s to clear',
+     sub:`last request waits ${lastTTFT>=90?fmt(lastTTFT/60,1)+' min':fmt(lastTTFT,1)+' s'}`
+        + ` (budget ${fmt(state.sla,0)} s) · every warm user loses ~${fmt(op.tokensLost,0)} output tokens`,
+     cls: drain>state.sla?'crit':'good',
+     tip:"What a correlated invalidation event actually costs. The backlog drains at (1 − duty) seconds of work per second, because the standing traffic keeps arriving throughout, so the last request's TTFT IS the drain time under either scheduling discipline. Section 8's ITL spike is ONE forward pass; during a drain the scheduler has a chunk to place in EVERY pass, so that spike is the steady state for the whole drain and the warm users who did nothing wrong simply stop receiving tokens at their normal rate. The tokens-lost figure is that difference integrated over the drain. Omitted, and all of it makes a real machine worse: the decode batch sharing each pass stretches the drain 1–3%, and preemption under a full KV pool is unpriced."},
+    {k:'TTFT now (miss / hit)', v:fmt(op.ttftMiss,2), u:'s for a miss',
+     sub:`a HIT waits ${fmt(op.ttftHitFcfs*1000,0)} ms FCFS | ${fmt(op.ttftHitPs*1000,0)} ms sharing`
+        + ` · duty ${fmt(op.duty*100,0)}%`,
+     cls: op.ttftMiss>state.sla?'crit':(op.ttftMiss>state.sla/2?'warn':'good'),
+     tip:"Mean time to first token at the current load, from the M/G/1 queue. The HIT column is the sharpest thing on this page: under first-come-first-served a warm hit waits behind whatever misses are in front of it, so the cache-miss rate is a latency parameter for the users who HIT the cache, not only for the users who miss — at a 20% miss rate on the 27B/TP2 a hit's TTFT reaches 74x its own service time. Processor sharing is the other end of the bracket (vLLM admits in arrival order but runs several admitted prefills concurrently); neither end is uniformly optimistic, and which is which flips by request class. Solved against the MEAN, so a p95 budget binds sooner than anything here."},
+  ];
+  const colMap = {good, warn, crit};
+  box.innerHTML = tiles.map(t=>{
+    const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
+    const kk = t.tip? `<span class="tip" tabindex="0" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
+    return `<div class="tile${t.hero?' hero':''}"><div class="k">${kk}</div>`
+         + `<div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div>`
+         + `<div class="sub2 tnum">${esc(t.sub)}</div></div>`;
+  }).join('');
+}
+
+/* ---- Chart F: the four ceilings, in users, vs the miss rate ---- */
+let chartFGeom = null;
+function renderChartF(d, op){
+  if (!d){ renderNoFit('chartF','planner'); chartFGeom=null;
+           document.getElementById('ttF').style.opacity=0; return; }
+  const W=560,H=320, mL=52,mR=16,mT=14,mB=42;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const surface=cssv('--surface'), text=cssv('--text');
+  const C = PLANNER_COLORS();
+  const all = [...d.cache, ...d.decode, ...d.latency, ...d.saturation, op.users]
+                .filter(v=>isFinite(v) && v>0);
+  const yLo = Math.max(1, Math.min(...all, op.users)*0.6);
+  const yHi = Math.max(...all)*1.25;
+  const sx = linScale(0, 0.5, mL, mL+pw), sy = logScale(yLo, yHi, mT+ph, mT);
+  let g='';
+  for (const t of logTicks(yLo,yHi)){
+    const Y=sy(t);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${fmt(t,0)}</text>`;
+  }
+  for (const t of [0,0.1,0.2,0.3,0.4,0.5]){
+    const X=sx(t);
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${X}" y="${mT+ph+16}" text-anchor="middle">${fmt(t*100,0)}%</text>`;
+  }
+  const path = arr => arr.map((v,i)=>`${i?'L':'M'} ${sx(d.fs[i])} ${sy(clip(v,yLo,yHi))}`).join(' ');
+  // safe region: everything under the envelope
+  g+=`<path d="${path(d.env)} L ${sx(0.5)} ${mT+ph} L ${mL} ${mT+ph} Z" fill="${C.cache}" opacity="0.07"/>`;
+  for (const k of ['cache','decode','latency','saturation'])
+    g+=`<path d="${path(d[k])}" fill="none" stroke="${C[k]}" stroke-width="2" stroke-linejoin="round"/>`;
+  g+=`<path d="${path(d.env)}" fill="none" stroke="${text}" stroke-width="2.6" stroke-dasharray="5 3" stroke-linejoin="round" opacity="0.85"/>`;
+  // where the envelope changes hands
+  for (let i=1;i<d.fs.length;i++){
+    if (d.binding[i] !== d.binding[i-1]){
+      const X=sx(d.fs[i]);
+      g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${muted}" stroke-width="1.2" stroke-dasharray="3 3"/>`;
+      g+=`<text class="dlabel" x="${X+5}" y="${mT+12}" text-anchor="start" fill="${muted}">`
+        +`${esc(d.binding[i-1])} → ${esc(d.binding[i])} at ${fmt(d.fs[i]*100,0)}%</text>`;
+      break;
+    }
+  }
+  // your load
+  const X0=sx(clip(state.inval/100,0,0.5)), Y0=sy(clip(op.users,yLo,yHi));
+  g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${op.fits?cssv('--good'):cssv('--crit')}" stroke="${surface}" stroke-width="1.5"/>`;
+  g+=`<text class="dlabel" x="${X0+9}" y="${Y0+4}" text-anchor="start" fill="${op.fits?cssv('--good'):cssv('--crit')}">${fmt(op.users,0)} users</text>`;
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">cache-miss rate f</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent users (log)</text>`;
+  document.getElementById('chartF').innerHTML =
+    svgEl(g,W,H,'The four ceilings in max concurrent users versus the cache-miss rate');
+  chartFGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
+}
+
+/* ---- Chart G: cold-spike tolerance, with the MFU bracket as a band ---- */
+let chartGGeom = null;
+function renderChartG(d, others){
+  if (!d){ renderNoFit('chartG','spike tolerance'); chartGGeom=null;
+           document.getElementById('ttG').style.opacity=0; return; }
+  const W=560,H=320, mL=52,mR=16,mT=14,mB=42;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const surface=cssv('--surface'), s1=cssv('--s1'), crit=cssv('--crit');
+  const ctx = (others||[]).flatMap(o=>o.b).filter(v=>isFinite(v)&&v>0);
+  const yLo=0.1, yHi=Math.max(4, ...d.spike.hi.filter(isFinite), ...ctx)*1.3;
+  const sx=linScale(0,0.5,mL,mL+pw), sy=logScale(yLo,yHi,mT+ph,mT);
+  let g='';
+  for (const t of logTicks(yLo,yHi)){
+    const Y=sy(t);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${t<1?t.toFixed(1):fmt(t,0)}</text>`;
+  }
+  for (const t of [0,0.1,0.2,0.3,0.4,0.5]){
+    const X=sx(t);
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${X}" y="${mT+ph+16}" text-anchor="middle">${fmt(t*100,0)}%</text>`;
+  }
+  const path = (arr,fs) => arr.map((v,i)=>`${i?'L':'M'} ${sx((fs||d.fs)[i])} ${sy(clip(v,yLo,yHi))}`).join(' ');
+  // other topologies of the same model, for context
+  for (const o of (others||[]))
+    g+=`<path d="${path(o.b, o.fs)}" fill="none" stroke="${muted}" stroke-width="1.2" opacity="0.55"/>`;
+  // MFU bracket band
+  const up = d.spike.hi.map((v,i)=>[d.fs[i],v]);
+  const dn = d.spike.lo.map((v,i)=>[d.fs[i],v]).reverse();
+  g+=`<path d="${up.map(([f,v],i)=>`${i?'L':'M'} ${sx(f)} ${sy(clip(v,yLo,yHi))}`).join(' ')} `
+    + `${dn.map(([f,v])=>`L ${sx(f)} ${sy(clip(v,yLo,yHi))}`).join(' ')} Z" fill="${s1}" opacity="0.20"/>`;
+  g+=`<path d="${path(d.spike.mid)}" fill="none" stroke="${s1}" stroke-width="2.4" stroke-linejoin="round"/>`;
+  // "cannot absorb one" line
+  const Y1=sy(1);
+  g+=`<line x1="${mL}" y1="${Y1}" x2="${mL+pw}" y2="${Y1}" stroke="${crit}" stroke-width="1.4" stroke-dasharray="4 3"/>`;
+  g+=`<text class="dlabel" x="${mL+pw-4}" y="${Y1-6}" text-anchor="end" fill="${crit}">cannot absorb a single simultaneous miss</text>`;
+  // your miss rate
+  const f0=clip(state.inval/100,0,0.5), i0=Math.round(f0*100);
+  const X0=sx(f0), Y0=sy(clip(d.spike.mid[i0],yLo,yHi));
+  g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${s1}" stroke="${surface}" stroke-width="1.5"/>`;
+  g+=`<text class="dlabel" x="${X0+9}" y="${Y0+4}" text-anchor="start" fill="${s1}">B* ${fmt(d.spike.mid[i0],1)}</text>`;
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">standing cache-miss rate f</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">B* — simultaneous misses (log)</text>`;
+  document.getElementById('chartG').innerHTML =
+    svgEl(g,W,H,'Cold-spike tolerance versus the standing cache-miss rate, with the MFU bracket');
+  chartGGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
+}
+
+/* ---- The frontier table ---- */
+function renderFrontierTable(rows, curKey){
+  const C = PLANNER_COLORS();
+  const head = `<tr><th>configuration</th><th class="num">max users</th>`
+             + `<th>binding</th><th class="num">cache</th><th class="num">decode</th>`
+             + `<th class="num">latency</th><th class="num">saturation</th>`
+             + `<th class="num">B*</th></tr>`;
+  const body = rows.map(r=>{
+    const you = r.key===curKey ? ' class="you"' : '';
+    const cells = ['cache','decode','latency','saturation']
+      .map(k=>`<td class="num"${k===r.op.binding?` style="color:${C[k]};font-weight:650"`:''}>`
+             + `${k==='decode'&&r.censored?'≥ ':''}`
+             + `${isFinite(r.op.ceilings[k])?fmt(r.op.ceilings[k],0):'—'}</td>`).join('');
+    return `<tr${you}><td>${esc(r.label)}</td>`
+         + `<td class="num">${fmt(r.op.limit,0)}${r.reps>1?` <span style="color:${cssv('--muted')}">(${fmt(r.op.limit/r.reps,0)}/grp)</span>`:''}</td>`
+         + `<td class="bind" style="color:${C[r.op.binding]}">${esc(PLANNER_LABEL[r.op.binding])}</td>`
+         + cells
+         + `<td class="num">${fmt(r.bstar,1)}</td></tr>`;
+  }).join('');
+  document.getElementById('frontierTable').innerHTML =
+    `<table class="ftable">${head}${body}</table>`;
 }
 
 /* ============================================================================
@@ -2412,6 +2997,11 @@ const sliderMap=[
   ['s-sub_ratio','sub_ratio',v=>parseFloat(v)],
   ['s-sys','sys',v=>parseFloat(v)],
   ['s-inval','inval',v=>parseFloat(v)],
+  ['s-users','users',v=>parseInt(v,10)],
+  ['s-think','think',v=>parseInt(v,10)],
+  ['s-sla','sla',v=>parseInt(v,10)],
+  ['s-turn','turn',v=>parseInt(v,10)],
+  ['s-burst','burst',v=>parseInt(v,10)],
 ];
 sliderMap.forEach(([id,key,cast])=>{
   const el=document.getElementById(id);
@@ -2433,8 +3023,31 @@ document.querySelectorAll('.tip').forEach(t=>{ t.tabIndex=0; });
 document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
   state.sub_shares_prefix=e.target.checked; computeAndRender(false);
 });
+// burst presets. "= full flush" is the correlated event limitation 8 names —
+// a prompt-template deploy colding the WHOLE resident population at once — so
+// it reads the current warm count rather than any fixed number.
+document.querySelectorAll('.preset button[data-burst]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const v = b.dataset.burst;
+    const flush = lastWarmCur ? Math.round(lastWarmCur.p5) : 32;
+    const el = document.getElementById('s-burst');
+    state.burst = clip(v==='flush' ? flush : parseInt(v,10),
+                       parseInt(el.min,10), parseInt(el.max,10));
+    el.value = state.burst;
+    syncLabels(); computeAndRender(false);
+  });
+});
 
 function syncLabels(){
+  document.getElementById('v-users').textContent=fmt(state.users,0);
+  document.getElementById('v-think').textContent=fmt(state.think,0);
+  document.getElementById('v-sla').textContent=fmt(state.sla,0);
+  document.getElementById('v-turn').textContent=fmt(state.turn,0);
+  document.getElementById('v-burst').textContent=fmt(state.burst,0);
+  // the derived quantity the whole planner runs on — shown next to the users
+  // slider so the 64 / 30 s = 2.13 req/s reference is never a hidden constant
+  document.getElementById('v-rate').textContent=
+    requestRate(state.users, state.think).toFixed(2);
   document.getElementById('v-ngpu').textContent=fmt(state.ngpu,0);
   document.getElementById('v-gpuname').textContent=CONFIG.GPUS[state.gpu].name;
   document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);

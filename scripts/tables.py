@@ -658,7 +658,115 @@ def spike_tables():
     print("  agentic traffic is burstier than Poisson — that is why B* exists).")
 
 
+def planner_tables():
+    """The two-axis planner: all four ceilings in one unit (research/spike.md).
+
+    Two of the four columns are already published in § 7's decision table
+    (warm users p5, mns@40); this section adds the two the prefill axis
+    contributes and shows which of the four actually binds.
+    """
+    w0 = wl()
+    CH, TURN, SLA = 32_768, 2_000, 10.0
+    THINK = M.THINK_TIME_S
+    rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
+            ("35BA3B", 1, 1, "H200"), ("35BA3B", 1, 2, "H200"),
+            ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
+            ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
+
+    def cfgs():
+        for mk, dp, tp, gk in rows:
+            m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+            if M.kv_pool_tokens(m, t) > 0:
+                yield mk, m, t
+
+    print("\n== THE OPERATING POINT: four ceilings, one unit (research/spike.md) ==")
+    print("  The study has always reported its constraints in DIFFERENT UNITS and")
+    print("  refused to combine them — § 8 says so outright. Two assumptions make")
+    print("  them commensurable, and both are limitations, not conveniences:")
+    print("  ONE USER HOLDS ONE SESSION, and a user sends a turn every 30 s. Under")
+    print("  those, every constraint becomes MAX CONCURRENT USERS and the binding")
+    print("  one is simply the smallest. cache/decode are § 7's published columns")
+    print("  (warm users p5, mns@40) — the planner reproduces them, it does not")
+    print("  restate them; latency/saturation are what the prefill axis adds.")
+    print(f"\n  f={w0.invalidation:.0%}, {THINK:.0f} s think time, {SLA:.0f} s TTFT budget, "
+          f"{M.DECODE_FLOOR_TOKS:.0f} tok/s floor")
+    for mk, m, t in cfgs():
+        op = M.operating_point(m, t, w0, M.REF_USERS, CH, TURN, SLA, n_iter=600)
+        c = op["ceilings"]
+        ref = "fits" if op["fits"] else "OVER"
+        print(f"  {mk:7} {t.name:16} cache {c['cache']:6.0f}  decode {c['decode']:6.0f}  "
+              f"latency {c['latency']:6.0f}  sat {c['saturation']:6.0f}  -> "
+              f"{op['binding'].upper():10} at {op['limit']:5.0f} users "
+              f"({M.REF_USERS} {ref}, {op['headroom']:4.0%} of it)")
+    print("  Mistral-Medium-3.5 is the one row where DECODE binds, and it is not a")
+    print("  contradiction of H7: that model ships no MTP module (mtp = 1.0), so")
+    print("  the study's documented 'without MTP the ordering flips' case is its")
+    print("  CENTRAL case, not an adverse one.")
+
+    print(f"\n== Which constraint binds, vs miss rate (27B TP2, {THINK:.0f} s think) ==")
+    print("  The planner's whole reason to exist: cache and decode barely move with")
+    print("  f, latency and saturation collapse — so the BINDING CONSTRAINT SWITCHES")
+    print("  partway across the explorer's own slider range. Neither axis alone")
+    print("  can show that crossover.")
+    m27, tp2 = MODELS["27B"], TOPOLOGIES["2xH200-TP2"]
+    prev = None
+    for f in (0.00, 0.01, 0.02, 0.04, 0.05, 0.06, 0.07, 0.10, 0.15, 0.20, 0.25):
+        op = M.operating_point(m27, tp2, wl(invalidation=f), M.REF_USERS,
+                               CH, TURN, SLA, n_iter=600)
+        c = op["ceilings"]
+        mark = "  <-- CROSSOVER" if prev and prev != op["binding"] else ""
+        print(f"  f={f:6.1%}  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
+              f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
+              f"{op['binding'].upper()}{mark}")
+        prev = op["binding"]
+
+    print(f"\n== Sensitivity of the ceilings to the two planner assumptions ==")
+    print("  Both conversions are load-bearing, in OPPOSITE directions. Think time")
+    print("  scales the latency and saturation ceilings linearly while leaving")
+    print("  cache and decode untouched — so halving it flips the binding")
+    print("  constraint on its own, with no change to the hardware or workload.")
+    print("  The sessions-per-user assumption acts on the other pair: a user who")
+    print("  keeps k concurrent sessions divides the cache ceiling by k and leaves")
+    print("  latency alone (the work rate is unchanged).")
+    for think in (15.0, 30.0, 60.0):
+        op = M.operating_point(m27, tp2, w0, M.REF_USERS, CH, TURN, SLA,
+                               think_time_s=think, n_iter=600)
+        c = op["ceilings"]
+        print(f"  think {think:5.0f} s  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
+              f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
+              f"{op['binding'].upper()}")
+    print("  TTFT budget moves only the latency ceiling (and B* with it):")
+    for sla in (5.0, 10.0, 20.0, 30.0):
+        lat = M.max_users_latency(m27, tp2, w0, CH, sla, TURN)
+        b = M.spike_tolerance(m27, tp2, w0, sla, M.request_rate(M.REF_USERS),
+                              CH, TURN)
+        print(f"  budget {sla:5.0f} s  latency ceiling {lat:6.0f} users   B* {b:5.1f}")
+    print("  MFU is the soft input, not a decision — the [30-60%] bracket is an")
+    print("  ERROR BAR on every prefill-derived ceiling, and it is wide:")
+    for mfu, lab in ((M.MFU_LOW, "30%"), (M.MFU_DEFAULT, "45%"), (M.MFU_HIGH, "60%")):
+        lat = M.max_users_latency(m27, tp2, w0, CH, SLA, TURN, mfu=mfu)
+        sat = M.max_users_saturation(m27, tp2, w0, CH, TURN, mfu=mfu)
+        b = M.spike_tolerance(m27, tp2, w0, SLA, M.request_rate(M.REF_USERS),
+                              CH, TURN, mfu=mfu)
+        print(f"  MFU {lab}  latency {lat:6.0f}  sat {sat:6.0f}  B* {b:5.1f}")
+
+    print("\n== The frontier: every configuration ranked by its binding ceiling ==")
+    print("  What an 'exhaustive decision tool' should show without clicking")
+    print("  through combinations. Sorted by the limit that actually binds.")
+    table = []
+    for mk, m, t in cfgs():
+        op = M.operating_point(m, t, w0, M.REF_USERS, CH, TURN, SLA, n_iter=600)
+        b = M.spike_tolerance(m, t, w0, SLA, M.request_rate(M.REF_USERS), CH, TURN)
+        table.append((op["limit"] * (t.replicas or 1), mk, t, op, b))
+    for total, mk, t, op, b in sorted(table, reverse=True):
+        dp_note = (f" ({op['limit']:.0f}/group x {t.replicas} replicas)"
+                   if t.replicas > 1 else "")
+        print(f"  {total:6.0f} users  {mk:7} {t.name:16} "
+              f"bound by {op['binding'].upper():10}  B* {b:5.1f}{dp_note}")
+
+
 if __name__ == "__main__":
     main()
     prefill_tables()
     spike_tables()
+    planner_tables()
