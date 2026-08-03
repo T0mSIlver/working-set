@@ -1445,7 +1445,10 @@ function samplingSig(){
           state.user_median,state.user_sigma,state.sub_median,state.sub_sigma,
           state.sub_ratio,state.sub_shares_prefix,state.sys,state.inval].join('|');
 }
-function seedFor(purpose){ _rngState = _hash(samplingSig() + '#' + purpose) || 1; }
+// _spare must be dropped too: a half-used Box-Muller pair carried across a
+// reseed makes the section's draws depend on whatever sampled BEFORE it, so
+// "deterministic given the state" silently wasn't
+function seedFor(purpose){ _rngState = _hash(samplingSig() + '#' + purpose) || 1; _spare = null; }
 
 function randn(){                        // standard normal (Box-Muller)
   if (_spare !== null){ const v=_spare; _spare=null; return v; }
@@ -2640,19 +2643,20 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   const warmUsersNow = lastWarmCur.p5 * (1 - p_sub(wl));
 
   // --- the sampled halves, on settled renders only ---
-  const sig = `${state.model}|${state.gpu}|${state.wdt}|${state.ngpu}|${state.tp}|`
-            + `${state.kv}|${state.cap}|${state.ram}|${state.state_dt}|${state.wover}|`
-            + `${state.mtp}|${state.user_median}|${state.user_sigma}|${state.sub_median}|`
-            + `${state.sub_sigma}|${state.sub_ratio}|${state.sub_shares_prefix}|${state.sys}`;
+  // A DRAFT render reuses the last settled results UNCONDITIONALLY (the same
+  // split chart B uses): the knobs being dragged are exactly the ones that
+  // would change them, so any staleness check re-runs the Monte-Carlo on
+  // every input event — ~0.5 s per frame — and the 120 ms settle corrects
+  // the numbers anyway.
   let warmFn, decodeUsers, decodeCensored = false;
-  if (!draft || !lastPlanner || lastPlanner.sig !== sig){
+  if (!draft || !lastPlanner){
     seedFor('decodeCeil');
     decodeUsers = maxUsersDecode(model, topo, wl, DECODE_FLOOR_TOKS, q.DECODE_ITER || 220);
     decodeCensored = decodeUsers.censored; decodeUsers = decodeUsers.n;
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
                             q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
-    lastPlanner = { sig, warmFn, decodeUsers, decodeCensored };
+    lastPlanner = { warmFn, decodeUsers, decodeCensored };
   } else {
     warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
     decodeCensored = lastPlanner.decodeCensored;
@@ -2707,7 +2711,10 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
              + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
              + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
              + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;
-  if (!lastFrontier || lastFrontier.sig !== fsig){
+  // like the sampled halves above, a DRAFT render never re-runs the
+  // Monte-Carlo half — fsig contains the very knobs a drag is changing,
+  // so checking it here would re-fill every row on every input event
+  if (!lastFrontier || (!draft && lastFrontier.sig !== fsig)){
     seedFor('frontier');
     const base = [];
     for (const mk of Object.keys(CONFIG.MODELS))
@@ -2728,7 +2735,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   // service-time moments depend on the workload and the turn size only, so the
   // load and budget sliders reuse them: dragging those is pure arithmetic
   const msig = `${fsig}|${state.turn}`;
-  if (!lastFrontierMo || lastFrontierMo.sig !== msig) lastFrontierMo = { sig: msig, mo: {} };
+  if (!lastFrontierMo || (!draft && lastFrontierMo.sig !== msig)) lastFrontierMo = { sig: msig, mo: {} };
   const rows = lastFrontier.base.map(r=>{
     const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
     const r2 = requestRate(state.users, state.think)/r.reps;
