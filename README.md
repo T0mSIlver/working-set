@@ -15,7 +15,10 @@ The full write-up — setup, method, results, and recommendations — is in
 > **NVFP4 weight quantization** (B300-only, weights-never-KV, available for all
 > four models), and two more models: **Mistral-Medium-3.5-128B** (dense GQA,
 > 176 KiB/token KV) and **GLM-5.2** (744B-A40B, MLA + DeepSeek Sparse Attention,
-> sparse decode pricing). See docs/scenarios.md § Extension.
+> sparse decode pricing). See docs/scenarios.md § Extension. The 2026-08
+> extension prices the prefill roofline (§ 8) and then its **queue and its
+> bursts** (§ 9) — what a cache miss costs, and how big a cold spike each
+> deployment can absorb.
 
 ## Key findings
 
@@ -47,6 +50,20 @@ The full write-up — setup, method, results, and recommendations — is in
   deployment. Non-obvious corollary: the **35B-A3B MoE prefills ~7× faster
   than the smaller dense 27B**, because only its ~2.4B active GEMM parameters
   prefill.
+- **That ceiling is not a place to sit** (docs/scenarios.md § 9). Adding the
+  prefill queue turns it into a planning number: a miss's service time is
+  quadratic in a log-normal context length (cv² of 5.5–8.3 where an
+  exponential is 1), so mean TTFT breaches a 10 s budget while the duty cycle
+  still reads a comfortable **76–93%**, and the burst a deployment absorbs hits
+  zero exactly *at* f\*. The headline metric is **cold-spike tolerance B\***, the
+  simultaneous cache misses a config survives inside that budget: **5.1** on
+  the 27B/TP2, **36.4** on the 35B-A3B/TP2, and **0.5 — less than one request —**
+  on Mistral-Medium-3.5/TP4. The MoE's prefill edge **compounds** here (7.2–8.8×
+  against a 5.9× speed gap, wider on the tighter machine), and it is the only
+  configuration modelled that can serve its own recovery after a **global cache
+  flush** — every dense one has to shed load. Sharpest corollary: under FCFS the
+  miss tax is paid by the users who *hit* the cache, whose TTFT reaches **74×**
+  their own service time at a 20% miss rate.
 
 ![Cache hit-rate sweep](figures/prefix_cache_sweep.png)
 
@@ -76,7 +93,8 @@ The full write-up — setup, method, results, and recommendations — is in
 │   ├── model_glm52.md        # GLM-5.2 (MLA+DSA) constants + sources
 │   ├── gpu_b300.md           # B300 (Blackwell Ultra) hardware constants
 │   ├── nvfp4.md              # NVFP4 format, B300-only gate, Qwen NVFP4 bytes
-│   └── prefill.md            # prefill (compute-roofline) constants + confidence tiers
+│   ├── prefill.md            # prefill (compute-roofline) constants + confidence tiers
+│   └── spike.md              # cold-spike model: M/G/1 queueing + burst drain
 ├── figures/                  # generated figures used in the write-ups
 └── data/                     # provider CSVs (not committed — see data/README.md)
 ```
@@ -120,7 +138,7 @@ prompt-caching sweep (not one of these scripts).
 
 ```bash
 uv run scripts/scenario_model.py   # self-checks (calibration + published-config identities)
-uv run scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation / prefill_thrash .png
+uv run scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation / prefill_thrash / cold_spike .png
 uv run scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
 ```
 
