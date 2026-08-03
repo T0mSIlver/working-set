@@ -252,7 +252,7 @@ svg text{fill:var(--text-2)}
     <button class="themebtn" id="themeBtn" type="button"><span id="themeIco">◐</span><span id="themeTxt">Theme</span></button>
   </header>
 
-  <p class="assump-line">Memory model calibrated to the baseline's measured H200 pool, validated once against a real TP2 bring-up (−0.3%); everything prefill-side is <span class="prov">analytic and unvalidated</span>. <a href="method.html">All assumptions, the full model &amp; glossary →</a></p>
+  <p class="assump-line">Memory model calibrated to an FP8 anchor <em>projected</em> from the baseline's measured FP16 H200 pool, validated once against a real TP2 bring-up (within 0.3%); everything prefill-side is <span class="prov">analytic and unvalidated</span>. <a href="method.html">All assumptions, the full model &amp; glossary →</a></p>
 
   <!-- CONTROLS -->
     <div class="panel controls">
@@ -458,7 +458,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-inval" min="0" max="50" step="0.5" value="1">
       </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Cache misses arriving AT ONCE — the correlated event the i.i.d. miss-rate slider cannot express. The 'flush' preset sets it to one replica group's p5 warm population: a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
+          <label class="flabel"><span class="tip" data-tip="Cache misses arriving AT ONCE — the correlated event the i.i.d. miss-rate slider cannot express. The 'flush' preset sets it to one replica group's p5 warm population (capped at the slider's 512): a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
           <input type="range" id="s-burst" min="1" max="512" step="1" value="32">
           <span class="preset"><span class="plab">presets</span><button type="button" data-burst="1">one miss</button><button type="button" data-burst="32">a burst of 32</button><button type="button" data-burst="flush">full flush</button></span>
       </div>
@@ -2869,7 +2869,7 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs){
         :`miss ≈ ${fmt(coldS,1)} s (p5–p95 ${fmt(coldP5,1)}–${fmt(coldP95,1)}) · f* ${fstar>10?"> 1,000":"= "+fmt(fstar*100,0)}% at ${fmt(groupRate,2)} req/s${dp?"/replica":""}`
          + (spike>0?` · chunk spikes ITL ×${fmt(spike,0)}`:"")
          + (dp?` · ×${topo.replicas} replicas`:""), cls:prefillClass,
-     tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group — set by FLOPs, so no KV pool, offload or warm headroom raises it. Priced on the heavy tail (E[L²]) at the 32,768-token chunk default and the calibrated 45% MFU; f* is the miss rate that saturates the group at the current load, and the colour compares the invalidation slider against it. Analytic and UNVALIDATED — details on the method page."},
+     tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group — set by FLOPs, so no KV pool, offload or warm headroom raises it. Priced on the heavy tail (E[L²]) at the 32,768-token chunk default and the calibrated 45% MFU; f* is the miss rate that saturates the group at the current load; colour: green f < f*/2, amber from f*/2, red at f* and beyond. Analytic and UNVALIDATED — details on the method page."},
     {act:1, k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: every HBM-resident p5-warm session decoding at once — each user's median speed. Green ≥50 tok/s, amber ≥40 (the hard floor), red below; if green, the cache — not bandwidth — binds. CPU-offloaded sessions are excluded, so the offload slider does not move this."},
@@ -3332,13 +3332,13 @@ function enforceConstraints(){
       ? "DeepSeek-V4-Flash: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled."
       : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable, so the toggle is disabled."));
   document.getElementById('state-tip').setAttribute('data-tip', stateOk
-    ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence on the method page.`
+    ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence: method page, "The two un-measured structural knobs".`
     : (state.model === "DSV4F"
       ? `DeepSeek-V4-Flash pays a fixed ${fmt(m.deltanet_state/MIB,1)} MiB/session, but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.`
       : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention — so this control is disabled.`));
   document.getElementById('wover-tip').setAttribute('data-tip', woverOk
     ? "Slack between a checkpoint's stated bytes and the server's real resident footprint. This model's figure is raw/on-disk — an under-estimate by an unknown margin; +15% is the one calibrated data point (the 27B's as-deployed 28.8 GiB vs its raw params), transferred here as an extrapolation."
-    : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Disabled on this model.");
+    : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Its NVFP4 figure is a measured checkpoint total under the same convention, so the knob stays disabled on this model.");
   const modelTips = {
     "27B": "Qwen3.6-27B — dense hybrid, the calibrated baseline: 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.",
     "35BA3B": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN.",
