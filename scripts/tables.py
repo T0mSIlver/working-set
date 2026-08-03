@@ -523,6 +523,268 @@ def prefill_tables():
     print("  includes attending over the cached context, not just the new turn.")
 
 
+def b_fmt(model, topo, w, sla, rate, chunk, turn):
+    """B* for one row, printed as a count with a floor-to-zero guard."""
+    b = M.spike_tolerance(model, topo, w, sla, rate, chunk, turn)
+    return f"{b:5.1f}" if b >= 0.05 else "  0.0"
+
+
+def spike_tables():
+    """Cold-spike tolerance: queueing and bursts on the prefill axis
+    (research/spike.md). Analytic, unvalidated — as § 8 is."""
+    w0 = wl()
+    CH = 32_768          # vLLM max_num_batched_tokens
+    TURN = 2_000         # tokens a warm hit still prefills (the new turn)
+    RATE = 2.13          # req/s: 64 users, one turn every 30 s
+    SLA = 10.0           # TTFT budget (s). B* is LINEAR in it: halve for 5 s
+    BURST = 32           # reference simultaneous-miss spike
+    rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
+            ("35BA3B", 1, 1, "H200"), ("35BA3B", 1, 2, "H200"),
+            ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
+            ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
+
+    def cfgs():
+        for mk, dp, tp, gk in rows:
+            m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+            if M.kv_pool_tokens(m, t) > 0:
+                yield mk, m, t
+
+    print("\n== Cold spikes: what a DUTY CYCLE cannot see (research/spike.md) ==")
+    print("  § 8 prices prefill as a mean rate against a mean service time. Two")
+    print("  things that model cannot see, and limitations 2 and 8 name both:")
+    print("  VARIANCE — a miss's service time runs as L^2 on a lognormal L, so its")
+    print("  second moment is huge and the queue diverges well below f*; and")
+    print("  BURSTS — invalidation arrives in clumps (a template deploy, a flush),")
+    print("  not one request at a time. f* turns out to be the miss rate at which")
+    print("  burst tolerance reaches ZERO, which is no place to plan to sit.")
+    print("  One replica GROUP is one queue: a DP deployment has `replicas` of")
+    print("  them and a burst spreads only as well as the router balances it.")
+
+    print(f"\n== Prefill service-time variance (f={w0.invalidation:.0%}, "
+          f"{RATE:.2f} req/s) ==")
+    print("  cv^2 = squared coefficient of variation of the SERVICE time. An")
+    print("  exponential service would sit at 1; the P-K wait is proportional to")
+    print("  1 + cv^2, so these rows wait 3.3-4.7x longer than an M/M/1 at equal load.")
+    for mk, m, t in cfgs():
+        e_s, e_s2, e_cold, e_warm = M.prefill_service_moments(m, t, w0, CH, TURN)
+        print(f"  {mk:7} {t.name:16} E[S] {e_s * 1e3:6.1f} ms  "
+              f"miss {e_cold * 1e3:6.0f} ms  hit {e_warm * 1e3:5.1f} ms  "
+              f"cv^2 {e_s2 / e_s ** 2 - 1:5.2f}  rho {RATE * e_s:6.1%}")
+
+    print(f"\n== TTFT vs miss rate (27B TP2, {RATE:.2f} req/s), FCFS | PS ==")
+    print("  The two disciplines BRACKET vLLM, which admits in arrival order but")
+    print("  runs several admitted prefills concurrently. Neither is uniformly")
+    print("  optimistic: PS bills each request for its own size (dearer for the")
+    print("  long misses, far cheaper for the short hits), FCFS bills one shared")
+    print("  wait (which the short hits cannot amortise — the convoy effect).")
+    print("  Watch the HIT column: that is the miss tax being paid by users who")
+    print("  hit the cache. B* = largest simultaneous cold burst still inside a")
+    print(f"  {SLA:.0f} s TTFT budget.")
+    m27, tp2 = MODELS["27B"], TOPOLOGIES["2xH200-TP2"]
+    for f in (0.00, 0.01, 0.02, 0.05, 0.10, 0.15, 0.20, 0.25):
+        w = wl(invalidation=f)
+        duty = M.prefill_duty(m27, tp2, w, RATE, CH, TURN)
+        cf = M.prefill_ttft_seconds(m27, tp2, w, RATE, CH, TURN)
+        cp = M.prefill_ttft_seconds(m27, tp2, w, RATE, CH, TURN, discipline="ps")
+        hf = M.prefill_ttft_seconds(m27, tp2, w, RATE, CH, TURN, request="warm")
+        hp = M.prefill_ttft_seconds(m27, tp2, w, RATE, CH, TURN, request="warm",
+                                    discipline="ps")
+        print(f"  f={f:5.0%}  duty {duty:6.1%}   miss TTFT {cf:6.2f} | {cp:6.2f} s"
+              f"   hit TTFT {hf * 1e3:7.0f} | {hp * 1e3:6.0f} ms   B* {b_fmt(m27, tp2, w, SLA, RATE, CH, TURN)}")
+
+    print(f"\n== The planning ceiling: SLA-limited miss rate vs f* "
+          f"({SLA:.0f} s TTFT) ==")
+    print("  f_sla = miss rate at which MEAN miss TTFT reaches the budget; f* =")
+    print("  miss rate at which prefill duty reaches 100%. f_sla always binds")
+    print("  first, and the gap is pure queueing — the duty cycle is at 70-90%")
+    print("  when latency has already gone. Plan against f_sla, not f*.")
+    for mk, m, t in cfgs():
+        ff = M.sla_miss_rate(m, t, w0, RATE, CH, SLA, TURN)
+        fp = M.sla_miss_rate(m, t, w0, RATE, CH, SLA, TURN, discipline="ps")
+        fstar = M.breakeven_miss_rate(m, t, w0, RATE, CH, TURN)
+        duty_at = M.prefill_duty(m, t, wl(invalidation=ff), RATE, CH, TURN)
+        cap = "  (>= 100%: not reached)" if min(ff, fp) >= 1.0 else ""
+        print(f"  {mk:7} {t.name:16} f_sla {ff:6.1%} | {fp:6.1%}   "
+              f"f* {fstar:6.1%}   duty at f_sla {duty_at:6.1%}{cap}")
+
+    print(f"\n== COLD-SPIKE TOLERANCE B* ({SLA:.0f} s TTFT budget, "
+          f"f={w0.invalidation:.0%}, {RATE:.2f} req/s) ==")
+    print("  B* = SLA x (1 - rho) / E[S | miss]: the largest burst of SIMULTANEOUS")
+    print("  misses whose LAST request still gets a first token inside the budget.")
+    print("  Linear in the SLA, so a 5 s budget halves every row and the ranking")
+    print(f"  does not move. drain({BURST}) = how long a {BURST}-miss spike takes to clear.")
+    for mk, m, t in cfgs():
+        b = M.spike_tolerance(m, t, w0, SLA, RATE, CH, TURN)
+        drain = M.burst_drain_seconds(m, t, w0, BURST, RATE, CH, TURN)
+        flag = "  <-- cannot absorb ONE" if b < 1 else ""
+        print(f"  {mk:7} {t.name:16} B* {b:6.1f} req   "
+              f"drain({BURST}) {drain:7.1f} s{flag}")
+
+    print("\n== MoE vs dense: where the advantage COMPOUNDS, and where it cancels ==")
+    print("  Per-request, two factors move the same way on a MoE: few active")
+    print("  parameters shrink E[S | miss], and the cheap warm turns that follow")
+    print("  from the same property leave rho low, widening the headroom the")
+    print("  burst drains into. So the spike-tolerance gap EXCEEDS the raw")
+    print("  prefill-speed gap — and by more on the tighter machine.")
+    for dp, tp, gk in ((1, 1, "H200"), (1, 2, "H200")):
+        td, tm = M.topology_grid(dp, tp, gk), M.topology_grid(dp, tp, gk)
+        d, mo = MODELS["27B"], MODELS["35BA3B"]
+        speed = (M.cold_request_seconds(d, td, w0, CH)
+                 / M.cold_request_seconds(mo, tm, w0, CH))
+        bd = M.spike_tolerance(d, td, w0, SLA, RATE, CH, TURN)
+        bm = M.spike_tolerance(mo, tm, w0, SLA, RATE, CH, TURN)
+        print(f"  {td.name:16} miss-speed {speed:5.1f}x   B* {bd:5.1f} -> {bm:5.1f} "
+              f"= {bm / bd:5.1f}x  (compounding {bm / bd / speed:4.2f}x)")
+    print("\n== The GLOBAL FLUSH: where the MoE advantage does NOT compound ==")
+    print("  A template deploy or a cache wipe colds the WHOLE resident population")
+    print("  at once — limitation 8's correlated invalidation, the burst this")
+    print("  study's own workload model deliberately excludes. The MoE holds a")
+    print("  bigger population, so capacity and prefill speed pull OPPOSITE ways")
+    print("  here and the 7-9x per-request gap shrinks to ~2x.")
+    print("  A flush also puts the machine at f = 100% until sessions re-warm, so")
+    print("  the honest question is whether it can serve an ALL-COLD stream at all:")
+    print("  all-cold duty = rate x E[S | miss] (= RATE / max_cold_rate, and > 1")
+    print("  exactly when f* < 100%). Above 1 the queue grows without bound and")
+    print("  recovery is set by admission control, not by drain rate — which is")
+    print("  what f* > 100% has been saying all along, in the units that show it.")
+    print("  The drain column assumes the standing traffic stays at its normal 1%")
+    print("  miss rate, so it is a FLOOR; on the 'shed load' rows it is fiction.")
+    for mk, m, t in cfgs():
+        p5 = M.warm_capacity(m, t, w0, n_iter=400,
+                             draw=int(4000 + M.kv_pool_tokens(m, t) / 8000))[0]
+        drain = M.burst_drain_seconds(m, t, w0, p5, RATE, CH, TURN)
+        allcold = RATE / M.max_cold_rate(m, t, w0, CH)
+        verdict = ("serves it" if allcold < 1 else "MUST SHED LOAD")
+        print(f"  {mk:7} {t.name:16} flush {p5:5.0f} sessions -> "
+              f"drain >= {drain:6.0f} s ({drain / 60:5.1f} min)   "
+              f"all-cold duty {allcold:6.1%}  {verdict}")
+
+    print(f"\n== What a {BURST}-miss spike costs the users who HIT the cache "
+          f"(64 decoders) ==")
+    print("  § 8's ITL spike is ONE forward pass. During a drain the scheduler has")
+    print("  a chunk to place in EVERY pass, so the spike is the steady state for")
+    print("  the whole drain. Tokens lost = output that never arrives while it")
+    print("  lasts — the same event a latency dashboard shows as a plateau.")
+    for mk, m, t in cfgs():
+        drain, ratio, per_user, total = M.spike_token_debt(
+            m, t, w0, BURST, 64, RATE, CH, TURN, n_iter=400)
+        print(f"  {mk:7} {t.name:16} drain {drain:6.1f} s  ITL {ratio:4.0f}x  "
+              f"lost {per_user:6.0f} tok/user  {total / 1e3:6.1f}k total")
+    print("  Omitted, and all of it makes the real machine worse: the decode batch")
+    print("  sharing each pass stretches the drain 1-3%, preemption/recompute")
+    print("  under a full KV pool is unpriced, and arrivals are Poisson (real")
+    print("  agentic traffic is burstier than Poisson — that is why B* exists).")
+
+
+def planner_tables():
+    """The two-axis planner: all four ceilings in one unit (research/spike.md).
+
+    Two of the four columns are already published in § 7's decision table
+    (warm users p5, mns@40); this section adds the two the prefill axis
+    contributes and shows which of the four actually binds.
+    """
+    w0 = wl()
+    CH, TURN, SLA = 32_768, 2_000, 10.0
+    THINK = M.THINK_TIME_S
+    rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
+            ("35BA3B", 1, 1, "H200"), ("35BA3B", 1, 2, "H200"),
+            ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
+            ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
+
+    def cfgs():
+        for mk, dp, tp, gk in rows:
+            m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+            if M.kv_pool_tokens(m, t) > 0:
+                yield mk, m, t
+
+    print("\n== THE OPERATING POINT: four ceilings, one unit (research/spike.md) ==")
+    print("  The study has always reported its constraints in DIFFERENT UNITS and")
+    print("  refused to combine them — § 8 says so outright. Two assumptions make")
+    print("  them commensurable, and both are limitations, not conveniences:")
+    print("  ONE USER HOLDS ONE SESSION, and a user sends a turn every 30 s. Under")
+    print("  those, every constraint becomes MAX CONCURRENT USERS and the binding")
+    print("  one is simply the smallest. cache/decode are § 7's published columns")
+    print("  (warm users p5, mns@40) — the planner reproduces them, it does not")
+    print("  restate them; latency/saturation are what the prefill axis adds.")
+    print(f"\n  f={w0.invalidation:.0%}, {THINK:.0f} s think time, {SLA:.0f} s TTFT budget, "
+          f"{M.DECODE_FLOOR_TOKS:.0f} tok/s floor")
+    for mk, m, t in cfgs():
+        op = M.operating_point(m, t, w0, M.REF_USERS, CH, TURN, SLA, n_iter=600)
+        c = op["ceilings"]
+        ref = "fits" if op["fits"] else "OVER"
+        print(f"  {mk:7} {t.name:16} cache {c['cache']:6.0f}  decode {c['decode']:6.0f}  "
+              f"latency {c['latency']:6.0f}  sat {c['saturation']:6.0f}  -> "
+              f"{op['binding'].upper():10} at {op['limit']:5.0f} users "
+              f"({M.REF_USERS} {ref}, {op['headroom']:4.0%} of it)")
+    print("  Mistral-Medium-3.5 is the one row where DECODE binds, and it is not a")
+    print("  contradiction of H7: that model ships no MTP module (mtp = 1.0), so")
+    print("  the study's documented 'without MTP the ordering flips' case is its")
+    print("  CENTRAL case, not an adverse one.")
+
+    print(f"\n== Which constraint binds, vs miss rate (27B TP2, {THINK:.0f} s think) ==")
+    print("  The planner's whole reason to exist: cache and decode barely move with")
+    print("  f, latency and saturation collapse — so the BINDING CONSTRAINT SWITCHES")
+    print("  partway across the explorer's own slider range. Neither axis alone")
+    print("  can show that crossover.")
+    m27, tp2 = MODELS["27B"], TOPOLOGIES["2xH200-TP2"]
+    prev = None
+    for f in (0.00, 0.01, 0.02, 0.04, 0.05, 0.06, 0.07, 0.10, 0.15, 0.20, 0.25):
+        op = M.operating_point(m27, tp2, wl(invalidation=f), M.REF_USERS,
+                               CH, TURN, SLA, n_iter=600)
+        c = op["ceilings"]
+        mark = "  <-- CROSSOVER" if prev and prev != op["binding"] else ""
+        print(f"  f={f:6.1%}  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
+              f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
+              f"{op['binding'].upper()}{mark}")
+        prev = op["binding"]
+
+    print(f"\n== Sensitivity of the ceilings to the two planner assumptions ==")
+    print("  Both conversions are load-bearing, in OPPOSITE directions. Think time")
+    print("  scales the latency and saturation ceilings linearly while leaving")
+    print("  cache and decode untouched — so halving it flips the binding")
+    print("  constraint on its own, with no change to the hardware or workload.")
+    print("  The sessions-per-user assumption acts on the other pair: a user who")
+    print("  keeps k concurrent sessions divides the cache ceiling by k and leaves")
+    print("  latency alone (the work rate is unchanged).")
+    for think in (15.0, 30.0, 60.0):
+        op = M.operating_point(m27, tp2, w0, M.REF_USERS, CH, TURN, SLA,
+                               think_time_s=think, n_iter=600)
+        c = op["ceilings"]
+        print(f"  think {think:5.0f} s  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
+              f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
+              f"{op['binding'].upper()}")
+    print("  TTFT budget moves only the latency ceiling (and B* with it):")
+    for sla in (5.0, 10.0, 20.0, 30.0):
+        lat = M.max_users_latency(m27, tp2, w0, CH, sla, TURN)
+        b = M.spike_tolerance(m27, tp2, w0, sla, M.request_rate(M.REF_USERS),
+                              CH, TURN)
+        print(f"  budget {sla:5.0f} s  latency ceiling {lat:6.0f} users   B* {b:5.1f}")
+    print("  MFU is the soft input, not a decision — the [30-60%] bracket is an")
+    print("  ERROR BAR on every prefill-derived ceiling, and it is wide:")
+    for mfu, lab in ((M.MFU_LOW, "30%"), (M.MFU_DEFAULT, "45%"), (M.MFU_HIGH, "60%")):
+        lat = M.max_users_latency(m27, tp2, w0, CH, SLA, TURN, mfu=mfu)
+        sat = M.max_users_saturation(m27, tp2, w0, CH, TURN, mfu=mfu)
+        b = M.spike_tolerance(m27, tp2, w0, SLA, M.request_rate(M.REF_USERS),
+                              CH, TURN, mfu=mfu)
+        print(f"  MFU {lab}  latency {lat:6.0f}  sat {sat:6.0f}  B* {b:5.1f}")
+
+    print("\n== The frontier: every configuration ranked by its binding ceiling ==")
+    print("  What an 'exhaustive decision tool' should show without clicking")
+    print("  through combinations. Sorted by the limit that actually binds.")
+    table = []
+    for mk, m, t in cfgs():
+        op = M.operating_point(m, t, w0, M.REF_USERS, CH, TURN, SLA, n_iter=600)
+        b = M.spike_tolerance(m, t, w0, SLA, M.request_rate(M.REF_USERS), CH, TURN)
+        table.append((op["limit"] * (t.replicas or 1), mk, t, op, b))
+    for total, mk, t, op, b in sorted(table, reverse=True):
+        dp_note = (f" ({op['limit']:.0f}/group x {t.replicas} replicas)"
+                   if t.replicas > 1 else "")
+        print(f"  {total:6.0f} users  {mk:7} {t.name:16} "
+              f"bound by {op['binding'].upper():10}  B* {b:5.1f}{dp_note}")
+
+
 if __name__ == "__main__":
     main()
     prefill_tables()
+    spike_tables()
+    planner_tables()
