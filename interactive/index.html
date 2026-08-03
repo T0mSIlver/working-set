@@ -202,6 +202,21 @@ svg text{fill:var(--text-2)}
 .preset{display:inline-flex; gap:6px; margin-top:6px}
 .preset button{font:inherit; font-size:11px; padding:3px 9px; border-radius:7px; border:1px solid var(--border); background:var(--tile); color:var(--text-2); cursor:pointer}
 .preset button:hover{border-color:var(--s1); color:var(--s1)}
+.act-h{display:flex; gap:14px; align-items:flex-start; margin:34px 0 12px; padding-top:22px; border-top:2px solid var(--border)}
+.act-n{flex:0 0 auto; width:30px; height:30px; border-radius:50%; background:var(--s1); color:#fff; font-weight:700; font-size:15px; display:grid; place-items:center; margin-top:1px}
+.act-h h2{margin:0; font-size:20px; letter-spacing:-.02em; font-weight:680}
+.act-h p{margin:5px 0 0; font-size:13px; color:var(--text-2); max-width:78ch; line-height:1.55}
+.ctl-lede{margin:-2px 0 10px; font-size:12px; color:var(--text-2); max-width:80ch}
+.glossary{margin:14px 0}
+.glossary dl{margin:8px 0 0; display:grid; grid-template-columns:190px 1fr; gap:11px 20px; align-items:baseline}
+.glossary dt{font-weight:660; font-size:13px}
+.glossary dt .gt{display:block; font-weight:420; color:var(--muted); font-size:11.5px; margin-top:1px}
+.glossary dd{margin:0; font-size:12.5px; color:var(--text-2); line-height:1.55}
+@media (max-width:820px){ .glossary dl{grid-template-columns:1fr; gap:3px 0} .glossary dd{margin:0 0 8px} }
+/* a section whose single chart or single tile should not leave a dead column */
+.charts.solo{grid-template-columns:1fr}
+.tiles.solo{grid-template-columns:1fr}
+.tiles.solo .tile.hero{grid-column:span 1}
 </style>
 </head>
 <body>
@@ -244,8 +259,9 @@ svg text{fill:var(--text-2)}
   </details>
 
   <!-- CONTROLS -->
-  <div class="panel controls">
-    <div class="section-h">Scenario controls</div>
+    <div class="panel controls">
+    <div class="section-h">Setup</div>
+    <p class="ctl-lede">Hardware, model and serving dtypes. These change every number on the page.</p>
     <div class="ctl-grid">
       <div class="ctl-group">
         <div class="ctl-sec">Model &amp; hardware</div>
@@ -314,7 +330,17 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-cap" min="30" max="262" step="2" value="180">
         </div>
       </div>
+    </div>
+  </div>
 
+  <div class="act-h">
+    <span class="act-n">1</span>
+    <div><h2>Can I hold them?</h2><p>How many user sessions stay <b>warm</b> in the KV cache — and whether the cache or the decode bandwidth runs out first. This is the study's original question, and nothing here depends on how often anyone sends a request.</p></div>
+  </div>
+  <div class="panel controls">
+    <div class="section-h">Workload</div>
+    <p class="ctl-lede">Who is using it, and what their prompts look like.</p>
+    <div class="ctl-grid">
       <div class="ctl-group">
         <div class="ctl-sec">Prompt-length distribution</div>
         <div class="field">
@@ -334,7 +360,6 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-sub_sigma" min="0.30" max="1.40" step="0.01" value="0.90">
         </div>
       </div>
-
       <div class="ctl-group">
         <div class="ctl-sec">Request mixture &amp; caching</div>
         <div class="field">
@@ -352,42 +377,12 @@ svg text{fill:var(--text-2)}
           <label class="flabel"><span class="tip" data-tip="Tokens of stable prefix every user request shares — the coding agent's system prompt plus its skills, rules and tool definitions. One block is reserved per cache and deduplicated across every session, so a bigger shared prefix costs the pool once and saves it on every session: raising it RAISES warm capacity. The reference workload uses 15k; the baseline's real agent already exceeded 30k, and 3k is the lean subagent prefix. This only pays off if the prefix is byte-stable across users and turns — a per-tenant salt or an edited tool list turns it into per-session bytes (see the invalidation control).">System / shared prefix</span> <span class="val"><span id="v-sys">15</span>k</span></label>
           <input type="range" id="s-sys" min="1" max="40" step="1" value="15">
         </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt, a prompt-template deploy…) — 1% = 1 in 100. Cold requests occupy pool space but never count as warm, so they cap the warm-hit ceiling at 1 − f. The range runs to 50% so the badly-behaved end is reachable: 10% is the docs' adverse planning case, and past ~25% the pool is mostly paying for sessions that will never be reused. Modelled as an i.i.d. per-request draw. A correlated flush — one deploy colding every session at once — is worse than anything this slider can show, and is priced separately in the Cold-spike tolerance tile.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
-          <input type="range" id="s-inval" min="0" max="50" step="0.5" value="1">
-        </div>
-      </div>
-      <div class="ctl-group">
-        <div class="ctl-sec">Load &amp; latency budget</div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Concurrent users the deployment serves. This is the knob that turns every constraint into the SAME unit: one user is assumed to hold one session (so it compares against warm capacity) and to send a turn every `think time` seconds (so it compares against a work rate). The study's reference load is 64 users at one turn per 30 s = 2.13 req/s, and at those defaults every figure on this page reproduces the published tables exactly. Both conversions are assumptions, not facts — a user running several concurrent sessions divides the cache ceiling, and bursty think time invalidates the Poisson arrival model.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
-          <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
-        </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Seconds between one user's turns — their think/edit/read time. Scales the request rate inversely, so it moves the latency and saturation ceilings LINEARLY while leaving cache and decode untouched: halving it can flip which constraint binds with no change to hardware or workload. The study's reference is 30 s (one turn every 30 s per user).">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
-          <input type="range" id="s-think" min="5" max="180" step="5" value="30">
-        </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Time-to-first-token budget a cache MISS must meet. Sets the latency ceiling and the cold-spike tolerance B*, which is exactly LINEAR in it — halving the budget halves every B* and reorders nothing. A budget below one miss's own prefill cost cannot be met at any load, and the tile says so. Solved against the MEAN TTFT, so a p95 budget binds at a lower miss rate than anything shown here.">TTFT budget</span> <span class="val"><span id="v-sla">10</span> s</span></label>
-          <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
-        </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Tokens a warm HIT still prefills — the new turn's suffix on top of its cached context. Hardcoded at 2,000 before this page priced queueing, and a bigger lever than it looks: at low miss rates the HIT leg dominates the duty cycle, so turn size sets the standing load (and therefore the headroom a burst drains into) more than miss cost does. 500 to 8,000 tokens moves B* by ~3.5x on the 27B/TP2.">Warm turn size</span> <span class="val"><span id="v-turn">2,000</span> tok</span></label>
-          <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
-        </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How many cache misses arrive AT ONCE — a correlated invalidation event, which the per-request miss-rate slider deliberately cannot express (that one is an i.i.d. draw). Drives the drain time, the last request's TTFT and the output tokens the bystanding warm users lose while it clears. The 'flush' preset sets it to the whole warm population, the event limitation 8 names: a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
-          <input type="range" id="s-burst" min="1" max="512" step="1" value="32">
-          <span class="preset"><button type="button" data-burst="1">1</button><button type="button" data-burst="32">32</button><button type="button" data-burst="flush">= full flush</button></span>
-        </div>
       </div>
     </div>
   </div>
 
-  <!-- STAT TILES -->
   <div class="tiles" id="tiles"></div>
 
-  <!-- CHARTS -->
   <div class="charts">
     <div class="panel card">
       <p class="ct">A · Prompt-length distribution</p>
@@ -430,24 +425,97 @@ svg text{fill:var(--text-2)}
       </div>
       <div class="chartbox"><div id="chartD"></div><div class="tt" id="ttD"></div></div>
     </div>
+  </div>
 
+  <div class="act-h">
+    <span class="act-n">2</span>
+    <div><h2>Can I serve them?</h2><p>Warm capacity counts sessions sitting in memory. It says nothing about <b>work arriving</b> — a cache miss re-prefills a whole context on the compute roofline, misses arrive in clumps rather than one at a time, and a queue forms long before the machine is full. This act adds the arrival rate, the latency budget, and what a cold spike costs.</p></div>
+  </div>
+  <div class="panel controls">
+    <div class="section-h">Load &amp; cold traffic</div>
+    <p class="ctl-lede">How much traffic arrives, how cold it is, and how fast it has to be answered. <b>These are the knobs that decide the table at the bottom of the page.</b></p>
+    <div class="ctl-grid">
+      <div class="ctl-group">
+        <div class="ctl-sec">How much traffic</div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Concurrent users the deployment serves. This is the knob that turns every constraint into the SAME unit: one user is assumed to hold one session (so it compares against warm capacity) and to send a turn every `think time` seconds (so it compares against a work rate). The study's reference load is 64 users at one turn per 30 s = 2.13 req/s, and at those defaults every figure on this page reproduces the published tables exactly. Both conversions are assumptions, not facts — a user running several concurrent sessions divides the cache ceiling, and bursty think time invalidates the Poisson arrival model.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
+          <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Seconds between one user's turns — their think/edit/read time. Scales the request rate inversely, so it moves the latency and saturation ceilings LINEARLY while leaving cache and decode untouched: halving it can flip which constraint binds with no change to hardware or workload. The study's reference is 30 s (one turn every 30 s per user).">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
+          <input type="range" id="s-think" min="5" max="180" step="5" value="30">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Tokens a warm HIT still prefills — the new turn's suffix on top of its cached context. Hardcoded at 2,000 before this page priced queueing, and a bigger lever than it looks: at low miss rates the HIT leg dominates the duty cycle, so turn size sets the standing load (and therefore the headroom a burst drains into) more than miss cost does. 500 to 8,000 tokens moves B* by ~3.5x on the 27B/TP2.">Warm turn size</span> <span class="val"><span id="v-turn">2,000</span> tok</span></label>
+          <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
+        </div>
+      </div>
+      <div class="ctl-group">
+        <div class="ctl-sec">Latency budget &amp; cold traffic</div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Time-to-first-token budget a cache MISS must meet. Sets the latency ceiling and the cold-spike tolerance B*, which is exactly LINEAR in it — halving the budget halves every B* and reorders nothing. A budget below one miss's own prefill cost cannot be met at any load, and the tile says so. Solved against the MEAN TTFT, so a p95 budget binds at a lower miss rate than anything shown here.">TTFT budget</span> <span class="val"><span id="v-sla">10</span> s</span></label>
+          <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
+      </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt, a prompt-template deploy…) — 1% = 1 in 100. Cold requests occupy pool space but never count as warm, so they cap the warm-hit ceiling at 1 − f. The range runs to 50% so the badly-behaved end is reachable: 10% is the docs' adverse planning case, and past ~25% the pool is mostly paying for sessions that will never be reused. Modelled as an i.i.d. per-request draw. A correlated flush — one deploy colding every session at once — is worse than anything this slider can show, and is priced separately in the Cold-spike tolerance tile.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
+          <input type="range" id="s-inval" min="0" max="50" step="0.5" value="1">
+      </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="How many cache misses arrive AT ONCE — a correlated invalidation event, which the per-request miss-rate slider deliberately cannot express (that one is an i.i.d. draw). Drives the drain time, the last request's TTFT and the output tokens the bystanding warm users lose while it clears. The 'flush' preset sets it to the whole warm population, the event limitation 8 names: a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
+          <input type="range" id="s-burst" min="1" max="512" step="1" value="32">
+          <span class="preset"><button type="button" data-burst="1">1</button><button type="button" data-burst="32">32</button><button type="button" data-burst="flush">= full flush</button></span>
+      </div>
+      </div>
+    </div>
+  </div>
+  <div class="panel card glossary">
+    <div class="section-h">The five words this section needs</div>
+    <dl>
+      <dt>MFU <span class="gt">Model FLOP Utilisation</span></dt>
+      <dd>What fraction of a GPU's <em>advertised</em> arithmetic throughput a real kernel achieves. An H200 is rated 1,979 TFLOP/s of dense FP8; no real prefill reaches that, because time also goes on memory stalls, attention kernels, collectives and launch overhead. <b>MFU = achieved ÷ advertised.</b> This study assumes <b>45%</b>, with a plausible <b>30–60%</b> bracket — the softest input on the page: it is not measured here, and it scales every prefill time and every derived ceiling almost proportionally. That is why B* carries a band instead of a single number. It does <em>not</em> affect warm capacity, which is an arithmetic-free byte count.</dd>
+      <dt>TTFT <span class="gt">time to first token</span></dt>
+      <dd>How long a request waits before its first output token — queueing plus its own prefill. A cache <b>miss</b> re-prefills its whole context; a <b>hit</b> prefills only the new turn, but still queues behind whatever misses are in front of it.</dd>
+      <dt>Prefill duty <span class="gt">the fraction of the machine spent prefilling</span></dt>
+      <dd>Arrival rate × mean prefill time. At 100% the queue grows without bound. It is an <em>average</em>, which is exactly why it cannot see the two things below.</dd>
+      <dt>f* <span class="gt">the saturation miss rate</span></dt>
+      <dd>The cache-miss rate at which prefill duty reaches 100%. Not a target: it is the point at which burst tolerance has already fallen to zero.</dd>
+      <dt>B* <span class="gt">cold-spike tolerance</span></dt>
+      <dd>How many cache misses can arrive <em>at the same instant</em> and still have the last of them answered inside the TTFT budget. The miss-rate slider models misses arriving independently; B* models them arriving together, which is how a template deploy or a cache wipe actually behaves.</dd>
+    </dl>
+  </div>
+
+  <div class="tiles" id="tilesLoad"></div>
+
+  <div class="charts">
     <div class="panel card">
       <p class="ct">E · The max_num_batched_tokens trade</p>
       <p class="cs">Why vLLM's prefill chunk is 32k, not 2k: three views of one knob, sharing a log axis. Small chunks shrink the ITL spike (bottom) but amortise the per-pass weight stream over fewer FLOPs, so effective MFU falls (top) and the cold-request ceiling falls with it (middle). Dashed line = the 32,768 default every tile is priced at; the spike prices the chunk's marginal FLOPs (its host pass streams the weights anyway). Kernel-launch overheads are unpriced — the left edge reads better than a real machine.</p>
       <div class="chartbox"><div id="chartE"></div><div class="tt" id="ttE"></div></div>
     </div>
-  </div>
 
-  <!-- COLD-SPIKE PLANNER -->
-  <div class="planner-h">
-    <div class="section-h">The operating point — every constraint in one unit</div>
-    <div class="lede">The study has always reported its ceilings in different units and refused to combine them. Two stated assumptions — <b>one user holds one session</b>, and sends a turn every <b>think time</b> seconds — turn all four into <b>max concurrent users</b>, so the binding one is simply the smallest. Two of them barely move with the miss rate and two collapse, so which one binds <b>changes hands</b> inside this page's own slider range.</div>
-  </div>
-  <div class="tiles" id="spikeTiles"></div>
-
-  <div class="charts">
     <div class="panel card">
-      <p class="ct">F · The binding constraint vs cache-miss rate</p>
+      <p class="ct">F · Cold-spike tolerance</p>
+      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses whose last request still gets a first token inside the budget — against the standing miss rate. Band = the MFU [30–60%] bracket, the soft input every prefill figure carries. Each curve reaches zero at its own f*, which is what makes f* a limit rather than an operating point.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>this configuration</span>
+        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 30–60%</span>
+        <span class="li"><span class="sw" style="background:var(--muted)"></span>other topologies</span>
+        <span class="li"><span class="sw dot" style="background:var(--crit)"></span>absorbs &lt; 1 miss</span>
+      </div>
+      <div class="chartbox"><div id="chartF"></div><div class="tt" id="ttF"></div></div>
+    </div>
+  </div>
+
+  <div class="act-h">
+    <span class="act-n">3</span>
+    <div><h2>So what should I run?</h2><p>Every ceiling above, converted into one unit — <b>max concurrent users</b> — so the binding one is simply the smallest. Two of the four are the study's own published columns, which the conversion reproduces rather than restates; the other two are what act 2 adds.</p></div>
+  </div>
+
+  <div class="tiles solo" id="decisionTiles"></div>
+
+  <div class="charts solo">
+    <div class="panel card">
+      <p class="ct">G · The binding constraint vs cache-miss rate</p>
       <p class="cs">All four ceilings for the current configuration, in max concurrent users. Dashed black = what you actually get (the smallest). Dot = your current load. Where the envelope changes colour, the binding constraint changes hands — the one thing neither axis can show alone.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
@@ -455,18 +523,6 @@ svg text{fill:var(--text-2)}
         <span class="li"><span class="sw" style="background:var(--s2)"></span>latency</span>
         <span class="li"><span class="sw" style="background:var(--crit)"></span>saturation</span>
         <span class="li"><span class="sw dot" style="background:var(--text)"></span>your load</span>
-      </div>
-      <div class="chartbox"><div id="chartF"></div><div class="tt" id="ttF"></div></div>
-    </div>
-
-    <div class="panel card">
-      <p class="ct">G · Cold-spike tolerance</p>
-      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses whose last request still gets a first token inside the budget — against the standing miss rate. Band = the MFU [30–60%] bracket, the soft input every prefill figure carries. Each curve reaches zero at its own f*, which is what makes f* a limit rather than an operating point.</p>
-      <div class="legend">
-        <span class="li"><span class="sw" style="background:var(--s1)"></span>this configuration</span>
-        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 30–60%</span>
-        <span class="li"><span class="sw" style="background:var(--muted)"></span>other topologies</span>
-        <span class="li"><span class="sw dot" style="background:var(--crit)"></span>absorbs &lt; 1 miss</span>
       </div>
       <div class="chartbox"><div id="chartG"></div><div class="tt" id="ttG"></div></div>
     </div>
@@ -1004,12 +1060,28 @@ function requestRate(users, think){ return users / (think || liveThink); }
 // step), so ~11 evaluations replace a linear scan. Mirrors max_users_decode.
 function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
   const F = floor || DECODE_FLOOR_TOKS, HI = hi || 4096;
-  const p50 = n => decodeCurves(model, topo, wl, n, Math.max(1,n-1), n_iter||220).p50.slice(-1)[0];
+  // one probe costs O(n_iter x n) — decodeCurves builds a cumulative context
+  // sum up to n — so the ORDER of probes dominates the cost. Doubling up from
+  // 1 keeps the largest probe within 2x the answer; the old "probe HI first"
+  // bisection paid for a 4,096-wide sweep even when the crossing was at 118,
+  // which was ~30x of this function and most of a settled render.
+  // A probe at concurrency n already averages over n sampled contexts, so its
+  // relative MC error falls as n grows — spending the same iteration count at
+  // n = 4,096 as at n = 8 buys precision nobody reads. Scaling iterations by
+  // 128/n makes every probe cost about the same (n_iter x n stays flat) and
+  // keeps the wide end of the search from dominating: the 35B-A3B on 8xH200,
+  // whose crossing sits near 2,400 concurrent decoders, went from ~2.9 s to
+  // ~0.2 s with no visible change to the answer.
+  const base = n_iter || 220;
+  const p50 = n => decodeCurves(model, topo, wl, n, Math.max(1,n-1),
+                                clip(Math.round(base*128/n), 30, base)
+                               ).p50.slice(-1)[0];
   if (!(p50(1) >= F)) return { n: 0, censored: false };
+  let lo = 1, up = 2;
+  while (up <= HI && p50(up) >= F){ lo = up; up *= 2; }
   // a crossing beyond HI is CENSORED, not "exactly HI" — the study does not
   // do silent caps, so the flag rides along and the readouts print "≥"
-  if (p50(HI) >= F) return { n: HI, censored: true };
-  let lo = 1, up = HI;
+  if (up > HI) return { n: HI, censored: true };
   while (up - lo > 1){ const mid = (lo+up)>>1; if (p50(mid) >= F) lo = mid; else up = mid; }
   return { n: lo, censored: false };
 }
@@ -2217,6 +2289,20 @@ function activeModel(){ return modelFor(state.model); }
 // The same dtype / deployed-overhead switches applied to an ARBITRARY model —
 // what the frontier table needs to price every configuration on equal terms
 // (and what activeModel() has always done for the selected one).
+// Cross-MODEL comparison variant: the same dtype / overhead switches, but each
+// model keeps its OWN speculative-decoding capability instead of inheriting the
+// MTP slider. Ranking configurations against each other must not hand one of
+// them a speedup it does not ship — Mistral-Medium-3.5 has no MTP module at
+// all, and pricing it at the slider's 1.7x doubles its decode ceiling (74 vs
+// 36 users) and hides that it is decode-bound below the reference load. The
+// slider stays a SENSITIVITY control on the selected configuration, which is
+// what its own tooltip says it is.
+function modelForCompare(key){
+  const own = CONFIG.MODELS[key].mtp;
+  const saved = state.mtp;
+  state.mtp = own;
+  try { return modelFor(key); } finally { state.mtp = saved; }
+}
 function modelFor(key){
   let m = CONFIG.MODELS[key];
   // NVFP4 weights (B300-only; the UI disables the option elsewhere): swap in
@@ -2329,11 +2415,11 @@ function computeAndRender(draft){
    The closed-form halves (latency, saturation, B*, TTFT) are cheap and update
    live on every frame, so dragging the load or budget sliders is immediate.
    -------------------------------------------------------------------------- */
-let lastPlanner = null, lastFrontier = null, lastDecodeCeil = null;
+let lastPlanner = null, lastFrontier = null, lastFrontierMo = null;
 function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   if (noFit){
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
-    renderChartF(null); renderChartG(null);
+    renderBindingChart(null); renderSpikeChart(null);
     document.getElementById('frontierTable').innerHTML = '';
     lastPlanner = null; lastFrontier = null; lastDecodeCeil = null;
     return;
@@ -2384,7 +2470,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     ttftHitPs:   sp.rho >= 1 ? Infinity : mo.hit/(1-sp.rho),
   });
   renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
-  renderChartF(d, op);
+  renderBindingChart(d, op);
 
   // context lines on chart G: the same model at the other TP widths that fit
   const others = [];
@@ -2396,33 +2482,51 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     const r2 = requestRate(state.users, state.think);
     others.push({ fs: d.fs, b: d.fs.map(x => bStar(m2, x, state.sla, r2)) });
   }
-  renderChartG(d, others);
+  renderSpikeChart(d, others);
 
-  // --- the frontier table, settled renders only ---
-  if (!draft || !lastFrontier){
-    const rows = [];
+  // --- the frontier table ---
+  // Split by cost, not by render mode. The Monte-Carlo half (warm fill +
+  // decode-ceiling search per configuration) is keyed on a signature that
+  // EXCLUDES the selected model, the GPU count and every load/budget knob —
+  // none of which change any other row's warm capacity or decode ceiling — so
+  // the two most common interactions (switching model, dragging load) never
+  // pay for it. The closed-form half is recomputed every render.
+  const fsig = `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|`
+             + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
+             + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
+             + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;
+  if (!lastFrontier || lastFrontier.sig !== fsig){
+    const base = [];
     for (const mk of Object.keys(CONFIG.MODELS))
       for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
         if (dp*tp > 8) continue;
-        const m2 = modelFor(mk), t2 = makeGrid(dp, tp, state.gpu);
+        const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu);
         if (kv_pool_tokens(m2, t2) <= 0) continue;
-        const r2 = requestRate(state.users, state.think)/(t2.replicas||1);
-        const mo2 = prefillServiceMoments(m2, t2, wl, cs);
         const wc2 = warmCapacity(m2, t2, wl, ramPerCache(t2),
                                  Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
-        const du2 = maxUsersDecode(m2, t2, wl, DECODE_FLOOR_TOKS, 160);
-        const op2 = operatingPoint(m2, t2, wl, cs, {
-          mo: mo2, warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1),
-          decodeUsers: du2.n*(t2.replicas||1) });
-        rows.push({ key:`${mk}|${dp}x${tp}`, label:`${m2.name} · ${t2.name}`,
-                    op:op2, reps:t2.replicas||1, censored:du2.censored,
-                    bstar: bStar(mo2, f, state.sla, r2) });
+        const du2 = maxUsersDecode(m2, t2, wl, DECODE_FLOOR_TOKS, 140);
+        base.push({ key:`${mk}|${dp}x${tp}`, mk, dp, tp,
+                    label:`${m2.name} · ${t2.name}`, reps:t2.replicas||1,
+                    warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1),
+                    decodeUsers: du2.n*(t2.replicas||1), censored: du2.censored });
       }
-    rows.sort((a,b)=>b.op.limit-a.op.limit);
-    lastFrontier = rows;
+    lastFrontier = { sig: fsig, base };
   }
-  renderFrontierTable(lastFrontier,
-    `${state.model}|${state.ngpu/state.tp}x${state.tp}`);
+  // service-time moments depend on the workload and the turn size only, so the
+  // load and budget sliders reuse them: dragging those is pure arithmetic
+  const msig = `${fsig}|${state.turn}`;
+  if (!lastFrontierMo || lastFrontierMo.sig !== msig) lastFrontierMo = { sig: msig, mo: {} };
+  const rows = lastFrontier.base.map(r=>{
+    const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
+    const r2 = requestRate(state.users, state.think)/r.reps;
+    const mo2 = lastFrontierMo.mo[r.key]
+             || (lastFrontierMo.mo[r.key] = prefillServiceMoments(m2, t2, wl, cs));
+    return { ...r,
+             op: operatingPoint(m2, t2, wl, cs, {
+               mo: mo2, warmUsers: r.warmUsers, decodeUsers: r.decodeUsers }),
+             bstar: bStar(mo2, f, state.sla, r2) };
+  }).sort((a,b)=>b.op.limit-a.op.limit);
+  renderFrontierTable(rows, `${state.model}|${state.ngpu/state.tp}x${state.tp}`);
 }
 
 // chart D's subtitle explains the n=32 slope break, but only when the active
@@ -2546,43 +2650,46 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs){
   const tiles=[
     // a censored fill ran out of draws before it ran out of budget, so the count
     // is a floor, not an estimate — say so rather than quietly under-reporting
-    {k:"Warm sessions · p5", hero:true, v:noFit?"—":(warm.censored?"≥ ":"")+fmt(warm.p5,0),
+    {act:1, k:"Warm sessions · p5", hero:true, v:noFit?"—":(warm.censored?"≥ ":"")+fmt(warm.p5,0),
      u:noFit?"":(dp?"per replica":"sessions"),
      sub: noFit ? `model weights do not fit this configuration (${fitHint}) — zero at any CPU offload`
         : (dp ? `system total ${fmt(warm.p5*topo.replicas,0)} (sticky routing) · ≈ ${fmt(warm.p5*topo.replicas*(1-p_sub(wl)),0)} distinct users`
               : `the planning number — 95% of draws hold at least this many · ≈ ${fmt(warm.p5*(1-p_sub(wl)),0)} distinct users`)
           + (offl>=1 ? ` · by tier, p5 each: ${fmt(warm.g5,0)} HBM-resident · ${fmt(offl,0)} offloaded (storage)` : ''),
      tip:"THE number this study is built to produce. A warm session's KV + recurrent state sit in cache, so its next request prefills only the new turn — served well and comfortably. A cold request re-prefills everything and briefly thrashes the GPU for every active user. p5 = conservative tail: 95% of draws keep at least this many warm. With CPU offload on, this counts both HBM-resident and host-RAM sessions — the RAM tier is storage, and must be restored over PCIe before it can decode."},
-    {k:"Warm p50 / p95", v:noFit?"—":fmt(warm.p50,0), u:noFit?"":"sessions",
+    {act:1, k:"Warm p50 / p95", v:noFit?"—":fmt(warm.p50,0), u:noFit?"":"sessions",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`p95 ${fmt(warm.p95,0)} — median and optimistic-tail views`,
      tip:"Same metric, median (p50) and optimistic (p95) draws. Plan on p5; use p50 to compare configurations."},
-    {k:"KV pool", v:fmt(pool/1e6,2), u:"M tok", sub:topo.name,
+    {act:1, k:"KV pool", v:fmt(pool/1e6,2), u:"M tok", sub:topo.name,
      tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
-    {k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
+    {act:2, k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
      tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
-    {k:"Max cold req/s", v:noFit?"—":fmt(coldRate,2), u:noFit?"":"req/s",
+    {act:2, k:"Max cold req/s", v:noFit?"—":fmt(coldRate,2), u:noFit?"":"req/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`
         :`miss ≈ ${fmt(coldS,1)} s (p5–p95 ${fmt(coldP5,1)}–${fmt(coldP95,1)}) · f* ${fstar>10?"> 1,000":"= "+fmt(fstar*100,0)}% at ${fmt(groupRate,2)} req/s${dp?"/replica":""}`
          + (spike>0?` · chunk spikes ITL ×${fmt(spike,0)}`:"")
          + (dp?` · ×${topo.replicas} replicas`:""), cls:prefillClass,
      tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group. Set by FLOPs, so no KV pool, CPU offload or warm-session headroom raises it. The headline is 1/(EXPECTED miss cost), priced on the context distribution's heavy tail (E[L²], not the mean length); the p5–p95 range is the cost SPREAD of a single miss. A miss re-pays its full attention however it is chunked, plus a per-pass overhead (the weight stream) for each of its chunks; a warm hit is charged its new turn's attention over the whole cached context at the marginal rate. Everything here is PINNED to vLLM's max_num_batched_tokens = 32,768, where the effective MFU is the calibrated 45% (the [30–60%] bracket moves absolutes 2×) — chart E below sweeps the chunk size and shows why it sits that high. f* = the miss rate that saturates the group at its share of the reference 2.13 req/s (64 users, one turn every 30 s; a DP grid splits that load across replicas), warm turns included; colour compares the invalidation slider f against it — green f < f*/2, amber f ≥ f*/2, red f ≥ f* (prefill saturates before the slider's miss rate). 'Chunk spikes ITL' = the one inter-token gap every decoder AT THE STRESS POINT (the n shown in the per-user tile, not the docs' fixed 64) sees when a mid-re-prefill 32,768-token chunk shares their forward pass. WEIGHT DTYPE IS NOT PRICED: NVFP4 configs are charged the FP8 tensor rate; their mixed W4A4/FP8/BF16 recipes could really run faster OR slower, so for them this tile is a modeling choice, not a bound. Analytic and UNVALIDATED — see research/prefill.md."},
-    {k:"Cold-spike tolerance", v:noFit?"—":fmt(sp.bstar,1), u:noFit?"":"misses at once",
-     sub:noFit?`model weights do not fit this configuration — ${fitHint}`
-        :`${fmt(SPIKE_BURST,0)} at once drains in ${sp.drain>=90?fmt(sp.drain/60,1)+" min":fmt(sp.drain,0)+" s"}`
-         + ` · latency ceiling f_sla ${sp.fsla>=1?"> 100":fmt(sp.fsla*100,0)}% vs f* ${fstar>10?"> 1,000":fmt(fstar*100,0)}%`
-         + ` · a full flush ${sp.allCold<1?"drains ("+fmt(sp.allCold*100,0)+"% all-cold duty)":"MUST shed load ("+fmt(sp.allCold*100,0)+"% all-cold duty)"}`,
-     cls:spikeClass,
-     tip:"How big a BURST of simultaneous cache misses this configuration absorbs — the thing a duty cycle structurally cannot show, since a mean rate against a mean service time sees neither variance nor correlation. B* = SLA × (1 − duty) / (mean miss cost), the largest clump of at-once misses whose LAST request still gets a first token inside a 10-second TTFT budget. LINEAR in that budget, so a 5 s target halves every number here and changes no ranking. Two things it reveals. (1) f* is not a planning number: B* falls to ZERO exactly at f*, and the mean-TTFT latency ceiling f_sla binds earlier still — at 0.35–0.93× f* across the modelled configurations, with the duty cycle reading a comfortable 76–93%. Size the miss rate against f_sla. (2) A GLOBAL flush (a prompt-template deploy colding every session at once) puts the machine at f = 100% until sessions re-warm, so the question becomes whether an all-cold stream is servable at all: all-cold duty above 100% means no steady state, and recovery is set by admission control — which this study does not model. That is what f* > 100% has been saying all along, in units that show it. The MoE's advantage COMPOUNDS here (cheap misses AND low standing duty: 7–9× the dense 27B's tolerance against a 5.9× prefill-speed gap) but partly CANCELS on a flush, where its larger warm population is the thing being re-prefilled. Modelled as one M/G/1 queue per replica GROUP: a DP deployment has one per replica, and a burst spreads across them only as well as the router balances it — which the sticky routing DP needs for cache reasons actively works against. Arrivals are Poisson (milder than real agentic traffic), the ceiling solves against the MEAN TTFT (a p95 budget binds lower), and admission control, priority and preemption are unmodelled. Analytic and UNVALIDATED — see research/spike.md."},
-    {k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
+    {act:1, k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥50 tok/s (comfortable), amber ≥40 (at the hard floor), red below. If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
-    {k:"Aggregate, all GPU-resident p5 warm active", v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
+    {act:1, k:"Aggregate, all GPU-resident p5 warm active", v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
      tip:"System-wide token throughput at that same stress point — the GPU-resident p5-warm sessions all decoding at once, summed over DP replicas. A capacity ceiling for batch/offline work, not a latency promise."},
   ];
   const good=cssv('--good'),warn=cssv('--warn'),crit=cssv('--crit');
   const colMap={good,warn,crit};
-  document.getElementById('tiles').innerHTML = tiles.map(t=>{
+  // one tile vocabulary, three destinations: act 1 answers "can I hold them?",
+  // act 2 "can I serve them?". A tile without an act stays with act 1.
+  paintTiles('tiles',     tiles.filter(t=>(t.act||1)===1), colMap);
+  paintTiles('tilesLoad', tiles.filter(t=>t.act===2),      colMap);
+}
+
+// shared tile markup — used by both the capacity tiles above and the planner
+function paintTiles(id, tiles, colMap){
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = tiles.map(t=>{
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
     const kk = t.tip? `<span class="tip" tabindex="0" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
     return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}"><div class="k">${kk}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
@@ -2664,11 +2771,13 @@ function bStar(mo, f, sla, rate){
 }
 
 function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
-  const box = document.getElementById('spikeTiles');
   if (noFit){
-    box.innerHTML = `<div class="tile wide"><div class="k">The operating point</div>`
+    const msg = `<div class="tile wide"><div class="k">The operating point</div>`
       + `<div class="v tnum">—</div><div class="sub2">model weights do not fit this `
       + `configuration — ${esc(fitHint)}</div></div>`;
+    document.getElementById('decisionTiles').innerHTML = msg;
+    // act 2's capacity-side tiles are already painted and still meaningful;
+    // only the cold-traffic readouts are missing, so append rather than wipe
     return;
   }
   const C = PLANNER_COLORS();
@@ -2680,7 +2789,7 @@ function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
     .sort((a,b)=>op.ceilings[a]-op.ceilings[b])
     .map(k=>`${PLANNER_LABEL[k]} ${fmt(op.ceilings[k],0)}`).join(' · ');
   const tiles = [
-    {k:'Binding constraint', hero:true, v:PLANNER_LABEL[bind].toUpperCase(),
+    {decision:true, k:'Binding constraint', hero:true, v:PLANNER_LABEL[bind].toUpperCase(),
      u: op.limit >= 1 ? `at ${fmt(op.limit,0)} users` : 'at no load at all',
      sub: op.limit >= 1
         ? `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`
@@ -2709,21 +2818,27 @@ function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
      tip:"Mean time to first token at the current load, from the M/G/1 queue. The HIT column is the sharpest thing on this page: under first-come-first-served a warm hit waits behind whatever misses are in front of it, so the cache-miss rate is a latency parameter for the users who HIT the cache, not only for the users who miss — at a 20% miss rate on the 27B/TP2 a hit's TTFT reaches 74x its own service time. Processor sharing is the other end of the bracket (vLLM admits in arrival order but runs several admitted prefills concurrently); neither end is uniformly optimistic, and which is which flips by request class. Solved against the MEAN, so a p95 budget binds sooner than anything here."},
   ];
   const colMap = {good, warn, crit};
-  box.innerHTML = tiles.map(t=>{
+  // the binding constraint IS the decision, so it heads act 3 alone; the cold-
+  // traffic readouts join act 2's tiles, which renderTiles has already painted
+  paintTiles('decisionTiles', tiles.filter(t=>t.decision), colMap);
+  const load = document.getElementById('tilesLoad');
+  load.insertAdjacentHTML('beforeend', tiles.filter(t=>!t.decision).map(t=>{
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
     const kk = t.tip? `<span class="tip" tabindex="0" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
-    return `<div class="tile${t.hero?' hero':''}"><div class="k">${kk}</div>`
+    return `<div class="tile"><div class="k">${kk}</div>`
          + `<div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div>`
          + `<div class="sub2 tnum">${esc(t.sub)}</div></div>`;
-  }).join('');
+  }).join(''));
 }
 
 /* ---- Chart F: the four ceilings, in users, vs the miss rate ---- */
-let chartFGeom = null;
-function renderChartF(d, op){
-  if (!d){ renderNoFit('chartF','planner'); chartFGeom=null;
-           document.getElementById('ttF').style.opacity=0; return; }
-  const W=560,H=320, mL=52,mR=16,mT=14,mB=42;
+let bindingGeom = null;
+function renderBindingChart(d, op){
+  if (!d){ renderNoFit('chartG','planner'); bindingGeom=null;
+           document.getElementById('ttG').style.opacity=0; return; }
+  // act 3 gives this chart the full page width, so it needs a viewBox to
+  // match: a 560-wide box stretched to ~1,100 px scales every label with it
+  const W=1120,H=400, mL=64,mR=22,mT=16,mB=46;
   const pw=W-mL-mR, ph=H-mT-mB;
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
   const surface=cssv('--surface'), text=cssv('--text');
@@ -2767,16 +2882,16 @@ function renderChartF(d, op){
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">cache-miss rate f</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent users (log)</text>`;
-  document.getElementById('chartF').innerHTML =
+  document.getElementById('chartG').innerHTML =
     svgEl(g,W,H,'The four ceilings in max concurrent users versus the cache-miss rate');
-  chartFGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
+  bindingGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
 /* ---- Chart G: cold-spike tolerance, with the MFU bracket as a band ---- */
-let chartGGeom = null;
-function renderChartG(d, others){
-  if (!d){ renderNoFit('chartG','spike tolerance'); chartGGeom=null;
-           document.getElementById('ttG').style.opacity=0; return; }
+let spikeGeom = null;
+function renderSpikeChart(d, others){
+  if (!d){ renderNoFit('chartF','spike tolerance'); spikeGeom=null;
+           document.getElementById('ttF').style.opacity=0; return; }
   const W=560,H=320, mL=52,mR=16,mT=14,mB=42;
   const pw=W-mL-mR, ph=H-mT-mB;
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
@@ -2817,9 +2932,9 @@ function renderChartG(d, others){
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">standing cache-miss rate f</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">B* — simultaneous misses (log)</text>`;
-  document.getElementById('chartG').innerHTML =
+  document.getElementById('chartF').innerHTML =
     svgEl(g,W,H,'Cold-spike tolerance versus the standing cache-miss rate, with the MFU bracket');
-  chartGGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
+  spikeGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
 /* ---- The frontier table ---- */
