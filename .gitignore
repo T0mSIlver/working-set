@@ -10,3 +10,7 @@ venv/
 
 # OS / editor
 .DS_Store
+
+# Local agent configs for cross-review runs (installed per-machine by the
+# delegate skills; not part of the study)
+.opencode/
