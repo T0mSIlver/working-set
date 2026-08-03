@@ -244,6 +244,7 @@ svg text{fill:var(--text-2)}
             <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
             <button data-v="MM35" aria-pressed="false">Mistral-Med-3.5</button>
             <button data-v="GLM52" aria-pressed="false">GLM-5.2</button>
+            <button data-v="DSV4F" aria-pressed="false">DSv4-Flash</button>
           </div>
         </div>
         <div class="field">
@@ -254,7 +255,7 @@ svg text{fill:var(--text-2)}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline. NVFP4 (4.5 bits/param on quantized tensors) swaps in the real NVFP4-checkpoint byte counts. What stays high-precision is recipe-specific — RedHatAI's 35B-A3B keeps embeddings, lm_head, routers and the DeltaNet blocks BF16; NVIDIA's Mistral recipe keeps attention and edge MLP FP8; NVIDIA's GLM recipe quantizes ONLY routed experts — so the modelled bytes follow the specific checkpoints named in the research notes, and MoE models' fixed per-step read can grow even as expert reads shrink. B300-only: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so this study does not model NVFP4 on H-generation GPUs. KV cache stays FP8/FP16 by policy — vLLM's nvfp4 KV (Blackwell-only, shipped 2026-05) is not modelled.">Weights</span></label>
+          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline. NVFP4 (4.5 bits/param on quantized tensors) swaps in the real NVFP4-checkpoint byte counts. What stays high-precision is recipe-specific — RedHatAI's 35B-A3B keeps embeddings, lm_head, routers and the DeltaNet blocks BF16; NVIDIA's Mistral recipe keeps attention and edge MLP FP8; NVIDIA's GLM recipe quantizes ONLY routed experts — so the modelled bytes follow the specific checkpoints named in the research notes, and MoE models' fixed per-step read can grow even as expert reads shrink. DeepSeek-V4-Flash has no NVFP4 variant at all — its experts ship natively FP4, and the only conversion is larger than the original — so the option is disabled there. B300-only: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug, so this study does not model NVFP4 on H-generation GPUs. KV cache stays FP8/FP16 by policy — vLLM's nvfp4 KV (Blackwell-only, shipped 2026-05) is not modelled.">Weights</span></label>
           <div class="seg" id="seg-wdt" data-key="wdt">
             <button data-v="fp8" aria-pressed="true">FP8</button>
             <button data-v="nvfp4" aria-pressed="false">NVFP4</button>
@@ -286,7 +287,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses in total (one 8-GPU node at most — both parts here are 8-GPU NVLink domains). How they are divided into replica groups is the Split control below. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200, though it fits one B300; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
+          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses in total (one 8-GPU node at most — both parts here are 8-GPU NVLink domains). How they are divided into replica groups is the Split control below. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200, though it fits one B300; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300; DeepSeek-V4-Flash fits from 2×H200 / 1×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
@@ -531,6 +532,26 @@ const CONFIG = {
       params_prefill: 37.4e9,      // MoE: ledger 39.3B active (excl embed) less lm_head 1.9e9
       attn_layers: 78, attn_d: 64*256,
       max_ctx: 1048576,            // native 1M context
+    },
+    "DSV4F": {                     // research/model_dsv4flash.md
+      name: "DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
+      kv_bpt: 3450,                // 21 x 576/4 CSA + 20 x 576/128 HCA + 21 x 64/4 fp4 indexer
+      deltanet_state: 15597568,    // NOT DeltaNet: 46 x 128 x 576 windows + 12.2e6 fp32 compressor state
+      state_fp32_ok: false,        // fixed mixed-precision state — the fp32 toggle models nothing
+      w_resident: 166.88e9,        // measured safetensors total (native mixed FP8/FP4 checkpoint)
+      w_decode_shared: 7.66e9,     // attn 4.60 + shared exp 1.08 + comp/idx/gates/mHC 0.92 + lm_head 1.06
+      w_route_pertok: 3449290752,  // 6 experts x 13,369,344 B (FP4 packed + E8M0 scales) x 43
+      w_route_total: 147169738752, // 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+      mtp: 1.7,                    // DSpark drafts 7 tokens; transplanted fit, unmeasured
+      // no nvfp4_w: experts are ALREADY FP4 natively; no official 0731 NVFP4
+      // exists and the community conversion is LARGER (research note #4)
+      kv_decode_bpt: 426,          // 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA read
+      kv_decode_const: 9363456,    // 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
+      kv_decode_topk: 2048,        // 512 compressed entries x ratio 4, in token space
+      kv_fp16_ok: false,           // vLLM V4 path asserts fp8 main KV; SGLang bf16 decode unfinished
+      params_prefill: 12.70e9,     // MoE: active GEMM params excl embed + lm_head
+      attn_layers: 41, attn_d: 26624/41,  // 21 indexer layers @1024-equiv + 20 HCA @256-equiv
+      max_ctx: 1048576,            // native 1M (YaRN x16 baked into the config)
     },
   },
 
@@ -900,8 +921,10 @@ function breakevenMissRate(m, topo, wl, rate, cs){
   console.assert(minTpFor(CONFIG.MODELS["MM35"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["MM35"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["GLM52"],"H200")===7 &&
-                 minTpFor(CONFIG.MODELS["GLM52"],"B300")===3, "min TP per model/part");
-  for (const mk of ["MM35","GLM52"])
+                 minTpFor(CONFIG.MODELS["GLM52"],"B300")===3 &&
+                 minTpFor(CONFIG.MODELS["DSV4F"],"H200")===2 &&
+                 minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1, "min TP per model/part");
+  for (const mk of ["MM35","GLM52","DSV4F"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(CONFIG.MODELS[mk], makeTopo("dp",n))===0,
         mk+": pure DP of single H200s must stay a 0 pool");
@@ -959,6 +982,10 @@ function breakevenMissRate(m, topo, wl, rate, cs){
   console.assert(kv_pool_tokens(glm, makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(glm, makeTopo("tp",8,"H200")) > 0,
     "GLM-5.2 FP8 must not fit 1 GPU but fit 8xH200");
+  console.assert(kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"H200")) === 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",2,"H200")) > 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"B300")) > 0,
+    "DSv4-Flash must fit from 2xH200 and a single B300");
   // NVFP4 swap identities (mirror _selfcheck): checkpoint shrinks, but the
   // BF16-kept blocks make the SHARED per-step read heavier on the MoE models
   console.assert(m35.nvfp4_w[0] < m35.w_resident && m35.nvfp4_w[1] > m35.w_decode_shared,
@@ -970,6 +997,24 @@ function breakevenMissRate(m, topo, wl, rate, cs){
   console.assert(Math.abs(glm.kv_decode_const/(78*2048*576) - 1) < 0.001,
     "GLM top-k read = 78 layers x top-2048 x 576 B");
   console.assert(glm.kv_decode_topk === 2048, "GLM top-k window");
+  // DSv4-Flash identities (research/model_dsv4flash.md; mirror _selfcheck)
+  const dsf = CONFIG.MODELS["DSV4F"];
+  console.assert(dsf.kv_bpt === 21*576/4 + 20*576/128 + 21*64/4,
+    "DSV4F kv_bpt = CSA + HCA + fp4 indexer = 3,450 B/token");
+  console.assert(dsf.deltanet_state === 46*128*576 + 12206080,
+    "DSV4F per-session state = windows + fp32 compressor buffers");
+  console.assert(dsf.state_fp32_ok === false && dsf.kv_fp16_ok === false,
+    "DSV4F: fixed-precision state, quantized-only main KV");
+  console.assert(dsf.w_route_pertok === 6*13369344*43 &&
+                 dsf.w_route_total === 256*13369344*43 &&
+                 Math.abs(dsf.w_route_total/dsf.w_route_pertok - 256/6) < 1e-9,
+    "DSV4F expert bytes (FP4 packed + E8M0 scales); kink at n = 256/6");
+  console.assert(dsf.kv_decode_bpt === 21*64/4 + 20*576/128 &&
+                 dsf.kv_decode_const === 21*512*576 + 43*128*576 &&
+                 dsf.kv_decode_topk === 2048, "DSV4F sparse-decode pricing");
+  console.assert(Math.abs(dsf.attn_layers*dsf.attn_d - (21*1024 + 20*256)) < 1e-9,
+    "DSV4F prefill quadratic term = indexer + dense-HCA equivalents");
+  console.assert(!dsf.nvfp4_w, "DSV4F must not be NVFP4-selectable");
   // zero-pool honesty: weights that don't fit report ZERO warm even with a
   // large CPU-offload buffer (the guard fires before the workload is touched)
   const zr = warmCapacity(glm, makeTopo("tp",1,"H200"), null, 512, 3, 1000);
@@ -1936,8 +1981,9 @@ function activeModel(){
   if (state.kv === "fp16" && m.kv_fp16_ok !== false)
     m = { ...m, kv_bpt: m.kv_bpt*2, name: m.name + " [FP16 KV]" };
   // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.2
-  // carry no state at all) — the UI disables the control for those.
-  if (state.state_dt === "fp32" && m.deltanet_state > 0)
+  // carry no state at all) and on DSv4-Flash (its per-session state is a
+  // fixed mixed-precision buffer, state_fp32_ok) — the UI disables both.
+  if (state.state_dt === "fp32" && m.deltanet_state > 0 && m.state_fp32_ok !== false)
     m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [fp32 state]" };
   // +15% deployed-weight overhead. Never applied to the 27B, whose 28.8 GiB is
   // already the as-deployed footprint (that is where the 15% came from) — the
@@ -2209,11 +2255,13 @@ function enforceConstraints(){
   const m = CONFIG.MODELS[state.model];
   state.tp = clampTp(state.tp, state.ngpu);
   renderSplitControl();
-  const gpuOk = CONFIG.GPUS[state.gpu].supports_nvfp4;
-  if (!gpuOk && state.wdt === "nvfp4") state.wdt = "fp8";
+  // NVFP4 needs BOTH a capable GPU and an existing checkpoint (DSv4-Flash
+  // has none: its experts are already FP4 natively — research note #4)
+  const nvOk = CONFIG.GPUS[state.gpu].supports_nvfp4 && !!m.nvfp4_w;
+  if (!nvOk && state.wdt === "nvfp4") state.wdt = "fp8";
   const fp16Ok = m.kv_fp16_ok !== false;
   if (!fp16Ok && state.kv === "fp16") state.kv = "fp8";
-  const stateOk = m.deltanet_state > 0;
+  const stateOk = m.deltanet_state > 0 && m.state_fp32_ok !== false;
   if (!stateOk && state.state_dt === "fp32") state.state_dt = "bf16";
   const woverOk = state.model !== "27B";
   if (!woverOk && state.wover === "p15") state.wover = "pub";
@@ -2222,7 +2270,7 @@ function enforceConstraints(){
     b=>b.setAttribute('aria-pressed', b.dataset.v===val?'true':'false'));
   sync('seg-wdt', state.wdt); sync('seg-kv', state.kv);
   sync('seg-state', state.state_dt); sync('seg-wover', state.wover);
-  document.querySelector('#seg-wdt button[data-v="nvfp4"]').disabled = !gpuOk;
+  document.querySelector('#seg-wdt button[data-v="nvfp4"]').disabled = !nvOk;
   document.querySelector('#seg-kv button[data-v="fp16"]').disabled = !fp16Ok;
   document.querySelector('#seg-state button[data-v="fp32"]').disabled = !stateOk;
   document.querySelector('#seg-wover button[data-v="p15"]').disabled = !woverOk;
@@ -2230,10 +2278,14 @@ function enforceConstraints(){
   // the state-dependent ones are re-stamped here on every constraint pass
   document.getElementById('kv-tip').setAttribute('data-tip', fp16Ok
     ? "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
-    : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable, so the toggle is disabled.");
+    : (state.model === "DSV4F"
+      ? "DeepSeek-V4-Flash: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled."
+      : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable, so the toggle is disabled."));
   document.getElementById('state-tip').setAttribute('data-tip', stateOk
     ? `Dtype vLLM keeps the Gated-DeltaNet recurrent state in. Every resident session is charged one constant state on top of its attention KV, so this is a flat per-session tax: ${fmt(m.deltanet_state/MIB,1)} MiB at bf16, double at fp32. bf16 is ASSUMED, not measured — it is what makes the baseline's observed 75 MiB match the 27B's state arithmetic. The 2xH200 log does not settle it: its 23.8 GiB of allocator state pages would be ~325 sessions at bf16 or ~162 at fp32, and neither matches the 17 concurrent sequences, so that pool looks pre-allocated from max_num_seqs rather than per-session. The single largest un-measured structural knob on the Qwens (~-10% warm capacity).`
-    : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention, everything lives in the KV cache — so this control does nothing here and is disabled.`);
+    : (state.model === "DSV4F"
+      ? `DeepSeek-V4-Flash DOES pay a fixed per-session state — ${fmt(m.deltanet_state/MIB,1)} MiB of 128-entry attention windows plus fp32 compressor buffers, charged like the DeltaNet state — but its precision is set by the serving stack (fp8 latents, fp32 compressor state), so there is no bf16/fp32 knob to turn and the control is disabled.`
+      : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention, everything lives in the KV cache — so this control does nothing here and is disabled.`));
   document.getElementById('wover-tip').setAttribute('data-tip', woverOk
     ? "Slack between a checkpoint's stated parameter bytes and what the server actually resides: fused/padded kernel buffers, non-quantized odds and ends, allocator rounding. This model's w_resident is a raw or on-disk-checkpoint figure, so it is an UNDER-estimate of the deployed footprint by an unknown margin. +15% is the one calibrated data point available: the 27B's as-deployed 28.8 GiB runs ~15% above its raw param bytes. Transferring that ratio to a different architecture and quantization recipe is an extrapolation — it is the reason this knob exists rather than being folded into the constants."
     : "Qwen3.6-27B's 28.8 GiB is already the measured AS-DEPLOYED footprint, not a raw parameter count — the +15% overhead was derived FROM it, so applying it here would double-count. The NVFP4 path stays disabled by the same calibration: the FP8 as-deployed figure matches the measured checkpoint total within 0.2%, and the NVFP4 21.92 GB is a measured checkpoint total under that same convention. Disabled on this model; it applies to the three whose resident bytes come from raw or checkpoint figures.");
@@ -2242,6 +2294,7 @@ function enforceConstraints(){
     "35BA3B": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN.",
     "MM35": "Mistral-Medium-3.5-128B — dense, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B), the study's KV-hungriest model. No MTP module: speculative default 1.0× (external EAGLE draft unmeasured). Hard 262k context max.",
     "GLM52": "GLM-5.2 — 744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context.",
+    "DSV4F": "DeepSeek-V4-Flash-0731 — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's KV-lightest big model: fits from 2×H200 / 1×B300 (native FP4 experts; no NVFP4 variant). 1M native context.",
   };
   document.getElementById('model-tip').setAttribute('data-tip', modelTips[state.model]);
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
@@ -2335,6 +2388,7 @@ function syncLabels(){
   // drafts 5 tokens and Mistral has no MTP module (its slider models EAGLE),
   // so the readout is only indicative there.
   const aNote = state.model==="GLM52" ? ' GLM-5.2 drafts 5 tokens — α is indicative only.'
+              : state.model==="DSV4F" ? ' DSv4-Flash drafts 7 tokens (DSpark) — α is indicative only.'
               : state.model==="MM35" ? ' Mistral has no MTP module — the slider models an EAGLE-style speedup; α does not apply.' : '';
   const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
     : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
