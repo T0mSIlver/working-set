@@ -2639,7 +2639,11 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     // the only thing on screen that answers "then what?". It now carries
     // load-dependent verdicts, so it must keep updating here (cs is null on
     // the no-fit path; the workload stats it needs are fit-independent).
-    renderFrontierSection(wl, cs || contextStats(wl), draft, q);
+    // cs is null here; only draw the 20k-sample context stats when some row's
+    // moments cache is actually cold — otherwise the draw is discarded
+    const needCs = !lastFrontier || !lastFrontierMo
+                || lastFrontier.base.some(r => !lastFrontierMo.mo[r.key]);
+    renderFrontierSection(wl, cs || (needCs ? contextStats(wl) : null), draft, q);
     lastPlanner = null;
     return;
   }
@@ -3278,8 +3282,10 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   // largest decode batch that keeps per-user p50 at the 40 tok/s floor, capped
   // at the GPU-resident warm population — beyond it there is nobody warm to admit
   const sug = Math.max(1, Math.round(Math.min(decodeUsers, lastWarmCur.g5)));
-  const specOn = state.mtp>1 && m0.mtp>1;
+  // draft counts mirror the research notes; a model missing here must not
+  // emit num_speculative_tokens:undefined, so it gates specOn too
   const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7}[state.model];
+  const specOn = state.mtp>1 && m0.mtp>1 && specDrafts !== undefined;
   const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
   const ramGrp = ramPerCache(topo);
 
@@ -3310,7 +3316,7 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
 
   const spec = [
     ['Model', esc(base)],
-    ['Weights', state.wdt==='nvfp4'?'NVFP4':'FP8'],
+    ['Weights', (state.wdt==='nvfp4'?'NVFP4':'FP8') + (state.wover==='p15'?' (+15% deployed)':'')],
     ['Hardware', esc(topo.name)],
     ['KV cache', state.kv==='fp8'?'FP8 (fp8_e4m3)':'FP16 (auto)'],
     ['max_model_len', `${fmt(wl.cap,0)} tok`],
@@ -3325,7 +3331,10 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     ['Max cold req/s', `${fmt(1/mo.miss,2)}${reps>1?' per group':''}`],
     ['Cold-spike tolerance B*', `${fmt(op.bstar,1)} misses at once${reps>1?' per group':''}`],
   ].map(([k,v])=>`<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
-  const vcol = op.fits ? (op.headroom>=0.8?'var(--warn)':'var(--good)') : 'var(--crit)';
+  // same thresholds as the binding-constraint tile, so the two act-3 panels
+  // can never disagree about the same operating point (headroom = users/limit)
+  const vcol = op.headroom>=1 ? 'var(--crit)'
+             : (op.headroom>=0.8 ? 'var(--warn)' : 'var(--good)');
   const verdict = op.limit>=1
     ? `${op.fits?'✓ serves':'✗ cannot serve'} your ${fmt(op.users,0)} users — `
       + `${PLANNER_LABEL[op.binding]} binds at ${fmt(op.limit,0)} (×${fmt(op.limit/op.users,1)} your load)`
@@ -3384,7 +3393,7 @@ function renderFrontierTable(rows, curKey){
             : `<td class="num" style="color:${muted}">not viable<br><span style="font-size:10.5px">${esc(why)}</span></td>`)
          + `<td class="bind" style="color:${C[r.op.binding]}">${esc(PLANNER_LABEL[r.op.binding])}</td>`
          + (viable
-            ? `<td class="num" style="color:${fits?(room>=1.25?good:warn):crit}">${cen}×${fmt(room, room<10?1:0)}</td>`
+            ? `<td class="num" style="color:${fits?(room>1.25?good:warn):crit}">×${fmt(room, room<10?1:0)}${cen?'+':''}</td>`
             : `<td class="num" style="color:${muted}">—</td>`)
          + ceilCells
          + `<td class="num">${fmt(r.bstar,1)}</td></tr>`;
@@ -3585,6 +3594,13 @@ document.getElementById('t-ceilcols').addEventListener('change',e=>{
 // deploy-card copy button lives in re-generated markup, so delegate the click
 document.getElementById('deployCard').addEventListener('click',e=>{
   if (e.target.id !== 'copyCmd' || !deployCmdText) return;
+  // navigator.clipboard is UNDEFINED (sync TypeError, not a rejection) on
+  // insecure origins — guard before touching it
+  if (!navigator.clipboard?.writeText){
+    e.target.textContent = 'blocked';
+    setTimeout(()=>{ e.target.textContent = 'copy'; }, 1200);
+    return;
+  }
   navigator.clipboard.writeText(deployCmdText).then(()=>{
     e.target.textContent = 'copied';
     setTimeout(()=>{ e.target.textContent = 'copy'; }, 1200);
@@ -3685,8 +3701,9 @@ function redrawCharts(){
   }
   renderChartE(lastChartE);   // re-render from cached series, no new draws
   renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress,lastCS);
-  // the planner's two persistent panels bake chart-palette colors into inline
-  // styles at render time — repaint them from their caches on a theme flip
+  // the frontier bakes chart-palette colors (PLANNER_COLORS -> cssv) into
+  // inline styles, so a theme flip must repaint it; the deploy card only uses
+  // var() colors but is repainted too so its copy-button state never goes stale
   if (lastFrontierRows) renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
   if (lastDeploy) renderDeployCard(lastDeploy.op, lastDeploy.model, lastDeploy.topo,
                                    lastDeploy.wl, lastDeploy.mo, lastDeploy.decodeUsers);
