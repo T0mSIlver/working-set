@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU scaling — model &amp; method</title>
+<style>
+/* ============================================================================
+   DESIGN SYSTEM — same tokens as index.html (light default, dark via media + attr)
+   ========================================================================== */
+:root{
+  --surface:#fcfcfb; --page:#f9f9f7;
+  --text:#0b0b0b; --text-2:#52514e; --muted:#6f6d66;
+  --grid:#e1e0d9; --axis:#c3c2b7;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#12805a; --s4:#7b4fc0;
+  --good:#0a7d0a; --warn:#a5680a; --crit:#c22c2c;
+  --border:#e1e0d9; --tile:#ffffff; --control:#f2f1ec;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 1px 3px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --surface:#1a1a19; --page:#0d0d0d;
+    --text:#ffffff; --text-2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#a486e8;
+    --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+    --border:#2c2c2a; --tile:#222220; --control:#242422;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --surface:#1a1a19; --page:#0d0d0d;
+  --text:#ffffff; --text-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#a486e8;
+  --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+  --border:#2c2c2a; --tile:#222220; --control:#242422;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--page); color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:14.5px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:780px; margin:0 auto; padding:20px 20px 70px;}
+.tnum{font-variant-numeric:tabular-nums}
+header.app{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:6px;}
+header.app h1{font-size:22px; font-weight:650; letter-spacing:-.01em; margin:0;}
+header.app .sub{color:var(--text-2); font-size:13.5px; margin:4px 0 0;}
+.themebtn{
+  border:1px solid var(--border); background:var(--surface); color:var(--text-2);
+  border-radius:8px; padding:7px 12px; font:inherit; font-size:12.5px; cursor:pointer;
+  display:inline-flex; align-items:center; gap:7px; white-space:nowrap;
+}
+.themebtn:hover{border-color:var(--axis)}
+a{color:var(--s1); text-decoration:none}
+a:hover{text-decoration:underline}
+code{background:var(--control); padding:1px 5px; border-radius:4px; font-size:.92em}
+b{font-weight:600}
+.prov{color:var(--warn); font-weight:600}
+nav.toc{border:1px solid var(--border); border-radius:10px; background:var(--surface);
+  padding:11px 15px; margin:16px 0 6px; font-size:13px; color:var(--text-2);
+  display:flex; flex-wrap:wrap; gap:4px 16px;}
+section{margin-top:30px}
+h2{font-size:17px; font-weight:650; letter-spacing:-.01em; margin:0 0 8px;
+  padding-top:22px; border-top:2px solid var(--border);}
+h3{font-size:14px; font-weight:640; margin:20px 0 4px;}
+p{margin:8px 0}
+ul{margin:6px 0; padding-left:20px}
+li{margin:5px 0}
+p,li,dd{color:var(--text-2)}
+p b,li b,dd b{color:var(--text)}
+dl{margin:8px 0}
+dt{font-weight:640; color:var(--text); margin-top:14px}
+dt .gt{font-weight:480; color:var(--muted); font-size:12.5px; margin-left:6px}
+dd{margin:3px 0 0 0}
+.foot{color:var(--muted); font-size:11.5px; margin-top:34px; text-align:center}
+.foot code{background:var(--control); padding:1px 5px; border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="app">
+    <div>
+      <h1>Model &amp; method</h1>
+      <p class="sub">Every assumption behind the <a href="./">interactive explorer</a>, in one place. The explorer states each figure; this page says where it comes from and how far to trust it.</p>
+    </div>
+    <button class="themebtn" id="themeBtn" type="button"><span id="themeIco">◐</span><span id="themeTxt">Theme</span></button>
+  </header>
+
+  <nav class="toc">
+    <a href="#hypothesis">Hypothesis</a>
+    <a href="#calibration">Calibration &amp; validation</a>
+    <a href="#memory">Memory model</a>
+    <a href="#workload">Workload model</a>
+    <a href="#prefill">Prefill &amp; queueing</a>
+    <a href="#hardware">Hardware &amp; models</a>
+    <a href="#glossary">Glossary</a>
+  </nav>
+
+  <section id="hypothesis">
+    <h2>The working hypothesis, and the number the study exists to produce</h2>
+    <p>A request that hits a <b>warm</b> session — one whose KV cache and recurrent state are still resident — prefills only its new turn, and is served well and comfortably. A <b>cold</b> request re-prefills its whole context on the compute roofline, briefly stealing bandwidth from every active user. Deployments are therefore sized by <b>warm sessions, planning on p5</b>: 95% of Monte-Carlo draws hold at least that many.</p>
+    <p>That hypothesis is no longer just an assertion. The <b>Max cold req/s</b> and <b>Cold-spike tolerance</b> readouts price it on prefill's own (compute) roofline, in a second pair of units — a work <em>rate</em> and a burst <em>size</em> — that the session count cannot express: a miss costs 18–19× the machine time of a hit, near-identically across all four architectures (<code>docs/scenarios.md</code> § 8).</p>
+  </section>
+
+  <section id="calibration">
+    <h2>Calibration &amp; validation</h2>
+    <p>A transparent memory model, <b>calibrated to a 1×H200 + 27B FP8 pool of 2.77M KV tokens</b> — a figure <em>projected</em> from the baseline's measured FP16 pool (~1.337M tokens, ×2 for FP8 plus freed activation memory), not itself a direct measurement. The per-GPU activation reserve is <em>solved</em> from that anchor, so every other configuration falls out of the same arithmetic rather than being guessed.</p>
+    <h3 id="crosscheck">The measured cross-check (2026-07-22)</h3>
+    <p>A real 27B + FP16-KV + TP2 bring-up reported <span class="tnum">3,233,564</span> KV tokens at startup (110.59 GiB per worker; 17.54× concurrency at 184,320 tokens) — within 0.3% of this model's 3.24M prediction, with nothing about TP2 or FP16 fitted. First non-circular validation of the reserve + TP arithmetic + FP16 doubling. Run backwards it pins the per-GPU reserve at <b>18.24 GiB</b> against the anchor-solved 17.98 GiB, i.e. an equivalent 1×H200 FP8 anchor of <b>2.762M</b> tokens against the projected 2.77M (the ~1.4% residual is left in the constants rather than re-anchored: it would move every published figure by under 0.5%). What it still does <em>not</em> settle: the recurrent-state dtype, the other three models, and — since a globally wrong anchor shifts prediction and measurement together — the FP8 path itself.</p>
+    <p><b>Retired 2026-07-29:</b> the study used to carry a low calibration anchor as an adverse case — 2× the measured FP16 <em>lower</em> bound (2.278M tokens ⇒ a 33.0 GiB per-GPU reserve). The TP2 measurement refutes it outright: it predicts a 2.750M-token pool where 3,233,564 were reported (−14.9%), against −0.26% for the anchor in use. An adverse case has to be one the hardware has not already ruled out.</p>
+    <h3>What is measured, what is projected, what is analytic</h3>
+    <ul>
+      <li><b>Measured:</b> the baseline FP16 pool interval, the TP2 bring-up, the 27B's as-deployed 28.8 GiB weights, the B300's usable HBM, the user prompt-length fit.</li>
+      <li><b>Projected from a measurement:</b> the FP8 anchor, TP scaling beyond 2 GPUs, the +15% weight overhead on non-27B models, the transplanted MTP fit.</li>
+      <li><span class="prov">Analytic and unvalidated:</span> the entire prefill/queueing axis (Max cold req/s, f*, B*, TTFT), the decode roofline, the subagent workload distribution.</li>
+    </ul>
+  </section>
+
+  <section id="memory">
+    <h2>The memory model</h2>
+    <h3 id="montecarlo">Monte-Carlo capacity</h3>
+    <p>Capacity is estimated by simulation over a user+subagent prompt-length mixture, not solved in closed form; every resident session is also charged its constant recurrent state. Draws are <b>seeded from the configuration</b> (since 2026-08-03), so the same configuration always renders the same numbers, and the load/latency controls — which cannot affect capacity — leave every capacity figure untouched. Two things still move it legitimately: <em>neighbouring</em> slider positions draw a different sample (a few sessions of spread is sampling noise, not a real effect), and while a slider is being dragged the page renders a lower-iteration draft, which can land a session or two from the settled value. The Python sweeps in <code>tables.py</code> use fixed seeds throughout. Real non-linearities (the expert-union kink at n=32, the cap's tail-truncation, the prefix floor) are explained in <code>docs/scenarios.md</code>. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</p>
+    <h3 id="tpdp">TP and DP</h3>
+    <p><b>TP (tensor-parallel, any N)</b> shares one weight copy across all GPUs, so the pooled KV cache grows faster than N×; effective decode bandwidth scales by <span class="tnum">N × 0.90^log₂N</span> (the baseline's 0.90 haircut applied per doubling — beyond 2 GPUs this is a projection, not a measurement). Widening TP always raises <em>total</em> capacity, because every DP group re-pays for its own full copy of the weights.</p>
+    <p><b>DP (data-parallel, any N)</b> keeps N per-replica caches. Aggregate throughput scales ~N×, but a returning user is only <em>warm on their home replica</em> (sticky routing), and a shared CPU-offload buffer splits N ways.</p>
+    <h3 id="moe">MoE decode</h3>
+    <p>MoE decode reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts. The explorer uses the conservative no-overlap union bound (the docs also show the optimistic expected-union bracket). Past the point where every routed expert is read each step — n = 32 on the 35B-A3B — the fixed weight read stops growing with the batch, which is the slope break chart D shows.</p>
+    <h3 id="kvdtype">KV cache dtype</h3>
+    <p>All constants assume the FP8 KV cache (<code>--kv-cache-dtype fp8_e4m3</code>), as tested in the baseline. The FP16 switch doubles KV bytes/token (half the pool, heavier decode reads); weights and the recurrent state are unaffected, and the activation-reserve calibration stays pinned to the FP8 anchor. Sanity: FP16 + 27B + 1×H200 gives a 1.39M-token pool, inside the baseline's measured [1.14M, 1.40M]. GLM-5.2's sparse-MLA path and DeepSeek-V4-Flash's V4 path both require a quantized (FP8) KV cache in vLLM, so the FP16 toggle is disabled there.</p>
+    <h3 id="offload">CPU offload is storage only</h3>
+    <p>A session offloaded to host RAM still counts as warm <em>capacity</em>, but only sessions whose KV is resident in GPU HBM can decode — an offloaded one must be restored over PCIe first (a latency the model does not price). Every decode-side readout (the per-user/aggregate stress tiles, chart C's capacity zone) is therefore computed over <b>HBM-resident warm sessions only</b>, so moving the offload slider never changes per-user decode speed. For DP the buffer splits across replicas.</p>
+    <h3 id="cold">Cold sessions in the pool</h3>
+    <p>Cold / invalidating requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f). Past ~25% invalidation about a third of the pool is paying for sessions that will never be reused.</p>
+    <h3 id="knobs">The two un-measured structural knobs</h3>
+    <p>Other projections carry their own flags where they appear; these two are memory-accounting assumptions with no measurement behind them at all, so they are separate, named controls rather than a bundle.</p>
+    <ul>
+      <li><b>Recurrent state dtype</b> (bf16/fp32): the dtype vLLM keeps the Gated-DeltaNet recurrent state in — a flat per-session charge on top of the attention KV. bf16 is <em>inferred</em>, not measured: it is what makes the baseline's observed 75 MiB match the 27B's state arithmetic. The 2×H200 log does not settle it — its 23.8 GiB of allocator state pages would be ~325 sessions at bf16 or ~162 at fp32, and neither matches the 17 concurrent sequences, so that pool looks pre-allocated from <code>max_num_seqs</code> rather than per-session. fp32 would double the charge and costs the Qwens ~10% of warm capacity — the largest un-measured structural knob on those models. Mistral-3.5 and GLM-5.2 hold no recurrent state (the control is disabled); DeepSeek-V4-Flash pays a fixed 14.9 MiB/session of attention windows and fp32 compressor buffers whose precision is set by the serving stack, so it has no knob to turn either.</li>
+      <li><b>Deployed-weight overhead</b> (as-published/+15%): the slack between a checkpoint's stated parameter bytes and what the server actually resides — fused/padded kernel buffers, non-quantized odds and ends, allocator rounding. Four of the five models' <code>w_resident</code> figures are raw or on-disk checkpoint bytes, i.e. under-estimates by an unknown margin; the one calibrated data point is the 27B's as-deployed 28.8 GiB running ~15% above its raw params. Transferring that ratio to a different architecture and quantization recipe is an extrapolation — which is why it is a knob rather than a constant. The knob is disabled on the 27B itself, where the figure is already as-deployed and applying +15% would double-count.</li>
+    </ul>
+    <h3 id="mtp">MTP / speculative decoding</h3>
+    <p>The slider sets the speculative-decode speedup (1.0× = off). The base quantity is the per-draft acceptance α: with 2 draft tokens, speedup = 1 + α + α², so 1.7× ⇔ α ≈ 47% — the 27B's measured fit (a measured 87% acceptance would be ≈ 2.6×). The inversion is exact for the Qwens only: GLM-5.2's MTP drafts 5 tokens, DeepSeek-V4-Flash drafts 7 (DSpark), and Mistral-Medium-3.5 ships no MTP module at all (its slider models an external EAGLE-style draft, unmeasured). The slider applies to the <em>selected</em> configuration only — the frontier table prices every row at its own model's capability, so cross-model ranking is never moved by this control. MTP + hybrid-model prefix caching is an immature serving path, so the conservative purchasing view keeps it at 1.0×; the purchasing base likewise excludes CPU offload and N&gt;2 TP. These controls exist so that headroom stays visible, not hidden.</p>
+  </section>
+
+  <section id="workload">
+    <h2>The workload model</h2>
+    <h3 id="lengths">Prompt lengths</h3>
+    <p>Both request classes draw log-normal lengths. The user class is <b>fitted by maximum likelihood on 1,850 real request lengths</b> (median 31k, σ = 0.81): ~68% of prompts within ×/÷ e^σ ≈ 2.25 of the median, p95 ≈ 3.8× the median, mean ≈ 1.39× the median. The mean — not the median — drives warm capacity, so a fatter tail of huge pool-hogging sessions means fewer warm. The subagent class is <b>assumed</b> (median 8k, σ = 0.90; no subagent trace has been collected yet). Lengths above the <code>max_seq_len</code> cap are truncated to it — a lower cap trims the tail (smaller worst-case cold prefill, less pool hogging), and a median far past the cap degenerates toward all-sessions-at-cap.</p>
+    <h3 id="subagents">Subagents and the shared prefix</h3>
+    <p>The subagent ratio r is subagent requests per user request, so subagents are r/(1+r) of sampled sessions; they draw much shorter prompts behind their own lean 3k prefix (or reuse the user prefix, if that toggle is on — no extra reserved block, but each subagent then carries the bigger base). The <b>system / shared prefix</b> is the stable block every user request shares — system prompt, skills, rules, tool definitions. It is reserved once per cache and deduplicated across every session, so a bigger shared prefix costs the pool once and saves it on every session: raising it <em>raises</em> warm capacity. The reference workload uses 15k; the baseline's real agent already exceeded 30k. This only pays off while the prefix is byte-stable across users and turns — a per-tenant salt or an edited tool list turns it into per-session bytes, which is what the invalidation control prices.</p>
+    <h3 id="users">Users, think time, and the one-unit conversion</h3>
+    <p>The Concurrent-users control is what converts every ceiling into the same unit: one user is assumed to hold <b>one session</b> (so the count compares against warm capacity) and to send a turn every <b>think-time</b> seconds (so it compares against a work rate). The reference load is 64 users at one turn per 30 s = 2.13 req/s, and at those defaults every ceiling in the explorer reproduces the published tables within Monte-Carlo noise. Both conversions are assumptions, not facts — a user running several concurrent sessions divides the cache ceiling, and bursty think time invalidates the Poisson arrival model. A warm hit still prefills its <b>turn size</b> (default 2,000 tokens) — a bigger lever than it looks: at low miss rates the hit leg dominates the duty cycle, so turn size sets the standing load a burst drains into (500 → 8,000 tokens moves B* by ~3.5× on the 27B/TP2).</p>
+  </section>
+
+  <section id="prefill">
+    <h2>The prefill &amp; queueing model <span class="prov">(analytic, unvalidated)</span></h2>
+    <h3 id="coldreqs">Max cold req/s — the prefill ceiling</h3>
+    <p>The one readout priced in FLOPs, not HBM bytes (<code>research/prefill.md</code>). A miss re-prefills its whole context in <code>max_num_batched_tokens</code> chunks (GEMM + the quadratic attention term) against the part's <em>dense</em> FP8 peak; every readout is pinned to vLLM's 32,768 default, where the effective MFU is the calibrated 45% — the soft input: the plausible [30–60%] bracket spans 2× end to end. The headline is 1/(<em>expected</em> miss cost), priced on the context distribution's heavy tail (E[L²] — the quadratic attention term must not be priced at the mean length); the p5–p95 sub-line is the cost spread of a <em>single</em> miss. It is a per-replica-group ceiling that no KV pool, CPU offload or warm headroom can raise. <b>f*</b> is the miss rate that saturates the group at its share of the current load (users / think time, warm turns included; a DP grid splits that load across replicas).</p>
+    <h3 id="chunks">The chunk-size trade (chart E)</h3>
+    <p>Every chunk is charged its attention over the cache it lands on, so a miss's FLOPs are <em>chunk-size invariant</em> (the pair count telescopes) — but each of its passes also streams the resident weights, an overhead that multiplies by the pass count, so its total <em>machine time</em> is not: that per-pass roofline is what makes the effective MFU fall at small chunk sizes. Small chunks shrink the ITL spike every decoder sees (the spike prices the chunk's marginal FLOPs — its host pass streams the weights anyway) but sink MFU and the cold-request ceiling with it: that is why vLLM's default is 32k, not 2k, and why the explorer sweeps the knob in a chart instead of exposing it as a slider. A warm hit pays its new turn's attention over the whole cached context at the <em>marginal</em> rate (its small pass rides the serving steady state).</p>
+    <h3 id="spike">Cold-spike tolerance — queueing and bursts</h3>
+    <p>Max cold req/s and f* are a <em>duty cycle</em> — a mean rate against a mean service time — and a mean sees neither variance nor correlation. Both bite. A miss's service time runs as <span class="tnum">L²</span> on a log-normal L, so its squared coefficient of variation lands at <b>5.5–8.3</b> where an exponential would sit at 1, and the M/G/1 (Pollaczek–Khinchine) wait diverges well below f*: the <b>latency ceiling f_sla</b> — the miss rate whose mean TTFT reaches the TTFT budget — binds at <b>0.35–0.93× f*</b> (tightest on the most prefill-fragile config, Mistral-3.5/TP4), with the duty cycle still reading a comfortable 76–93%. And invalidation arrives in <em>clumps</em>, so <b>B*</b> prices the largest simultaneous burst of misses whose last request still gets a first token in budget; it is <em>linear</em> in the budget (a 5 s target halves every number, changing no ranking) and reaches <b>zero exactly at f*</b> — which is what makes f* a limit rather than an operating point. A <b>global flush</b> puts the machine at f = 100% until sessions re-warm; above 100% duty there is no steady state and recovery is set by admission control, unmodelled here. One queue per replica <em>group</em>: a DP burst spreads across replicas only as well as the router balances it, which the sticky routing DP needs for cache reasons works against.</p>
+    <h3 id="ttft">TTFT, and what a hit waits for</h3>
+    <p>Mean TTFT comes from the same M/G/1 queue, solved against the <em>mean</em> — a p95 budget binds at a lower miss rate than anything shown. The sharpest consequence is on the requests that <em>hit</em>: under first-come-first-served a warm hit waits behind whatever misses are in front of it, so the cache-miss rate is a latency parameter for the hitting users too — at a 20% miss rate on the 27B/TP2 a hit's TTFT reaches 74× its own service time. Processor sharing is the other end of the bracket (vLLM admits in arrival order but runs several admitted prefills concurrently); neither end is uniformly optimistic, and which is which flips by request class.</p>
+    <h3 id="drain">What a burst costs while it clears</h3>
+    <p>A backlog drains at (1 − duty) seconds of work per second, because the standing traffic keeps arriving throughout — so the last request's TTFT <em>is</em> the drain time under either scheduling discipline. During the drain the scheduler has a prefill chunk to place in every forward pass, so the ITL spike is the steady state for the whole drain: the warm users who did nothing wrong simply stop receiving tokens at their normal rate, and the tokens-lost figure is that difference integrated over the drain. The "full flush" burst preset sets the burst to the p5 warm population of one replica group — the correlated event a prompt-template deploy actually is.</p>
+    <h3 id="unpriced">What is deliberately not priced</h3>
+    <p>Every one of these makes a real machine worse than the model: kernel-launch/scheduler per-pass costs (the small-chunk end of chart E reads better than a real machine), Poisson arrivals (real agentic traffic is burstier), solving against mean rather than percentile TTFT, preemption/recompute under a full KV pool, the decode batch stretching a drain 1–3%, and PCIe restore latency for offloaded sessions. NVFP4 checkpoints are charged the FP8 tensor rate — their mixed W4A4/FP8/BF16 recipes could really run faster <em>or</em> slower, so for NVFP4 configs the prefill figures are a modeling choice, not a bound.</p>
+  </section>
+
+  <section id="hardware">
+    <h2>Hardware &amp; model constants</h2>
+    <h3 id="gpus">H200 and B300</h3>
+    <p>The H200 (141 GB HBM3e, 4.8 TB/s) is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve, <b>plus a measured +9.75 GB/GPU correction</b>: the H200 actually delivers ~150.75 GB usable against its 141 GB vendor figure (the calibration silently absorbs that margin), while a real B300 <code>nvidia-smi</code> dump shows 275,040 MiB = 288.4 GB — nominal bytes, no Hopper-style over-provision — so the transferred reserve must add the hidden margin back (<code>research/gpu_b300.md</code>; formerly a sensitivity, measured 2026-07-27). Both parts are modelled as 8-GPU NVLink domains, so a deployment is one node at most.</p>
+    <h3 id="nvfp4">NVFP4 weights (B300-only)</h3>
+    <p>Swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; what stays high-precision is recipe-specific — see <code>research/nvfp4.md</code> — e.g. RedHatAI's 35B-A3B keeps the DeltaNet blocks BF16 while NVIDIA's GLM recipe quantizes only the routed experts). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug (open as of 2026-07-27), so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — an owner policy: vLLM's nvfp4 KV shipped 2026-05 (Blackwell-datacenter-only) but is not modelled. Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up. DeepSeek-V4-Flash has no NVFP4 variant at all — its experts ship natively FP4, and the only conversion is larger than the original.</p>
+    <h3 id="models">The five models</h3>
+    <ul>
+      <li><b>Qwen3.6-27B</b> — dense hybrid, the calibrated baseline: 64 layers (48 DeltaNet + 16 full-attention) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.</li>
+      <li><b>Qwen3.6-35B-A3B</b> — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attention) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). Constants from the published config — derivations in <code>research/model_35ba3b.md</code>. 262k native, 1M via YaRN.</li>
+      <li><b>Mistral-Medium-3.5-128B</b> (open weights, 2026-04) — dense, 88 uniform GQA layers → <b>176 KiB/token</b> FP8 KV, the study's KV-hungriest model. No recurrent state, no MTP module. Hard 262k context. <code>research/model_mistral_medium35.md</code>.</li>
+      <li><b>GLM-5.2</b> (open weights, 2026-06) — 744B-A40B, MLA + DeepSeek Sparse Attention: stores 47.3 KiB/token (MLA latent + indexer keys) but decode reads only the top-2048 tokens per layer plus an indexer scan (2,772 B per context token). FP8 weights (~756 GB) fit from 7×H200 / 4×B300 per the vLLM recipe's 893 GB floor (3×B300 = 864 GB passes the pool arithmetic only); NVFP4 (~465 GB) from 2×B300. 1M native context. <code>research/model_glm52.md</code>.</li>
+      <li><b>DeepSeek-V4-Flash-0731</b> — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's KV-lightest big model: fits from 2×H200 / 1×B300. 1M native context.</li>
+    </ul>
+    <h3 id="provenance">Provenance</h3>
+    <p>The B300 / NVFP4 / Mistral-3.5 / GLM-5.2 constants were researched 2026-07-27 with HuggingFace and NVIDIA domains proxy-blocked — chains run through first-party GitHub repos, three-way config mirrors, and cross-checked snippets, with an assumptions / re-verification ledger in each research note and per-claim confidence tiers in <code>nvfp4.md</code> and <code>gpu_b300.md</code>. Strongest cross-check: the derived GLM-5.2 NVFP4 resident matches the vLLM recipe's ~465 GB within 0.05%.</p>
+  </section>
+
+  <section id="glossary">
+    <h2>Glossary</h2>
+    <dl>
+      <dt>MFU <span class="gt">Model FLOP Utilisation</span></dt>
+      <dd>What fraction of a GPU's <em>advertised</em> arithmetic throughput a real kernel achieves. An H200 is rated 1,979 TFLOP/s of dense FP8; no real prefill reaches that, because time also goes on memory stalls, attention kernels, collectives and launch overhead. <b>MFU = achieved ÷ advertised.</b> This study assumes <b>45%</b>, with a plausible <b>30–60%</b> bracket — the softest input on the page: it is not measured here, and it scales every prefill time and every derived ceiling almost proportionally. That is why B* carries a band instead of a single number. It does <em>not</em> affect warm capacity, which is an arithmetic-free byte count.</dd>
+      <dt>TTFT <span class="gt">time to first token</span></dt>
+      <dd>How long a request waits before its first output token — queueing plus its own prefill. A cache <b>miss</b> re-prefills its whole context; a <b>hit</b> prefills only the new turn, but still queues behind whatever misses are in front of it.</dd>
+      <dt>Prefill duty <span class="gt">the fraction of the machine spent prefilling</span></dt>
+      <dd>Arrival rate × mean prefill time. At 100% the queue grows without bound. It is an <em>average</em>, which is exactly why it cannot see the two things below.</dd>
+      <dt>f* <span class="gt">the saturation miss rate</span></dt>
+      <dd>The cache-miss rate at which prefill duty reaches 100%. Not a target: it is the point at which burst tolerance has already fallen to zero.</dd>
+      <dt>B* <span class="gt">cold-spike tolerance</span></dt>
+      <dd>How many cache misses can arrive <em>at the same instant</em> and still have the last of them answered inside the TTFT budget. The miss-rate slider models misses arriving independently; B* models them arriving together, which is how a template deploy or a cache wipe actually behaves.</dd>
+    </dl>
+  </section>
+
+  <p class="foot">Mirrors <code>scripts/scenario_model.py</code>; constants live in the explorer's <code>CONFIG</code> block. Full write-up: <code>docs/writeup.md</code> and <code>docs/scenarios.md</code> in the repository. Research notes: <code>research/model_35ba3b.md</code>, <code>model_mistral_medium35.md</code>, <code>model_glm52.md</code>, <code>gpu_b300.md</code>, <code>nvfp4.md</code>, <code>prefill.md</code>, <code>spike.md</code>.</p>
+</div>
+
+<script>
+"use strict";
+const themeBtn=document.getElementById('themeBtn');
+function currentTheme(){
+  const attr=document.documentElement.getAttribute('data-theme');
+  if(attr) return attr;
+  return matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';
+}
+function applyThemeLabel(){
+  const t=currentTheme();
+  document.getElementById('themeIco').textContent = t==='dark'?'☾':'☀';
+  document.getElementById('themeTxt').textContent = t==='dark'?'Switch to light':'Switch to dark';
+  themeBtn.setAttribute('aria-label', t==='dark'?'Switch to light theme':'Switch to dark theme');
+}
+themeBtn.addEventListener('click',()=>{
+  document.documentElement.setAttribute('data-theme', currentTheme()==='dark'?'light':'dark');
+  applyThemeLabel();
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{
+  if(!document.documentElement.getAttribute('data-theme')) applyThemeLabel();
+});
+applyThemeLabel();
+</script>
+</body>
+</html>
