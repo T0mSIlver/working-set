@@ -165,8 +165,9 @@ lm_head (129,280 x 4096, BF16)                   = 1,059.1e6
 w_decode_shared                                  = 7.66e9 B
 ```
 
-Active check: 7.66e9 (≈ 6.7e9 params less lm_head) + 3.45e9 ≈ 12.9e9
-params/step ✓ "A13B". The 916e6 mixed-dtype line carries the note's largest
+Active check (params, not bytes): 6.21e9 shared params excl. lm_head +
+6.49e9 routed-expert params/token = 12.70e9 active params/step ✓ "A13B"
+(= `params_prefill`). The 916e6 mixed-dtype line carries the note's largest
 uncertainty (±0.2e9, ~±3% of the shared read — the exact dtype split of the
 529e6 non-attention shared params was sampled, not exhaustively summed).
 
@@ -221,7 +222,7 @@ checkpoint.
   (vllm#42876) + SGLang roadmap; the vLLM recipe's "recommended" phrasing
   disagrees. If BF16 KV ships, kv_fp16_ok flips to True and ×2 overstates
   the true BF16 layout by only 0.3%.
-- The FP32 compressor state (11.6 MiB/seq) is charged per *resident* session;
+- The FP32 compressor state (11.65 MiB/seq) is charged per *resident* session;
   a serving stack could plausibly keep it only for *active* sequences. Biases
   capacity DOWN (conservative).
 - The per-session fixed cost reuses the `deltanet_state` field; the fp32-state
