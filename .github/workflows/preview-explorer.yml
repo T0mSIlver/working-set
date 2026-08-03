@@ -43,6 +43,11 @@ jobs:
       - name: Write preview wrangler config (no custom-domain route)
         env:
           PREVIEW_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
+          # passed as a worker var in the generated config — the action's
+          # `secrets:` input runs `wrangler secret bulk` against the DEFAULT
+          # wrangler.jsonc, i.e. the production worker, so it cannot be used
+          # here. GitHub masks the value in logs either way.
+          PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
         run: |
           cat > wrangler.preview.jsonc <<EOF
           {
@@ -50,6 +55,7 @@ jobs:
             "compatibility_date": "2026-07-22",
             "workers_dev": true,
             "main": ".github/preview-auth.mjs",
+            "vars": { "PREVIEW_PASSWORD": "${PREVIEW_PASSWORD}" },
             "assets": {
               "directory": "./interactive",
               "binding": "ASSETS",
@@ -64,10 +70,6 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.118.0"
           command: deploy --config wrangler.preview.jsonc
-          secrets: |
-            PREVIEW_PASSWORD
-        env:
-          PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
       - name: Comment preview URL on the PR
         if: github.event_name == 'pull_request'
         env:
