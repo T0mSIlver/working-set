@@ -971,7 +971,9 @@ function meanPasses(cs, C){
 // the MEAN is what a sustained cold-request rate averages over (same reason
 // the mean, not the median, drives warm capacity), while p5/p95 bound what a
 // single cheap/expensive miss costs. Monte-Carlo like everything else on the
-// page, so these jitter ~1% between renders.
+// page — ~1% sampling noise against the true distribution — but the draws are
+// seeded from the configuration, so the same knobs always render the same
+// numbers.
 function contextStats(wl, n){
   n = n || 20000;
   const a = new Float64Array(n);
@@ -3271,14 +3273,13 @@ function renderFrontierTable(rows, curKey){
 /* ============================================================================
    CONTROL WIRING
    ========================================================================== */
-let debTimer=null, dragging=false;
+let debTimer=null;
 function scheduleFull(){
   clearTimeout(debTimer);
-  debTimer=setTimeout(()=>{ dragging=false; computeAndRender(false); }, 120);
+  debTimer=setTimeout(()=>{ computeAndRender(false); }, 120);
 }
 function onInput(){
   syncLabels();
-  dragging=true;
   computeAndRender(true);   // draft while dragging
   scheduleFull();           // full on settle
 }
