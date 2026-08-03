@@ -342,6 +342,97 @@ def fig_prefill_thrash():
             for mk, dp, tp, gk, _, lab in configs}
 
 
+def fig_cold_spike():
+    """Cold-spike tolerance: the queue arrives long before the duty ceiling,
+    and B* is where the MoE/dense gap compounds (research/spike.md)."""
+    CH, TURN, RATE, SLA = 32_768, 2_000, 2.13, 10.0
+    wl = base_workload()
+    configs = [("27B", 1, 1, "H200", MUTED, "27B 1xH200"),
+               ("27B", 1, 2, "H200", BLUE, "27B TP2"),
+               ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
+               ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
+               ("GLM52", 1, 8, "H200", AQUA, "GLM-5.2 TP8")]
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
+
+    # -- left: TTFT vs miss rate, 27B TP2, both request classes -----------
+    # the disciplines bracket vLLM from both sides and the bracket FLIPS by
+    # class, so each class gets a band rather than a line
+    m, t = MODELS["27B"], M.topology_grid(1, 2, "H200")
+    fstar = M.breakeven_miss_rate(m, t, wl, RATE, CH, TURN)
+    f_sla = M.sla_miss_rate(m, t, wl, RATE, CH, SLA, TURN)
+    fs = np.linspace(0, fstar * 0.985, 160)
+    curves = {}
+    for cls in ("cold", "warm"):
+        for disc in ("fcfs", "ps"):
+            curves[cls, disc] = np.array([
+                M.prefill_ttft_seconds(m, t, base_workload(invalidation=f),
+                                       RATE, CH, TURN, request=cls,
+                                       discipline=disc) for f in fs])
+    for cls, col, lab in (("cold", BLUE, "a MISS waits"),
+                          ("warm", ORANGE, "a HIT waits")):
+        lo = np.minimum(curves[cls, "fcfs"], curves[cls, "ps"])
+        hi = np.maximum(curves[cls, "fcfs"], curves[cls, "ps"])
+        axL.fill_between(fs * 100, lo, hi, color=col, alpha=.22, lw=0)
+        axL.plot(fs * 100, curves[cls, "fcfs"], color=col, lw=2, label=lab)
+        axL.plot(fs * 100, curves[cls, "ps"], color=col, lw=1.2, ls=":")
+    axL.axhline(SLA, color=RED, lw=1.4, ls="--")
+    axL.text(0.4, SLA * 1.12, f"{SLA:.0f} s TTFT budget", color=RED, fontsize=8.5)
+    axL.axvline(f_sla * 100, color=GREEN, lw=1.4, ls="--")
+    axL.annotate(f"f_sla = {f_sla:.0%}\nlatency gone\n(duty only "
+                 f"{M.prefill_duty(m, t, base_workload(invalidation=f_sla), RATE, CH, TURN):.0%})",
+                 (f_sla * 100, 0.055), xytext=(-6, 0), textcoords="offset points",
+                 fontsize=8.5, color=GREEN, ha="right", va="bottom")
+    axL.axvline(fstar * 100, color=RED, lw=1.4)
+    axL.annotate(f"f* = {fstar:.0%}\nduty 100%", (fstar * 100, 0.055),
+                 xytext=(-6, 0), textcoords="offset points", fontsize=8.5,
+                 color=RED, ha="right", va="bottom")
+    axL.set_yscale("log")
+    axL.set_xlim(0, fstar * 108); axL.set_ylim(0.05, 100)
+    axL.set_xlabel("cache-miss rate  f  (%)")
+    axL.set_ylabel("mean time to first token (s, log)")
+    axL.legend(frameon=False, fontsize=8.5, loc="upper left")
+    axL.set_title("27B TP2: the queue arrives before the ceiling\n"
+                  "solid = FCFS, dotted = processor sharing; the band is the\n"
+                  "scheduling bracket — and it flips sign by request class",
+                  fontsize=10.5)
+
+    # -- right: cold-spike tolerance vs miss rate -------------------------
+    fs2 = np.linspace(0, 0.5, 151)
+    for mk, dp, tp, gk, col, lab in configs:
+        mm, tt = MODELS[mk], M.topology_grid(dp, tp, gk)
+        b = [M.spike_tolerance(mm, tt, base_workload(invalidation=f), SLA,
+                               RATE, CH, TURN) for f in fs2]
+        axR.plot(fs2 * 100, np.maximum(b, 1e-3), color=col, lw=2, label=lab)
+        b1 = M.spike_tolerance(mm, tt, wl, SLA, RATE, CH, TURN)
+        axR.plot([1], [b1], "o", color=col, ms=6, zorder=5)
+        axR.annotate(f"{b1:.1f}", (1, b1), xytext=(7, 0),
+                     textcoords="offset points", fontsize=8.5, va="center",
+                     color=col, fontweight="bold")
+    axR.axhline(1, color=RED, lw=1.4, ls="--")
+    axR.text(49.4, 1.1, "cannot absorb a SINGLE simultaneous miss", color=RED,
+             fontsize=8.5, ha="right")
+    axR.axvspan(0, 1, color=GREEN, alpha=.16)
+    axR.set_yscale("log")
+    axR.set_xlim(0, 50); axR.set_ylim(0.05, 120)
+    axR.set_xlabel("standing cache-miss rate  f  (%)")
+    axR.set_ylabel(f"cold-spike tolerance B*  (simultaneous misses, {SLA:.0f} s budget)")
+    axR.legend(frameon=False, fontsize=8.5, loc="lower right")
+    axR.set_title("How big a spike each deployment absorbs\n"
+                  "B* is linear in the SLA, so another budget rescales every\n"
+                  "curve and moves no ranking; each hits zero at its own f*",
+                  fontsize=10.5)
+
+    fig.suptitle("Cold-spike tolerance — the MoE's prefill advantage compounds "
+                 "where it matters most", fontsize=12, y=1.005)
+    fig.tight_layout()
+    fig.savefig(out("scenario_cold_spike.png"), bbox_inches="tight")
+    plt.close(fig)
+    return {lab: M.spike_tolerance(MODELS[mk], M.topology_grid(dp, tp, gk),
+                                   wl, SLA, RATE, CH, TURN)
+            for mk, dp, tp, gk, _, lab in configs}
+
+
 if __name__ == "__main__":
     res = fig_capacity()
     fig_sysprompt()
@@ -349,12 +440,16 @@ if __name__ == "__main__":
     fig_subagent_invalidation()
     fig_scaling()
     fstars = fig_prefill_thrash()
+    spikes = fig_cold_spike()
     print("saved: scenario_capacity.png, scenario_sysprompt.png, scenario_mns.png, "
           "scenario_subagent_invalidation.png, scenario_scaling.png, "
-          "scenario_prefill_thrash.png")
+          "scenario_prefill_thrash.png, scenario_cold_spike.png")
     print("\nbreakeven miss rate (prefill duty = 100% at 2.13 req/s):")
     for lab, f in fstars.items():
         print(f"  {lab:18} {f:6.0%}")
+    print("\ncold-spike tolerance B* (10 s TTFT budget, f = 1%, 2.13 req/s):")
+    for lab, b in spikes.items():
+        print(f"  {lab:18} {b:6.1f} simultaneous misses")
     print("\nwarm reusable p50 (0GB offload), reference workload:")
     for (mk, tk), (p5, p50, p95) in res.items():
         print(f"  {mk:7} {tk:12} {p5:5.0f} / {p50:5.0f} / {p95:5.0f}")

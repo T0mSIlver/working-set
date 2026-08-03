@@ -81,6 +81,14 @@ Stated up front, with predicted direction; outcomes are in [§ Outcomes](#outcom
   decode bandwidth**: the number of users whose sessions fit warm in the pool is
   smaller than the number of concurrent decoders the bandwidth could carry at
   40 tok/s.
+- **H8 — Cold spikes** *(added 2026-08-03, after § 8 gave prefill a price)*.
+  Because a miss's service time is quadratic in a lognormal context length, the
+  prefill queue is dominated by variance rather than by the mean: **TTFT breaches
+  a latency budget well below f\***, and the burst a deployment can absorb goes
+  to zero *at* f\*. The MoE's active-parameter prefill advantage should therefore
+  **compound** into spike tolerance (cheap misses *and* low standing load), except
+  on a global flush, where its larger warm population is the thing being
+  re-prefilled and the advantage should partly cancel.
 
 ## Model
 
@@ -691,6 +699,179 @@ it; no bound is claimed there (`research/prefill.md` #1). One `vllm bench`
 prefill run at `max_num_batched_tokens=32768` on the 27B TP2 would settle the
 absolute scale.
 
+### 9. Cold-spike tolerance — what the duty cycle hides (H8)
+
+![Cold-spike tolerance](../figures/scenario_cold_spike.png)
+
+§ 8 prices prefill as a **mean rate against a mean service time**, and a mean is
+exactly the statistic that cannot see variance or correlation. Two of this
+study's own limitations say so: limitation 2 ("queueing … absent"), and
+limitation 8 ("no burstiness, no correlated invalidation — e.g. a prompt-template
+deploy that colds *every* session at once"). This section closes both on the
+prefill axis. Constants, derivations and confidence tiers:
+[`research/spike.md`](../research/spike.md); regenerate with the spike sections
+of `tables.py`.
+
+The finding in one line: **f\* is not a planning number — it is the miss rate at
+which burst tolerance reaches zero.**
+
+#### Service time is not just slow, it is wildly variable
+
+A miss's service time runs as `L²` on a lognormal `L`, so its second moment is
+enormous. Squared coefficient of variation `cv² = E[S²]/E[S]² − 1`, at the
+reference f = 1%:
+
+| Model / topology | E[S] | E[S \| miss] | E[S \| hit] | cv² | ρ at 2.13 req/s |
+| --- | --- | --- | --- | --- | --- |
+| 27B, 1×H200 | 173.2 ms | 2,826 ms | 146.4 ms | 5.50 | 36.9% |
+| 27B, TP2 | 96.2 ms | 1,570 ms | 81.3 ms | 5.50 | 20.5% |
+| 35B-A3B, 1×H200 | 30.6 ms | 477 ms | 26.1 ms | 7.25 | 6.5% |
+| 35B-A3B, TP2 | 17.0 ms | 265 ms | 14.5 ms | 7.25 | 3.6% |
+| Mistral-3.5, TP4 | 344.1 ms | 5,485 ms | 292.2 ms | 6.34 | 73.3% |
+| GLM-5.2, TP8 | 128.2 ms | 1,954 ms | 109.8 ms | 8.33 | 27.3% |
+
+Every E[S] is `f × miss + (1 − f) × hit` at f = 1% — which is why the *hit* leg
+dominates the mean even though the *miss* leg dominates the variance.
+
+An exponential service time would sit at cv² = 1. The Pollaczek–Khinchine wait is
+proportional to `1 + cv²`, so these queue **3.3–4.7× longer than an M/M/1 at
+equal load** — and none of that is visible in a duty cycle.
+
+#### The queue arrives long before the ceiling
+
+vLLM is neither textbook discipline, so both ends are reported. Neither is
+uniformly optimistic and **the bracket flips by request class**: processor
+sharing bills each request for its own size (dearer for the long misses, far
+cheaper for the short hits), FCFS bills one shared wait (which the short hits
+cannot amortise). 27B on TP2 at 2.13 req/s, FCFS | PS:
+
+| f | duty | miss TTFT | hit TTFT | B\* |
+| --- | --- | --- | --- | --- |
+| 0% | 17.3% | 1.58 \| 1.90 s | 90 \| 98 ms | 5.3 |
+| 1% | 20.5% | 1.65 \| 1.97 s | **162** \| 102 ms | 5.1 |
+| 5% | 33.2% | 2.01 \| 2.35 s | **517** \| 122 ms | 4.3 |
+| 10% | 49.0% | 2.70 \| 3.08 s | **1,209** \| 160 ms | 3.2 |
+| 20% | 80.7% | 7.50 \| 8.15 s | **6,012** \| 422 ms | 1.2 |
+| 25% | 96.6% | 43.4 \| 46.1 s | **41,933** \| 2,387 ms | 0.2 |
+
+**Read the hit column.** Limitation 9 says "warm ≠ SLA — a warm hit still pays
+prefill for the new turn's suffix", and § 8 priced that suffix at 81 ms. Under
+FCFS the same hit also *waits behind whatever misses are in front of it*: 15× its
+own service time at f = 10%, 74× at f = 20%. The cache-miss rate is not only a
+throughput parameter for the users who miss; it is a **latency parameter for the
+users who hit**. That is a different and worse claim than "a hit is cheap, not
+free", and it is the one number here a production dashboard would actually show.
+
+The planning counterpart of `f*` is `f_sla`, the miss rate at which mean miss
+TTFT reaches a 10 s budget. It always binds first, and the gap is pure queueing:
+
+| Model / topology | f_sla (FCFS \| PS) | f\* | duty at f_sla |
+| --- | --- | --- | --- |
+| 27B, 1×H200 | 8.3% \| 7.1% | 12.1% | 78% |
+| 27B, TP2 | 21.5% \| 21.1% | 26.1% | 85% |
+| 35B-A3B, 1×H200 | 91.0% \| 93.3% | 98.3% | 93% |
+| 35B-A3B, TP2 | *not reached* | 181.6% | — |
+| Mistral-3.5, TP4 | 1.2% \| **0.0%** | 3.4% | 76% |
+| GLM-5.2, TP8 | 13.3% \| 14.5% | 19.5% | 76% |
+| 27B, 1×B300 | 29.6% \| 29.4% | 34.4% | 88% |
+
+**At every binding configuration the duty cycle still reads 76–93% when latency
+has already gone.** Mistral-3.5's PS entry is not a rounding artefact: its warm
+turns alone put it at 62% duty, so under processor sharing a miss takes 14 s —
+**that configuration breaches a 10 s TTFT budget with a perfectly warm cache**.
+
+#### Cold-spike tolerance B\*
+
+A spike of `B` *simultaneous* misses drains against the standing load at
+`T_drain = B × E[S | miss] / (1 − ρ)`. Inverting for a 10 s TTFT budget gives the
+section's headline metric — the largest burst whose last request still gets a
+first token in time. `B*` is **linear in the SLA**, so another budget rescales
+every row and moves no ranking.
+
+| Model / topology | B\* (10 s) | drain of a 32-miss spike | tokens lost per warm user |
+| --- | --- | --- | --- |
+| 27B, 1×H200 | 2.2 | 143 s | 5,459 |
+| 27B, TP2 | 5.1 | 63 s | 4,333 |
+| 35B-A3B, 1×H200 | 19.6 | 16 s | 1,175 |
+| **35B-A3B, TP2** | **36.4** | 8.8 s | 1,140 |
+| Mistral-3.5, TP4 | **0.5** — *cannot absorb one* | 657 s | 17,337 |
+| GLM-5.2, TP8 | 3.7 | 86 s | 3,132 |
+| 35B-A3B, 2×B300 | 84.4 | 3.8 s | 809 |
+
+The token column is § 8's ITL spike carried through time. One chunk is a blip;
+during a drain the scheduler has a chunk to place in *every* forward pass, so the
+31–122× spike is the **steady state for the whole drain**. A 32-miss spike on the
+27B/TP2 costs each of 64 warm users ~4,300 output tokens across a 63-second
+plateau — the shape a latency dashboard shows, from an event none of those users
+caused.
+
+Mistral-Medium-3.5 on TP4 was already the study's doubly-constrained deployment
+(56 warm sessions < 64 users, f\* = 3%). It is now triply so: **it cannot absorb
+a single simultaneous cache miss inside a 10 s budget.**
+
+#### Where the MoE advantage compounds — and where it cancels
+
+Two factors set `B*`, and on a MoE they move the same way because they are the
+same property seen twice: few active parameters shrink `E[S | miss]`, and the
+cheap warm turns that follow leave ρ low, widening the headroom the burst drains
+into.
+
+| topology | miss-speed gap | B\* gap | compounding |
+| --- | --- | --- | --- |
+| 1×H200 | 5.9× | 2.2 → 19.6 = **8.8×** | 1.48× |
+| TP2 | 5.9× | 5.1 → 36.4 = **7.2×** | 1.21× |
+
+**The spike-tolerance gap exceeds the raw prefill-speed gap, and by more on the
+tighter machine** — the opposite of how most advantages behave. This strengthens
+the H2 recommendation on a third axis (after warm capacity and prefill speed).
+
+The **global flush** is the case where it does not compound. A template deploy
+colds the whole resident population at once, and the MoE holds a 3.3× larger one:
+capacity and prefill speed pull opposite ways, and the 7–9× gap shrinks to
+~2.2–2.7×. Worse, a flush puts the machine at f = 100% until sessions re-warm, so
+the standing traffic is all-cold too:
+
+| Model / topology | flush size | drain ≥ | all-cold duty | verdict |
+| --- | --- | --- | --- | --- |
+| 27B, 1×H200 | 77 | 5.7 min | 602% | must shed load |
+| 27B, TP2 | 194 | 6.4 min | 334% | must shed load |
+| 35B-A3B, 1×H200 | 250 | 2.1 min | 102% | must shed load *(marginally)* |
+| **35B-A3B, TP2** | 634 | 2.9 min | **56%** | **serves it** |
+| Mistral-3.5, TP4 | 56 | 19.2 min | 1,168% | must shed load |
+| GLM-5.2, TP8 | 143 | 6.4 min | 416% | must shed load |
+| 35B-A3B, 2×B300 | 1,509 | 3.0 min | 25% | **serves it** |
+
+All-cold duty exceeds 1 exactly when `f* < 100%` — which re-reads an existing
+number in the units that show what it means. `f* > 100%` has been reported since
+§ 8 as "prefill never binds at this rate"; what it *is* is **"this configuration
+survives a global cache flush"**. At the reference load only the 35B-A3B on TP2
+and on 2×B300 clear that bar. The drain column is therefore a **floor**, and on
+the "must shed load" rows it is fiction — it prices the backlog while assuming
+the standing traffic stays at 1% misses, which is exactly what a flush makes
+untrue. Recovery there is set by admission control, which this study does not
+model.
+
+#### What this does and does not establish
+
+It **supports H8** and sharpens two limitations into results: queueing (2) and
+correlated invalidation (8) are now priced on the prefill axis. The planning
+consequence is concrete — size against `f_sla` and `B*`, not against `f*` — and
+the MoE recommendation gains a third, compounding dimension.
+
+It is **analytic and unvalidated**, and it inherits everything § 8 inherits (MFU
+above all). Its own soft spots, in order: arrivals are Poisson, which is *milder*
+than real agentic traffic; `f_sla` solves against the **mean** TTFT, so a p95
+budget binds lower still and every f_sla here is an upper bound; the FCFS/PS
+bracket contains vLLM but does not locate it inside; DP topologies have one queue
+*per replica*, and a burst spreads across them only as well as the router
+balances — which sticky routing, recommended by H3 for cache reasons, actively
+works against. Admission control, priority and preemption are unmodelled, and
+each of them is a mechanism real servers use against exactly these events. All of
+these except the DP routing point make the real machine **worse** than this
+model. One burst-replay experiment — hold a warm population, invalidate B
+sessions at once, record burst TTFT and bystander ITL — observes `T_drain`, the
+convoy tax and the token debt directly, on hardware that already exists.
+
 ## Why some knobs act non-linearly (or non-monotonically)
 
 Two separate causes; distinguishing them matters when reading sweeps.
@@ -792,6 +973,11 @@ So for agentic coding on this hardware:
   interfere with active decodes, and the baseline's N=10 cyclic-eviction collapse
   shows the cliff-shaped failure mode. Treat the warm count as the population to
   stay under, not a soft target.
+- **Size the miss rate against `f_sla`, not `f*`** (§ 9). The duty ceiling still
+  reads 76–93% at the point where TTFT breaches a 10 s budget, and burst tolerance
+  is *zero* at f\*. The second number to carry is **B\***, the simultaneous-miss
+  spike a configuration absorbs: 5.1 on the 27B/TP2, 36.4 on the 35B-A3B/TP2, and
+  0.5 — less than one request — on Mistral-Medium-3.5/TP4.
 
 **Suggested vLLM setup** (per the model above): `--kv-cache-dtype fp8_e4m3`;
 `--enable-prefix-caching`; `max_seq_len` 180k (caps worst-case cold prefill and pool
@@ -914,6 +1100,7 @@ so is the bandwidth they would share.
 | H5 subagents raise warm count | **Supported** (640 → 918 across r = 0 → 1) |
 | H6 invalidation ≈ linear, ceiling 1 − f | **Supported** (−1.5% at f = 1%, −14% at 10%) |
 | H7 cache binds before bandwidth | **Supported in all 6 configs — with MTP** (warm < mns@40; v@warm ≥ 41 tok/s). **Reversed in all 6 without it** (mns@40 falls 1.8–2.0×, e.g. 118 → 60 on the 27B / 1×H200) |
+| H8 spikes bind below f\*; MoE compounds | **Supported** (§ 9). f_sla is 0.35–0.93× f\* (tightest on Mistral-3.5/TP4) and duty still reads 76–93% there; B\* → 0 at f\*. MoE spike tolerance beats dense **8.8× (1×H200) / 7.2× (TP2)** against a 5.9× prefill-speed gap — and, as predicted, the advantage **shrinks to ~2.2–2.7× on a global flush**. Unpredicted corollary: under FCFS the miss tax lands on *hits* (74× their own service time at f = 20%) |
 
 ## Extension (2026-07): B300 GPUs, NVFP4 weights, Mistral-Medium-3.5, GLM-5.2
 
@@ -1112,10 +1299,15 @@ Ordered roughly by how much each could move the numbers:
    load). What remains unmodelled: the two rooflines are still reported
    *separately* — no scheduler model mixes a chunk and a decode batch in one
    forward pass, so `decode_curves` still reports pure-decode speed and warm
-   capacity is still computed as if prefill were free. Queueing, preemption/
-   recompute and PCIe-restore contention are also absent, and every one of them
-   makes the real machine worse (`research/prefill.md` #5). The prefill numbers
-   are analytic and **unvalidated** — no measured prefill figure exists in this
+   capacity is still computed as if prefill were free. **Queueing was retired
+   from this list 2026-08-03**: § 9 adds an M/G/1 wait on the prefill server and
+   finds it binds *before* the duty ceiling — the SLA-limited miss rate sits at
+   0.35–0.93× f\*, with duty still reading 76–93%. What remains absent is
+   preemption/recompute, PCIe-restore contention, admission control, and any
+   TTFT *percentile* (§ 9 solves against the mean, so its f_sla figures are
+   upper bounds); every one of those makes the real machine worse
+   (`research/prefill.md` #5, `research/spike.md` #7). The prefill numbers are
+   analytic and **unvalidated** — no measured prefill figure exists in this
    repo.
 3. **35B-A3B is modelled, not measured.** Constants come from the published config,
    but FP8-KV support, hybrid-model prefix caching, and MTP acceptance (~1.7× is the
@@ -1147,9 +1339,17 @@ Ordered roughly by how much each could move the numbers:
 8. **Arrival order is an i.i.d. draw** — no burstiness, no correlated invalidation
    (e.g. a prompt-template deploy that colds *every* session at once), no diurnal
    pattern. The invalidation model is per-request, deliberately milder than a global
-   flush.
+   flush. *Partially retired 2026-08-03:* § 9 prices both an explicit
+   simultaneous-miss burst (cold-spike tolerance B\*) and the global flush — where
+   every dense configuration modelled here, and the MoE on a single H200, enters a
+   regime with no steady state. It remains absent from the **capacity** model: warm
+   counts are still built on i.i.d. arrivals, and § 9's arrivals are Poisson, which
+   is still milder than real agentic traffic.
 9. **Warm ≠ SLA.** "Warm capacity" counts sessions resident in cache, not a latency
-   guarantee; a warm hit still pays prefill for the new turn's suffix.
+   guarantee; a warm hit still pays prefill for the new turn's suffix — and, § 9
+   adds, *waits behind the misses in front of it*: under FCFS a hit's TTFT reaches
+   74× its own service time at a 20% miss rate. The miss rate is a latency
+   parameter for the users who **hit**, not only for the users who miss.
 10. **CPU offload is priced as storage only.** Offloaded sessions count as warm, but
     the PCIe transfer to restore them on the next turn (≈ 0.1–0.3 s per 100k-token
     session at 32–64 GB/s, plus contention) is not modelled, so offload-inflated
@@ -1201,7 +1401,7 @@ Ordered roughly by how much each could move the numbers:
 
 ```
 uv run scripts/scenario_model.py   # self-checks: calibration + config identities
-uv run scripts/scenarios.py        # regenerates the four figures
+uv run scripts/scenarios.py        # regenerates the figures
 uv run scripts/tables.py           # regenerates every number quoted above
 ```
 
