@@ -240,13 +240,13 @@ svg text{fill:var(--text-2)}
         <li><b>Monte-Carlo jitter:</b> every render redraws the workload, so repeated runs (and neighbouring slider positions) can differ by a few sessions — that is sampling noise, not a real effect. The Python sweeps in <code>tables.py</code> use a fixed seed instead and are smooth. Real non-linearities (the expert-union kink at n=32, the cap's tail-truncation, the prefix floor) are explained in docs/scenarios.md.</li>
         <li><b>MoE decode</b> reads only the active experts: weight bytes per step grow with the batch's expert union, from the shared block up to all routed experts. The explorer uses the conservative no-overlap union bound (docs also show the optimistic expected-union bracket).</li>
         <li><b>The two un-measured structural knobs.</b> Other projections on this page carry their own flags where they appear (TP scaling beyond 2 GPUs, the transplanted MTP fit, the assumed workload distributions, the uncalibrated decode roofline); these two are memory-accounting assumptions with no measurement behind them at all, so they are separate, named controls rather than a bundle. <b>Recurrent state dtype</b> (bf16/fp32): bf16 is inferred from the baseline's observed 75 MiB, not measured — fp32 would double a flat per-session charge and costs the Qwens ~10% of warm capacity (Mistral-3.5 and GLM-5.2 hold no recurrent state, so the control is disabled there). <b>Deployed-weight overhead</b> (as-published/+15%): three of the four models' <code>w_resident</code> figures are raw or on-disk checkpoint bytes, and the only calibration for the gap is the 27B's as-deployed 28.8 GiB running ~15% above its raw params — so the knob is disabled on the 27B, where that 15% came from. <b>Retired 2026-07-29:</b> a third ingredient used to ride along here — a calibration anchor at 2× the measured FP16 <em>lower</em> bound (2.278M tokens ⇒ a 33.0 GiB per-GPU reserve). The TP2 measurement below refutes it outright: it predicts a 2.750M-token pool where 3,233,564 were reported (−14.9%), against −0.26% for the anchor in use. An adverse case has to be one the hardware has not already ruled out.</li>
-        <li><b>MTP knob:</b> the slider sets the speculative-decode speedup (1.0× = off) and shows the implied per-draft acceptance α it is computed from (speedup = 1 + α + α²; 1.7× ⇔ α ≈ 47%, the measured fit). The purchasing base excludes MTP, CPU offload and N&gt;2 TP; these controls exist so that headroom stays visible, not hidden.</li>
+        <li><b>MTP knob:</b> the slider sets the speculative-decode speedup (1.0× = off) and shows the implied per-draft acceptance α it is computed from. It applies to the SELECTED configuration only: the frontier table prices every row at its own model's capability, so cross-model ranking is not moved by this control (speedup = 1 + α + α²; 1.7× ⇔ α ≈ 47%, the measured fit). The purchasing base excludes MTP, CPU offload and N&gt;2 TP; these controls exist so that headroom stays visible, not hidden.</li>
         <li><b>KV dtype:</b> all constants assume the FP8 KV cache (<code>--kv-cache-dtype fp8_e4m3</code>), as tested in the baseline. The FP16 switch doubles KV bytes/token (half the pool, heavier decode reads); weights and the DeltaNet state are unaffected, and the activation-reserve calibration stays pinned to the FP8 anchor. Sanity: FP16 + 27B + 1×H200 gives a 1.39M-token pool, inside the baseline's measured [1.14M, 1.40M].</li>
         <li><b>Measured cross-check (2026-07-22):</b> a real 27B + FP16-KV + TP2 bring-up reported <span class="tnum">3,233,564</span> KV tokens at startup (110.59 GiB per worker; 17.54× concurrency at 184,320 tokens) — within 0.3% of this model's 3.24M prediction, with nothing about TP2 or FP16 fitted. First non-circular validation of the reserve + TP arithmetic + FP16 doubling. Run backwards it pins the per-GPU reserve at <b>18.24 GiB</b> against the anchor-solved 17.98 GiB, i.e. an equivalent 1×H200 FP8 anchor of <b>2.762M</b> tokens against the projected 2.77M — which is why the low-anchor case is gone from this page (the ~1.4% residual is left in the constants rather than re-anchored: it would move every published figure by under 0.5%). What it still does <em>not</em> settle: the recurrent-state dtype, the other three models, and — since a globally wrong anchor shifts prediction and measurement together — the FP8 path itself. See docs/scenarios.md § Measured cross-check.</li>
         <li><b>CPU offload is storage only.</b> A session offloaded to host RAM still counts as warm <em>capacity</em>, but only sessions whose KV is resident in GPU HBM can decode — an offloaded one must be restored over PCIe first (a latency the model does not price). Every decode-side readout (the per-user/aggregate stress tiles, chart C's capacity zone) is therefore computed over <b>HBM-resident warm sessions only</b>, so moving the offload slider never changes per-user decode speed.</li>
         <li><b>Cold / invalidating</b> requests occupy KV but never count as warm — they cap the reusable-hit ceiling at (1−f).</li>
-        <li><b>Max cold req/s (prefill ceiling):</b> the one tile priced in FLOPs, not HBM bytes (<code>research/prefill.md</code>). A miss re-prefills its whole context in <code>max_num_batched_tokens</code> chunks (GEMM + the quadratic attention term) against the part's <em>dense</em> FP8 peak; every readout is pinned to vLLM's 32,768 default, where the effective MFU is the calibrated 45% — the soft input: the plausible [30–60%] bracket moves the absolute number 2× either way, and the figure is <span class="prov">analytic and unvalidated</span>. The headline is 1/(<em>expected</em> miss cost), priced on the context distribution's heavy tail (E[L²] — the quadratic attention term must not be priced at the mean length); the p5–p95 in the sub-line is the cost spread of a <em>single</em> miss. Every chunk is charged its attention over the cache it lands on, so a miss's FLOPs are <em>chunk-size invariant</em> (the pair count telescopes) — but each of its passes also streams the resident weights, an overhead that multiplies by the pass count, so its total <em>machine time</em> is not: that per-pass roofline is what makes the effective MFU fall at small chunk sizes (<b>chart E</b> sweeps the whole trade — throughput lost vs ITL spike shrunk — which is why the old chunk slider is gone). A warm hit pays its new turn's attention over the whole cached context at the <em>marginal</em> rate (its small pass rides the serving steady state; so does the ITL-spike chunk, which joins a decode pass that streams the weights anyway). It is a per-replica-group ceiling that no KV pool, CPU offload or warm headroom can raise; f* is the miss rate that saturates the group at its share of the reference 2.13 req/s (64 users, one turn every 30 s; a DP grid splits the load across replicas), warm turns included, and the tile turns amber/red as the invalidation slider approaches/passes it. Not priced: kernel-launch/scheduler per-pass costs (the small-chunk end of chart E still reads <em>better</em> than a real machine), and NVFP4 checkpoints are charged the FP8 tensor rate — their mixed W4A4/FP8/BF16 recipes could really run faster <em>or</em> slower than that, so for NVFP4 configs these figures are a modeling choice, not a bound.</li>
-        <li><b>Cold-spike tolerance (queueing &amp; bursts):</b> the tile beside it (<code>research/spike.md</code>). Max cold req/s and f* are a <em>duty cycle</em> — a mean rate against a mean service time — and a mean sees neither variance nor correlation. Both bite. A miss's service time runs as <span class="tnum">L²</span> on a log-normal L, so its squared coefficient of variation lands at <b>5.5–8.3</b> where an exponential would sit at 1, and the M/G/1 (Pollaczek–Khinchine) wait diverges well below f*: the <b>latency ceiling f_sla</b> — the miss rate whose mean TTFT reaches a 10 s budget — binds at <b>0.35–0.93× f*</b> (tightest on the most prefill-fragile config, Mistral-3.5/TP4), with the duty cycle still reading a comfortable 76–93%. And invalidation arrives in <em>clumps</em>, so <b>B*</b> prices the largest simultaneous burst of misses whose last request still gets a first token in budget; it is <em>linear</em> in that budget (a 5 s target halves every number, changing no ranking) and reaches <b>zero exactly at f*</b> — which is what makes f* a limit rather than an operating point. A <b>global flush</b> puts the machine at f = 100% until sessions re-warm, so the sub-line asks whether an all-cold stream is servable at all; above 100% there is no steady state and recovery is set by admission control, unmodelled here. Not priced, and every one of them makes a real machine worse: arrivals are Poisson (real agentic traffic is burstier), the ceiling solves against the <em>mean</em> TTFT rather than a percentile, and preemption/recompute is absent. One queue per replica <em>group</em>: a DP burst spreads across replicas only as well as the router balances it, which sticky routing works against. <span class="prov">Analytic and unvalidated</span>, as the whole prefill axis is.</li>
+        <li><b>Max cold req/s (prefill ceiling):</b> the one tile priced in FLOPs, not HBM bytes (<code>research/prefill.md</code>). A miss re-prefills its whole context in <code>max_num_batched_tokens</code> chunks (GEMM + the quadratic attention term) against the part's <em>dense</em> FP8 peak; every readout is pinned to vLLM's 32,768 default, where the effective MFU is the calibrated 45% — the soft input: the plausible [30–60%] bracket spans 2× end to end (×0.67–×1.33 around the 45% case), and the figure is <span class="prov">analytic and unvalidated</span>. The headline is 1/(<em>expected</em> miss cost), priced on the context distribution's heavy tail (E[L²] — the quadratic attention term must not be priced at the mean length); the p5–p95 in the sub-line is the cost spread of a <em>single</em> miss. Every chunk is charged its attention over the cache it lands on, so a miss's FLOPs are <em>chunk-size invariant</em> (the pair count telescopes) — but each of its passes also streams the resident weights, an overhead that multiplies by the pass count, so its total <em>machine time</em> is not: that per-pass roofline is what makes the effective MFU fall at small chunk sizes (<b>chart E</b> sweeps the whole trade — throughput lost vs ITL spike shrunk — which is why the old chunk slider is gone). A warm hit pays its new turn's attention over the whole cached context at the <em>marginal</em> rate (its small pass rides the serving steady state; so does the ITL-spike chunk, which joins a decode pass that streams the weights anyway). It is a per-replica-group ceiling that no KV pool, CPU offload or warm headroom can raise; f* is the miss rate that saturates the group at its share of the CURRENT load — Concurrent users / think time, which is 2.13 req/s at the defaults of 64 users and one turn every 30 s, and a DP grid splits that load across replicas — warm turns included, and the tile turns amber/red as the invalidation slider approaches/passes it. Not priced: kernel-launch/scheduler per-pass costs (the small-chunk end of chart E still reads <em>better</em> than a real machine), and NVFP4 checkpoints are charged the FP8 tensor rate — their mixed W4A4/FP8/BF16 recipes could really run faster <em>or</em> slower than that, so for NVFP4 configs these figures are a modeling choice, not a bound.</li>
+        <li><b>Cold-spike tolerance (queueing &amp; bursts):</b> the tile beside it (<code>research/spike.md</code>). Max cold req/s and f* are a <em>duty cycle</em> — a mean rate against a mean service time — and a mean sees neither variance nor correlation. Both bite. A miss's service time runs as <span class="tnum">L²</span> on a log-normal L, so its squared coefficient of variation lands at <b>5.5–8.3</b> where an exponential would sit at 1, and the M/G/1 (Pollaczek–Khinchine) wait diverges well below f*: the <b>latency ceiling f_sla</b> — the miss rate whose mean TTFT reaches the TTFT budget (10 s by default) — binds at <b>0.35–0.93× f*</b> (tightest on the most prefill-fragile config, Mistral-3.5/TP4), with the duty cycle still reading a comfortable 76–93%. And invalidation arrives in <em>clumps</em>, so <b>B*</b> prices the largest simultaneous burst of misses whose last request still gets a first token in budget; it is <em>linear</em> in that budget (a 5 s target halves every number, changing no ranking) and reaches <b>zero exactly at f*</b> — which is what makes f* a limit rather than an operating point. A <b>global flush</b> puts the machine at f = 100% until sessions re-warm, so the sub-line asks whether an all-cold stream is servable at all; above 100% there is no steady state and recovery is set by admission control, unmodelled here. Not priced, and every one of them makes a real machine worse: arrivals are Poisson (real agentic traffic is burstier), the ceiling solves against the <em>mean</em> TTFT rather than a percentile, and preemption/recompute is absent. One queue per replica <em>group</em>: a DP burst spreads across replicas only as well as the router balances it, which sticky routing works against. <span class="prov">Analytic and unvalidated</span>, as the whole prefill axis is.</li>
         <li>Capacity is Monte-Carlo over a user+subagent length mixture; every resident session is also charged its constant DeltaNet recurrent state. Decode speed is per-step bandwidth ÷ (weights + live KV + per-sequence state read/write), sped up by MTP.</li>
         <li><b>GPU choice (H200 / B300):</b> the H200 is the calibrated baseline. The <b>B300</b> (Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4) reuses the H200-solved ~18 GiB per-GPU reserve, <b>plus a measured +9.75 GB/GPU correction</b>: the H200 actually delivers ~150.75 GB usable against its 141 GB vendor figure (the calibration silently absorbs that margin), while a real B300 <code>nvidia-smi</code> dump shows 275,040 MiB = 288.4 GB — nominal bytes, no Hopper-style over-provision — so the transferred reserve must add the hidden margin back (<code>research/gpu_b300.md</code>; formerly a sensitivity, measured 2026-07-27).</li>
         <li><b>NVFP4 weights (B300-only):</b> swaps in real NVFP4-checkpoint byte counts (4.5 bits/param on quantized tensors; what stays high-precision is recipe-specific — see <code>research/nvfp4.md</code> — e.g. RedHatAI's 35B-A3B keeps the DeltaNet blocks BF16 while NVIDIA's GLM recipe quantizes only the routed experts). Gated to native-FP4 GPUs: vLLM's Hopper fallback is weight-only Marlin with a known correctness bug (open as of 2026-07-27), so H-generation NVFP4 is deliberately not modelled. The KV cache is <b>never</b> 4-bit here — an owner policy: vLLM's nvfp4 KV shipped 2026-05 (Blackwell-datacenter-only, values dequantized to FP8 before attention) but is not modelled in this study (<code>research/nvfp4.md</code>). Non-obvious: on the MoE models NVFP4 makes the <em>fixed</em> per-step read heavier (BF16-kept blocks) while expert reads shrink 1.78× — low-concurrency decode slows, high-concurrency speeds up.</li>
@@ -261,7 +261,7 @@ svg text{fill:var(--text-2)}
   <!-- CONTROLS -->
     <div class="panel controls">
     <div class="section-h">Setup</div>
-    <p class="ctl-lede">Hardware, model and serving dtypes. These change every number on the page.</p>
+    <p class="ctl-lede">Hardware, model and serving dtypes. These change most numbers on the page.</p>
     <div class="ctl-grid">
       <div class="ctl-group">
         <div class="ctl-sec">Model &amp; hardware</div>
@@ -314,7 +314,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses in total (one 8-GPU node at most — both parts here are 8-GPU NVLink domains). How they are divided into replica groups is the Split control below. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200, though it fits one B300; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
+          <label class="flabel"><span class="tip" data-tip="How many GPUs the deployment uses in total (one 8-GPU node at most — both parts here are 8-GPU NVLink domains). How they are divided into replica groups is the Split control. Note the big models need several GPUs before any pool exists at all (Mistral-Medium-3.5 FP8 needs TP2+ on H200, though it fits one B300; GLM-5.2 FP8 fits from 7×H200 / 4×B300, its NVFP4 from 2×B300).">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
@@ -335,7 +335,7 @@ svg text{fill:var(--text-2)}
 
   <div class="act-h">
     <span class="act-n">1</span>
-    <div><h2>Can I hold them?</h2><p>How many user sessions stay <b>warm</b> in the KV cache — and whether the cache or the decode bandwidth runs out first. This is the study's original question, and nothing here depends on how often anyone sends a request.</p></div>
+    <div><h2>Can I hold them?</h2><p>How many user sessions stay <b>warm</b> in the KV cache — and whether the cache or the decode bandwidth runs out first. This is the study's original question: nothing here depends on how <em>often</em> anyone sends a request. (The cache-miss slider in act 2 does still trim the warm count — cold sessions occupy the pool without ever being reused.)</p></div>
   </div>
   <div class="panel controls">
     <div class="section-h">Workload</div>
@@ -438,7 +438,7 @@ svg text{fill:var(--text-2)}
       <div class="ctl-group">
         <div class="ctl-sec">How much traffic</div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Concurrent users the deployment serves. This is the knob that turns every constraint into the SAME unit: one user is assumed to hold one session (so it compares against warm capacity) and to send a turn every `think time` seconds (so it compares against a work rate). The study's reference load is 64 users at one turn per 30 s = 2.13 req/s, and at those defaults every figure on this page reproduces the published tables exactly. Both conversions are assumptions, not facts — a user running several concurrent sessions divides the cache ceiling, and bursty think time invalidates the Poisson arrival model.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
+          <label class="flabel"><span class="tip" data-tip="Concurrent users the deployment serves. This is the knob that turns every constraint into the SAME unit: one user is assumed to hold one session (so it compares against warm capacity) and to send a turn every `think time` seconds (so it compares against a work rate). The study's reference load is 64 users at one turn per 30 s = 2.13 req/s, and at those defaults every CEILING on this page reproduces the published tables within Monte-Carlo noise. Two readouts are deliberately different: the ITL spike and the tokens-lost figure are priced at this page's stress point — the concurrency shown in the per-user tile — rather than at the docs' fixed 64 decoders. Both conversions are assumptions, not facts — a user running several concurrent sessions divides the cache ceiling, and bursty think time invalidates the Poisson arrival model.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
           <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
         </div>
         <div class="field">
@@ -446,7 +446,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-think" min="5" max="180" step="5" value="30">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Tokens a warm HIT still prefills — the new turn's suffix on top of its cached context. Hardcoded at 2,000 before this page priced queueing, and a bigger lever than it looks: at low miss rates the HIT leg dominates the duty cycle, so turn size sets the standing load (and therefore the headroom a burst drains into) more than miss cost does. 500 to 8,000 tokens moves B* by ~3.5x on the 27B/TP2.">Warm turn size</span> <span class="val"><span id="v-turn">2,000</span> tok</span></label>
+          <label class="flabel"><span class="tip" data-tip="Tokens a warm HIT still prefills — the new turn's suffix on top of its cached context. Hardcoded at 2,000 until this control existed, and a bigger lever than it looks: at low miss rates the HIT leg dominates the duty cycle, so turn size sets the standing load (and therefore the headroom a burst drains into) more than miss cost does. 500 to 8,000 tokens moves B* by ~3.5x on the 27B/TP2.">Warm turn size</span> <span class="val"><span id="v-turn">2,000</span> tok</span></label>
           <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
         </div>
       </div>
@@ -457,11 +457,11 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
       </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt, a prompt-template deploy…) — 1% = 1 in 100. Cold requests occupy pool space but never count as warm, so they cap the warm-hit ceiling at 1 − f. The range runs to 50% so the badly-behaved end is reachable: 10% is the docs' adverse planning case, and past ~25% the pool is mostly paying for sessions that will never be reused. Modelled as an i.i.d. per-request draw. A correlated flush — one deploy colding every session at once — is worse than anything this slider can show, and is priced separately in the Cold-spike tolerance tile.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
+          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt, a prompt-template deploy…) — 1% = 1 in 100. Cold requests occupy pool space but never count as warm, so they cap the warm-hit ceiling at 1 − f. The range runs to 50% so the badly-behaved end is reachable: 10% is the docs' adverse planning case, and past ~25% about a third of the pool is paying for sessions that will never be reused. Modelled as an i.i.d. per-request draw. A correlated flush — one deploy colding every session at once — is worse than anything this slider can show, and is priced separately in the Cold-spike tolerance tile.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
           <input type="range" id="s-inval" min="0" max="50" step="0.5" value="1">
       </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How many cache misses arrive AT ONCE — a correlated invalidation event, which the per-request miss-rate slider deliberately cannot express (that one is an i.i.d. draw). Drives the drain time, the last request's TTFT and the output tokens the bystanding warm users lose while it clears. The 'flush' preset sets it to the whole warm population, the event limitation 8 names: a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
+          <label class="flabel"><span class="tip" data-tip="How many cache misses arrive AT ONCE — a correlated invalidation event, which the per-request miss-rate slider deliberately cannot express (that one is an i.i.d. draw). Drives the drain time, the last request's TTFT and the output tokens the bystanding warm users lose while it clears. The 'flush' preset sets it to the p5 warm population of ONE replica group (capped at the slider's 512) — the event limitation 8 names: a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
           <input type="range" id="s-burst" min="1" max="512" step="1" value="32">
           <span class="preset"><button type="button" data-burst="1">1</button><button type="button" data-burst="32">32</button><button type="button" data-burst="flush">= full flush</button></span>
       </div>
@@ -516,7 +516,7 @@ svg text{fill:var(--text-2)}
   <div class="charts solo">
     <div class="panel card">
       <p class="ct">G · The binding constraint vs cache-miss rate</p>
-      <p class="cs">All four ceilings for the current configuration, in max concurrent users. Dashed black = what you actually get (the smallest). Dot = your current load. Where the envelope changes colour, the binding constraint changes hands — the one thing neither axis can show alone.</p>
+      <p class="cs">All four ceilings for the current configuration, in max concurrent users. The dashed line is what you actually get — the smallest of the four. The dot is your current load. The vertical marker is where the binding constraint <b>first</b> changes hands, which is the one thing neither axis can show on its own.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
         <span class="li"><span class="sw" style="background:var(--s3)"></span>decode</span>
@@ -529,8 +529,8 @@ svg text{fill:var(--text-2)}
   </div>
 
   <div class="panel card" style="margin-top:14px">
-    <p class="ct">The frontier — every configuration at the current workload</p>
-    <p class="cs">What binds, and where, without clicking through combinations. Sorted by the ceiling that actually binds; your configuration is highlighted. DP rows show the per-group limit — a burst spreads across replicas only as well as the router balances it, which the sticky routing DP needs for cache reasons works against.</p>
+    <p class="ct">The frontier — four models × six splits on the selected GPU</p>
+    <p class="cs">What binds, and where, without clicking through combinations. Sorted by the ceiling that actually binds; your configuration is highlighted. Every row is priced at <b>its own</b> speculative-decoding capability — 1.7× on the Qwens and GLM-5.2, 1.0× on Mistral-Medium-3.5, which ships no MTP module — rather than at the MTP slider, so configurations are ranked on what they actually deliver; the slider stays a sensitivity control on the selected configuration only. Ceilings are system-wide concurrent users, with the per-group figure in parentheses for DP: a burst spreads across replicas only as well as the router balances it, which the sticky routing DP needs for cache reasons works against.</p>
     <div id="frontierTable"></div>
   </div>
 
@@ -1113,11 +1113,20 @@ function operatingPoint(model, topo, wl, cs, opts){
   const sla = o.sla ?? state.sla, think = o.think ?? state.think;
   const mo = o.mo || prefillServiceMoments(model, topo, wl, cs, o.chunk);
   const f = wl.invalidation;
+  // UNITS: every ceiling here is SYSTEM-wide concurrent users, because that is
+  // what the Concurrent users control means (its load is split across replicas
+  // at groupRate = rate / replicas). cache and decode arrive already scaled by
+  // the caller; latency and saturation come out of the closed forms PER GROUP,
+  // so they are scaled here. Mixing the two conventions silently mislabelled
+  // which constraint binds on every DP row. scenario_model.py keeps all four
+  // per group instead — a different, also-consistent choice, documented in its
+  // operating_point() docstring; on TP topologies (replicas = 1) they agree.
+  const reps = o.reps || 1;
   const ceilings = {
     cache:      o.warmUsers,
     decode:     o.decodeUsers,
-    latency:    maxUsersLatency(mo, f, sla, think, o.discipline),
-    saturation: maxUsersSaturation(mo, f, think),
+    latency:    reps * maxUsersLatency(mo, f, sla, think, o.discipline),
+    saturation: reps * maxUsersSaturation(mo, f, think),
   };
   let binding = 'cache';
   for (const k in ceilings) if (ceilings[k] < ceilings[binding]) binding = k;
@@ -2451,7 +2460,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
 
   const d = plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo);
   const op = operatingPoint(model, topo, wl, cs, {
-    mo, warmUsers: warmUsersNow*reps, decodeUsers: decodeUsers*reps });
+    mo, reps, warmUsers: warmUsersNow*reps, decodeUsers: decodeUsers*reps });
   // per-group quantities the tiles quote alongside the user ceilings
   const sp = spikeMetrics(model, topo, wl, cs, rate);
   const drain = state.burst * mo.miss / Math.max(1e-9, 1 - sp.rho);
@@ -2472,11 +2481,13 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
   renderBindingChart(d, op);
 
-  // context lines on chart G: the same model at the other TP widths that fit
+  // context lines on the spike chart: the same model at other widths that fit
   const others = [];
   for (const n of [1,2,4,8]){
-    if (n === topo.n_gpu) continue;
     const t2 = makeTopo('tp', n, state.gpu);
+    if (t2.name === topo.name) continue;   // skip only the CURRENT topology:
+    // skipping every topology with the same GPU count hid the TP curve from
+    // DP users, which is exactly the comparison they are looking for
     if (kv_pool_tokens(model, t2) <= 0) continue;
     const m2 = prefillServiceMoments(model, t2, wl, cs);
     const r2 = requestRate(state.users, state.think);
@@ -2523,7 +2534,8 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
              || (lastFrontierMo.mo[r.key] = prefillServiceMoments(m2, t2, wl, cs));
     return { ...r,
              op: operatingPoint(m2, t2, wl, cs, {
-               mo: mo2, warmUsers: r.warmUsers, decodeUsers: r.decodeUsers }),
+               mo: mo2, reps: r.reps,
+               warmUsers: r.warmUsers, decodeUsers: r.decodeUsers }),
              bstar: bStar(mo2, f, state.sla, r2) };
   }).sort((a,b)=>b.op.limit-a.op.limit);
   renderFrontierTable(rows, `${state.model}|${state.ngpu/state.tp}x${state.tp}`);
@@ -2669,7 +2681,7 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs){
         :`miss ≈ ${fmt(coldS,1)} s (p5–p95 ${fmt(coldP5,1)}–${fmt(coldP95,1)}) · f* ${fstar>10?"> 1,000":"= "+fmt(fstar*100,0)}% at ${fmt(groupRate,2)} req/s${dp?"/replica":""}`
          + (spike>0?` · chunk spikes ITL ×${fmt(spike,0)}`:"")
          + (dp?` · ×${topo.replicas} replicas`:""), cls:prefillClass,
-     tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group. Set by FLOPs, so no KV pool, CPU offload or warm-session headroom raises it. The headline is 1/(EXPECTED miss cost), priced on the context distribution's heavy tail (E[L²], not the mean length); the p5–p95 range is the cost SPREAD of a single miss. A miss re-pays its full attention however it is chunked, plus a per-pass overhead (the weight stream) for each of its chunks; a warm hit is charged its new turn's attention over the whole cached context at the marginal rate. Everything here is PINNED to vLLM's max_num_batched_tokens = 32,768, where the effective MFU is the calibrated 45% (the [30–60%] bracket moves absolutes 2×) — chart E below sweeps the chunk size and shows why it sits that high. f* = the miss rate that saturates the group at its share of the reference 2.13 req/s (64 users, one turn every 30 s; a DP grid splits that load across replicas), warm turns included; colour compares the invalidation slider f against it — green f < f*/2, amber f ≥ f*/2, red f ≥ f* (prefill saturates before the slider's miss rate). 'Chunk spikes ITL' = the one inter-token gap every decoder AT THE STRESS POINT (the n shown in the per-user tile, not the docs' fixed 64) sees when a mid-re-prefill 32,768-token chunk shares their forward pass. WEIGHT DTYPE IS NOT PRICED: NVFP4 configs are charged the FP8 tensor rate; their mixed W4A4/FP8/BF16 recipes could really run faster OR slower, so for them this tile is a modeling choice, not a bound. Analytic and UNVALIDATED — see research/prefill.md."},
+     tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group. Set by FLOPs, so no KV pool, CPU offload or warm-session headroom raises it. The headline is 1/(EXPECTED miss cost), priced on the context distribution's heavy tail (E[L²], not the mean length); the p5–p95 range is the cost SPREAD of a single miss. A miss re-pays its full attention however it is chunked, plus a per-pass overhead (the weight stream) for each of its chunks; a warm hit is charged its new turn's attention over the whole cached context at the marginal rate. Everything here is PINNED to vLLM's max_num_batched_tokens = 32,768, where the effective MFU is the calibrated 45% (the [30–60%] bracket moves absolutes 2×) — chart E below sweeps the chunk size and shows why it sits that high. f* = the miss rate that saturates the group at its share of the CURRENT load (Concurrent users / think time — 2.13 req/s at the defaults; a DP grid splits it across replicas), warm turns included; colour compares the invalidation slider f against it — green f < f*/2, amber f ≥ f*/2, red f ≥ f* (prefill saturates before the slider's miss rate). 'Chunk spikes ITL' = the one inter-token gap every decoder AT THE STRESS POINT (the n shown in the per-user tile, not the docs' fixed 64) sees when a mid-re-prefill 32,768-token chunk shares their forward pass. WEIGHT DTYPE IS NOT PRICED: NVFP4 configs are charged the FP8 tensor rate; their mixed W4A4/FP8/BF16 recipes could really run faster OR slower, so for them this tile is a modeling choice, not a bound. Analytic and UNVALIDATED — see research/prefill.md."},
     {act:1, k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
      tip:"Stress test: if every HBM-resident p5-warm session decoded simultaneously, this is each user's median speed (HBM roofline shared across the batch). Green ≥50 tok/s (comfortable), amber ≥40 (at the hard floor), red below. If green, the cache — not bandwidth — is the binding constraint. CPU-offloaded sessions are excluded: their KV sits in host RAM and cannot decode until it is restored, so the offload slider does not change this number."},
@@ -2798,7 +2810,7 @@ function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
           + `(${fmt(sp.mo.miss,1)} s) — unachievable at any load`
           + ` · next: ${others}`,
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
-     tip:"The whole point of this panel: all four of the study's ceilings converted into ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm user-class p5 population that fits in the KV pool. decode = the concurrency at which per-user p50 falls to the 40 tok/s hard floor. latency = the load at which a miss's MEAN TTFT reaches your budget. saturation = the load at which prefill duty reaches 100% (section 8's f*, in users). The conversion costs two assumptions, both on the Concurrent users control: one user holds one session, and turns every `think time` seconds. Two ceilings barely move with the miss rate and two collapse, so which one binds CHANGES HANDS as f rises — chart F shows where. Per replica group, scaled by the replica count for DP; a DP burst spreads across replicas only as well as the router balances it."},
+     tip:"The whole point of this panel: all four of the study's ceilings converted into ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm user-class p5 population that fits in the KV pool. decode = the concurrency at which per-user p50 falls to the 40 tok/s hard floor. latency = the load at which a miss's MEAN TTFT reaches your budget. saturation = the load at which prefill duty reaches 100% (section 8's f*, in users). The conversion costs two assumptions, both on the Concurrent users control: one user holds one session, and turns every `think time` seconds. Two ceilings barely move with the miss rate and two collapse, so which one binds CHANGES HANDS as f rises — chart G shows where. Per replica group, scaled by the replica count for DP; a DP burst spreads across replicas only as well as the router balances it."},
     {k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
      sub:`MFU 30–60% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
@@ -2831,7 +2843,8 @@ function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
   }).join(''));
 }
 
-/* ---- Chart F: the four ceilings, in users, vs the miss rate ---- */
+/* ---- The binding-constraint chart (act 3, rendered as 'G'): the four
+   ceilings, in users, vs the miss rate ---- */
 let bindingGeom = null;
 function renderBindingChart(d, op){
   if (!d){ renderNoFit('chartG','planner'); bindingGeom=null;
@@ -2887,7 +2900,8 @@ function renderBindingChart(d, op){
   bindingGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
-/* ---- Chart G: cold-spike tolerance, with the MFU bracket as a band ---- */
+/* ---- The spike chart (act 2, rendered as 'F'): cold-spike tolerance,
+   with the MFU bracket as a band ---- */
 let spikeGeom = null;
 function renderSpikeChart(d, others){
   if (!d){ renderNoFit('chartF','spike tolerance'); spikeGeom=null;
