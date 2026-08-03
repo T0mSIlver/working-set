@@ -439,7 +439,7 @@ svg text{fill:var(--text-2)}
           <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Seconds between one user's turns (reference: 30 s). Scales the request rate inversely — moves the latency and saturation ceilings linearly while leaving cache and decode untouched, so halving it can flip which constraint binds.">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
+          <label class="flabel"><span class="tip" data-tip="Average seconds between one user's REQUESTS (reference: 30 s) — the full turn-to-turn interval, including the previous response's prefill + decode, not idle time on top: arrivals are open-loop, so response time never feeds back into the cadence. Scales the request rate inversely — moves the latency and saturation ceilings linearly while leaving cache and decode untouched.">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
           <input type="range" id="s-think" min="5" max="180" step="5" value="30">
         </div>
         <div class="field">

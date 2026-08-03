@@ -4,9 +4,10 @@
 //
 // Ways in, ordered by friction:
 //   1. cookie      — <expiry>.<hmac(password, expiry)>, stateless; rotating
-//                    the PREVIEW_PASSWORD repo secret revokes every session
-//   2. magic link  — ?key=<password> sets the cookie and redirects with the
-//                    key stripped from the URL
+//                    the PREVIEW_PASSWORD secret revokes every session
+//   2. magic link  — ?key=<derived token> (or the raw password) sets the
+//                    cookie and redirects with the key stripped; the derived
+//                    token keeps the password itself out of URLs and logs
 //   3. login form  — what a browser sees instead of the basic-auth POPUP: a
 //                    real password field, so password managers save/autofill
 //   4. basic auth  — user "preview" (curl and other non-HTML clients only)
@@ -22,12 +23,28 @@ async function sign(secret, msg) {
   return [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// constant-time string compare — the cookie check recomputes an HMAC and
+// compares attacker-supplied input against it, which is exactly where a
+// short-circuiting === becomes a byte-at-a-time oracle
+function ctEqual(a, b) {
+  const ab = new TextEncoder().encode(String(a));
+  const bb = new TextEncoder().encode(String(b));
+  let d = ab.length ^ bb.length;
+  const n = Math.max(ab.length, bb.length);
+  for (let i = 0; i < n; i++) d |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  return d === 0;
+}
+
+// URL-safe magic-link token: password-derived, so links never carry the
+// password itself; rotating the password rotates every link
+const magicToken = async pw => (await sign(pw, "magic-link-v1")).slice(0, 32);
+
 async function cookieValid(header, pw) {
   const m = (header || "").match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
   if (!m) return false;
   const [exp, sig] = m[1].split(".");
   if (!exp || !sig || Number(exp) < Date.now()) return false;
-  return sig === await sign(pw, exp);
+  return ctEqual(sig, await sign(pw, exp));
 }
 
 async function authCookie(pw) {
@@ -38,9 +55,15 @@ async function authCookie(pw) {
 
 const escAttr = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
                               .replace(/"/g, "&quot;");
-// only same-origin absolute paths survive as a post-login destination
-const safeNext = n => (typeof n === "string" && n.startsWith("/") && !n.startsWith("//"))
-  ? n : "/";
+// only same-origin destinations survive as a post-login target — URL-parse
+// instead of prefix checks, which let /\evil.com through (browsers treat \
+// as / in the authority position)
+const safeNext = (n, base) => {
+  try {
+    const u = new URL(String(n ?? "/"), base);
+    return u.origin === new URL(base).origin ? u.pathname + u.search : "/";
+  } catch { return "/"; }
+};
 
 function loginPage(next, wrong) {
   return new Response(`<!DOCTYPE html>
@@ -86,12 +109,13 @@ export default {
       return new Response("preview password not configured", { status: 503 });
     const pw = env.PREVIEW_PASSWORD;
     const url = new URL(request.url);
+    const cookieOk = await cookieValid(request.headers.get("Cookie"), pw);
 
-    // login-form submission
+    // login-form submission; an already-authed session just gets redirected
     if (request.method === "POST" && url.pathname === LOGIN_PATH) {
       const form = await request.formData();
-      const next = safeNext(form.get("next"));
-      if (form.get("key") === pw)
+      const next = safeNext(form.get("next"), url);
+      if (cookieOk || ctEqual(form.get("key") ?? "", pw))
         return new Response(null, {
           status: 303,
           headers: { Location: next, "Set-Cookie": await authCookie(pw) },
@@ -101,7 +125,8 @@ export default {
 
     // magic link: strip the key from the URL so it stays out of
     // history/referrers, and hand back a session cookie
-    if (url.searchParams.get("key") === pw) {
+    const key = url.searchParams.get("key");
+    if (key !== null && (ctEqual(key, await magicToken(pw)) || ctEqual(key, pw))) {
       url.searchParams.delete("key");
       return new Response(null, {
         status: 302,
@@ -110,12 +135,11 @@ export default {
     }
 
     // session cookie
-    if (await cookieValid(request.headers.get("Cookie"), pw))
-      return env.ASSETS.fetch(request);
+    if (cookieOk) return env.ASSETS.fetch(request);
 
     // basic auth (curl etc.) — and upgrade it to a cookie
     const expected = "Basic " + btoa("preview:" + pw);
-    if (request.headers.get("Authorization") === expected) {
+    if (ctEqual(request.headers.get("Authorization") ?? "", expected)) {
       const asset = await env.ASSETS.fetch(request);
       const resp = new Response(asset.body, asset);   // unfreeze the headers
       resp.headers.append("Set-Cookie", await authCookie(pw));
