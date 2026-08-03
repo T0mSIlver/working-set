@@ -13,12 +13,14 @@ The full write-up — setup, method, results, and recommendations — is in
 > with an interactive explorer at [`interactive/index.html`](interactive/index.html).
 > The 2026-07 extension adds the **B300** (Blackwell Ultra) as a selectable GPU,
 > **NVFP4 weight quantization** (B300-only, weights-never-KV, available for all
-> four models), and two more models: **Mistral-Medium-3.5-128B** (dense GQA,
+> models), and two more models: **Mistral-Medium-3.5-128B** (dense GQA,
 > 176 KiB/token KV) and **GLM-5.2** (744B-A40B, MLA + DeepSeek Sparse Attention,
 > sparse decode pricing). See docs/scenarios.md § Extension. The 2026-08
 > extension prices the prefill roofline (§ 8) and then its **queue and its
 > bursts** (§ 9) — what a cache miss costs, and how big a cold spike each
-> deployment can absorb.
+> deployment can absorb — and adds **DeepSeek-V4-Flash-0731** (284B-A13B,
+> compressed sparse attention: 3.4 KiB/token — the study's KV-lightest big
+> model).
 
 ## Key findings
 
@@ -102,6 +104,7 @@ The full write-up — setup, method, results, and recommendations — is in
 │   ├── model_35ba3b.md       # cited architecture parameterization for 35B-A3B
 │   ├── model_mistral_medium35.md  # Mistral-Medium-3.5-128B constants + sources
 │   ├── model_glm52.md        # GLM-5.2 (MLA+DSA) constants + sources
+│   ├── model_dsv4flash.md    # DeepSeek-V4-Flash-0731 (CSA/HCA) constants + sources
 │   ├── gpu_b300.md           # B300 (Blackwell Ultra) hardware constants
 │   ├── nvfp4.md              # NVFP4 format, B300-only gate, Qwen NVFP4 bytes
 │   ├── prefill.md            # prefill (compute-roofline) constants + confidence tiers
@@ -163,11 +166,13 @@ B300's native FP4 tensor cores and never applied to the KV cache; topologies are
 a `DP × TP` grid via `topology_grid(dp, tp, gpu)`, so a replica is a *group* of
 GPUs — the only way a model that does not fit a single GPU can be data-parallel
 at all (Mistral-Medium-3.5 needs TP2 on H200 though it fits one B300; GLM-5.2
-needs TP7 on H200, TP3 on B300), with `min_tp_for` / `node_splits` giving the
-fitting splits of an 8-GPU node);
+needs TP7 on H200, TP3 on B300; DeepSeek-V4-Flash needs TP2 on H200, fits one
+B300), with `min_tp_for` / `node_splits` giving the fitting splits of an
+8-GPU node);
 `scripts/scenarios.py` renders the static figures; and `interactive/index.html`
 is a dependency-free page mirroring the same math with live sliders for the
-workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 / GLM-5.2), GPU
+workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 / GLM-5.2 /
+DeepSeek-V4-Flash-0731), GPU
 (H200 / B300), weight & KV dtypes, and topology — the **Split (DP × TP)** control
 offers the legal splits of the chosen GPU count (its divisors), so hybrid grids
 like GLM-5.2 `DP2×TP4` are reachable, with non-fitting splits struck through and

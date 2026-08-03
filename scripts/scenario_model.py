@@ -187,6 +187,12 @@ class Model:
     # False for models vLLM can only serve with a quantized KV cache
     # (GLM-5.2's DSA path asserts fp8) — with_kv_dtype("fp16") then raises.
     kv_fp16_ok: bool = True
+    # False when deltanet_state is NOT a bf16 recurrent state the fp32 toggle
+    # can meaningfully double (DSv4-Flash reuses the field for its fixed
+    # per-session window + fp32 compressor buffers, already mixed-precision).
+    # Python charges deltanet_state as-is either way; the flag exists for
+    # mirror parity with the explorer, which gates its fp32-state control on it.
+    state_fp32_ok: bool = True
     # Largest max_seq_len the study allows for this model (tokens). The
     # workload cap (Workload.cap) may not exceed it — warm_capacity and
     # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
@@ -356,6 +362,42 @@ MODELS = {
         # and flagged. 64 heads x 256 (qk_nope 192 + rope 64 = v_head_dim).
         params_prefill=37.4e9, attn_layers=78, attn_d=64 * 256,
     ),
+    # MoE 284B-A13B (304B on disk incl. 3 DSpark stages), MQA over a 512-dim
+    # latent + per-layer-class compression (2 SWA / 21 CSA ratio-4 / 20 HCA
+    # ratio-128), open weights (2026-07-31). Only COMPRESSED caches grow:
+    # 3,450 B/token — ~10x below V3-class MLA — plus a fixed ~14.9 MiB/session
+    # (128-entry windows on 46 layers + fp32 compressor state), carried in
+    # deltanet_state. Decode reads the FP4 indexer scan + dense-HCA compressed
+    # axis (426 B/ctx-token) and top-512 latents + windows (9.36 MB/seq).
+    # Native checkpoint is already mixed FP8/FP4 (experts FP4 + E8M0 scales,
+    # servable on H200 per the vLLM recipe) -> no NVFP4 variant exists or
+    # helps (the community conversion is LARGER). research/model_dsv4flash.md.
+    "DSV4F": Model(
+        name="DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
+        kv_bpt=3_450,                    # 21 x 576/4 + 20 x 576/128 + 21 x 64/4 (fp8 latent+fp4 idx)
+        deltanet_state=15_597_568,       # 46 x 128 x 576 windows + 12,206,080 fp32 compressor state
+        state_fp32_ok=False,             # already fp32/fp8-mixed; doubling models nothing
+        w_resident=166.88e9,             # measured safetensors total 166,878,536,440 B
+        w_decode_shared=7.66e9,          # attn 4.60 + shared exp 1.08 + compressors/indexers/
+                                         # gates/mHC 0.92 + lm_head 1.06 (research note 4)
+        w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
+        w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+        mtp=1.7,                         # DSpark drafts 7 tokens; transplanted fit, unmeasured
+        nvfp4_w=None,                    # experts already FP4 natively; no official 0731 NVFP4
+        kv_decode_bpt=426,               # 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA
+        kv_decode_const=9_363_456,       # 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
+        kv_decode_topk=2_048,            # 512 compressed entries x ratio 4, in token space
+        kv_fp16_ok=False,                # vLLM's V4 path asserts fp8 main KV; SGLang's bf16
+                                         # KV-decode is unfinished (research note 6)
+        max_ctx=1_048_576,               # native 1M (YaRN x16 over 65,536 baked into the config)
+        # prefill: MoE active GEMM params excl embed/lm_head (12.703e9 from the
+        # param ledger). Quadratic term: the indexer scores the full compressed
+        # axis (equiv. attn_d 1024 x 21 CSA layers) and HCA attends it densely
+        # (equiv. 256 x 20); the CSA top-512 and window reads are LINEAR per
+        # token and deliberately left out — prefill priced cheaper, biased
+        # AGAINST the thrash hypothesis (research/model_dsv4flash.md #6).
+        params_prefill=12.70e9, attn_layers=41, attn_d=26_624 / 41,
+    ),
 }
 
 # ---- MTP speedup <-> per-draft acceptance ------------------------------------
@@ -391,8 +433,9 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
         return model
     if not model.kv_fp16_ok:
         raise ValueError(
-            f"{model.name}: FP16 KV is not servable (vLLM's sparse-MLA/DSA "
-            "path requires a quantized KV cache; see research/model_glm52.md)")
+            f"{model.name}: FP16 KV is not servable (vLLM requires a quantized "
+            "KV cache on this model's sparse-attention path — GLM-5.2's DSA, "
+            "DSv4-Flash's CSA; see the model's research note)")
     return replace(model, kv_bpt=model.kv_bpt * 2, name=model.name + " [FP16 KV]")
 
 
@@ -1922,9 +1965,9 @@ def _selfcheck():
         pass
 
     # ---- the grid is what makes DP expressible for the 2026-07 models -------
-    # MM35 and GLM-5.2 fit no single H200, so pure DP is a 0 pool at every N --
-    # that is the study's existing "does not fit" sentinel, and it stands.
-    for mdl in (MODELS["MM35"], MODELS["GLM52"]):
+    # MM35, GLM-5.2 and DSv4-Flash fit no single H200, so pure DP is a 0 pool
+    # at every N -- the study's existing "does not fit" sentinel, and it stands.
+    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"]):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
     # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
@@ -1932,11 +1975,14 @@ def _selfcheck():
     assert min_tp_for(MODELS["MM35"], "B300") == 1
     assert min_tp_for(MODELS["GLM52"], "H200") == 7
     assert min_tp_for(MODELS["GLM52"], "B300") == 3
+    assert min_tp_for(MODELS["DSV4F"], "H200") == 2
+    assert min_tp_for(MODELS["DSV4F"], "B300") == 1
     assert kv_pool_tokens(MODELS["MM35"], topology_grid(4, 2)) > 0    # DP4xTP2
     assert kv_pool_tokens(MODELS["GLM52"], topology_grid(2, 4, "B300")) > 0
     # min_tp is exactly the boundary: one GPU less holds nothing
     for mk, gk in (("MM35", "H200"), ("MM35", "B300"),
-                   ("GLM52", "H200"), ("GLM52", "B300")):
+                   ("GLM52", "H200"), ("GLM52", "B300"),
+                   ("DSV4F", "H200"), ("DSV4F", "B300")):
         need = min_tp_for(MODELS[mk], gk)
         assert kv_pool_tokens(MODELS[mk], topology_grid(1, need, gk)) > 0
         if need > 1:
@@ -1945,7 +1991,9 @@ def _selfcheck():
     for mk, gk, want in (("MM35",  "H200", [(4, 2), (2, 4), (1, 8)]),
                          ("MM35",  "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
                          ("GLM52", "H200", [(1, 8)]),
-                         ("GLM52", "B300", [(2, 4), (1, 8)])):
+                         ("GLM52", "B300", [(2, 4), (1, 8)]),
+                         ("DSV4F", "H200", [(4, 2), (2, 4), (1, 8)]),
+                         ("DSV4F", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)])):
         got = [(t.dp, t.tp) for t in node_splits(MODELS[mk], gk, node=8)]
         assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
         for t in node_splits(MODELS[mk], gk, node=8):
@@ -2053,16 +2101,39 @@ def _selfcheck():
     assert mm.mtp == 1.0, "no MTP module on Mistral Medium 3.5"
     assert mm.deltanet_state == 0.0 and glm.deltanet_state == 0.0
 
-    # KV dtype: Mistral doubles like the Qwens; GLM's DSA path must refuse FP16
-    assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
+    # DSv4-Flash identities (research/model_dsv4flash.md): compressed caches
+    dsf = MODELS["DSV4F"]
+    assert dsf.kv_bpt == 21 * 576 / 4 + 20 * 576 / 128 + 21 * 64 / 4   # 3,450 B
+    assert dsf.deltanet_state == 46 * 128 * 576 + 12_206_080    # windows + fp32 state
+    assert not dsf.state_fp32_ok and all(
+        MODELS[k].state_fp32_ok for k in MODELS if k != "DSV4F")
+    assert dsf.w_route_pertok == 6 * 13_369_344 * 43            # FP4 experts + E8M0 scales
+    assert dsf.w_route_total == 256 * 13_369_344 * 43
+    assert abs(dsf.w_route_total / dsf.w_route_pertok - 256 / 6) < 1e-9  # kink ~42.7
+    assert dsf.kv_decode_bpt == 21 * 64 / 4 + 20 * 576 / 128    # scan + dense HCA
+    assert dsf.kv_decode_const == 21 * 512 * 576 + 43 * 128 * 576
+    assert dsf.kv_decode_topk == 2_048
+    assert abs(dsf.attn_layers * dsf.attn_d - (21 * 1024 + 20 * 256)) < 1e-9
+    assert dsf.nvfp4_w is None                                  # no NVFP4 variant modelled
     try:
-        with_kv_dtype(glm, "fp16"); raise AssertionError("expected ValueError")
+        with_weight_dtype(dsf, "nvfp4"); raise AssertionError("expected ValueError")
     except ValueError:
         pass
 
+    # KV dtype: Mistral doubles like the Qwens; GLM's DSA path and DSv4-Flash's
+    # CSA path must refuse FP16 (both serve only with a quantized main KV)
+    assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
+    for quant_only in (glm, dsf):
+        try:
+            with_kv_dtype(quant_only, "fp16")
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
     # context caps (owner decision 2026-07): Qwens + GLM allow up to 1M
-    # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144
-    assert m27.max_ctx == m35.max_ctx == glm.max_ctx == 1_048_576
+    # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144;
+    # DSv4-Flash is natively 1M (YaRN x16 baked into its config)
+    assert m27.max_ctx == m35.max_ctx == glm.max_ctx == dsf.max_ctx == 1_048_576
     assert mm.max_ctx == 262_144
     wl_1m = replace(wl, cap=1_048_576)
     assert warm_capacity(m35, t1, wl_1m, n_iter=40)[1] > 0     # 1M cap runs
@@ -2080,14 +2151,20 @@ def _selfcheck():
     assert kv_pool_tokens(with_weight_dtype(glm, "nvfp4"), b4) > kv_pool_tokens(glm, b4) > 0
 
     # sparse-attention decode: GLM's DSA pricing must beat the dense-read
-    # pricing of the same bytes at long context (that is DSA's entire point)
+    # pricing of the same bytes at long context (that is DSA's entire point);
+    # same check for DSv4-Flash's compressed-sparse reads
     glm_dense_read = replace(glm, kv_decode_bpt=None, kv_decode_const=0.0)
     t8 = topology("tp", 8)
     _, p_dsa, _, _ = decode_curves(glm, t8, wl, [64], n_iter=300)
     _, p_dense, _, _ = decode_curves(glm_dense_read, t8, wl, [64], n_iter=300)
     assert p_dsa[0] > p_dense[0], "DSA decode must out-speed full-cache reads"
+    dsf_dense_read = replace(dsf, kv_decode_bpt=None, kv_decode_const=0.0)
+    _, p_csa, _, _ = decode_curves(dsf, tp2, wl, [64], n_iter=300)
+    _, p_full, _, _ = decode_curves(dsf_dense_read, tp2, wl, [64], n_iter=300)
+    assert p_csa[0] > p_full[0], "CSA decode must out-speed full-cache reads"
     # decode monotonicity holds for the new models on hardware they fit
-    for mdl, topo_fit in ((mm, tp2), (glm, t8), (with_weight_dtype(glm, "nvfp4"), b4)):
+    for mdl, topo_fit in ((mm, tp2), (glm, t8), (dsf, tp2),
+                          (with_weight_dtype(glm, "nvfp4"), b4)):
         _, p50n, _, aggn = decode_curves(mdl, topo_fit, wl, [1, 8, 64], n_iter=300)
         assert p50n[0] > p50n[1] > p50n[2] > 0
         assert aggn[2] > aggn[0]
@@ -2379,7 +2456,7 @@ def _selfcheck():
     for dtype in KV_DTYPES:
         for mk in MODELS:
             if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:
-                continue   # GLM-5.2: FP16 KV not servable on the DSA path
+                continue   # GLM-5.2 (DSA) / DSv4-Flash (CSA): FP16 KV not servable
             for tk in TOPOLOGIES:
                 p = kv_pool_tokens(with_kv_dtype(MODELS[mk], dtype), TOPOLOGIES[tk])
                 print(f"  pool {mk:7} {tk:12} {dtype:5} = {p / 1e6:6.2f} M tokens")
@@ -2389,6 +2466,9 @@ def _selfcheck():
             t = topology("tp", n, "B300")
             pools = []
             for wd in WEIGHT_DTYPES:
+                if wd == "nvfp4" and MODELS[mk].nvfp4_w is None:
+                    pools.append("   n/a")   # DSv4-Flash: no NVFP4 variant exists
+                    continue
                 mdl = with_weight_dtype(MODELS[mk], wd)
                 pools.append(f"{kv_pool_tokens(mdl, t) / 1e6:6.2f}")
             print(f"  pool {mk:7} {t.name:19} = {' | '.join(pools)} M tokens")
