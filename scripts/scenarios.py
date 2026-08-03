@@ -342,6 +342,195 @@ def fig_prefill_thrash():
             for mk, dp, tp, gk, _, lab in configs}
 
 
+def fig_cold_spike():
+    """Cold-spike tolerance: the queue arrives long before the duty ceiling,
+    and B* is where the MoE/dense gap compounds (research/spike.md)."""
+    CH, TURN, RATE, SLA = 32_768, 2_000, 2.13, 10.0
+    wl = base_workload()
+    configs = [("27B", 1, 1, "H200", MUTED, "27B 1xH200"),
+               ("27B", 1, 2, "H200", BLUE, "27B TP2"),
+               ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
+               ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
+               ("GLM52", 1, 8, "H200", AQUA, "GLM-5.2 TP8")]
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
+
+    # -- left: TTFT vs miss rate, 27B TP2, both request classes -----------
+    # the disciplines bracket vLLM from both sides and the bracket FLIPS by
+    # class, so each class gets a band rather than a line
+    m, t = MODELS["27B"], M.topology_grid(1, 2, "H200")
+    fstar = M.breakeven_miss_rate(m, t, wl, RATE, CH, TURN)
+    f_sla = M.sla_miss_rate(m, t, wl, RATE, CH, SLA, TURN)
+    fs = np.linspace(0, fstar * 0.985, 160)
+    curves = {}
+    for cls in ("cold", "warm"):
+        for disc in ("fcfs", "ps"):
+            curves[cls, disc] = np.array([
+                M.prefill_ttft_seconds(m, t, base_workload(invalidation=f),
+                                       RATE, CH, TURN, request=cls,
+                                       discipline=disc) for f in fs])
+    for cls, col, lab in (("cold", BLUE, "a MISS waits"),
+                          ("warm", ORANGE, "a HIT waits")):
+        lo = np.minimum(curves[cls, "fcfs"], curves[cls, "ps"])
+        hi = np.maximum(curves[cls, "fcfs"], curves[cls, "ps"])
+        axL.fill_between(fs * 100, lo, hi, color=col, alpha=.22, lw=0)
+        axL.plot(fs * 100, curves[cls, "fcfs"], color=col, lw=2, label=lab)
+        axL.plot(fs * 100, curves[cls, "ps"], color=col, lw=1.2, ls=":")
+    axL.axhline(SLA, color=RED, lw=1.4, ls="--")
+    axL.text(0.4, SLA * 1.12, f"{SLA:.0f} s TTFT budget", color=RED, fontsize=8.5)
+    axL.axvline(f_sla * 100, color=GREEN, lw=1.4, ls="--")
+    axL.annotate(f"f_sla = {f_sla:.0%}\nlatency gone\n(duty only "
+                 f"{M.prefill_duty(m, t, base_workload(invalidation=f_sla), RATE, CH, TURN):.0%})",
+                 (f_sla * 100, 0.055), xytext=(-6, 0), textcoords="offset points",
+                 fontsize=8.5, color=GREEN, ha="right", va="bottom")
+    axL.axvline(fstar * 100, color=RED, lw=1.4)
+    axL.annotate(f"f* = {fstar:.0%}\nduty 100%", (fstar * 100, 0.055),
+                 xytext=(-6, 0), textcoords="offset points", fontsize=8.5,
+                 color=RED, ha="right", va="bottom")
+    axL.set_yscale("log")
+    axL.set_xlim(0, fstar * 108); axL.set_ylim(0.05, 100)
+    axL.set_xlabel("cache-miss rate  f  (%)")
+    axL.set_ylabel("mean time to first token (s, log)")
+    axL.legend(frameon=False, fontsize=8.5, loc="upper left")
+    axL.set_title("27B TP2: the queue arrives before the ceiling\n"
+                  "solid = FCFS, dotted = processor sharing; the band is the\n"
+                  "scheduling bracket — and it flips sign by request class",
+                  fontsize=10.5)
+
+    # -- right: cold-spike tolerance vs miss rate -------------------------
+    fs2 = np.linspace(0, 0.5, 151)
+    for mk, dp, tp, gk, col, lab in configs:
+        mm, tt = MODELS[mk], M.topology_grid(dp, tp, gk)
+        b = [M.spike_tolerance(mm, tt, base_workload(invalidation=f), SLA,
+                               RATE, CH, TURN) for f in fs2]
+        axR.plot(fs2 * 100, np.maximum(b, 1e-3), color=col, lw=2, label=lab)
+        b1 = M.spike_tolerance(mm, tt, wl, SLA, RATE, CH, TURN)
+        axR.plot([1], [b1], "o", color=col, ms=6, zorder=5)
+        axR.annotate(f"{b1:.1f}", (1, b1), xytext=(7, 0),
+                     textcoords="offset points", fontsize=8.5, va="center",
+                     color=col, fontweight="bold")
+    axR.axhline(1, color=RED, lw=1.4, ls="--")
+    axR.text(49.4, 1.1, "cannot absorb a SINGLE simultaneous miss", color=RED,
+             fontsize=8.5, ha="right")
+    axR.axvspan(0, 1, color=GREEN, alpha=.16)
+    axR.set_yscale("log")
+    axR.set_xlim(0, 50); axR.set_ylim(0.05, 120)
+    axR.set_xlabel("standing cache-miss rate  f  (%)")
+    axR.set_ylabel(f"cold-spike tolerance B*  (simultaneous misses, {SLA:.0f} s budget)")
+    axR.legend(frameon=False, fontsize=8.5, loc="lower right")
+    axR.set_title("How big a spike each deployment absorbs\n"
+                  "B* is linear in the SLA, so another budget rescales every\n"
+                  "curve and moves no ranking; each hits zero at its own f*",
+                  fontsize=10.5)
+
+    fig.suptitle("Cold-spike tolerance — the MoE's prefill advantage compounds "
+                 "where it matters most", fontsize=12, y=1.005)
+    fig.tight_layout()
+    fig.savefig(out("scenario_cold_spike.png"), bbox_inches="tight")
+    plt.close(fig)
+    return {lab: M.spike_tolerance(MODELS[mk], M.topology_grid(dp, tp, gk),
+                                   wl, SLA, RATE, CH, TURN)
+            for mk, dp, tp, gk, _, lab in configs}
+
+
+def fig_binding_map():
+    """The two-axis planner: four ceilings in one unit, and the crossover
+    where the binding constraint changes hands (research/spike.md)."""
+    CH, TURN, SLA = 32_768, 2_000, 10.0
+    THINK = M.THINK_TIME_S
+    fs = np.linspace(0, 0.30, 31)
+    CEIL = [("cache", BLUE, "cache — warm user sessions that fit"),
+            ("decode", GREEN, f"decode — {M.DECODE_FLOOR_TOKS:.0f} tok/s floor"),
+            ("latency", ORANGE, f"latency — mean TTFT hits {SLA:.0f} s"),
+            ("saturation", RED, "saturation — prefill duty hits 100%")]
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
+
+    # -- left: the 27B/TP2 planner, ceiling by ceiling ---------------------
+    m, t = MODELS["27B"], M.topology_grid(1, 2, "H200")
+    series = {k: [] for k, _, _ in CEIL}
+    for f in fs:
+        op = M.operating_point(m, t, base_workload(invalidation=f), M.REF_USERS,
+                               CH, TURN, SLA, n_iter=500)
+        for k, _, _ in CEIL:
+            series[k].append(op["ceilings"][k])
+    env = np.min([series[k] for k, _, _ in CEIL], axis=0)
+    axL.fill_between(fs * 100, 0, env, color=GREEN, alpha=.10, lw=0)
+    for k, col, lab in CEIL:
+        axL.plot(fs * 100, series[k], color=col, lw=2, label=lab)
+    axL.plot(fs * 100, env, color="black", lw=2.6, ls=(0, (4, 2)),
+             label="what you actually get", zorder=4)
+    # the crossover: where the envelope changes hands
+    binder = [min(CEIL, key=lambda c: series[c[0]][i])[0] for i in range(len(fs))]
+    for i in range(1, len(fs)):
+        if binder[i] != binder[i - 1]:
+            axL.axvline(fs[i] * 100, color=MUTED, lw=1.2, ls=":")
+            axL.annotate(f"crossover ≈ {fs[i]:.0%}\n{binder[i-1]} → {binder[i]}",
+                         (fs[i] * 100, env[i]), xytext=(8, 26),
+                         textcoords="offset points", fontsize=8.5, color=MUTED,
+                         bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                   ec=MUTED, alpha=.9))
+            break
+    axL.plot([1], [M.REF_USERS], "o", color="black", ms=7, zorder=6)
+    axL.annotate(f"reference: {M.REF_USERS} users at f = 1%", (1, M.REF_USERS),
+                 xytext=(10, -14), textcoords="offset points", fontsize=8.5)
+    axL.set_xlim(0, 30); axL.set_ylim(0, 400)
+    axL.set_xlabel("cache-miss rate  f  (%)")
+    axL.set_ylabel(f"max concurrent users  (one turn / {THINK:.0f} s)")
+    axL.legend(frameon=False, fontsize=8.5, loc="upper right")
+    axL.set_title("27B on TP2: every constraint in ONE unit\n"
+                  "two ceilings barely move with f and two collapse, so the\n"
+                  "binding one changes hands inside the slider's own range",
+                  fontsize=10.5)
+
+    # -- right: the frontier across configurations -------------------------
+    rows = [("27B", 1, 1, "H200", "27B 1xH200"), ("27B", 1, 2, "H200", "27B TP2"),
+            ("35BA3B", 1, 1, "H200", "35B-A3B 1xH200"),
+            ("35BA3B", 1, 2, "H200", "35B-A3B TP2"),
+            ("MM35", 1, 4, "H200", "Mistral-3.5 TP4"),
+            ("GLM52", 1, 8, "H200", "GLM-5.2 TP8"),
+            ("27B", 1, 1, "B300", "27B 1xB300")]
+    COLOR = {k: c for k, c, _ in CEIL}
+    bars = []
+    for mk, dp, tp, gk, lab in rows:
+        mm, tt = MODELS[mk], M.topology_grid(dp, tp, gk)
+        op = M.operating_point(mm, tt, base_workload(), M.REF_USERS, CH, TURN,
+                               SLA, n_iter=500)
+        bars.append((op["limit"], lab, op["binding"], op["ceilings"]))
+    bars.sort()
+    y = np.arange(len(bars))
+    axR.barh(y, [b[0] for b in bars], color=[COLOR[b[2]] for b in bars],
+             height=.6)
+    for i, (lim, lab, binding, ceilings) in enumerate(bars):
+        SHORT = {"cache": "cache", "decode": "dec", "latency": "lat",
+                 "saturation": "sat"}
+        others = " · ".join(f"{SHORT[k]} {ceilings[k]:.0f}"
+                            for k, _, _ in CEIL if k != binding)
+        axR.annotate(f"{lim:.0f} — {binding}", (lim, i), xytext=(5, 3),
+                     textcoords="offset points", va="center", fontsize=8.5,
+                     fontweight="bold", color=COLOR[binding])
+        axR.annotate(others, (lim, i), xytext=(5, -7), textcoords="offset points",
+                     va="center", fontsize=7.2, color=MUTED)
+    axR.axvline(M.REF_USERS, color="black", lw=1.4, ls="--")
+    axR.text(M.REF_USERS * 1.08, len(bars) - 0.4,
+             f"{M.REF_USERS}-user reference load", fontsize=8.5, va="center")
+    axR.set_yticks(y); axR.set_yticklabels([b[1] for b in bars], fontsize=9)
+    axR.set_xscale("log"); axR.set_xlim(8, 4000)
+    axR.set_xlabel("max concurrent users before the FIRST ceiling binds (log)")
+    axR.grid(axis="y", alpha=0)
+    axR.set_title("The frontier, bar coloured by what binds\n"
+                  "Mistral-3.5 is decode-bound below the reference load — it "
+                  "ships\nno MTP module, so the study's 'without MTP' case is its "
+                  "central one", fontsize=10.5)
+
+    fig.suptitle("The two-axis planner — which constraint actually limits this "
+                 "deployment, and when it changes hands", fontsize=12, y=1.005)
+    fig.tight_layout()
+    fig.savefig(out("scenario_binding_map.png"), bbox_inches="tight")
+    plt.close(fig)
+    return {lab: (lim, binding) for lim, lab, binding, _ in bars}
+
+
 if __name__ == "__main__":
     res = fig_capacity()
     fig_sysprompt()
@@ -349,12 +538,21 @@ if __name__ == "__main__":
     fig_subagent_invalidation()
     fig_scaling()
     fstars = fig_prefill_thrash()
+    spikes = fig_cold_spike()
+    binding = fig_binding_map()
     print("saved: scenario_capacity.png, scenario_sysprompt.png, scenario_mns.png, "
           "scenario_subagent_invalidation.png, scenario_scaling.png, "
-          "scenario_prefill_thrash.png")
+          "scenario_prefill_thrash.png, scenario_cold_spike.png, "
+          "scenario_binding_map.png")
+    print("\nbinding constraint at the reference workload (max concurrent users):")
+    for lab, (lim, what) in binding.items():
+        print(f"  {lab:18} {lim:6.0f} users — {what}")
     print("\nbreakeven miss rate (prefill duty = 100% at 2.13 req/s):")
     for lab, f in fstars.items():
         print(f"  {lab:18} {f:6.0%}")
+    print("\ncold-spike tolerance B* (10 s TTFT budget, f = 1%, 2.13 req/s):")
+    for lab, b in spikes.items():
+        print(f"  {lab:18} {b:6.1f} simultaneous misses")
     print("\nwarm reusable p50 (0GB offload), reference workload:")
     for (mk, tk), (p5, p50, p95) in res.items():
         print(f"  {mk:7} {tk:12} {p5:5.0f} / {p50:5.0f} / {p95:5.0f}")

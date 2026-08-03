@@ -222,9 +222,15 @@ other topology figure and flags the direction here.
 
 ## 5. What this section deliberately does not model
 
-- **Queueing.** `prefill_duty` reports utilisation, not latency. At duty 0.8
-  the queue is already deep; the model says nothing about the TTFT
-  distribution, only about where the ceiling is.
+- **Queueing.** *Addressed 2026-08-03 — see [`spike.md`](spike.md).*
+  `prefill_duty` reports utilisation, not latency. At duty 0.8 the queue is
+  already deep; this section says nothing about the TTFT distribution, only
+  about where the ceiling is. `spike.md` adds the M/G/1 wait on top of these
+  constants and finds the intuition was right and understated: the
+  SLA-limited miss rate binds while duty still reads 76–93%, so `f*` is the
+  point where burst tolerance reaches zero rather than a place to plan to sit.
+  What remains missing there is a percentile (it solves against the mean) and
+  any model of admission control.
 - **Prefill/decode scheduling policy.** vLLM's chunked prefill batches a chunk
   with running decodes; the split of a forward pass's time between them is
   treated as additive (`itl_spike`), which is right to first order and wrong
