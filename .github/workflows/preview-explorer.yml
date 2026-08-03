@@ -6,6 +6,11 @@
 # Also manually dispatchable once this file is on main:
 #   gh workflow run preview-explorer.yml --ref <branch> -f name=<slug>
 #
+# Previews are private: .github/preview-auth.mjs fronts the assets with HTTP
+# Basic auth (user "preview", password = the PREVIEW_PASSWORD repo secret;
+# rotate with `gh secret set PREVIEW_PASSWORD` + re-run). Fails closed (503)
+# if the secret is missing.
+#
 # Cleanup when a preview is no longer needed:
 #   npx wrangler delete --name workingset-explorer-<slug>
 name: Preview explorer
@@ -44,7 +49,12 @@ jobs:
             "name": "workingset-explorer-${PREVIEW_NAME}",
             "compatibility_date": "2026-07-22",
             "workers_dev": true,
-            "assets": { "directory": "./interactive" }
+            "main": ".github/preview-auth.mjs",
+            "assets": {
+              "directory": "./interactive",
+              "binding": "ASSETS",
+              "run_worker_first": true
+            }
           }
           EOF
       - uses: cloudflare/wrangler-action@v3
@@ -54,6 +64,10 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.118.0"
           command: deploy --config wrangler.preview.jsonc
+          secrets: |
+            PREVIEW_PASSWORD
+        env:
+          PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
       - name: Comment preview URL on the PR
         if: github.event_name == 'pull_request'
         env:
@@ -61,6 +75,6 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
-          body="Preview deployed: $URL (updates on every push; \`interactive/method.html\` at $URL/method.html)"
+          body="Preview deployed: $URL (updates on every push; method page at $URL/method). Basic auth: user \`preview\`, password = the \`PREVIEW_PASSWORD\` repo secret."
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --body "$body" \
             || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
