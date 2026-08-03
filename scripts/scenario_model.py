@@ -1135,6 +1135,303 @@ def breakeven_miss_rate(model: Model, topo: Topology, wl, req_rate: float,
 
 
 # ============================================================================
+# COLD SPIKES  (research/spike.md)
+# ----------------------------------------------------------------------------
+# Section 8 prices prefill as a DUTY CYCLE: a mean arrival rate against a mean
+# service time. Two things that model cannot see, and limitations 2 and 8 name
+# both of them:
+#
+#   variance   even smooth (Poisson) arrivals QUEUE. A miss's service time is
+#              driven by L and L^2 on a lognormal context distribution, so its
+#              second moment is enormous and the Pollaczek-Khinchine wait
+#              diverges long before duty reaches 100%.
+#   bursts     agentic traffic invalidates in CLUMPS, not one request at a
+#              time: a prompt-template deploy, a cache flush, a restarted
+#              worker fleet — limitation 8's "correlated invalidation". B
+#              misses land together and drain at whatever rate the standing
+#              load leaves free.
+#
+# So f* is not a planning number. It is the miss rate at which burst tolerance
+# reaches ZERO — the point where the queue has already diverged, not the point
+# where trouble starts. What a deployment can actually absorb is what this
+# section computes, and it is where the MoE's active-parameter prefill
+# advantage compounds (or, on a global flush, partly cancels against its own
+# larger warm population).
+#
+# The server here is ONE REPLICA GROUP (peak_flops is a group's FLOP/s), so a
+# DP deployment has `topo.replicas` such queues; a burst spreads across them
+# only as well as the router balances it. Every figure below is per group.
+# ============================================================================
+
+def _prefill_service_arrays(model: Model, topo: Topology, wl, chunk: float,
+                            turn_tokens: float = 0.0,
+                            mfu: float = MFU_DEFAULT,
+                            per_pass_overhead: bool = False,
+                            n: int = 200_000, seed: int = 0):
+    """Per-draw prefill service time (seconds) if the request were a MISS, and
+    if it were a HIT — one pair per sampled context length.
+
+    Both legs are returned over ALL draws rather than over the cold/warm
+    subsamples: `is_cold` is drawn independently of the length in
+    Workload.sample, so mixing the two legs analytically at f = invalidation
+    is exact and spares the miss leg's heavy quadratic tail the sampling noise
+    of a 1%-of-n subsample. Defaults n/seed match context_moments, which makes
+    the means reproduce cold_request_seconds / warm_request_seconds exactly
+    rather than approximately.
+    """
+    check_dtype_supported(model, topo)
+    if not 0 < mfu <= 1:
+        raise ValueError(f"mfu must be in (0, 1], got {mfu!r}")
+    if chunk <= 0:
+        raise ValueError(f"chunk must be > 0, got {chunk!r}")
+    full, _, _, _ = wl.sample(np.random.default_rng(seed), n)
+    length = full.astype(float)
+
+    flops = (2.0 * model.params_prefill * length
+             + 2.0 * model.attn_d * model.attn_layers * length ** 2)
+    if per_pass_overhead:
+        cold = (flops / (peak_flops(topo)
+                         * mfu_ceiling(model, topo, mfu_anchor=mfu))
+                + np.ceil(length / chunk)
+                * prefill_overhead_seconds(model, topo))
+    else:
+        cold = flops / (peak_flops(topo) * mfu)
+
+    if turn_tokens > 0:
+        # a hit's cost is AFFINE in the cached length it attends over (the
+        # cross term is linear in `prior` chunk by chunk), so two evaluations
+        # pin the whole line; the 1e6-token lever keeps the slope out of the
+        # cancellation noise of two nearly-equal big numbers
+        w0 = prefill_context_seconds(model, topo, turn_tokens, chunk, mfu,
+                                     prior=0.0)
+        w1 = prefill_context_seconds(model, topo, turn_tokens, chunk, mfu,
+                                     prior=1e6)
+        warm = w0 + (w1 - w0) / 1e6 * length
+    else:
+        warm = np.zeros_like(length)
+    return cold, warm
+
+
+def prefill_service_moments(model: Model, topo: Topology, wl, chunk: float,
+                            turn_tokens: float = 0.0,
+                            mfu: float = MFU_DEFAULT,
+                            per_pass_overhead: bool = False) -> tuple:
+    """(E[S], E[S^2], E[S | miss], E[S | hit]) for the prefill server, in
+    seconds, over the mixed cold/warm request stream.
+
+    E[S] is what the duty cycle already used. E[S^2] is the new quantity: the
+    Pollaczek-Khinchine wait is proportional to it, and on this workload it is
+    dominated by the rare long miss (service ~ L^2 on a lognormal L), so the
+    queue is far more sensitive to the tail than the duty cycle is to the
+    mean. That gap is the whole reason a deployment sized at f* queues.
+    """
+    cold, warm = _prefill_service_arrays(model, topo, wl, chunk, turn_tokens,
+                                         mfu, per_pass_overhead)
+    f = wl.invalidation
+    e_cold, e_warm = float(cold.mean()), float(warm.mean())
+    e_s = f * e_cold + (1 - f) * e_warm
+    e_s2 = f * float((cold ** 2).mean()) + (1 - f) * float((warm ** 2).mean())
+    return e_s, e_s2, e_cold, e_warm
+
+
+def queue_wait_seconds(model: Model, topo: Topology, wl, req_rate: float,
+                       chunk: float, turn_tokens: float = 0.0,
+                       mfu: float = MFU_DEFAULT,
+                       per_pass_overhead: bool = False) -> float:
+    """Mean time a request waits BEFORE its own prefill starts (M/G/1, FCFS).
+
+    Pollaczek-Khinchine:  E[W] = lambda x E[S^2] / (2 (1 - rho)).
+
+    Poisson arrivals are an assumption, and a mild one relative to real
+    agentic traffic (limitation 8) — which is why the burst functions below
+    exist alongside this. Returns inf at rho >= 1: the queue has no steady
+    state there, which is precisely what duty > 100% means.
+    """
+    if req_rate < 0:
+        raise ValueError(f"req_rate must be >= 0, got {req_rate!r}")
+    e_s, e_s2, _, _ = prefill_service_moments(model, topo, wl, chunk,
+                                              turn_tokens, mfu,
+                                              per_pass_overhead)
+    rho = req_rate * e_s
+    if rho >= 1:
+        return float("inf")
+    return req_rate * e_s2 / (2 * (1 - rho))
+
+
+def prefill_ttft_seconds(model: Model, topo: Topology, wl, req_rate: float,
+                         chunk: float, turn_tokens: float = 0.0,
+                         mfu: float = MFU_DEFAULT,
+                         request: str = "cold", discipline: str = "fcfs",
+                         per_pass_overhead: bool = False) -> float:
+    """Mean time-to-first-token: queueing delay + this request's own prefill.
+
+    `discipline` brackets what vLLM actually does, because vLLM is neither:
+
+      "fcfs"  M/G/1 first-come-first-served. Every request waits the SAME
+              P-K delay whatever its own size, so a 2k-token warm turn queues
+              behind a 180k-token re-prefill — the convoy effect. Sensitive to
+              E[S^2], i.e. to the miss tail.
+      "ps"    M/G/1 processor sharing: E[T | S=s] = s / (1 - rho). Chunked
+              prefill time-shares admitted requests, so a hit interleaves with
+              a running miss instead of queueing behind it. Distribution-
+              INsensitive — it never sees E[S^2] at all.
+
+    Neither is uniformly the optimistic end, and which is which flips by
+    class: PS charges every request in proportion to its own size, so it is
+    dearer for MISSES (the long jobs) and far cheaper for HITS; FCFS charges
+    one shared wait, which the short jobs cannot amortise. Read the pair as a
+    two-sided bracket per class, not as a best/worst case.
+
+    The truth is in between: vLLM admits in order but runs several admitted
+    prefills concurrently, bounded by max_num_batched_tokens. Reporting the
+    pair is the honest move; picking one would be a claim the study cannot
+    support.
+    """
+    if request not in ("cold", "warm"):
+        raise ValueError(f"request must be 'cold' or 'warm', got {request!r}")
+    if discipline not in ("fcfs", "ps"):
+        raise ValueError(f"discipline must be 'fcfs' or 'ps', got {discipline!r}")
+    e_s, e_s2, e_cold, e_warm = prefill_service_moments(
+        model, topo, wl, chunk, turn_tokens, mfu, per_pass_overhead)
+    own = e_cold if request == "cold" else e_warm
+    rho = req_rate * e_s
+    if rho >= 1:
+        return float("inf")
+    if discipline == "ps":
+        return own / (1 - rho)
+    return req_rate * e_s2 / (2 * (1 - rho)) + own
+
+
+def sla_miss_rate(model: Model, topo: Topology, wl, req_rate: float,
+                  chunk: float, sla_seconds: float,
+                  turn_tokens: float = 0.0, mfu: float = MFU_DEFAULT,
+                  discipline: str = "fcfs", request: str = "cold",
+                  per_pass_overhead: bool = False, hi: float = 1.0) -> float:
+    """Largest miss rate whose mean TTFT still meets `sla_seconds`.
+
+    The planning counterpart to breakeven_miss_rate: f* asks when the server
+    saturates, this asks when it stops being fast enough, and the second
+    always binds first. Returns 0.0 when even an all-warm stream breaches the
+    SLA, and `hi` when the SLA survives all the way to f = hi (i.e. the
+    constraint is not reached inside the range asked about).
+    """
+    if not sla_seconds > 0:
+        raise ValueError(f"sla_seconds must be > 0, got {sla_seconds!r}")
+    if not 0 < hi <= 1:
+        raise ValueError(f"hi must be in (0, 1], got {hi!r}")
+
+    def ttft(f):
+        return prefill_ttft_seconds(model, topo, replace(wl, invalidation=f),
+                                    req_rate, chunk, turn_tokens, mfu,
+                                    request=request, discipline=discipline,
+                                    per_pass_overhead=per_pass_overhead)
+
+    if ttft(0.0) > sla_seconds:
+        return 0.0
+    if ttft(hi) <= sla_seconds:
+        return hi
+    lo, up = 0.0, hi
+    for _ in range(60):                     # TTFT rises monotonically in f
+        mid = 0.5 * (lo + up)
+        if ttft(mid) <= sla_seconds:
+            lo = mid
+        else:
+            up = mid
+    return lo
+
+
+def burst_drain_seconds(model: Model, topo: Topology, wl, burst: float,
+                        req_rate: float, chunk: float,
+                        turn_tokens: float = 0.0, mfu: float = MFU_DEFAULT,
+                        per_pass_overhead: bool = False) -> float:
+    """Wall-clock to clear `burst` SIMULTANEOUS cache misses, on top of the
+    standing load — the deterministic-fluid drain of a correlated
+    invalidation event (limitation 8's template deploy or cache flush).
+
+    Backlog B x E[S | miss] drains at (1 - rho) seconds of work per second,
+    because the standing traffic keeps arriving throughout:
+
+        T_drain = B x E[S | miss] / (1 - rho)
+
+    and the burst's LAST request gets its first token at T_drain whichever
+    discipline runs (FCFS serves it last; processor sharing finishes the whole
+    burst together). Its MEAN TTFT does differ: ~T_drain / 2 under FCFS,
+    ~T_drain under PS.
+
+    Two omissions, both making the real machine worse than this: the decode
+    batch sharing each forward pass stretches the drain by t_decode / t_chunk
+    (1-3% at the reference settings), and preemption/recompute under a full
+    KV pool is unpriced entirely.
+    """
+    if burst < 0:
+        raise ValueError(f"burst must be >= 0, got {burst!r}")
+    e_s, _, e_cold, _ = prefill_service_moments(model, topo, wl, chunk,
+                                                turn_tokens, mfu,
+                                                per_pass_overhead)
+    rho = req_rate * e_s
+    if rho >= 1:
+        return float("inf")
+    return burst * e_cold / (1 - rho)
+
+
+def spike_tolerance(model: Model, topo: Topology, wl, sla_seconds: float,
+                    req_rate: float, chunk: float, turn_tokens: float = 0.0,
+                    mfu: float = MFU_DEFAULT,
+                    per_pass_overhead: bool = False) -> float:
+    """COLD-SPIKE TOLERANCE: the largest simultaneous burst of misses whose
+    last request still gets a first token inside `sla_seconds`.
+
+        B* = sla x (1 - rho) / E[S | miss]
+
+    Inverting burst_drain_seconds. Linear in the SLA, so another latency
+    budget is a multiplication — the ranking between configurations does not
+    move. Two factors set it, and on a MoE they pull the SAME way: a small
+    active-parameter count shrinks E[S | miss], and the cheap warm turns that
+    follow from it leave rho low, widening the headroom the burst drains
+    into. That product is why the MoE's spike tolerance beats the dense 27B by
+    MORE than its prefill-speed ratio. B* falls to zero exactly at f* — the
+    duty ceiling is the point where a deployment can absorb no burst at all,
+    not a point it can sit at.
+
+    Fractional by construction (the largest integer burst is its floor).
+    """
+    e_s, _, e_cold, _ = prefill_service_moments(model, topo, wl, chunk,
+                                                turn_tokens, mfu,
+                                                per_pass_overhead)
+    rho = req_rate * e_s
+    if rho >= 1:
+        return 0.0
+    return max(0.0, sla_seconds * (1 - rho) / e_cold)
+
+
+def spike_token_debt(model: Model, topo: Topology, wl, burst: float,
+                     n_decode: int, req_rate: float, chunk: float,
+                     turn_tokens: float = 0.0, mfu: float = MFU_DEFAULT,
+                     per_pass_overhead: bool = False,
+                     n_iter: int = 800, seed: int = 0) -> tuple:
+    """What a burst costs the users who did NOTHING wrong.
+
+    Returns (drain_s, itl_ratio, tokens_lost_per_user, tokens_lost_total).
+
+    Section 8's ITL spike is one forward pass; during a drain the scheduler
+    has a chunk to place in EVERY pass, so the spike is not a blip but the
+    steady state for `drain_s` seconds. Each of the `n_decode` warm users
+    generates at 1/ITL_mixed instead of 1/ITL_normal throughout, and the
+    difference is output tokens that never arrive. This is the metric that
+    makes a cold spike legible to someone reading a latency dashboard rather
+    than a duty cycle.
+    """
+    drain = burst_drain_seconds(model, topo, wl, burst, req_rate, chunk,
+                                turn_tokens, mfu, per_pass_overhead)
+    d_ms, x_ms, ratio = itl_spike(model, topo, wl, n_decode, chunk, mfu,
+                                  n_iter=n_iter, seed=seed)
+    if not np.isfinite(drain):
+        return drain, ratio, float("inf"), float("inf")
+    per_user = drain * (1e3 / d_ms - 1e3 / x_ms)
+    return drain, ratio, per_user, per_user * n_decode
+
+
+# ============================================================================
 # WORKLOAD  (user + subagent mixture, with cache-invalidation churn)
 # ============================================================================
 @dataclass
@@ -1335,6 +1632,196 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     scale = topo.replicas
     return (np.array(p5), np.array(p50), np.array(p95),
             np.array(agg) * scale)
+
+
+# ============================================================================
+# THE OPERATING POINT  (research/spike.md — the two-axis planner)
+# ----------------------------------------------------------------------------
+# The study has always reported its constraints in DIFFERENT UNITS and refused
+# to combine them. Section 8 says so outright: the prefill band is "a
+# sensitivity band for the prefill axis alone, not a two-axis planner — KV
+# capacity is a separate constraint in different units (sessions held vs work
+# rate)". That refusal was correct at the time and is the reason a reader must
+# hold two numbers at once to size a deployment.
+#
+# There is a way to make them commensurable, and it costs exactly two
+# assumptions, both stated rather than hidden:
+#
+#   1. ONE USER HOLDS ONE SESSION. So a session count converts to a user count.
+#   2. A USER SENDS A TURN EVERY `think_time_s` SECONDS. So a user count
+#      converts to a request rate, and a work rate converts back to users.
+#
+# Under those, all four of the study's constraints become the SAME quantity —
+# **the maximum concurrent users this configuration serves** — and the binding
+# constraint is simply the smallest of them:
+#
+#   cache        the warm p5 user-class population that fits in the KV pool
+#   decode       the concurrency at which per-user tok/s falls to the floor
+#   latency      the load at which mean TTFT reaches the budget (research/
+#                spike.md § 2 — this is the one the duty cycle cannot see)
+#   saturation   the load at which prefill duty reaches 100% (section 8's f*,
+#                re-expressed in users)
+#
+# Two of these depend on the miss rate f strongly and two barely at all, so
+# WHICH ONE BINDS CHANGES with f — the crossover is the planner's whole point,
+# and neither axis alone can show it.
+#
+# Both assumptions are load-bearing, so both are limitations, not conveniences:
+# see docs/scenarios.md § 9 "Reading the two-axis planner". A user with several
+# concurrent sessions, or bursty think time, moves the cache and latency
+# frontiers in opposite directions.
+# ============================================================================
+
+DECODE_FLOOR_TOKS = 40.0    # the study's hard per-user floor (50 is comfortable)
+THINK_TIME_S = 30.0         # reference: one turn every 30 s
+REF_USERS = 64              # reference population -> 64/30 = 2.13 req/s
+
+
+def request_rate(users: float, think_time_s: float = THINK_TIME_S) -> float:
+    """Requests/s a population of `users` generates. The conversion the whole
+    planner rests on (assumption 2 above)."""
+    if users < 0:
+        raise ValueError(f"users must be >= 0, got {users!r}")
+    if think_time_s <= 0:
+        raise ValueError(f"think_time_s must be > 0, got {think_time_s!r}")
+    return users / think_time_s
+
+
+def max_users_cache(model: Model, topo: Topology, wl: Workload, ram_gib=0,
+                    n_iter: int = 400, draw: int = None, seed: int = 0) -> float:
+    """Users whose sessions fit warm in the pool — warm p5, USER-class only.
+
+    p5, not p50: the study plans on the conservative tail. User-class, because
+    subagent sessions occupy the pool but are not users (which="user" is the
+    exact count the explorer approximates as warm x (1 - p_sub)).
+    """
+    if draw is None:
+        draw = int(4000 + kv_pool_tokens(model, topo) / 8000)
+    return float(warm_capacity(model, topo, wl, ram_gib=ram_gib, n_iter=n_iter,
+                               draw=draw, seed=seed, which="user")[0])
+
+
+def max_users_decode(model: Model, topo: Topology, wl: Workload,
+                     floor: float = DECODE_FLOOR_TOKS, union: str = "linear",
+                     n_iter: int = 400, seed: int = 0, hi: int = 4096) -> float:
+    """Concurrent decoders at which per-user p50 tok/s falls to `floor`.
+
+    Bisection, not the linear scan tables.py uses: per-user speed is monotone
+    decreasing in concurrency (every extra sequence adds KV bytes to the same
+    step), so ~12 evaluations replace up to 1,500. Returns 0 when even a single
+    decoder misses the floor, and raises if the crossing lies beyond `hi`
+    rather than returning a silently censored value.
+    """
+    def p50(n):
+        return decode_curves(model, topo, wl, [n], n_iter=n_iter, seed=seed,
+                             union=union)[1][0]
+    if p50(1) < floor:
+        return 0.0
+    if p50(hi) >= floor:
+        raise ValueError(f"decode floor crossing beyond hi={hi}: censored")
+    lo, up = 1, hi
+    while up - lo > 1:
+        mid = (lo + up) // 2
+        if p50(mid) >= floor:
+            lo = mid
+        else:
+            up = mid
+    return float(lo)
+
+
+def max_users_saturation(model: Model, topo: Topology, wl, chunk: float,
+                         turn_tokens: float = 0.0,
+                         think_time_s: float = THINK_TIME_S,
+                         mfu: float = MFU_DEFAULT,
+                         per_pass_overhead: bool = False) -> float:
+    """Users at which prefill duty reaches 100% — section 8's f*, in users.
+
+    rho = lambda E[S] = 1 at lambda = 1/E[S], so users = think_time / E[S].
+    Above this the queue has no steady state at all.
+    """
+    e_s, _, _, _ = prefill_service_moments(model, topo, wl, chunk, turn_tokens,
+                                           mfu, per_pass_overhead)
+    return think_time_s / e_s if e_s > 0 else float("inf")
+
+
+def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
+                      sla_seconds: float, turn_tokens: float = 0.0,
+                      think_time_s: float = THINK_TIME_S,
+                      mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
+                      per_pass_overhead: bool = False) -> float:
+    """Users at which a MISS's mean TTFT reaches `sla_seconds`.
+
+    Closed form in both disciplines, because E[S] and E[S^2] do not depend on
+    the arrival rate:
+        FCFS  lam a / (2(1 - lam b)) + c = SLA  ->  lam = k / (a + k b)
+        PS    c / (1 - lam b) = SLA            ->  lam = (1 - c/SLA) / b
+    with a = E[S^2], b = E[S], c = E[S | miss], k = 2(SLA - c).
+
+    ALWAYS strictly inside max_users_saturation: k/(a + k b) < 1/b for any
+    a > 0, which is the algebraic statement of "the queue diverges before the
+    server does" — the section's headline, and asserted in the self-checks.
+    Returns 0 when the request's own prefill already exceeds the budget, i.e.
+    when no load at all can meet it.
+    """
+    if discipline not in ("fcfs", "ps"):
+        raise ValueError(f"discipline must be 'fcfs' or 'ps', got {discipline!r}")
+    if not sla_seconds > 0:
+        raise ValueError(f"sla_seconds must be > 0, got {sla_seconds!r}")
+    a, b, c = (lambda m: (m[1], m[0], m[2]))(
+        prefill_service_moments(model, topo, wl, chunk, turn_tokens, mfu,
+                                per_pass_overhead))
+    if c >= sla_seconds or b <= 0:
+        return 0.0
+    if discipline == "ps":
+        lam = (1 - c / sla_seconds) / b
+    else:
+        k = 2 * (sla_seconds - c)
+        lam = k / (a + k * b)
+    return max(0.0, lam * think_time_s)
+
+
+def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
+                    chunk: float = CHUNK_DEFAULT, turn_tokens: float = 2_000,
+                    sla_seconds: float = 10.0,
+                    think_time_s: float = THINK_TIME_S,
+                    decode_floor: float = DECODE_FLOOR_TOKS,
+                    mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
+                    ram_gib=0, union: str = "linear",
+                    per_pass_overhead: bool = False,
+                    n_iter: int = 400, seed: int = 0) -> dict:
+    """All four ceilings in ONE unit — max concurrent users — plus which binds.
+
+    THE two-axis planner. `binding` is the argmin: whichever ceiling is lowest
+    is the one that actually limits this deployment, and `headroom` is how much
+    of it the requested population uses. Everything is per replica GROUP; a DP
+    deployment multiplies the cache and decode ceilings by `topo.replicas` only
+    under balanced routing, which sticky routing works against (spike.md #3).
+    """
+    if users < 0:
+        raise ValueError(f"users must be >= 0, got {users!r}")
+    ceilings = {
+        "cache": max_users_cache(model, topo, wl, ram_gib=ram_gib,
+                                 n_iter=n_iter, seed=seed),
+        "decode": max_users_decode(model, topo, wl, floor=decode_floor,
+                                   union=union, n_iter=n_iter, seed=seed),
+        "latency": max_users_latency(model, topo, wl, chunk, sla_seconds,
+                                     turn_tokens, think_time_s, mfu,
+                                     discipline, per_pass_overhead),
+        "saturation": max_users_saturation(model, topo, wl, chunk, turn_tokens,
+                                           think_time_s, mfu,
+                                           per_pass_overhead),
+    }
+    binding = min(ceilings, key=ceilings.get)
+    limit = ceilings[binding]
+    return {
+        "users": users,
+        "req_rate": request_rate(users, think_time_s),
+        "ceilings": ceilings,
+        "binding": binding,
+        "limit": limit,
+        "headroom": (users / limit) if limit > 0 else float("inf"),
+        "fits": users <= limit,
+    }
 
 
 # ============================================================================
@@ -1736,6 +2223,151 @@ def _selfcheck():
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+
+    # ---- COLD SPIKES (research/spike.md) -----------------------------------
+    RATE, TURN, SLA = 2.13, 2_000, 10.0
+    # the mixture reproduces section 8's means EXACTLY (same draws, same seed):
+    # the spike model must extend the duty model, not quietly re-derive it
+    e_s, e_s2, e_cold, e_warm = prefill_service_moments(m27, tp2, wl, CH, TURN)
+    assert abs(e_cold / cold_request_seconds(m27, tp2, wl, CH) - 1) < 1e-12, \
+        "E[S | miss] must equal cold_request_seconds"
+    assert abs(e_warm / warm_request_seconds(m27, tp2, TURN, CH,
+                                             prior=mean_context(wl)) - 1) < 1e-9, \
+        "E[S | hit] must equal warm_request_seconds at prior = E[L]"
+    assert abs(RATE * e_s / prefill_duty(m27, tp2, wl, RATE, CH, TURN) - 1) < 1e-12, \
+        "rho must equal the published duty cycle"
+    assert e_s2 > e_s ** 2, "second moment sanity"
+    # the miss tail dominates the queue: squared CV of ~5.5 (27B) to ~8.3
+    # (GLM-5.2) — an M/M/1 would sit at 1
+    assert e_s2 / e_s ** 2 - 1 > 5, "service-time variance must be large (L^2 tail)"
+    # queueing rises with load and diverges at the duty ceiling
+    assert (queue_wait_seconds(m27, tp2, wl, RATE, CH, TURN)
+            > queue_wait_seconds(m27, tp2, wl, RATE / 2, CH, TURN) > 0)
+    assert queue_wait_seconds(m27, tp2, replace(wl, invalidation=fstar), RATE,
+                              CH, TURN) == float("inf"), "no steady state at f*"
+    # The convoy effect: under FCFS a HIT waits behind misses, under PS it
+    # does not. This is the section's sharpest claim (the miss tax is paid by
+    # users who HIT the cache), so it is asserted, not merely printed.
+    w10 = replace(wl, invalidation=0.10)
+    hit_fcfs = prefill_ttft_seconds(m27, tp2, w10, RATE, CH, TURN,
+                                    request="warm", discipline="fcfs")
+    hit_ps = prefill_ttft_seconds(m27, tp2, w10, RATE, CH, TURN,
+                                  request="warm", discipline="ps")
+    assert hit_fcfs > 5 * hit_ps, "FCFS must convoy hits behind misses"
+    assert hit_fcfs > e_warm and hit_ps > e_warm, "TTFT includes own service"
+    # ...and the bracket flips by class: PS bills each request for its own
+    # size, which is dearer for the long jobs and cheaper for the short ones
+    assert (prefill_ttft_seconds(m27, tp2, w10, RATE, CH, TURN,
+                                 request="cold", discipline="ps")
+            > prefill_ttft_seconds(m27, tp2, w10, RATE, CH, TURN,
+                                   request="cold", discipline="fcfs")), \
+        "PS must be the dearer end for MISSES even as it is cheaper for hits"
+    # THE planning claim: the SLA binds before the duty ceiling does
+    f_sla = sla_miss_rate(m27, tp2, wl, RATE, CH, SLA, TURN)
+    assert 0 < f_sla < fstar, \
+        f"SLA-limited miss rate {f_sla:.1%} must sit below f* {fstar:.1%}"
+    assert sla_miss_rate(m27, tp2, wl, RATE, CH, SLA, TURN,
+                         discipline="ps") < f_sla, \
+        "the miss-side SLA must bind sooner under PS"
+    # burst tolerance: linear in the SLA, zero at the duty ceiling
+    b_dense = spike_tolerance(m27, tp2, wl, SLA, RATE, CH, TURN)
+    assert abs(spike_tolerance(m27, tp2, wl, 2 * SLA, RATE, CH, TURN)
+               / b_dense - 2) < 1e-9, "B* is linear in the SLA"
+    assert spike_tolerance(m27, tp2, replace(wl, invalidation=fstar), SLA,
+                           RATE, CH, TURN) < 1e-9, "B* must vanish at f*"
+    assert abs(burst_drain_seconds(m27, tp2, wl, b_dense, RATE, CH, TURN)
+               - SLA) < 1e-9, "drain(B*) must equal the SLA by construction"
+    # ...and the branch's thesis: the MoE's spike tolerance beats the dense
+    # 27B by MORE than its prefill-speed ratio, because a cheap miss and a
+    # cheap warm turn are the same property seen twice
+    b_moe = spike_tolerance(m35, tp2, wl, SLA, RATE, CH, TURN)
+    speed_x = (cold_request_seconds(m27, tp2, wl, CH)
+               / cold_request_seconds(m35, tp2, wl, CH))
+    assert b_moe / b_dense > speed_x > 1, \
+        "MoE spike tolerance must beat dense by more than the prefill ratio"
+    # the drain is not free for anyone: warm decoders lose real output tokens
+    drain, ratio, per_user, total = spike_token_debt(m27, tp2, wl, 32, 64,
+                                                    RATE, CH, TURN, n_iter=200)
+    assert drain > 0 and ratio > 1 and 0 < per_user < drain * 1e3
+    assert abs(total / (64 * per_user) - 1) < 1e-12
+    for bad in ("FCFS", "lifo", ""):
+        try:
+            prefill_ttft_seconds(m27, tp2, wl, RATE, CH, TURN, discipline=bad)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+    # ---- THE OPERATING POINT: four ceilings in one unit --------------------
+    # the reference load is exactly the study's 64 users / 30 s = 2.13 req/s
+    assert abs(request_rate(REF_USERS) - RATE) < 0.01, \
+        "64 users at one turn per 30 s must reproduce the 2.13 req/s reference"
+    op = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA)
+    assert set(op["ceilings"]) == {"cache", "decode", "latency", "saturation"}
+    assert op["binding"] == min(op["ceilings"], key=op["ceilings"].get)
+    # the algebraic heart of section 9: the queue diverges before the server
+    # does, so the latency ceiling is ALWAYS strictly inside saturation
+    for mdl, tp in ((m27, tp2), (m27, t1), (m35, tp2)):
+        lat = max_users_latency(mdl, tp, wl, CH, SLA, TURN)
+        sat = max_users_saturation(mdl, tp, wl, CH, TURN)
+        assert 0 < lat < sat, \
+            f"{mdl.name}: latency ceiling {lat:.0f} must sit inside saturation {sat:.0f}"
+        # ...and processor sharing bounds it from the other side (dearer for
+        # the long misses, so it admits fewer users than FCFS)
+        assert max_users_latency(mdl, tp, wl, CH, SLA, TURN,
+                                 discipline="ps") < lat
+    # a budget below one miss's own prefill cannot be met at ANY load
+    assert max_users_latency(m27, tp2, wl, CH, 0.5, TURN) == 0.0
+    # ceilings move the right way: a bigger budget and a longer think time both
+    # admit more users; a fatter miss rate admits fewer
+    assert (max_users_latency(m27, tp2, wl, CH, 2 * SLA, TURN)
+            > max_users_latency(m27, tp2, wl, CH, SLA, TURN))
+    assert abs(max_users_latency(m27, tp2, wl, CH, SLA, TURN, think_time_s=60)
+               / max_users_latency(m27, tp2, wl, CH, SLA, TURN) - 2) < 1e-9, \
+        "think time scales the user ceilings linearly"
+    assert (max_users_latency(m27, tp2, replace(wl, invalidation=0.10), CH,
+                              SLA, TURN)
+            < max_users_latency(m27, tp2, wl, CH, SLA, TURN))
+    # The planner must REPRODUCE the study's published decision table, not
+    # restate it differently: two of its four ceilings are already in § 7's
+    # table (warm users p5 = 69 / 177, mns@40 = 118 / 228), and only the
+    # latency and saturation columns are new. If these drift, the planner has
+    # silently forked from the numbers the rest of the study plans on.
+    assert abs(max_users_cache(m27, t1, wl, n_iter=800) - 69) <= 3, \
+        "cache ceiling must reproduce the published warm-users p5 of 69"
+    assert abs(max_users_cache(m27, tp2, wl, n_iter=800) - 177) <= 6, \
+        "cache ceiling must reproduce the published warm-users p5 of 177"
+    assert abs(max_users_decode(m27, t1, wl, n_iter=800) - 118) <= 4, \
+        "decode ceiling must reproduce the published mns@40 of 118"
+    assert abs(max_users_decode(m27, tp2, wl, n_iter=800) - 228) <= 8, \
+        "decode ceiling must reproduce the published mns@40 of 228"
+    # decode: monotone, bisected, and matching the study's H7 finding that the
+    # CACHE binds before bandwidth at the reference workload (with MTP on)
+    dec = max_users_decode(m27, t1, wl, n_iter=200)
+    assert dec > max_users_cache(m27, t1, wl, n_iter=200), \
+        "H7: the cache must bind before decode bandwidth on the 27B / 1xH200"
+    assert max_users_decode(m27, t1, wl, floor=20.0, n_iter=200) > dec, \
+        "a lower floor must admit more concurrent decoders"
+    # an unreachable floor is a censored result, not a silent cap
+    try:
+        max_users_decode(m27, t1, wl, floor=1e-6, n_iter=200)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+    # WHICH constraint binds must change with the miss rate — the planner's
+    # whole reason to exist (cache at f=1%, latency once misses get common)
+    b_lo = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA,
+                           n_iter=200)["binding"]
+    b_hi = operating_point(m27, tp2, replace(wl, invalidation=0.25),
+                           REF_USERS, CH, TURN, SLA, n_iter=200)["binding"]
+    assert b_lo != b_hi, \
+        f"the binding constraint must switch with f (got {b_lo} at both ends)"
+    assert b_hi == "latency", f"latency must bind at f=25%, got {b_hi}"
+    for bad_users in (-1,):
+        try:
+            operating_point(m27, tp2, wl, bad_users, n_iter=50)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
 
     print("selfcheck OK")
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
