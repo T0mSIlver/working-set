@@ -64,6 +64,17 @@ The full write-up — setup, method, results, and recommendations — is in
   flush** — every dense one has to shed load. Sharpest corollary: under FCFS the
   miss tax is paid by the users who *hit* the cache, whose TTFT reaches **74×**
   their own service time at a 20% miss rate.
+- **All four constraints, in one unit.** The study reported capacity in sessions
+  and prefill in work rates and declined to combine them. Converting each into
+  **max concurrent users** — at the price of two stated assumptions (one user
+  holds one session; a user turns every 30 s) — makes the binding constraint
+  simply the smallest, and it *reproduces* the published decision table's warm-user
+  and mns@40 columns rather than restating them. Two ceilings barely move with the
+  miss rate and two collapse, so **which one binds changes hands at f ≈ 6%** on the
+  27B/TP2. It also renames the tightest constraint on one configuration:
+  Mistral-Medium-3.5/TP4 is **decode**-bound at 36 users — below the reference
+  load — because it ships no MTP module, making the study's "without MTP the
+  ordering flips" case its central one.
 
 ![Cache hit-rate sweep](figures/prefix_cache_sweep.png)
 
@@ -138,7 +149,7 @@ prompt-caching sweep (not one of these scripts).
 
 ```bash
 uv run scripts/scenario_model.py   # self-checks (calibration + published-config identities)
-uv run scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation / prefill_thrash / cold_spike .png
+uv run scripts/scenarios.py        # renders scenario_capacity / sysprompt / mns / subagent_invalidation / prefill_thrash / cold_spike / binding_map .png
 uv run scripts/tables.py           # regenerates every number quoted in docs/scenarios.md
 ```
 

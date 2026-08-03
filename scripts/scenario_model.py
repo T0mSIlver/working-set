@@ -1635,6 +1635,196 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
 
 
 # ============================================================================
+# THE OPERATING POINT  (research/spike.md — the two-axis planner)
+# ----------------------------------------------------------------------------
+# The study has always reported its constraints in DIFFERENT UNITS and refused
+# to combine them. Section 8 says so outright: the prefill band is "a
+# sensitivity band for the prefill axis alone, not a two-axis planner — KV
+# capacity is a separate constraint in different units (sessions held vs work
+# rate)". That refusal was correct at the time and is the reason a reader must
+# hold two numbers at once to size a deployment.
+#
+# There is a way to make them commensurable, and it costs exactly two
+# assumptions, both stated rather than hidden:
+#
+#   1. ONE USER HOLDS ONE SESSION. So a session count converts to a user count.
+#   2. A USER SENDS A TURN EVERY `think_time_s` SECONDS. So a user count
+#      converts to a request rate, and a work rate converts back to users.
+#
+# Under those, all four of the study's constraints become the SAME quantity —
+# **the maximum concurrent users this configuration serves** — and the binding
+# constraint is simply the smallest of them:
+#
+#   cache        the warm p5 user-class population that fits in the KV pool
+#   decode       the concurrency at which per-user tok/s falls to the floor
+#   latency      the load at which mean TTFT reaches the budget (research/
+#                spike.md § 2 — this is the one the duty cycle cannot see)
+#   saturation   the load at which prefill duty reaches 100% (section 8's f*,
+#                re-expressed in users)
+#
+# Two of these depend on the miss rate f strongly and two barely at all, so
+# WHICH ONE BINDS CHANGES with f — the crossover is the planner's whole point,
+# and neither axis alone can show it.
+#
+# Both assumptions are load-bearing, so both are limitations, not conveniences:
+# see docs/scenarios.md § 9 "Reading the two-axis planner". A user with several
+# concurrent sessions, or bursty think time, moves the cache and latency
+# frontiers in opposite directions.
+# ============================================================================
+
+DECODE_FLOOR_TOKS = 40.0    # the study's hard per-user floor (50 is comfortable)
+THINK_TIME_S = 30.0         # reference: one turn every 30 s
+REF_USERS = 64              # reference population -> 64/30 = 2.13 req/s
+
+
+def request_rate(users: float, think_time_s: float = THINK_TIME_S) -> float:
+    """Requests/s a population of `users` generates. The conversion the whole
+    planner rests on (assumption 2 above)."""
+    if users < 0:
+        raise ValueError(f"users must be >= 0, got {users!r}")
+    if think_time_s <= 0:
+        raise ValueError(f"think_time_s must be > 0, got {think_time_s!r}")
+    return users / think_time_s
+
+
+def max_users_cache(model: Model, topo: Topology, wl: Workload, ram_gib=0,
+                    n_iter: int = 400, draw: int = None, seed: int = 0) -> float:
+    """Users whose sessions fit warm in the pool — warm p5, USER-class only.
+
+    p5, not p50: the study plans on the conservative tail. User-class, because
+    subagent sessions occupy the pool but are not users (which="user" is the
+    exact count the explorer approximates as warm x (1 - p_sub)).
+    """
+    if draw is None:
+        draw = int(4000 + kv_pool_tokens(model, topo) / 8000)
+    return float(warm_capacity(model, topo, wl, ram_gib=ram_gib, n_iter=n_iter,
+                               draw=draw, seed=seed, which="user")[0])
+
+
+def max_users_decode(model: Model, topo: Topology, wl: Workload,
+                     floor: float = DECODE_FLOOR_TOKS, union: str = "linear",
+                     n_iter: int = 400, seed: int = 0, hi: int = 4096) -> float:
+    """Concurrent decoders at which per-user p50 tok/s falls to `floor`.
+
+    Bisection, not the linear scan tables.py uses: per-user speed is monotone
+    decreasing in concurrency (every extra sequence adds KV bytes to the same
+    step), so ~12 evaluations replace up to 1,500. Returns 0 when even a single
+    decoder misses the floor, and raises if the crossing lies beyond `hi`
+    rather than returning a silently censored value.
+    """
+    def p50(n):
+        return decode_curves(model, topo, wl, [n], n_iter=n_iter, seed=seed,
+                             union=union)[1][0]
+    if p50(1) < floor:
+        return 0.0
+    if p50(hi) >= floor:
+        raise ValueError(f"decode floor crossing beyond hi={hi}: censored")
+    lo, up = 1, hi
+    while up - lo > 1:
+        mid = (lo + up) // 2
+        if p50(mid) >= floor:
+            lo = mid
+        else:
+            up = mid
+    return float(lo)
+
+
+def max_users_saturation(model: Model, topo: Topology, wl, chunk: float,
+                         turn_tokens: float = 0.0,
+                         think_time_s: float = THINK_TIME_S,
+                         mfu: float = MFU_DEFAULT,
+                         per_pass_overhead: bool = False) -> float:
+    """Users at which prefill duty reaches 100% — section 8's f*, in users.
+
+    rho = lambda E[S] = 1 at lambda = 1/E[S], so users = think_time / E[S].
+    Above this the queue has no steady state at all.
+    """
+    e_s, _, _, _ = prefill_service_moments(model, topo, wl, chunk, turn_tokens,
+                                           mfu, per_pass_overhead)
+    return think_time_s / e_s if e_s > 0 else float("inf")
+
+
+def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
+                      sla_seconds: float, turn_tokens: float = 0.0,
+                      think_time_s: float = THINK_TIME_S,
+                      mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
+                      per_pass_overhead: bool = False) -> float:
+    """Users at which a MISS's mean TTFT reaches `sla_seconds`.
+
+    Closed form in both disciplines, because E[S] and E[S^2] do not depend on
+    the arrival rate:
+        FCFS  lam a / (2(1 - lam b)) + c = SLA  ->  lam = k / (a + k b)
+        PS    c / (1 - lam b) = SLA            ->  lam = (1 - c/SLA) / b
+    with a = E[S^2], b = E[S], c = E[S | miss], k = 2(SLA - c).
+
+    ALWAYS strictly inside max_users_saturation: k/(a + k b) < 1/b for any
+    a > 0, which is the algebraic statement of "the queue diverges before the
+    server does" — the section's headline, and asserted in the self-checks.
+    Returns 0 when the request's own prefill already exceeds the budget, i.e.
+    when no load at all can meet it.
+    """
+    if discipline not in ("fcfs", "ps"):
+        raise ValueError(f"discipline must be 'fcfs' or 'ps', got {discipline!r}")
+    if not sla_seconds > 0:
+        raise ValueError(f"sla_seconds must be > 0, got {sla_seconds!r}")
+    a, b, c = (lambda m: (m[1], m[0], m[2]))(
+        prefill_service_moments(model, topo, wl, chunk, turn_tokens, mfu,
+                                per_pass_overhead))
+    if c >= sla_seconds or b <= 0:
+        return 0.0
+    if discipline == "ps":
+        lam = (1 - c / sla_seconds) / b
+    else:
+        k = 2 * (sla_seconds - c)
+        lam = k / (a + k * b)
+    return max(0.0, lam * think_time_s)
+
+
+def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
+                    chunk: float = CHUNK_DEFAULT, turn_tokens: float = 2_000,
+                    sla_seconds: float = 10.0,
+                    think_time_s: float = THINK_TIME_S,
+                    decode_floor: float = DECODE_FLOOR_TOKS,
+                    mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
+                    ram_gib=0, union: str = "linear",
+                    per_pass_overhead: bool = False,
+                    n_iter: int = 400, seed: int = 0) -> dict:
+    """All four ceilings in ONE unit — max concurrent users — plus which binds.
+
+    THE two-axis planner. `binding` is the argmin: whichever ceiling is lowest
+    is the one that actually limits this deployment, and `headroom` is how much
+    of it the requested population uses. Everything is per replica GROUP; a DP
+    deployment multiplies the cache and decode ceilings by `topo.replicas` only
+    under balanced routing, which sticky routing works against (spike.md #3).
+    """
+    if users < 0:
+        raise ValueError(f"users must be >= 0, got {users!r}")
+    ceilings = {
+        "cache": max_users_cache(model, topo, wl, ram_gib=ram_gib,
+                                 n_iter=n_iter, seed=seed),
+        "decode": max_users_decode(model, topo, wl, floor=decode_floor,
+                                   union=union, n_iter=n_iter, seed=seed),
+        "latency": max_users_latency(model, topo, wl, chunk, sla_seconds,
+                                     turn_tokens, think_time_s, mfu,
+                                     discipline, per_pass_overhead),
+        "saturation": max_users_saturation(model, topo, wl, chunk, turn_tokens,
+                                           think_time_s, mfu,
+                                           per_pass_overhead),
+    }
+    binding = min(ceilings, key=ceilings.get)
+    limit = ceilings[binding]
+    return {
+        "users": users,
+        "req_rate": request_rate(users, think_time_s),
+        "ceilings": ceilings,
+        "binding": binding,
+        "limit": limit,
+        "headroom": (users / limit) if limit > 0 else float("inf"),
+        "fits": users <= limit,
+    }
+
+
+# ============================================================================
 # SELF-CHECKS  (python scripts/scenario_model.py)
 # ============================================================================
 def _selfcheck():
@@ -2103,6 +2293,78 @@ def _selfcheck():
     for bad in ("FCFS", "lifo", ""):
         try:
             prefill_ttft_seconds(m27, tp2, wl, RATE, CH, TURN, discipline=bad)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+    # ---- THE OPERATING POINT: four ceilings in one unit --------------------
+    # the reference load is exactly the study's 64 users / 30 s = 2.13 req/s
+    assert abs(request_rate(REF_USERS) - RATE) < 0.01, \
+        "64 users at one turn per 30 s must reproduce the 2.13 req/s reference"
+    op = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA)
+    assert set(op["ceilings"]) == {"cache", "decode", "latency", "saturation"}
+    assert op["binding"] == min(op["ceilings"], key=op["ceilings"].get)
+    # the algebraic heart of section 9: the queue diverges before the server
+    # does, so the latency ceiling is ALWAYS strictly inside saturation
+    for mdl, tp in ((m27, tp2), (m27, t1), (m35, tp2)):
+        lat = max_users_latency(mdl, tp, wl, CH, SLA, TURN)
+        sat = max_users_saturation(mdl, tp, wl, CH, TURN)
+        assert 0 < lat < sat, \
+            f"{mdl.name}: latency ceiling {lat:.0f} must sit inside saturation {sat:.0f}"
+        # ...and processor sharing bounds it from the other side (dearer for
+        # the long misses, so it admits fewer users than FCFS)
+        assert max_users_latency(mdl, tp, wl, CH, SLA, TURN,
+                                 discipline="ps") < lat
+    # a budget below one miss's own prefill cannot be met at ANY load
+    assert max_users_latency(m27, tp2, wl, CH, 0.5, TURN) == 0.0
+    # ceilings move the right way: a bigger budget and a longer think time both
+    # admit more users; a fatter miss rate admits fewer
+    assert (max_users_latency(m27, tp2, wl, CH, 2 * SLA, TURN)
+            > max_users_latency(m27, tp2, wl, CH, SLA, TURN))
+    assert abs(max_users_latency(m27, tp2, wl, CH, SLA, TURN, think_time_s=60)
+               / max_users_latency(m27, tp2, wl, CH, SLA, TURN) - 2) < 1e-9, \
+        "think time scales the user ceilings linearly"
+    assert (max_users_latency(m27, tp2, replace(wl, invalidation=0.10), CH,
+                              SLA, TURN)
+            < max_users_latency(m27, tp2, wl, CH, SLA, TURN))
+    # The planner must REPRODUCE the study's published decision table, not
+    # restate it differently: two of its four ceilings are already in § 7's
+    # table (warm users p5 = 69 / 177, mns@40 = 118 / 228), and only the
+    # latency and saturation columns are new. If these drift, the planner has
+    # silently forked from the numbers the rest of the study plans on.
+    assert abs(max_users_cache(m27, t1, wl, n_iter=800) - 69) <= 3, \
+        "cache ceiling must reproduce the published warm-users p5 of 69"
+    assert abs(max_users_cache(m27, tp2, wl, n_iter=800) - 177) <= 6, \
+        "cache ceiling must reproduce the published warm-users p5 of 177"
+    assert abs(max_users_decode(m27, t1, wl, n_iter=800) - 118) <= 4, \
+        "decode ceiling must reproduce the published mns@40 of 118"
+    assert abs(max_users_decode(m27, tp2, wl, n_iter=800) - 228) <= 8, \
+        "decode ceiling must reproduce the published mns@40 of 228"
+    # decode: monotone, bisected, and matching the study's H7 finding that the
+    # CACHE binds before bandwidth at the reference workload (with MTP on)
+    dec = max_users_decode(m27, t1, wl, n_iter=200)
+    assert dec > max_users_cache(m27, t1, wl, n_iter=200), \
+        "H7: the cache must bind before decode bandwidth on the 27B / 1xH200"
+    assert max_users_decode(m27, t1, wl, floor=20.0, n_iter=200) > dec, \
+        "a lower floor must admit more concurrent decoders"
+    # an unreachable floor is a censored result, not a silent cap
+    try:
+        max_users_decode(m27, t1, wl, floor=1e-6, n_iter=200)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+    # WHICH constraint binds must change with the miss rate — the planner's
+    # whole reason to exist (cache at f=1%, latency once misses get common)
+    b_lo = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA,
+                           n_iter=200)["binding"]
+    b_hi = operating_point(m27, tp2, replace(wl, invalidation=0.25),
+                           REF_USERS, CH, TURN, SLA, n_iter=200)["binding"]
+    assert b_lo != b_hi, \
+        f"the binding constraint must switch with f (got {b_lo} at both ends)"
+    assert b_hi == "latency", f"latency must bind at f=25%, got {b_hi}"
+    for bad_users in (-1,):
+        try:
+            operating_point(m27, tp2, wl, bad_users, n_iter=50)
             raise AssertionError("expected ValueError")
         except ValueError:
             pass

@@ -433,6 +433,104 @@ def fig_cold_spike():
             for mk, dp, tp, gk, _, lab in configs}
 
 
+def fig_binding_map():
+    """The two-axis planner: four ceilings in one unit, and the crossover
+    where the binding constraint changes hands (research/spike.md)."""
+    CH, TURN, SLA = 32_768, 2_000, 10.0
+    THINK = M.THINK_TIME_S
+    fs = np.linspace(0, 0.30, 31)
+    CEIL = [("cache", BLUE, "cache — warm user sessions that fit"),
+            ("decode", GREEN, f"decode — {M.DECODE_FLOOR_TOKS:.0f} tok/s floor"),
+            ("latency", ORANGE, f"latency — mean TTFT hits {SLA:.0f} s"),
+            ("saturation", RED, "saturation — prefill duty hits 100%")]
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
+
+    # -- left: the 27B/TP2 planner, ceiling by ceiling ---------------------
+    m, t = MODELS["27B"], M.topology_grid(1, 2, "H200")
+    series = {k: [] for k, _, _ in CEIL}
+    for f in fs:
+        op = M.operating_point(m, t, base_workload(invalidation=f), M.REF_USERS,
+                               CH, TURN, SLA, n_iter=500)
+        for k, _, _ in CEIL:
+            series[k].append(op["ceilings"][k])
+    env = np.min([series[k] for k, _, _ in CEIL], axis=0)
+    axL.fill_between(fs * 100, 0, env, color=GREEN, alpha=.10, lw=0)
+    for k, col, lab in CEIL:
+        axL.plot(fs * 100, series[k], color=col, lw=2, label=lab)
+    axL.plot(fs * 100, env, color="black", lw=2.6, ls=(0, (4, 2)),
+             label="what you actually get", zorder=4)
+    # the crossover: where the envelope changes hands
+    binder = [min(CEIL, key=lambda c: series[c[0]][i])[0] for i in range(len(fs))]
+    for i in range(1, len(fs)):
+        if binder[i] != binder[i - 1]:
+            axL.axvline(fs[i] * 100, color=MUTED, lw=1.2, ls=":")
+            axL.annotate(f"crossover ≈ {fs[i]:.0%}\n{binder[i-1]} → {binder[i]}",
+                         (fs[i] * 100, env[i]), xytext=(8, 26),
+                         textcoords="offset points", fontsize=8.5, color=MUTED,
+                         bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                   ec=MUTED, alpha=.9))
+            break
+    axL.plot([1], [M.REF_USERS], "o", color="black", ms=7, zorder=6)
+    axL.annotate(f"reference: {M.REF_USERS} users at f = 1%", (1, M.REF_USERS),
+                 xytext=(10, -14), textcoords="offset points", fontsize=8.5)
+    axL.set_xlim(0, 30); axL.set_ylim(0, 400)
+    axL.set_xlabel("cache-miss rate  f  (%)")
+    axL.set_ylabel(f"max concurrent users  (one turn / {THINK:.0f} s)")
+    axL.legend(frameon=False, fontsize=8.5, loc="upper right")
+    axL.set_title("27B on TP2: every constraint in ONE unit\n"
+                  "two ceilings barely move with f and two collapse, so the\n"
+                  "binding one changes hands inside the slider's own range",
+                  fontsize=10.5)
+
+    # -- right: the frontier across configurations -------------------------
+    rows = [("27B", 1, 1, "H200", "27B 1xH200"), ("27B", 1, 2, "H200", "27B TP2"),
+            ("35BA3B", 1, 1, "H200", "35B-A3B 1xH200"),
+            ("35BA3B", 1, 2, "H200", "35B-A3B TP2"),
+            ("MM35", 1, 4, "H200", "Mistral-3.5 TP4"),
+            ("GLM52", 1, 8, "H200", "GLM-5.2 TP8"),
+            ("27B", 1, 1, "B300", "27B 1xB300")]
+    COLOR = {k: c for k, c, _ in CEIL}
+    bars = []
+    for mk, dp, tp, gk, lab in rows:
+        mm, tt = MODELS[mk], M.topology_grid(dp, tp, gk)
+        op = M.operating_point(mm, tt, base_workload(), M.REF_USERS, CH, TURN,
+                               SLA, n_iter=500)
+        bars.append((op["limit"], lab, op["binding"], op["ceilings"]))
+    bars.sort()
+    y = np.arange(len(bars))
+    axR.barh(y, [b[0] for b in bars], color=[COLOR[b[2]] for b in bars],
+             height=.6)
+    for i, (lim, lab, binding, ceilings) in enumerate(bars):
+        SHORT = {"cache": "cache", "decode": "dec", "latency": "lat",
+                 "saturation": "sat"}
+        others = " · ".join(f"{SHORT[k]} {ceilings[k]:.0f}"
+                            for k, _, _ in CEIL if k != binding)
+        axR.annotate(f"{lim:.0f} — {binding}", (lim, i), xytext=(5, 3),
+                     textcoords="offset points", va="center", fontsize=8.5,
+                     fontweight="bold", color=COLOR[binding])
+        axR.annotate(others, (lim, i), xytext=(5, -7), textcoords="offset points",
+                     va="center", fontsize=7.2, color=MUTED)
+    axR.axvline(M.REF_USERS, color="black", lw=1.4, ls="--")
+    axR.text(M.REF_USERS * 1.08, len(bars) - 0.4,
+             f"{M.REF_USERS}-user reference load", fontsize=8.5, va="center")
+    axR.set_yticks(y); axR.set_yticklabels([b[1] for b in bars], fontsize=9)
+    axR.set_xscale("log"); axR.set_xlim(8, 4000)
+    axR.set_xlabel("max concurrent users before the FIRST ceiling binds (log)")
+    axR.grid(axis="y", alpha=0)
+    axR.set_title("The frontier, bar coloured by what binds\n"
+                  "Mistral-3.5 is decode-bound below the reference load — it "
+                  "ships\nno MTP module, so the study's 'without MTP' case is its "
+                  "central one", fontsize=10.5)
+
+    fig.suptitle("The two-axis planner — which constraint actually limits this "
+                 "deployment, and when it changes hands", fontsize=12, y=1.005)
+    fig.tight_layout()
+    fig.savefig(out("scenario_binding_map.png"), bbox_inches="tight")
+    plt.close(fig)
+    return {lab: (lim, binding) for lim, lab, binding, _ in bars}
+
+
 if __name__ == "__main__":
     res = fig_capacity()
     fig_sysprompt()
@@ -441,9 +539,14 @@ if __name__ == "__main__":
     fig_scaling()
     fstars = fig_prefill_thrash()
     spikes = fig_cold_spike()
+    binding = fig_binding_map()
     print("saved: scenario_capacity.png, scenario_sysprompt.png, scenario_mns.png, "
           "scenario_subagent_invalidation.png, scenario_scaling.png, "
-          "scenario_prefill_thrash.png, scenario_cold_spike.png")
+          "scenario_prefill_thrash.png, scenario_cold_spike.png, "
+          "scenario_binding_map.png")
+    print("\nbinding constraint at the reference workload (max concurrent users):")
+    for lab, (lim, what) in binding.items():
+        print(f"  {lab:18} {lim:6.0f} users — {what}")
     print("\nbreakeven miss rate (prefill duty = 100% at 2.13 req/s):")
     for lab, f in fstars.items():
         print(f"  {lab:18} {f:6.0%}")
