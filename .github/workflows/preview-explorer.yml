@@ -1,0 +1,87 @@
+# Deploys a PR's interactive/ to a separate preview Worker on workers.dev —
+# no custom-domain route, so production (workingset.tomvaucourt.com) is
+# untouched. One worker per PR (workingset-explorer-pr<N>), updated on every
+# push; the run comments the preview URL on the PR.
+#
+# Also manually dispatchable once this file is on main:
+#   gh workflow run preview-explorer.yml --ref <branch> -f name=<slug>
+#
+# Previews are private: .github/preview-auth.mjs fronts the assets with HTTP
+# Basic auth (user "preview", password = the PREVIEW_PASSWORD repo secret;
+# rotate with `gh secret set PREVIEW_PASSWORD` + re-run). Fails closed (503)
+# if the secret is missing.
+#
+# Cleanup when a preview is no longer needed:
+#   npx wrangler delete --name workingset-explorer-<slug>
+name: Preview explorer
+
+on:
+  pull_request:
+    paths:
+      - interactive/**
+      - .github/workflows/preview-explorer.yml
+      - .github/preview-auth.mjs
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Preview slug — deploys workingset-explorer-<slug>.workers.dev"
+        required: true
+
+concurrency:
+  group: preview-explorer-${{ github.event_name == 'workflow_dispatch' && inputs.name || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # secrets are unavailable to fork PRs anyway; skip instead of failing
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Write preview wrangler config (no custom-domain route)
+        env:
+          PREVIEW_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
+        # JSON-encode via node so no value can break the config syntax
+        run: |
+          node -e 'require("fs").writeFileSync("wrangler.preview.jsonc",
+            JSON.stringify({
+              name: "workingset-explorer-" + process.env.PREVIEW_NAME,
+              compatibility_date: "2026-07-22",
+              workers_dev: true,
+              main: ".github/preview-auth.mjs",
+              assets: { directory: "./interactive", binding: "ASSETS",
+                        run_worker_first: true },
+            }, null, 2));'
+      - uses: cloudflare/wrangler-action@v3
+        id: deploy
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.118.0"
+          command: deploy --config wrangler.preview.jsonc
+      # a real encrypted worker secret, not a plaintext var. Runs after deploy
+      # (secret put needs the worker to exist on first run) and is keyed off
+      # the preview config's name, so it can never touch the production worker
+      # — the action's own `secrets:` input reads the default wrangler.jsonc,
+      # which is exactly the mistake this step replaces.
+      - name: Upload preview password as a worker secret
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
+        run: |
+          printf '%s' "$PREVIEW_PASSWORD" | npx wrangler secret put PREVIEW_PASSWORD \
+            --config wrangler.preview.jsonc
+      - name: Comment preview URL on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          body="Preview deployed: $URL (updates on every push; method page at $URL/method). Basic auth: user \`preview\`, password = the \`PREVIEW_PASSWORD\` repo secret."
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --body "$body" \
+            || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
