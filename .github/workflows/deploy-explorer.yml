@@ -1,0 +1,33 @@
+# Deploys interactive/index.html to the workingset-explorer Worker
+# (workingset.tomvaucourt.com) on every push to main that touches it.
+# Needs two repo secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
+name: Deploy explorer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - interactive/**
+      - wrangler.jsonc
+      - .github/workflows/deploy-explorer.yml
+  workflow_dispatch:
+
+# Serialize deploys so rapid pushes can't race; never cancel a running
+# deploy — the queued latest push still runs after it.
+concurrency:
+  group: deploy-explorer
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.118.0"
+          command: deploy
