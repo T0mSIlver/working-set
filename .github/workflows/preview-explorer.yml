@@ -1,0 +1,66 @@
+# Deploys a PR's interactive/ to a separate preview Worker on workers.dev —
+# no custom-domain route, so production (workingset.tomvaucourt.com) is
+# untouched. One worker per PR (workingset-explorer-pr<N>), updated on every
+# push; the run comments the preview URL on the PR.
+#
+# Also manually dispatchable once this file is on main:
+#   gh workflow run preview-explorer.yml --ref <branch> -f name=<slug>
+#
+# Cleanup when a preview is no longer needed:
+#   npx wrangler delete --name workingset-explorer-<slug>
+name: Preview explorer
+
+on:
+  pull_request:
+    paths:
+      - interactive/**
+      - .github/workflows/preview-explorer.yml
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Preview slug — deploys workingset-explorer-<slug>.workers.dev"
+        required: true
+
+concurrency:
+  group: preview-explorer-${{ github.event_name == 'workflow_dispatch' && inputs.name || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # secrets are unavailable to fork PRs anyway; skip instead of failing
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Write preview wrangler config (no custom-domain route)
+        env:
+          PREVIEW_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
+        run: |
+          cat > wrangler.preview.jsonc <<EOF
+          {
+            "name": "workingset-explorer-${PREVIEW_NAME}",
+            "compatibility_date": "2026-07-22",
+            "workers_dev": true,
+            "assets": { "directory": "./interactive" }
+          }
+          EOF
+      - uses: cloudflare/wrangler-action@v3
+        id: deploy
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.118.0"
+          command: deploy --config wrangler.preview.jsonc
+      - name: Comment preview URL on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          body="Preview deployed: $URL (updates on every push; \`interactive/method.html\` at $URL/method.html)"
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --body "$body" \
+            || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
