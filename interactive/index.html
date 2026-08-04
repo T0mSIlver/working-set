@@ -239,6 +239,21 @@ svg text{fill:var(--text-2)}
 .preset .plab{font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-right:1px}
 .preset button{font:inherit; font-size:11px; padding:3px 9px; border-radius:7px; border:1px solid var(--border); background:var(--tile); color:var(--text-2); cursor:pointer}
 .preset button:hover{border-color:var(--s1); color:var(--s1)}
+/* page table of contents — the page now runs three acts and eight act-3
+   panels, so it gets the same in-page nav the method page has */
+nav.toc{border:1px solid var(--border); border-radius:10px; background:var(--surface);
+  padding:10px 15px; margin:12px 0 2px; font-size:12.5px; color:var(--text-2);
+  display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline;}
+nav.toc a{color:var(--text-2)}
+nav.toc a:hover{color:var(--s1); text-decoration:none}
+nav.toc .tn{color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; font-weight:650; margin-right:2px}
+nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
+/* act-3 subsection headers: one narrative beat per group of panels */
+.sub-h{margin:30px 0 12px; padding-top:16px; border-top:1px solid var(--border);
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.sub-h h3{margin:0; font-size:15.5px; font-weight:660; letter-spacing:-.012em}
+.sub-h .n{color:var(--s1); font-weight:700; font-size:13px}
+.sub-h .lede{font-size:12.5px; color:var(--text-2)}
 .act-h{margin:34px 0 12px; padding-top:22px; border-top:2px solid var(--border)}
 .act-h .act-t{display:flex; gap:12px; align-items:center}
 .act-n{flex:0 0 auto; width:30px; height:30px; border-radius:50%; background:var(--s1); color:#fff; font-weight:700; font-size:15px; display:grid; place-items:center}
@@ -276,6 +291,19 @@ svg text{fill:var(--text-2)}
   </header>
 
   <p class="assump-line">Memory model calibrated to an FP8 anchor <em>projected</em> from the baseline's measured FP16 H200 pool, validated once against a real TP2 bring-up (within 0.3%); everything prefill-side is <span class="prov">analytic and unvalidated</span>. <a href="method.html">All assumptions, the full model &amp; glossary →</a></p>
+
+  <nav class="toc" aria-label="Page contents">
+    <span class="tn">On this page</span>
+    <a href="#act1">1 · Can I hold them?</a>
+    <a href="#act2">2 · Can I serve them?</a>
+    <a href="#act3">3 · What should I run?</a>
+    <span class="sep" aria-hidden="true"></span>
+    <a href="#verdict">Verdict</a>
+    <a href="#fragility">Sensitivity</a>
+    <a href="#recipe">Recipe &amp; bill</a>
+    <a href="#validate">Validate</a>
+    <a href="#frontier">Frontier</a>
+  </nav>
 
   <!-- CONTROLS -->
     <div class="panel controls">
@@ -353,7 +381,7 @@ svg text{fill:var(--text-2)}
     </div>
   </div>
 
-  <div class="act-h">
+  <div class="act-h" id="act1">
     <div class="act-t"><span class="act-n">1</span><h2>Can I hold them?</h2></div>
     <p>How many sessions stay <b>warm</b> — and whether the cache or the decode bandwidth runs out first. Memory only: nothing here depends on how often requests arrive.</p>
   </div>
@@ -447,7 +475,7 @@ svg text{fill:var(--text-2)}
     </div>
   </div>
 
-  <div class="act-h">
+  <div class="act-h" id="act2">
     <div class="act-t"><span class="act-n">2</span><h2>Can I serve them?</h2></div>
     <p>Adds <b>work arriving</b>: the request rate, the latency budget, and what cold traffic — steady or in a spike — costs.</p>
   </div>
@@ -529,23 +557,50 @@ svg text{fill:var(--text-2)}
     </div>
   </div>
 
-  <div class="act-h">
+  <div class="act-h" id="act3">
     <div class="act-t"><span class="act-n">3</span><h2>So what should I run?</h2></div>
-    <p>Every ceiling above, converted into one unit — <b>max concurrent users</b> — so the binding one is simply the smallest.</p>
+    <p>Every ceiling above, converted into one unit — <b>max concurrent users</b> — so the binding one is simply the smallest. Five beats: the <a href="#verdict">verdict</a>, <a href="#fragility">how fragile it is</a>, <a href="#recipe">the recipe and its bill</a>, <a href="#validate">the script that tests it</a>, and <a href="#frontier">every alternative ranked</a>.</p>
   </div>
 
+  <div class="sub-h" id="verdict"><span class="n">3·1</span><h3>The verdict</h3><span class="lede">which constraint binds first, and how much headroom is left</span></div>
+
   <div class="tiles solo" id="decisionTiles"></div>
+
+  <div class="panel card" id="ceilingCard" style="margin-bottom:14px">
+    <p class="ct">All four ceilings, side by side</p>
+    <p class="cs">How many concurrent users each constraint allows. The shortest bar is the answer; the marker is your load.</p>
+    <div id="ceilingBars"></div>
+  </div>
+
+  <div class="charts solo">
+    <div class="panel card">
+      <p class="ct">G · The binding constraint vs cache-miss rate</p>
+      <p class="cs">All four ceilings vs the miss rate. The <b>grey halo</b> traces the lowest — what you actually get; the dot is your load (red if over), and the vertical marker is where the binding constraint first changes hands.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
+        <span class="li"><span class="sw dash7" style="background:var(--s4)"></span>decode</span>
+        <span class="li"><span class="sw dash2" style="background:var(--s2)"></span>latency</span>
+        <span class="li"><span class="sw dash11" style="background:var(--muted)"></span>saturation</span>
+        <span class="li"><span class="sw dot" style="background:var(--text)"></span>your load (red if over)</span>
+      </div>
+      <div class="chartbox"><div id="chartG"></div><div class="tt" id="ttG"></div></div>
+    </div>
+  </div>
+
+  <div class="sub-h" id="fragility"><span class="n">3·2</span><h3>How fragile is the verdict</h3><span class="lede">sweep every assumption — the top row is the one the decision leans on hardest</span></div>
+
+  <div class="panel card" id="flipCard">
+    <p class="cs">Each bar sweeps <b>one</b> assumption across its plausible range with every other control held at your settings. Colour = which constraint binds there; the <b>red underline</b> marks where your load no longer fits. The <b>▼</b> is your current value, and the <b>dashed tick</b> is the nearest flip: the value where the bar changes colour (a different constraint takes over) or where the red underline starts or stops (the verdict itself changes) — the label on the right names which, in the flip’s own colour. Rows are sorted by how close that tick sits to your value.</p>
+    <div class="legend" id="flipLegend"></div>
+    <div id="flipRows"></div>
+  </div>
+
+  <div class="sub-h" id="recipe"><span class="n">3·3</span><h3>What to run, and what it costs</h3><span class="lede">the controls as a vLLM recipe, and its electricity bill</span></div>
 
   <div class="panel card" id="deployCard" style="margin-bottom:14px">
     <p class="ct">The deploy card — this configuration as a recipe</p>
     <p class="cs">What to run and what to expect, from the current controls. Projections, not measurements — <a href="method.html">method &amp; caveats</a>.</p>
     <div id="deployBody"></div>
-  </div>
-
-  <div class="panel card" id="testCard" style="margin-bottom:14px">
-    <p class="ct">Test these hypotheses on your endpoint</p>
-    <p class="cs">Every number on this page is a projection — the planning stance defines "comfortable capacity" as <b>measured</b> SLO capacity, which no model produces. This button writes the current predictions down as falsifiable hypotheses inside a standalone load-test script (Python, no checkout needed: <code>uv run validate_&hellip;.py</code>): closed-loop users with the shared prefix and log-normal contexts configured above, a load ladder bracketing the predicted limit, and a predicted-vs-measured verdict table at the end. Start with <code>--dry-run</code>; probe B* with <code>--burst N</code>.</p>
-    <div id="testBody"></div>
   </div>
 
   <div class="panel card" id="costCard" style="margin-bottom:14px">
@@ -570,36 +625,16 @@ svg text{fill:var(--text-2)}
     <div id="costBody"></div>
   </div>
 
-  <div class="panel card" id="ceilingCard">
-    <p class="ct">All four ceilings, side by side</p>
-    <p class="cs">How many concurrent users each constraint allows. The shortest bar is the answer; the marker is your load.</p>
-    <div id="ceilingBars"></div>
+  <div class="sub-h" id="validate"><span class="n">3·4</span><h3>Prove it on your endpoint</h3><span class="lede">the predictions rewritten as a falsifiable load test</span></div>
+
+  <div class="panel card" id="testCard" style="margin-bottom:14px">
+    <p class="cs">Every number on this page is a projection — the planning stance defines "comfortable capacity" as <b>measured</b> SLO capacity, which no model produces. This button writes the current predictions down as falsifiable hypotheses inside a standalone load-test script (Python, no checkout needed: <code>uv run validate_&hellip;.py</code>): closed-loop users with the shared prefix and log-normal contexts configured above, a load ladder bracketing the predicted limit, and a predicted-vs-measured verdict table at the end. Start with <code>--dry-run</code>; probe B* with <code>--burst N</code>.</p>
+    <div id="testBody"></div>
   </div>
 
-  <div class="charts solo">
-    <div class="panel card">
-      <p class="ct">G · The binding constraint vs cache-miss rate</p>
-      <p class="cs">All four ceilings vs the miss rate. The <b>grey halo</b> traces the lowest — what you actually get; the dot is your load (red if over), and the vertical marker is where the binding constraint first changes hands.</p>
-      <div class="legend">
-        <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
-        <span class="li"><span class="sw dash7" style="background:var(--s4)"></span>decode</span>
-        <span class="li"><span class="sw dash2" style="background:var(--s2)"></span>latency</span>
-        <span class="li"><span class="sw dash11" style="background:var(--muted)"></span>saturation</span>
-        <span class="li"><span class="sw dot" style="background:var(--text)"></span>your load (red if over)</span>
-      </div>
-      <div class="chartbox"><div id="chartG"></div><div class="tt" id="ttG"></div></div>
-    </div>
-  </div>
+  <div class="sub-h" id="frontier"><span class="n">3·5</span><h3>Every alternative, ranked</h3><span class="lede">all model × split configurations on this GPU, at your load</span></div>
 
-  <div class="panel card" id="flipCard" style="margin-top:14px">
-    <p class="ct">What would flip this decision</p>
-    <p class="cs">Each bar sweeps <b>one</b> assumption across its plausible range with every other control held at your settings. Colour = which constraint binds there; the red underline marks where your load stops fitting; the ▼ is your current value. Rows are sorted by how close the nearest flip sits — the top row is the assumption your decision leans on hardest.</p>
-    <div class="legend" id="flipLegend"></div>
-    <div id="flipRows"></div>
-  </div>
-
-  <div class="panel card" style="margin-top:14px">
-    <p class="ct">The frontier — every model × split on the selected GPU</p>
+  <div class="panel card" id="frontierCard">
     <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
     <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
     <div id="frontierTable"></div>
@@ -3467,10 +3502,13 @@ function renderTestCard(op, model, topo, wl){
   }
   lastHarnessArgs = { op, model, topo, wl };
   const hyp = harnessHypotheses(harnessPredictions(op, wl, topo), topo.replicas || 1);
+  // the list is the longest text block in act 3, so it folds: the summary
+  // line still says how many hypotheses there are and names the binding one
   box.innerHTML =
-    `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:650;margin:2px 0 6px">The hypotheses it will test</h4>`
-    + `<ul style="margin:0 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-2)">`
-    + hyp.map(h => `<li style="margin:3px 0">${esc(h)}</li>`).join('') + `</ul>`
+    `<details class="assump" style="margin:0 0 10px">`
+    + `<summary>The ${hyp.length} hypotheses it will test — headline: ${esc(hyp[4])}</summary>`
+    + `<div class="body"><ul style="margin:6px 0 4px;padding-left:18px;font-size:12.5px;color:var(--text-2)">`
+    + hyp.map(h => `<li style="margin:3px 0">${esc(h)}</li>`).join('') + `</ul></div></details>`
     + `<div class="preset"><button type="button" id="dlHarness">⬇ download validate_deployment.py</button>`
     + `<button type="button" id="cpHarness">copy script</button>`
     + `<span class="plab" style="text-transform:none;letter-spacing:0">then: uv run validate_deployment.py --dry-run</span></div>`;
@@ -3660,29 +3698,33 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const calD = aD > 0 ? (decodeNow / reps) / aD : 0;
 
   const axes = [];
-  const sweep = (K, lo, hi, at) => {
-    const pts = [];
-    for (let i = 0; i < K; i++){
-      const v = lo + (hi - lo) * i / (K - 1);
-      pts.push({ v, ...at(v, i) });
+  const sweep = (K, lo, hi, at, cur) => {
+    const vs = [];
+    for (let i = 0; i < K; i++) vs.push(lo + (hi - lo) * i / (K - 1));
+    // the sweep must contain the CURRENT value exactly: the stand-ins are
+    // calibrated to pass through the MC ceilings there, and a coarse grid
+    // whose nearest sample sits half a stride away can contradict the
+    // decision tile (fits at a 31k median, sampled at 45k → "does not fit")
+    if (cur !== undefined && cur >= lo && cur <= hi && !vs.includes(cur)){
+      vs.push(cur); vs.sort((a, b) => a - b);
     }
-    return pts;
+    return vs.map((v, i) => ({ v, ...at(v, i) }));
   };
   // 1 · cache-miss rate — warmFn is the SAME sampled curve chart G uses
   axes.push({ label: 'Cache-miss rate', cur: f0, lo: 0, hi: 0.5,
     fmt: v => fmt(v * 100, v > 0 && v < 0.02 ? 1 : 0) + '%', approx: false,
     pts: sweep(41, 0, 0.5, v =>
-      evalAt(mo, v, state.sla, state.think, warmFn(v) * reps, decodeNow)) });
+      evalAt(mo, v, state.sla, state.think, warmFn(v) * reps, decodeNow), f0) });
   // 2 · think time — enters every rate linearly, closed form
   axes.push({ label: 'Think time', cur: state.think, lo: 5, hi: 180,
     fmt: v => fmt(v, 0) + ' s', approx: false,
     pts: sweep(36, 5, 180, v =>
-      evalAt(mo, f0, state.sla, v, cacheNow, decodeNow)) });
+      evalAt(mo, f0, state.sla, v, cacheNow, decodeNow), state.think) });
   // 3 · TTFT budget — moves the latency ceiling only, closed form
   axes.push({ label: 'TTFT budget', cur: state.sla, lo: 1, hi: 60,
     fmt: v => fmt(v, 0) + ' s', approx: false,
     pts: sweep(40, 1, 60, v =>
-      evalAt(mo, f0, v, state.think, cacheNow, decodeNow)) });
+      evalAt(mo, f0, v, state.think, cacheNow, decodeNow), state.sla) });
   // 4 · warm turn size — re-prices the hit leg of the service moments; the
   //     moments read the liveTurn mirror, so swap it per point and restore
   {
@@ -3691,7 +3733,7 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       liveTurn = v;
       const mo2 = prefillServiceMoments(model, topo, wl, cs);
       return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
-    });
+    }, state.turn);
     liveTurn = saved;
     axes.push({ label: 'Warm turn size', cur: state.turn, lo: 250, hi: 16000,
       fmt: v => fmt(v / 1000, v < 1000 ? 2 : 1) + 'k tok', approx: false, pts });
@@ -3703,7 +3745,7 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     pts: sweep(16, PREFILL_MFU_LO, PREFILL_MFU_HI, v => {
       const mo2 = prefillServiceMoments(model, topo, wl, cs, null, v);
       return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
-    }) });
+    }, PREFILL_MFU) });
   // 6 · speculative-decode speedup — decode speed is exactly linear in it,
   //     so the mean-context stand-in only has to move the crossing point
   if (calD > 0)
@@ -3711,7 +3753,7 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       fmt: v => '×' + v.toFixed(2), approx: true,
       pts: sweep(21, 1.0, 3.0, v =>
         evalAt(mo, f0, state.sla, state.think, cacheNow,
-               decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps)) });
+               decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
   // 7 & 8 · the prompt-length distribution — median and shape. Both re-draw
   //     the context stats (4k samples: flip resolution, not tile precision)
   //     and move ALL FOUR ceilings through them.
@@ -3727,7 +3769,7 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
         const cacheU = warmUsersApprox(model, topo, wl2, 3000) * calC * reps;
         const decU = decodeUsersApprox(model, topo, cs2.samples) * calD * reps;
         return evalAt(mo2, f0, state.sla, state.think, cacheU, decU);
-      }) });
+      }, cur) });
   };
   {
     const el = document.getElementById('s-user_median');
@@ -3778,7 +3820,9 @@ function renderFlipPanel(axes){
   const text = cssv('--text'), good = cssv('--good');
   leg.innerHTML = ['cache', 'decode', 'latency', 'saturation'].map(k =>
     `<span class="li"><span class="sw" style="background:${C[k]}"></span>${PLANNER_LABEL[k]} binds</span>`).join('')
-    + `<span class="li"><span class="sw" style="background:${crit};height:3px"></span>your load does not fit</span>`;
+    + `<span class="li"><span class="sw" style="background:${crit};height:3px"></span>your load does not fit</span>`
+    + `<span class="li"><span style="color:${text};font-size:10px">▼</span>&nbsp;your value</span>`
+    + `<span class="li"><span class="sw" style="width:0;height:12px;border-left:2px dashed ${muted};background:none;border-radius:0"></span>nearest flip — named at the right, in its own colour</span>`;
   const W = 1120, rowH = 44, mT = 6, mL = 172, mR = 320, H = mT + rowH * axes.length + 6;
   const pw = W - mL - mR;
   let g = '';
@@ -3819,13 +3863,16 @@ function renderFlipPanel(axes){
     // flip marker + right-hand verdict
     if (ax.flip){
       const xf = sx(ax.flip.v);
-      g += `<line x1="${xf}" y1="${yc - 10}" x2="${xf}" y2="${yc + 9}" stroke="${text}" stroke-width="1.3" stroke-dasharray="2 2"/>`;
       const side = ax.flip.dir > 0 ? '≥' : '≤';
       const what = ax.flip.fitFlip
         ? (ax.flip.nowFits ? `stops fitting your ${fmt(state.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`
                            : `fits your ${fmt(state.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`)
         : `${PLANNER_LABEL[ax.flip.bind]} takes over at ${side} ${ax.fmt(ax.flip.v)}`;
+      // the tick, its label and the thing that changes at it share ONE colour:
+      // a verdict flip is red/green (and lands where the red underline starts
+      // or stops), a binding handover wears the incoming constraint's colour
       const col = ax.flip.fitFlip ? (ax.flip.nowFits ? crit : good) : C[ax.flip.bind];
+      g += `<line x1="${xf}" y1="${yc - 10}" x2="${xf}" y2="${yc + 9}" stroke="${col}" stroke-width="1.6" stroke-dasharray="3 2"/>`;
       g += `<text class="dlabel" x="${mL + pw + 14}" y="${yc + 3}" text-anchor="start" fill="${col}">${esc(what)}</text>`;
     } else {
       g += `<text class="dlabel" x="${mL + pw + 14}" y="${yc + 3}" text-anchor="start" fill="${muted}" font-weight="400">no handover in this range</text>`;
