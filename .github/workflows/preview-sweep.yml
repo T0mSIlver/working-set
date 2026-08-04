@@ -10,6 +10,13 @@
 # space is reserved for PR previews — don't dispatch-deploy a slug shaped
 # like pr<number>, the sweep will judge it by PR #<number>'s state.
 #
+# Previews live on ws-<slug>.preview.tomvaucourt.com behind Cloudflare Access
+# (workers_dev is false — see preview-explorer.yml). That changes nothing about
+# how the sweep *finds* orphans: it lists account Worker scripts by name, which
+# is independent of routing, and it never had a workers.dev URL in its
+# judgement logic. It does change cleanup — each preview now also owns a custom
+# domain, detached explicitly below before its script is deleted.
+#
 # Manual run (once on main): gh workflow run preview-sweep.yml
 #   -f dry_run=true to only list what would be deleted
 #   -f slug_ttl_days=0 to expire slug previews immediately
@@ -52,11 +59,44 @@ jobs:
           TTL_DAYS: ${{ inputs.slug_ttl_days || '7' }}
         run: |
           [[ "$TTL_DAYS" =~ ^[0-9]+$ ]] || { echo "::error::slug_ttl_days must be a non-negative integer"; exit 1; }
-          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts"
+          root="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers"
+          api="$root/scripts"
           auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
 
           tmp=$(mktemp)
           trap 'rm -f "$tmp"' EXIT
+
+          # Detach a preview's custom domain before its script is deleted.
+          # Cloudflare documents neither that deleting a script removes its
+          # Custom Domains nor that it leaves them behind, and wrangler has no
+          # custom-domain command, so this is explicit rather than trusting an
+          # undocumented cascade. Detaching takes the Cloudflare-managed DNS
+          # record with it; the auto-generated Advanced Certificate is
+          # documented as *not* deleted, which is inert (an unused cert in the
+          # zone's inventory) and is the only residue.
+          #
+          # The jq filter re-checks service and hostname client-side: if the
+          # ?service= query filter were ever ignored, an unfiltered list plus a
+          # blind delete loop would take down workingset.tomvaucourt.com.
+          detach_domains() {
+            # list and filter in two steps, not one pipeline: without pipefail
+            # a failed curl would be swallowed by a happy jq and read as
+            # "no domains attached", i.e. a silent skip of the detach.
+            local worker="$1" list ids id code
+            list=$(curl -sS --fail "${auth[@]}" "$root/domains?service=$worker") || {
+              echo "::error::listing Worker domains for $worker failed"; return 1; }
+            ids=$(jq -r --arg s "$worker" '.result[]?
+                  | select(.service == $s)
+                  | select(.hostname | endswith(".preview.tomvaucourt.com"))
+                  | .id' <<<"$list")
+            for id in $ids; do
+              code=$(curl -sS -o "$tmp" -w '%{http_code}' -X DELETE "${auth[@]}" "$root/domains/$id")
+              case "$code" in
+                200|204|404) echo "        detached custom domain $id from $worker" ;;
+                *) echo "::error::detaching $id from $worker failed with HTTP $code"; cat "$tmp"; return 1 ;;
+              esac
+            done
+          }
 
           workers='[]'
           page=1
@@ -126,6 +166,7 @@ jobs:
                 continue
               fi
             fi
+            detach_domains "$name"
             code=$(curl -sS -o "$tmp" -w '%{http_code}' -X DELETE "${auth[@]}" "$api/$name?force=true")
             case "$code" in
               200|204|404) echo "deleted $name — $reason"; deleted=$((deleted+1)) ;;

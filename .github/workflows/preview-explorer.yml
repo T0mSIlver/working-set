@@ -1,15 +1,21 @@
-# Deploys a PR's interactive/ to a separate preview Worker on workers.dev —
-# no custom-domain route, so production (workingset.tomvaucourt.com) is
-# untouched. One worker per PR (workingset-explorer-pr<N>), updated on every
-# push; the run comments the preview URL on the PR.
+# Deploys a PR's interactive/ to a separate preview Worker on its own private
+# hostname — ws-<slug>.preview.tomvaucourt.com — so production
+# (workingset.tomvaucourt.com) is untouched. One worker per PR
+# (workingset-explorer-pr<N>), updated on every push; the run comments the
+# preview URL on the PR.
 #
 # Also manually dispatchable once this file is on main:
 #   gh workflow run preview-explorer.yml --ref <branch> -f name=<slug>
 #
-# Previews are private: .github/preview-auth.mjs fronts the assets with HTTP
-# Basic auth (user "preview", password = the PREVIEW_PASSWORD repo secret;
-# rotate with `gh secret set PREVIEW_PASSWORD` + re-run). Fails closed (503)
-# if the secret is missing.
+# Previews are private via Cloudflare Access, not via anything in this repo.
+# The Access app (created by the Access bootstrap in the website repo) covers
+# *.preview.tomvaucourt.com with an email-OTP policy for Tom plus a service
+# token named "agents" for programmatic access (CF-Access-Client-Id and
+# CF-Access-Client-Secret headers, for curl and Playwright). So:
+#   - the previews are plain assets-only Workers, no auth code to review
+#   - workers_dev is false, so no ungated *.workers.dev URL exists at all
+#   - nothing in CI holds a password, and revoking access is one dashboard
+#     change rather than a secret rotation plus a redeploy of every preview
 #
 # PR previews are deleted automatically when the PR closes (merged or not);
 # a reopened PR is redeployed on the reopen event. Manually-dispatched
@@ -17,6 +23,8 @@
 # (their close event is filtered out), are caught by the nightly
 # preview-sweep.yml. Immediate manual cleanup, if ever needed:
 #   npx wrangler delete --name workingset-explorer-<slug>
+# (that leaves the custom domain attached to nothing — see the cleanup job
+# below for the detach call wrangler has no command for).
 name: Preview explorer
 
 on:
@@ -25,11 +33,10 @@ on:
     paths:
       - interactive/**
       - .github/workflows/preview-explorer.yml
-      - .github/preview-auth.mjs
   workflow_dispatch:
     inputs:
       name:
-        description: "Preview slug — deploys workingset-explorer-<slug>.workers.dev. pr<number> is reserved for PR previews (the sweep judges those by PR state)."
+        description: "Preview slug — deploys ws-<slug>.preview.tomvaucourt.com. pr<number> is reserved for PR previews (the sweep judges those by PR state)."
         required: true
 
 concurrency:
@@ -49,19 +56,34 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v5
-      - name: Write preview wrangler config (no custom-domain route)
+      - name: Write preview wrangler config (private custom domain, no workers.dev)
         env:
           PREVIEW_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
         # JSON-encode via node so no value can break the config syntax
         run: |
-          node -e 'require("fs").writeFileSync("wrangler.preview.jsonc",
+          # the slug is now a DNS label ("ws-<slug>"), not just part of a
+          # worker name: reject anything that would produce an invalid or
+          # over-long hostname before wrangler tries to provision a cert
+          if ! [[ "$PREVIEW_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?$ ]]; then
+            echo "::error::preview slug must be a lowercase DNS label (a-z, 0-9, dashes; no leading/trailing dash; <= 59 chars)"
+            exit 1
+          fi
+          node -e 'const n = process.env.PREVIEW_NAME;
+            require("fs").writeFileSync("wrangler.preview.jsonc",
             JSON.stringify({
-              name: "workingset-explorer-" + process.env.PREVIEW_NAME,
+              name: "workingset-explorer-" + n,
               compatibility_date: "2026-07-22",
-              workers_dev: true,
-              main: ".github/preview-auth.mjs",
-              assets: { directory: "./interactive", binding: "ASSETS",
-                        run_worker_first: true },
+              // no workers.dev URL: Cloudflare Access gates the custom domain
+              // only, so a live *.workers.dev subdomain would be an
+              // unauthenticated back door into the same assets
+              workers_dev: false,
+              // assets-only worker — no main script, so nothing to auth
+              assets: { directory: "./interactive" },
+              // one hostname per preview, never shared between workers, so
+              // wrangler never hits the interactive confirmation it shows
+              // when a custom domain already belongs to another Worker
+              routes: [{ pattern: "ws-" + n + ".preview.tomvaucourt.com",
+                         custom_domain: true }],
             }, null, 2));'
       - uses: cloudflare/wrangler-action@v3
         id: deploy
@@ -70,27 +92,18 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.118.0"
           command: deploy --config wrangler.preview.jsonc
-      # a real encrypted worker secret, not a plaintext var. Runs after deploy
-      # (secret put needs the worker to exist on first run) and is keyed off
-      # the preview config's name, so it can never touch the production worker
-      # — the action's own `secrets:` input reads the default wrangler.jsonc,
-      # which is exactly the mistake this step replaces.
-      - name: Upload preview password as a worker secret
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
-        run: |
-          printf '%s' "$PREVIEW_PASSWORD" | npx wrangler secret put PREVIEW_PASSWORD \
-            --config wrangler.preview.jsonc
       - name: Comment preview URL on the PR
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-          URL: ${{ steps.deploy.outputs.deployment-url }}
+        # URL built from the PR number rather than read from
+        # steps.deploy.outputs.deployment-url: with workers_dev false there is
+        # no workers.dev URL for the action to report, and the custom domain is
+        # fully determined by the PR number anyway.
         run: |
-          body="Preview deployed: $URL (updates on every push; method page at $URL/method). Basic auth: user \`preview\`, password = the \`PREVIEW_PASSWORD\` repo secret."
+          url="https://ws-pr$PR.preview.tomvaucourt.com"
+          body="Preview deployed: $url (updates on every push; method page at $url/method). Private behind Cloudflare Access — sign in with the email one-time code, or send the \`agents\` service token (\`CF-Access-Client-Id\` / \`CF-Access-Client-Secret\` headers) for curl and Playwright. There is no workers.dev URL for this preview."
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --body "$body" \
             || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
 
@@ -104,12 +117,53 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      # no checkout: a single REST call needs no repo files or config.
+      # no checkout: plain REST calls need no repo files or config.
+      #
+      # Detach the custom domain *before* deleting the script. Cloudflare
+      # documents neither that deleting a script removes its Custom Domains nor
+      # that it leaves them behind, and wrangler has no custom-domain command,
+      # so the detach is explicit rather than trusting an undocumented cascade.
+      # Detaching removes the Cloudflare-managed DNS record with it; the
+      # auto-generated Advanced Certificate is documented as *not* deleted,
+      # which is inert (an unused cert in the zone's certificate inventory) and
+      # is the only residue left behind.
+      #
+      # The jq filter re-checks service and hostname client-side: if the
+      # ?service= query filter were ever ignored, an unfiltered list plus a
+      # blind delete loop would take down workingset.tomvaucourt.com.
+      - name: Detach preview custom domain
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_NAME: pr${{ github.event.pull_request.number }}
+        run: |
+          worker="workingset-explorer-$PREVIEW_NAME"
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers"
+          auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+          # list and filter in two steps, not one pipeline: without pipefail a
+          # failed curl would be swallowed by a happy jq and read as "no
+          # domains attached", i.e. a silent skip of the detach
+          list=$(curl -sS --fail "${auth[@]}" "$api/domains?service=$worker")
+          ids=$(jq -r --arg s "$worker" '.result[]?
+                | select(.service == $s)
+                | select(.hostname | endswith(".preview.tomvaucourt.com"))
+                | .id' <<<"$list")
+          if [ -z "$ids" ]; then
+            echo "No preview custom domain attached to $worker; nothing to detach."
+          fi
+          for id in $ids; do
+            code=$(curl -sS -o resp.json -w '%{http_code}' -X DELETE "${auth[@]}" \
+              "$api/domains/$id")
+            case "$code" in
+              200|204|404) echo "Detached custom domain $id from $worker." ;;
+              *) echo "::error::detaching $id failed with HTTP $code"; cat resp.json; exit 1 ;;
+            esac
+          done
       # DELETE via the API rather than `wrangler delete` — the CLI's
       # non-interactive confirmation prompt and human-readable error text are
       # not a stable contract; HTTP status codes are. 404 (deploy skipped or
       # failed, or worker already deleted by hand) is success; anything else
-      # fails the job. Deleting the worker also removes its secrets.
+      # fails the job.
       - name: Delete preview worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
