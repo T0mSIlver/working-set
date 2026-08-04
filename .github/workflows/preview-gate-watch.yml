@@ -29,9 +29,10 @@ jobs:
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER")
+          # 204, not 200: GET on an assets-only script has no content to return
           case "$code" in
             404) echo "$WORKER does not exist — no preview URLs are live, nothing to watch."; exit 0 ;;
-            200) ;;
+            200|204) ;;
             *)   echo "::error::checking whether $WORKER exists failed with HTTP $code"; exit 1 ;;
           esac
           resp=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \

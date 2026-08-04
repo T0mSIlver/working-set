@@ -164,8 +164,10 @@ jobs:
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER")
+          # GET on a script returns its content — which for an assets-only
+          # Worker is empty, i.e. 204, not 200 (seen live in run 30956288700)
           case "$code" in
-            200) echo "$WORKER already exists." ;;
+            200|204) echo "$WORKER already exists." ;;
             404) echo "$WORKER does not exist yet; creating it with a one-off deploy."
                  npx --yes wrangler@4.118.0 deploy --config wrangler.canary.jsonc ;;
             *)   echo "::error::checking whether $WORKER exists failed with HTTP $code"; exit 1 ;;
@@ -304,9 +306,10 @@ jobs:
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER")
+          # 204, not 200: GET on an assets-only script has no content to return
           case "$code" in
             404) echo "$WORKER does not exist; nothing to retire."; exit 0 ;;
-            200) ;;
+            200|204) ;;
             *)   echo "::error::checking whether $WORKER exists failed with HTTP $code"; exit 1 ;;
           esac
           # no checkout: the placeholder and its config are self-contained
