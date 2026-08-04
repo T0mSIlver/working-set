@@ -10,9 +10,12 @@ for agentic coding workloads.
 live sliders for the workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 /
 GLM-5.2 / DeepSeek-V4-Flash), GPU (H200 / B300), weight & KV dtypes, and
 DP × TP topology. Configurations are **shareable** (a link encodes every
-control), and the explorer prices the **electricity bill**: a €/kWh slider
-and a duty-cycle power model turn every configuration into €/month,
-€/user·month and €/1M output tokens (`research/power.md`).
+control), the explorer prices the **electricity bill** (€/kWh slider,
+duty-cycle power model, `research/power.md`), and a **"Test these
+hypotheses" button** generates a standalone load-test script
+([`scripts/validate_deployment.py`](scripts/validate_deployment.py)) preloaded
+with the on-screen predictions — run it against a live vLLM endpoint to find
+the real limits.
 
 ## Contents
 
