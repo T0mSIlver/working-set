@@ -220,11 +220,19 @@ jobs:
           probe "$gate_url"
           case "$PROBE_STATE" in
             gated) echo "gate proven on $gate_url ($PROBE_DETAIL)" ;;
-            open)
-              echo "::error::$gate_url $PROBE_DETAIL — Cloudflare Access is not enabled on this Worker's preview URLs (Workers & Pages > $WORKER > Settings > Domains & Routes > Preview URLs > Enable Cloudflare Access). Failing closed: the preview was NOT uploaded."
-              exit 1 ;;
             *)
-              echo "::error::could not prove the Access gate on $gate_url ($PROBE_DETAIL). Failing closed: the preview was NOT uploaded. Re-run once the canary URL answers."
+              # Withdraw before failing: a previous run may already have
+              # published content under this alias, and refusing to add more
+              # would leave that live. Re-pointing the alias at the
+              # placeholder retracts what can be retracted — the placeholder
+              # is harmless by construction even if the gate is off.
+              npx --yes wrangler@4.118.0 versions upload --config wrangler.canary.jsonc \
+                --preview-alias "$ALIAS" --message "withdrawn: access gate unproven @ $GITHUB_SHA"
+              if [ "$PROBE_STATE" = open ]; then
+                echo "::error::$gate_url $PROBE_DETAIL — Cloudflare Access is not enabled on this Worker's preview URLs (Workers & Pages > $WORKER > Settings > Domains & Routes > Preview URLs > Enable Cloudflare Access). Failing closed: the preview was NOT uploaded, and the $ALIAS alias now serves the placeholder."
+              else
+                echo "::error::could not prove the Access gate on $gate_url ($PROBE_DETAIL). Failing closed: the preview was NOT uploaded, and the $ALIAS alias now serves the placeholder. Re-run once the canary URL answers."
+              fi
               exit 1 ;;
           esac
 
@@ -245,9 +253,15 @@ jobs:
               echo "url=$url" >> "$GITHUB_OUTPUT"
               echo "Preview URL: $url ($PROBE_DETAIL)" ;;
             open)
-              echo "::error::$url served content unauthenticated even though the canary was gated moments ago — check the Access configuration on $WORKER's preview URLs"
+              # gate broke mid-run: withdraw the content just uploaded
+              npx --yes wrangler@4.118.0 versions upload --config wrangler.canary.jsonc \
+                --preview-alias "$ALIAS" --message "withdrawn: access gate broke mid-run @ $GITHUB_SHA"
+              echo "::error::$url served content unauthenticated even though the canary was gated moments ago — check the Access configuration on $WORKER's preview URLs. The $ALIAS alias has been re-pointed at the placeholder."
               exit 1 ;;
             *)
+              # not withdrawn here: the canary just proved the per-Worker
+              # toggle, so this alias is gated too — the URL merely cannot be
+              # shown to answer yet, so it is not commented
               echo "::error::could not prove the Access gate on $url ($PROBE_DETAIL); not commenting the URL. Re-run once propagation settles."
               exit 1 ;;
           esac
