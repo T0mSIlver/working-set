@@ -59,13 +59,27 @@ jobs:
       - name: Write preview wrangler config (private custom domain, no workers.dev)
         env:
           PREVIEW_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
+          EVENT: ${{ github.event_name }}
         # JSON-encode via node so no value can break the config syntax
         run: |
-          # the slug is now a DNS label ("ws-<slug>"), not just part of a
-          # worker name: reject anything that would produce an invalid or
-          # over-long hostname before wrangler tries to provision a cert
-          if ! [[ "$PREVIEW_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?$ ]]; then
-            echo "::error::preview slug must be a lowercase DNS label (a-z, 0-9, dashes; no leading/trailing dash; <= 59 chars)"
+          # The slug feeds two names with different limits, so validate against
+          # the tighter one up front rather than letting wrangler fail on a
+          # cryptic API error after a cert has already been requested:
+          #   hostname label "ws-<slug>"                 — 63, so slug <= 60
+          #   worker name "workingset-explorer-<slug>"   — 63, so slug <= 43
+          # 41 keeps two characters of headroom, so lengthening the worker-name
+          # prefix cannot silently turn a valid slug into a failed deploy.
+          if ! [[ "$PREVIEW_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,39}[a-z0-9])?$ ]]; then
+            echo "::error::preview slug must be a lowercase DNS label (a-z, 0-9, dashes; no leading/trailing dash) of at most 41 chars — the Worker name limit, which binds before the hostname one"
+            exit 1
+          fi
+          # pr<number> is the PR previews' namespace, and it is load-bearing,
+          # not just convention: a dispatch named pr42 would write the same
+          # worker and hostname as PR #42 from a *different* concurrency group
+          # (dispatches key on the slug, PR events on the number), and the
+          # nightly sweep would then judge that worker by PR #42's state.
+          if [ "$EVENT" = "workflow_dispatch" ] && [[ "$PREVIEW_NAME" =~ ^pr[0-9]+$ ]]; then
+            echo "::error::slug \"$PREVIEW_NAME\" is reserved for the PR preview of that number — pick a different one"
             exit 1
           fi
           node -e 'const n = process.env.PREVIEW_NAME;
@@ -140,10 +154,15 @@ jobs:
           worker="workingset-explorer-$PREVIEW_NAME"
           api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers"
           auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
-          # list and filter in two steps, not one pipeline: without pipefail a
-          # failed curl would be swallowed by a happy jq and read as "no
-          # domains attached", i.e. a silent skip of the detach
-          list=$(curl -sS --fail "${auth[@]}" "$api/domains?service=$worker")
+          tmp=$(mktemp)
+          trap 'rm -f "$tmp"' EXIT
+          # list and filter in two assignments rather than one pipeline, so the
+          # failure mode does not depend on pipefail being set — the default
+          # runner shell here is `bash -e {0}`, no pipefail, and a failed curl
+          # piped into a happy jq would read as "no domains attached", i.e. a
+          # silent skip of the detach
+          list=$(curl -sS --fail "${auth[@]}" "$api/domains?service=$worker") || {
+            echo "::error::listing Worker domains for $worker failed"; exit 1; }
           ids=$(jq -r --arg s "$worker" '.result[]?
                 | select(.service == $s)
                 | select(.hostname | endswith(".preview.tomvaucourt.com"))
@@ -152,11 +171,11 @@ jobs:
             echo "No preview custom domain attached to $worker; nothing to detach."
           fi
           for id in $ids; do
-            code=$(curl -sS -o resp.json -w '%{http_code}' -X DELETE "${auth[@]}" \
+            code=$(curl -sS -o "$tmp" -w '%{http_code}' -X DELETE "${auth[@]}" \
               "$api/domains/$id")
             case "$code" in
               200|204|404) echo "Detached custom domain $id from $worker." ;;
-              *) echo "::error::detaching $id failed with HTTP $code"; cat resp.json; exit 1 ;;
+              *) echo "::error::detaching $id failed with HTTP $code"; cat "$tmp"; exit 1 ;;
             esac
           done
       # DELETE via the API rather than `wrangler delete` — the CLI's
@@ -170,13 +189,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PREVIEW_NAME: pr${{ github.event.pull_request.number }}
         run: |
-          code=$(curl -sS -o resp.json -w '%{http_code}' -X DELETE \
+          tmp=$(mktemp)
+          trap 'rm -f "$tmp"' EXIT
+          code=$(curl -sS -o "$tmp" -w '%{http_code}' -X DELETE \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/workingset-explorer-$PREVIEW_NAME?force=true")
           case "$code" in
             200|204) echo "Deleted worker workingset-explorer-$PREVIEW_NAME." ;;
             404) echo "Worker workingset-explorer-$PREVIEW_NAME does not exist; nothing to delete." ;;
-            *)   echo "Delete failed with HTTP $code:"; cat resp.json; exit 1 ;;
+            *)   echo "Delete failed with HTTP $code:"; cat "$tmp"; exit 1 ;;
           esac
       - name: Update PR comment
         env:
