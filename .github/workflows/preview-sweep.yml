@@ -66,7 +66,12 @@ jobs:
             pages=$(jq -r '.result_info.total_pages
               // (if .result_info.total_count then ((.result_info.total_count / 100) | ceil) else empty end)' <<<"$chunk")
             if [ -z "$pages" ]; then
-              echo "::warning::result_info has neither total_pages nor total_count; assuming a single page"
+              # Cloudflare's workers/scripts list ignores per_page/page and
+              # returns every script in one response with no pagination
+              # metadata (observed live 2026-08-04): this is the normal path,
+              # not a truncation — so a plain log line, not a ::warning
+              # annotation on every nightly run.
+              echo "result_info has no pagination metadata; endpoint returns all scripts in one page"
               pages=1
             fi
             [ "$page" -ge "$pages" ] && break
