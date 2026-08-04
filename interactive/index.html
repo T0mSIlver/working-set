@@ -267,7 +267,12 @@ svg text{fill:var(--text-2)}
       <h1>GPU scaling — interactive scenario explorer</h1>
       <p class="sub">Which model, on which GPUs, with which parameters — for agentic coding on H200 / B300. The hypothesis, once: a request that hits a <b>warm</b> session prefills only its new turn and is served comfortably; a <b>cold</b> one re-prefills its whole context and briefly stalls everyone. Plan on <b>warm p5</b>.</p>
     </div>
-    <button class="themebtn" id="themeBtn" type="button"><span id="themeIco">◐</span><span id="themeTxt">Theme</span></button>
+    <div style="display:flex; gap:8px; flex-wrap:wrap">
+      <button class="themebtn" id="shareBtn" type="button"
+        title="Copy a link that reproduces every control on this page exactly as it is set now">
+        <span aria-hidden="true">⧉</span><span id="shareTxt">Share this configuration</span></button>
+      <button class="themebtn" id="themeBtn" type="button"><span id="themeIco">◐</span><span id="themeTxt">Theme</span></button>
+    </div>
   </header>
 
   <p class="assump-line">Memory model calibrated to an FP8 anchor <em>projected</em> from the baseline's measured FP16 H200 pool, validated once against a real TP2 bring-up (within 0.3%); everything prefill-side is <span class="prov">analytic and unvalidated</span>. <a href="method.html">All assumptions, the full model &amp; glossary →</a></p>
@@ -1813,6 +1818,11 @@ const state = {
   // Not part of any compute signature — toggling re-renders from cached rows.
   showCeil: false,
 };
+
+// Snapshot of the published reference configuration, taken BEFORE any URL
+// state is applied: the share link encodes only the DIFFS from this, so a
+// default page shares as a bare URL and every link stays readable.
+const STATE_DEFAULTS = { ...state };
 
 // topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
 // in scenario_model.py): TP = one engine, weights sharded, one shared cache,
@@ -3703,6 +3713,87 @@ function syncLabels(){
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
 }
 
+/* ---- share link: the whole configuration in the URL fragment ------------
+   Encodes only the DIFFS from STATE_DEFAULTS, so a default page shares as a
+   bare URL. The fragment (not the query string) keeps every permutation on
+   one cached asset and out of server logs. Decode VALIDATES everything: enum
+   keys against their real option sets, numbers clamped to each slider's own
+   min/max — a mangled link degrades to the nearest legal state instead of
+   rendering garbage, and enforceConstraints() then applies the cross-control
+   rules (tp | ngpu, NVFP4 gate, per-model caps) exactly as a click would. */
+const URL_ENUMS = {
+  model: () => Object.keys(CONFIG.MODELS),
+  gpu:   () => Object.keys(CONFIG.GPUS),
+  wdt:   () => ["fp8","nvfp4"], kv: () => ["fp8","fp16"],
+  state_dt: () => ["bf16","fp32"], wover: () => ["pub","p15"],
+};
+const URL_BOOLS = ["sub_shares_prefix"];
+// numeric keys ride the slider map where a slider exists; tp has none
+const URL_EXTRA_NUM = { tp: [1, 8] };
+function encodeStateURL(){
+  const p = new URLSearchParams();
+  const put = (k, v) => { if (String(v) !== String(STATE_DEFAULTS[k])) p.set(k, String(v)); };
+  for (const k of Object.keys(URL_ENUMS)) put(k, state[k]);
+  for (const [, k] of sliderMap.map(([i, kk]) => [i, kk])) put(k, state[k]);
+  for (const k of Object.keys(URL_EXTRA_NUM)) put(k, state[k]);
+  // booleans encode as 1/0, so the diff test must compare the BOOLEANS —
+  // comparing "0" to "false" would stamp the key into every default link
+  for (const k of URL_BOOLS) if (state[k] !== STATE_DEFAULTS[k]) p.set(k, state[k] ? '1' : '0');
+  const q = p.toString();
+  return location.origin === "null"   // file:// — origin is unusable
+    ? location.href.split('#')[0] + (q ? '#' + q : '')
+    : location.origin + location.pathname + (q ? '#' + q : '');
+}
+function applyURLState(){
+  const h = location.hash.replace(/^#/, '');
+  if (!h) return;
+  let p; try { p = new URLSearchParams(h); } catch (e) { return; }
+  for (const [k, opts] of Object.entries(URL_ENUMS)){
+    const v = p.get(k);
+    if (v !== null && opts().includes(v)) state[k] = v;
+  }
+  // a shared model carries its own MTP default unless the link pins one —
+  // the same reset the model buttons apply on click
+  if (p.get('model') !== null && p.get('mtp') === null)
+    state.mtp = CONFIG.MODELS[state.model].mtp;
+  // these three sliders get model-scaled maxima (up to 4× the HTML attribute,
+  // ctxScale) from enforceConstraints AFTER this runs — clamp against the
+  // widest legal range here and let the constraint pass do the per-model clamp
+  const SCALED = { 'user_median': 4, 'sub_median': 4, 'cap': 4 };
+  for (const [id, k, cast] of sliderMap){
+    const v = p.get(k);
+    if (v === null) continue;
+    const el = document.getElementById(id), n = cast(v);
+    if (Number.isFinite(n))
+      state[k] = clip(n, parseFloat(el.min), parseFloat(el.max) * (SCALED[k] || 1));
+  }
+  for (const [k, [lo, hi]] of Object.entries(URL_EXTRA_NUM)){
+    const v = p.get(k);
+    if (v === null) continue;
+    const n = parseFloat(v);
+    if (Number.isFinite(n)) state[k] = k === 'tp' ? Math.round(clip(n, lo, hi)) : clip(n, lo, hi);
+  }
+  for (const k of URL_BOOLS) if (p.get(k) !== null) state[k] = p.get(k) === '1';
+}
+// reflect enum state into the two segmented controls enforceConstraints does
+// not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
+function syncEnumSegs(){
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu']])
+    document.querySelectorAll(`#${segId} button`).forEach(
+      b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
+  document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;
+}
+document.getElementById('shareBtn').addEventListener('click', e => {
+  const url = encodeStateURL();
+  // keep the address bar in step with what was just copied (no history entry)
+  try { history.replaceState(null, '', url); } catch (err) { /* file:// */ }
+  const txt = document.getElementById('shareTxt'), old = 'Share this configuration';
+  const done = ok => { txt.textContent = ok ? 'Link copied' : url === location.href ? 'Link is in the address bar' : 'Copy blocked — use the address bar';
+                       setTimeout(() => { txt.textContent = old; }, 1800); };
+  if (!navigator.clipboard?.writeText){ done(false); return; }
+  navigator.clipboard.writeText(url).then(() => done(true)).catch(() => done(false));
+});
+
 /* ---- theme toggle ---- */
 const themeBtn=document.getElementById('themeBtn');
 function currentTheme(){
@@ -3736,8 +3827,7 @@ function redrawCharts(){
   // var() colors but is repainted too so its copy-button state never goes stale
   if (lastFrontierRows) renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
   if (lastDeploy) renderDeployCard(lastDeploy.op, lastDeploy.model, lastDeploy.topo,
-                                   lastDeploy.wl, lastDeploy.mo, lastDeploy.decodeUsers);
-}
+                                   lastDeploy.wl, lastDeploy.mo, lastDeploy.decodeUsers);}
 themeBtn.addEventListener('click',()=>{
   const next = currentTheme()==='dark'?'light':'dark';
   document.documentElement.setAttribute('data-theme',next);
@@ -3767,6 +3857,8 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
 }, (n,dc)=>[{v:interpAt(dc,'agg',n), color:cssv('--s3'), r:4}]);
 
 /* ---- init ---- */
+applyURLState();       // a shared link restores every control before first paint
+syncEnumSegs();
 enforceConstraints();
 syncLabels();
 applyThemeLabel();
