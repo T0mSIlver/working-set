@@ -542,6 +542,28 @@ svg text{fill:var(--text-2)}
     <div id="deployBody"></div>
   </div>
 
+  <div class="panel card" id="costCard" style="margin-bottom:14px">
+    <p class="ct">The electricity bill</p>
+    <p class="cs">Wall power priced from the duty cycle the model already computes — prefill bursts near the power cap, bandwidth-bound decode well under it, idle in between — plus the chassis and the facility overhead (PUE). Energy only: the GPUs themselves are not priced. GPU term ±20–25%; B300 figures are extrapolated from Hopper measurements — <a href="method.html#power">method &amp; sources</a>.</p>
+    <div class="ctl-grid" style="margin-bottom:4px">
+      <div class="ctl-group">
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="What one kWh costs you. Default €0.19 = the Eurostat EU-27 non-household average (H1-2025); the spread runs €0.077 (FI) to €0.258 (CY). The bill is exactly linear in it.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
+          <input type="range" id="s-ekwh" min="0.05" max="0.60" step="0.01" value="0.19">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Power Usage Effectiveness — facility watts per IT watt (cooling, distribution). 1.2 ≈ hyperscale, 1.5 ≈ the Uptime-survey colo average, 2.0 ≈ a small in-house server room. Multiplies the whole bill.">Facility PUE</span></label>
+          <div class="seg" id="seg-pue" data-key="pue">
+            <button data-v="1.2" aria-pressed="false">1.2 hyperscale</button>
+            <button data-v="1.5" aria-pressed="true">1.5 colo</button>
+            <button data-v="2.0" aria-pressed="false">2.0 server room</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="costBody"></div>
+  </div>
+
   <div class="panel card" id="ceilingCard">
     <p class="ct">All four ceilings, side by side</p>
     <p class="cs">How many concurrent users each constraint allows. The shortest bar is the answer; the marker is your load.</p>
@@ -565,7 +587,7 @@ svg text{fill:var(--text-2)}
 
   <div class="panel card" style="margin-top:14px">
     <p class="ct">The frontier — every model × split on the selected GPU</p>
-    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP.</p>
+    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
     <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
     <div id="frontierTable"></div>
   </div>
@@ -602,9 +624,19 @@ const CONFIG = {
   // 2:4 sparsity, which no dense LLM GEMM reaches — halve it. B300: the DGX
   // B300 datasheet's 72 PFLOPS FP8 (8 GPUs, sparse) -> 4.5 dense/GPU; the
   // Ultra FP4 uplift did NOT carry to FP8, so "FP8 = FP4/2" is wrong here.
+  // Power constants (research/power.md): tdp_w is the spec plate; idle_w a
+  // measured H100 warm-idle proxy +10% (B300 extrapolated at the same ~10.5%
+  // of TDP); p_decode_w the measured bandwidth-bound token-phase draw (0.55 x
+  // TDP central, band 0.45-0.75); p_prefill_w the power-cap-limited prefill
+  // draw (0.90 x TDP — the cap binds before the FLOP peak, so it is FLAT
+  // across the MFU 30-60% band); host_w the DGX chassis adder per GPU (spec
+  // ceiling, conservative). B300 rows are ENTIRELY extrapolated — no
+  // published Blackwell Ultra power-state measurements exist.
   GPUS: {
-    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8, peak_flops_fp8: 1.979e15 },
-    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8, peak_flops_fp8: 4.5e15 },
+    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8, peak_flops_fp8: 1.979e15,
+              tdp_w: 700,  idle_w: 80,  p_decode_w: 385, p_prefill_w: 630,  host_w: 575 },
+    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8, peak_flops_fp8: 4.5e15,
+              tdp_w: 1400, idle_w: 150, p_decode_w: 770, p_prefill_w: 1260, host_w: 500 },
   },
   VRAM_PER_GPU: 141e9,     // calibration-anchor GPU (H200) HBM bytes
   HBM_BW:       4.8e12,    // calibration-anchor GPU bandwidth, bytes/s
@@ -1817,6 +1849,11 @@ const state = {
   // UI-only: whether the frontier table shows the four per-ceiling columns.
   // Not part of any compute signature — toggling re-renders from cached rows.
   showCeil: false,
+  // electricity price and facility PUE the cost card multiplies by — pricing
+  // constants, so deliberately NOT in samplingSig (they move no sampled draw).
+  // Defaults: Eurostat EU non-household average and the Uptime-survey colo
+  // figure (research/power.md).
+  ekwh: 0.19, pue: "1.5",
 };
 
 // Snapshot of the published reference configuration, taken BEFORE any URL
@@ -2669,7 +2706,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   if (noFit){
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
     renderBindingChart(null); renderSpikeChart(null); renderCeilingBars(null);
-    renderDeployCard(null);
+    renderDeployCard(null); renderCostCard(null);
     // The frontier enumerates every configuration and does not depend on the
     // current one fitting — when the answer to "can I run this?" is no, it is
     // the only thing on screen that answers "then what?". It now carries
@@ -2734,6 +2771,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
   renderCeilingBars(op);
   renderDeployCard(op, model, topo, wl, mo, decodeUsers);
+  renderCostCard(op, model, topo, wl, mo, decodeUsers);
   renderBindingChart(d, op);
 
   // context lines on the spike chart: the same model at other widths that fit
@@ -2802,7 +2840,10 @@ function renderFrontierSection(wl, cs, draft, q){
              op: operatingPoint(m2, t2, wl, cs, {
                mo: mo2, reps: r.reps,
                warmUsers: r.warmUsers, decodeUsers: r.decodeUsers }),
-             bstar: bStar(mo2, f, state.sla, r2) };
+             bstar: bStar(mo2, f, state.sla, r2),
+             // energy at YOUR load (research/power.md) — comparable across
+             // rows because every row is priced at the same demand
+             eur: energyCost(t2, mo2, f, r2, r.decodeUsers / r.reps).eurMonth };
   }).sort((a,b)=>b.op.limit-a.op.limit);
   renderFrontierTable(rows, `${state.model}|${state.ngpu/state.tp}x${state.tp}`);
 }
@@ -3299,6 +3340,83 @@ function renderCeilingBars(op){
   box.innerHTML = svgEl(g, W, H, 'The four ceilings compared in max concurrent users, with the current load marked');
 }
 
+/* ---- THE ELECTRICITY BILL (research/power.md) -----------------------------
+   Wall power from the duty cycle the model already computes. Three GPU
+   states, priced per research/power.md's measured anchors:
+     prefill   d_p = the prefill duty rho — compute-bound, power-cap-limited
+               (~0.90 x TDP, FLAT across the MFU band: the cap binds first)
+     decode    d_d — bandwidth-bound, well under TDP (~0.55 x, the softest
+               constant, band 0.45–0.75)
+     idle      the remainder, at warm-idle watts
+   d_p and d_d PARTITION time (no double counting): d_d is the decode demand
+   the load implies against the decode capacity at the 40 tok/s floor, capped
+   at whatever prefill leaves. P_total = n_gpu x (P_gpu + host) x PUE.
+   -------------------------------------------------------------------------- */
+// Output tokens one MAIN request decodes — ASSUMED, unmeasured (the workload
+// model never needed output lengths before). Consistent with the measured
+// 10.8 s served per turn at 50–90 tok/s. Scales d_d and the €/1M-token figure
+// linearly; the €/month bill moves far less (decode is one term of three).
+const AVG_OUT_TOK = 1000;
+
+// Average draw of one GPU and the whole system, at the current load.
+// rateGroup = TOTAL req/s one replica group sees; decodeUsersGroup = the
+// per-group decode ceiling at the floor (its capacity proxy).
+function powerDraw(topo, mo, f, rateGroup, decodeUsersGroup){
+  const g = topo.gpu || CONFIG.GPUS["H200"];
+  const eS = f * mo.miss + (1 - f) * mo.hit;
+  const dP = Math.min(1, rateGroup * eS);
+  const demand = rateGroup * AVG_OUT_TOK;                       // tok/s asked
+  const cap = decodeUsersGroup * DECODE_FLOOR_TOKS;             // tok/s at floor
+  const dD = Math.min(Math.max(0, 1 - dP), cap > 0 ? demand / cap : 1);
+  const perGpu = dP * g.p_prefill_w + dD * g.p_decode_w
+               + Math.max(0, 1 - dP - dD) * g.idle_w;
+  const pue = parseFloat(state.pue) || 1.5;
+  const kw = topo.n_gpu * (perGpu + g.host_w) * pue / 1000;
+  return { dP, dD, perGpu, kw, pue };
+}
+// € figures on top of the draw. 720 h/month; €/1M output tokens divides the
+// whole system's cost rate by the output-token rate the load implies.
+function energyCost(topo, mo, f, rateGroup, decodeUsersGroup){
+  const p = powerDraw(topo, mo, f, rateGroup, decodeUsersGroup);
+  const eurMonth = p.kw * 720 * state.ekwh;
+  const outTokS = rateGroup * (topo.replicas || 1) * AVG_OUT_TOK;
+  const eurMtok = outTokS > 0 ? (p.kw * state.ekwh / 3600) / outTokS * 1e6 : Infinity;
+  return { ...p, eurMonth, eurUser: eurMonth / Math.max(1, state.users), eurMtok };
+}
+
+function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
+  const box = document.getElementById('costBody'); if (!box) return;
+  if (!op){
+    box.innerHTML = '<p class="cs">model weights do not fit this configuration — no deployment, no bill.</p>';
+    return;
+  }
+  const reps = topo.replicas || 1;
+  const rate = serverRate(state.users, state.think, wl.sub_ratio) / reps;
+  const c = energyCost(topo, mo, wl.invalidation, rate, decodeUsersGroup);
+  const g = topo.gpu || CONFIG.GPUS["H200"];
+  const idleFrac = Math.max(0, 1 - c.dP - c.dD);
+  const draw = [
+    ['Average draw', `${fmt(c.kw, 2)} kW`],
+    ['Per GPU (of TDP)', `${fmt(c.perGpu, 0)} W (${fmt(c.perGpu / g.tdp_w * 100, 0)}%)`],
+    ['Time split', `${fmt(c.dP * 100, 0)}% prefill · ${fmt(c.dD * 100, 0)}% decode · ${fmt(idleFrac * 100, 0)}% idle`],
+    ['Host + PUE', `${fmt(g.host_w, 0)} W/GPU · ×${c.pue}`],
+  ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
+  const bill = [
+    ['Energy / month', `€${fmt(c.eurMonth, 0)}`],
+    ['Per user / month', `€${fmt(c.eurUser, 2)}`],
+    ['Per 1M output tokens', isFinite(c.eurMtok) ? `€${fmt(c.eurMtok, 2)}` : '—'],
+    ['At idle (floor)', `€${fmt(topo.n_gpu * (g.idle_w + g.host_w) * c.pue / 1000 * 720 * state.ekwh, 0)} /mo`],
+  ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
+  box.innerHTML =
+    `<div class="deploy">`
+    + `<div><h4>Draw</h4><dl class="spec">${draw}</dl></div>`
+    + `<div><h4>Bill</h4><dl class="spec">${bill}</dl></div>`
+    + `<p class="verdictline" style="color:${cssv('--muted')};font-weight:400">`
+    + `Output assumed at ${fmt(AVG_OUT_TOK, 0)} tokens per request (unmeasured). `
+    + `Two seemingly equal configurations rarely bill equally: idle watts scale with GPU count, decode watts with the load.</p>`
+    + `</div>`;
+}
+
 /* ---- The deploy card ------------------------------------------------------
    The page's answer as a recipe: the current controls spelled out as the vLLM
    flags they imply, next to the outcomes the model projects for them. The
@@ -3407,7 +3525,7 @@ function renderFrontierTable(rows, curKey){
       + `<th class="num">latency</th><th class="num">saturation</th>` : '';
   const head = `<tr><th>configuration</th><th>your load</th><th class="num">max users</th>`
              + `<th>binds on</th><th class="num">headroom</th>${ceilHead}`
-             + `<th class="num">B*</th></tr>`;   // .num headers right-align over their digits
+             + `<th class="num">B*</th><th class="num">€/mo</th></tr>`;   // .num headers right-align over their digits
   const body = rows.map(r=>{
     const you = r.key===curKey ? ' class="you"' : '';
     const viable = r.op.limit >= 1;
@@ -3436,7 +3554,9 @@ function renderFrontierTable(rows, curKey){
             ? `<td class="num" style="color:${fits?(room>1.25?good:warn):crit}">×${fmt(room, room<10?1:0)}${cen?'+':''}</td>`
             : `<td class="num" style="color:${muted}">—</td>`)
          + ceilCells
-         + `<td class="num">${fmt(r.bstar,1)}</td></tr>`;
+         + `<td class="num">${fmt(r.bstar,1)}</td>`
+         // energy is meaningful only where the load can actually be served
+         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td></tr>`;
   }).join('');
   document.getElementById('frontierTable').innerHTML =
     `<div class="ftable-wrap"><table class="ftable">${head}${body}</table></div>`;
@@ -3605,6 +3725,7 @@ const sliderMap=[
   ['s-sla','sla',v=>parseInt(v,10)],
   ['s-turn','turn',v=>parseInt(v,10)],
   ['s-burst','burst',v=>parseInt(v,10)],
+  ['s-ekwh','ekwh',v=>parseFloat(v)],
 ];
 sliderMap.forEach(([id,key,cast])=>{
   const el=document.getElementById(id);
@@ -3711,6 +3832,7 @@ function syncLabels(){
   document.getElementById('v-sub_ratio').textContent=r.toFixed(2)+perTxt;
   document.getElementById('v-sys').textContent=fmt(state.sys,0);
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
+  document.getElementById('v-ekwh').textContent=state.ekwh.toFixed(2);
 }
 
 /* ---- share link: the whole configuration in the URL fragment ------------
@@ -3726,6 +3848,7 @@ const URL_ENUMS = {
   gpu:   () => Object.keys(CONFIG.GPUS),
   wdt:   () => ["fp8","nvfp4"], kv: () => ["fp8","fp16"],
   state_dt: () => ["bf16","fp32"], wover: () => ["pub","p15"],
+  pue: () => ["1.2","1.5","2.0"],
 };
 const URL_BOOLS = ["sub_shares_prefix"];
 // numeric keys ride the slider map where a slider exists; tp has none
@@ -3778,7 +3901,7 @@ function applyURLState(){
 // reflect enum state into the two segmented controls enforceConstraints does
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
-  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu']])
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;

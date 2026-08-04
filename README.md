@@ -9,8 +9,10 @@ for agentic coding workloads.
 **Start with the [interactive explorer](https://workingset.tomvaucourt.com/)** —
 live sliders for the workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 /
 GLM-5.2 / DeepSeek-V4-Flash), GPU (H200 / B300), weight & KV dtypes, and
-DP × TP topology. Configurations are **shareable**: the share button copies a
-link that encodes every control, so a decision can be reproduced exactly.
+DP × TP topology. Configurations are **shareable** (a link encodes every
+control), and the explorer prices the **electricity bill**: a €/kWh slider
+and a duty-cycle power model turn every configuration into €/month,
+€/user·month and €/1M output tokens (`research/power.md`).
 
 ## Contents
 
