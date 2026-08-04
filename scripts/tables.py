@@ -746,13 +746,42 @@ def planner_tables():
     print("  The sessions-per-user assumption acts on the other pair: a user who")
     print("  keeps k concurrent sessions divides the cache ceiling by k and leaves")
     print("  latency alone (the work rate is unchanged).")
-    for think in (15.0, 30.0, 60.0):
+    for think in (15.0, 30.0, M.MEASURED_CYCLE_S, 60.0):
         op = M.operating_point(m27, tp2, w0, M.REF_USERS, CH, TURN, SLA,
                                think_time_s=think, n_iter=600)
         c = op["ceilings"]
+        mark = "  <-- measured interval" if think == M.MEASURED_CYCLE_S else ""
         print(f"  think {think:5.0f} s  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
               f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
-              f"{op['binding'].upper()}")
+              f"{op['binding'].upper()}{mark}")
+
+    print("\n== Think time, measured (scripts/think_time_trace.py) ==")
+    print("  Role-tagged pi-agent trace (2026-08-04, 8 sessions / 306 requests):")
+    print(f"  the open-loop interval is {M.MEASURED_CYCLE_S:.0f} s = Z "
+          f"{M.MEASURED_THINK_Z_S:.1f} s waiting ({M.MEASURED_REQ_PER_TURN:.1f} "
+          f"requests/turn; tool waits mean {M.MEASURED_T_TOOL_S:.1f} s but")
+    print(f"  median 0.61 s — build-dominated; human waits mean "
+          f"{M.MEASURED_T_HUMAN_S:.0f} s) + R {M.MEASURED_SERVICE_R_S:.1f} s "
+          f"being served on the traced API")
+    print("  backend. The study's 30 s reference is therefore the CONSERVATIVE")
+    print("  side of the measurement. R does not port to an on-prem box, so the")
+    print("  CLOSED conversion drops it: Z is the knob and the deployment")
+    print("  supplies its own response time (queue + prefill + decode at the")
+    print("  40 tok/s floor) — a slower deployment stretches its users' cycles")
+    print("  and lightens its own arrival rate. Cache/decode columns unchanged")
+    print("  by construction; in closed mode 'sat' is the throughput KNEE (past")
+    print("  it users buy latency, not throughput), and it can bind before the")
+    print("  SLA is exhausted — the open ordering lat < sat is open-only.")
+    for f in (0.01, 0.10):
+        opo = M.operating_point(m27, tp2, wl(invalidation=f), M.REF_USERS,
+                                CH, TURN, SLA, n_iter=600)
+        opc = M.operating_point(m27, tp2, wl(invalidation=f), M.REF_USERS,
+                                CH, TURN, SLA, closed=True, n_iter=600)
+        co, cc = opo["ceilings"], opc["ceilings"]
+        print(f"  f={f:4.0%}  open   latency {co['latency']:5.0f}  sat "
+              f"{co['saturation']:5.0f}  -> {opo['binding'].upper()}")
+        print(f"          closed latency {cc['latency']:5.0f}  knee "
+              f"{cc['saturation']:5.0f}  -> {opc['binding'].upper()}")
     print("  TTFT budget moves only the latency ceiling (and B* with it):")
     for sla in (5.0, 10.0, 20.0, 30.0):
         lat = M.max_users_latency(m27, tp2, w0, CH, sla, TURN)

@@ -1691,8 +1691,14 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
 # assumptions, both stated rather than hidden:
 #
 #   1. ONE USER HOLDS ONE SESSION. So a session count converts to a user count.
-#   2. A USER SENDS A TURN EVERY `think_time_s` SECONDS. So a user count
-#      converts to a request rate, and a work rate converts back to users.
+#   2. A USER'S MAIN-AGENT STREAM ISSUES A REQUEST EVERY `think_time_s`
+#      SECONDS — the full turn-to-turn interval, open loop (the previous
+#      response's service time is inside it, not on top of it). So a user
+#      count converts to a request rate, and a work rate converts back to
+#      users. Each main request additionally tows `wl.sub_ratio` subagent
+#      requests through the prefill server, so the total arrival rate is
+#      (1 + sub_ratio) x users / think_time — the same (1 + r) that the
+#      service moments already carry in their class mixture.
 #
 # Under those, all four of the study's constraints become the SAME quantity —
 # **the maximum concurrent users this configuration serves** — and the binding
@@ -1713,21 +1719,74 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
 # see docs/scenarios.md § 9 "Reading the two-axis planner". A user with several
 # concurrent sessions, or bursty think time, moves the cache and latency
 # frontiers in opposite directions.
+#
+# Assumption 2 now has a measured anchor (the MEASURED_* block below): a
+# role-tagged pi-agent trace puts the open-loop interval at 43 s — waiting
+# Z = 32.3 s (47% tool execution, 53% human) plus being-served R = 10.8 s on
+# the traced API backend. R does NOT transfer to an on-prem deployment, which
+# is exactly why the CLOSED variants of the latency and saturation ceilings
+# exist: they take Z as the knob and let the model supply its own R
+# (queue wait + prefill + decode), so a slower deployment stretches the
+# cycle — and lightens its own arrival rate — automatically. The open
+# conversion with the 30 s reference stays the default and is the
+# conservative side of the measurement (30 s < 43 s measured).
 # ============================================================================
 
 DECODE_FLOOR_TOKS = 40.0    # the study's hard per-user floor (50 is comfortable)
-THINK_TIME_S = 30.0         # reference: one turn every 30 s
-REF_USERS = 64              # reference population -> 64/30 = 2.13 req/s
+THINK_TIME_S = 30.0         # reference: one main-agent request every 30 s
+REF_USERS = 64              # reference population -> 64/30 = 2.13 req/s (main
+                            # requests; the prefill server sees 1 + sub_ratio x)
+OUT_TOKENS_DEFAULT = 1_000  # decoded share of the 2,000-token turn increment
+                            # (the rest arrives as tool results / user text)
+
+# Measured think-time anchors — role-tagged pi-agent trace, 2026-08-04:
+# 8 sessions, 306 main-agent requests, 39 human turns. Regenerate with
+# scripts/think_time_trace.py from an inter-event-gap CSV (the trace itself is
+# not committed). The one gap > 30 min is excluded as a parked session.
+MEASURED_REQ_PER_TURN = 7.8   # main-agent requests per human turn
+MEASURED_T_TOOL_S = 18.3      # mean tool wait; median 0.61 s (lognormal sigma 2.43
+                              # — the mean is build-dominated, 30x the median)
+MEASURED_T_HUMAN_S = 275.0    # mean human wait; n = 19, tail-dominated (median 58 s)
+MEASURED_THINK_Z_S = 32.5     # waiting per request (tool 47% + human 53%)
+MEASURED_SERVICE_R_S = 10.8   # being-served per request ON THE TRACED API BACKEND
+MEASURED_CYCLE_S = 43.3       # Z + R: the open-loop inter-request interval
 
 
-def request_rate(users: float, think_time_s: float = THINK_TIME_S) -> float:
-    """Requests/s a population of `users` generates. The conversion the whole
-    planner rests on (assumption 2 above)."""
+def think_z(req_per_turn: float = MEASURED_REQ_PER_TURN,
+            t_tool_s: float = MEASURED_T_TOOL_S,
+            t_human_s: float = MEASURED_T_HUMAN_S) -> float:
+    """Steady-state waiting per request: a turn is `req_per_turn` requests, the
+    first n-1 each followed by a tool wait and the last by a human wait.
+
+    With the raw measured means this returns 51 s against the directly
+    measured 32.3 s (MEASURED_THINK_Z_S). The gap is censoring, not error:
+    session-final turns never show their human gap (only 19 of the 39 traced
+    turns have one), so the formula is the upper edge and the direct anchor
+    the lower edge of an honest [32, 51] s band for Z. The knobs exist for
+    sensitivity; they do not outrank the direct measurement.
+    """
+    if req_per_turn < 1:
+        raise ValueError(f"req_per_turn must be >= 1, got {req_per_turn!r}")
+    if t_tool_s < 0 or t_human_s < 0:
+        raise ValueError("tool/human waits must be >= 0")
+    return ((req_per_turn - 1) * t_tool_s + t_human_s) / req_per_turn
+
+
+def request_rate(users: float, think_time_s: float = THINK_TIME_S,
+                 sub_ratio: float = 0.0) -> float:
+    """Requests/s a population of `users` generates — MAIN-agent requests by
+    default (the published 2.13 req/s reference). The conversion the whole
+    planner rests on (assumption 2 above). Pass `sub_ratio` to get the total
+    arrival rate the prefill server actually sees: each main request tows
+    that many subagent requests, and the service moments already mix the two
+    classes at the same ratio."""
     if users < 0:
         raise ValueError(f"users must be >= 0, got {users!r}")
     if think_time_s <= 0:
         raise ValueError(f"think_time_s must be > 0, got {think_time_s!r}")
-    return users / think_time_s
+    if sub_ratio < 0:
+        raise ValueError(f"sub_ratio must be >= 0, got {sub_ratio!r}")
+    return users * (1.0 + sub_ratio) / think_time_s
 
 
 def max_users_cache(model: Model, topo: Topology, wl: Workload, ram_gib=0,
@@ -1776,22 +1835,48 @@ def max_users_saturation(model: Model, topo: Topology, wl, chunk: float,
                          turn_tokens: float = 0.0,
                          think_time_s: float = THINK_TIME_S,
                          mfu: float = MFU_DEFAULT,
-                         per_pass_overhead: bool = False) -> float:
+                         per_pass_overhead: bool = False,
+                         closed_z_s: float = None,
+                         out_tokens: float = OUT_TOKENS_DEFAULT,
+                         decode_toks: float = DECODE_FLOOR_TOKS) -> float:
     """Users at which prefill duty reaches 100% — section 8's f*, in users.
 
-    rho = lambda E[S] = 1 at lambda = 1/E[S], so users = think_time / E[S].
-    Above this the queue has no steady state at all.
+    OPEN (default): rho = lambda E[S] = 1 at lambda = 1/E[S] and each user
+    contributes (1 + sub_ratio) requests per think interval, so
+    users = think_time / ((1 + r) E[S]). Above this the queue has no steady
+    state at all.
+
+    CLOSED (`closed_z_s` set): a session cannot fire while it is being
+    served, so the queue never diverges — throughput saturates instead. The
+    reported ceiling is the balanced-bounds knee of the interactive
+    (machine-repairman) model, N* = (Z + R0) / D: below it users add
+    throughput, above it they only add latency. R0 is the zero-load response
+    (own prefill + decoding `out_tokens` at `decode_toks` — the study's
+    floor, i.e. the slowest acceptable decode) and D = (1 + r) E[S] is the
+    prefill demand one user-cycle places on the bottleneck. Subagent requests
+    are priced as demand, not as cycle time: they overlap the main turn.
     """
     e_s, _, _, _ = prefill_service_moments(model, topo, wl, chunk, turn_tokens,
                                            mfu, per_pass_overhead)
-    return think_time_s / e_s if e_s > 0 else float("inf")
+    demand = (1.0 + wl.sub_ratio) * e_s
+    if demand <= 0:
+        return float("inf")
+    if closed_z_s is None:
+        return think_time_s / demand
+    if closed_z_s < 0:
+        raise ValueError(f"closed_z_s must be >= 0, got {closed_z_s!r}")
+    r0 = e_s + out_tokens / decode_toks
+    return (closed_z_s + r0) / demand
 
 
 def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
                       sla_seconds: float, turn_tokens: float = 0.0,
                       think_time_s: float = THINK_TIME_S,
                       mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
-                      per_pass_overhead: bool = False) -> float:
+                      per_pass_overhead: bool = False,
+                      closed_z_s: float = None,
+                      out_tokens: float = OUT_TOKENS_DEFAULT,
+                      decode_toks: float = DECODE_FLOOR_TOKS) -> float:
     """Users at which a MISS's mean TTFT reaches `sla_seconds`.
 
     Closed form in both disciplines, because E[S] and E[S^2] do not depend on
@@ -1800,11 +1885,23 @@ def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
         PS    c / (1 - lam b) = SLA            ->  lam = (1 - c/SLA) / b
     with a = E[S^2], b = E[S], c = E[S | miss], k = 2(SLA - c).
 
-    ALWAYS strictly inside max_users_saturation: k/(a + k b) < 1/b for any
-    a > 0, which is the algebraic statement of "the queue diverges before the
-    server does" — the section's headline, and asserted in the self-checks.
-    Returns 0 when the request's own prefill already exceeds the budget, i.e.
-    when no load at all can meet it.
+    `lam` is the TOTAL arrival rate (the moments mix both request classes),
+    and each user contributes (1 + sub_ratio) requests per interval, so the
+    OPEN conversion is users = lam think_time / (1 + r).
+
+    CLOSED (`closed_z_s` set): the population that sustains `lam` also spends
+    each cycle being served, so users = lam (Z + R(lam)) / (1 + r), with
+    R = mean prefill sojourn at lam (wait + own prefill; PS: b/(1 - lam b))
+    plus decoding `out_tokens` at `decode_toks`. No fixed point is needed:
+    lam_sla does not depend on the population, only the conversion back to
+    users does. The closed count is ALWAYS >= the open count at the same
+    interval parameter — response feedback stretches the cycle.
+
+    ALWAYS strictly inside max_users_saturation (open vs open): k/(a + k b)
+    < 1/b for any a > 0, which is the algebraic statement of "the queue
+    diverges before the server does" — the section's headline, and asserted
+    in the self-checks. Returns 0 when the request's own prefill already
+    exceeds the budget, i.e. when no load at all can meet it.
     """
     if discipline not in ("fcfs", "ps"):
         raise ValueError(f"discipline must be 'fcfs' or 'ps', got {discipline!r}")
@@ -1820,7 +1917,16 @@ def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
     else:
         k = 2 * (sla_seconds - c)
         lam = k / (a + k * b)
-    return max(0.0, lam * think_time_s)
+    if closed_z_s is None:
+        return max(0.0, lam * think_time_s / (1.0 + wl.sub_ratio))
+    if closed_z_s < 0:
+        raise ValueError(f"closed_z_s must be >= 0, got {closed_z_s!r}")
+    if discipline == "ps":
+        resp = b / (1 - lam * b)
+    else:
+        resp = lam * a / (2 * (1 - lam * b)) + b
+    cycle = closed_z_s + resp + out_tokens / decode_toks
+    return max(0.0, lam * cycle / (1.0 + wl.sub_ratio))
 
 
 def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
@@ -1831,6 +1937,9 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                     mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
                     ram_gib=0, union: str = "linear",
                     per_pass_overhead: bool = False,
+                    closed: bool = False,
+                    z_think_s: float = MEASURED_THINK_Z_S,
+                    out_tokens: float = OUT_TOKENS_DEFAULT,
                     n_iter: int = 400, seed: int = 0) -> dict:
     """All four ceilings in ONE unit — max concurrent users — plus which binds.
 
@@ -1839,9 +1948,19 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
     of it the requested population uses. Everything is per replica GROUP; a DP
     deployment multiplies the cache and decode ceilings by `topo.replicas` only
     under balanced routing, which sticky routing works against (spike.md #3).
+
+    `closed=True` switches the latency and saturation columns to the
+    closed-loop conversion: `z_think_s` (waiting only — measured 32.3 s)
+    replaces `think_time_s` (the full interval — measured 43 s, reference
+    30 s), and the model supplies its own service time. Cache is unchanged
+    on purpose (held sessions occupy KV whether or not the user is active),
+    and decode keeps its published worst-case reading (every user decoding
+    at once) rather than the closed steady-state duty — both are stated in
+    docs/scenarios.md § 9.
     """
     if users < 0:
         raise ValueError(f"users must be >= 0, got {users!r}")
+    z = z_think_s if closed else None
     ceilings = {
         "cache": max_users_cache(model, topo, wl, ram_gib=ram_gib,
                                  n_iter=n_iter, seed=seed),
@@ -1849,10 +1968,14 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                                    union=union, n_iter=n_iter, seed=seed),
         "latency": max_users_latency(model, topo, wl, chunk, sla_seconds,
                                      turn_tokens, think_time_s, mfu,
-                                     discipline, per_pass_overhead),
+                                     discipline, per_pass_overhead,
+                                     closed_z_s=z, out_tokens=out_tokens,
+                                     decode_toks=decode_floor),
         "saturation": max_users_saturation(model, topo, wl, chunk, turn_tokens,
                                            think_time_s, mfu,
-                                           per_pass_overhead),
+                                           per_pass_overhead,
+                                           closed_z_s=z, out_tokens=out_tokens,
+                                           decode_toks=decode_floor),
     }
     binding = min(ceilings, key=ceilings.get)
     limit = ceilings[binding]
@@ -2404,6 +2527,49 @@ def _selfcheck():
     assert (max_users_latency(m27, tp2, replace(wl, invalidation=0.10), CH,
                               SLA, TURN)
             < max_users_latency(m27, tp2, wl, CH, SLA, TURN))
+    # ---- think time: measured anchors and the closed-loop variants ---------
+    # the anchors must be one consistent measurement: cycle = Z + R, the
+    # published 30 s reference sits on the conservative side of the measured
+    # 43 s interval, and the decomposition formula sits ABOVE the direct Z
+    # (session-final turns censor their human gap, so raw means overshoot)
+    assert abs(MEASURED_CYCLE_S
+               - (MEASURED_THINK_Z_S + MEASURED_SERVICE_R_S)) < 0.2, \
+        "cycle anchor must equal Z + R (they are one measurement, split)"
+    assert THINK_TIME_S < MEASURED_CYCLE_S, \
+        "the 30 s reference must remain the conservative side of the anchor"
+    assert MEASURED_THINK_Z_S < think_z() < 2 * MEASURED_THINK_Z_S, \
+        "censoring pushes the formula above the direct Z, but not absurdly so"
+    # each main request tows sub_ratio subagent requests: the total arrival
+    # rate carries (1 + r), and the user ceilings shrink by the same factor
+    assert abs(request_rate(REF_USERS, sub_ratio=wl.sub_ratio)
+               - request_rate(REF_USERS) * (1 + wl.sub_ratio)) < 1e-9, \
+        "total request rate must be (1 + sub_ratio) x the main-agent rate"
+    # closed loop: at the SAME interval parameter the closed count is larger
+    # (response time stretches the cycle), latency stays inside the knee at
+    # the reference configuration, and a slower decode admits MORE users
+    # (each session hammers the prefill server less often)
+    lat_o = max_users_latency(m27, tp2, wl, CH, SLA, TURN)
+    lat_c = max_users_latency(m27, tp2, wl, CH, SLA, TURN,
+                              closed_z_s=THINK_TIME_S)
+    sat_c = max_users_saturation(m27, tp2, wl, CH, TURN,
+                                 closed_z_s=THINK_TIME_S)
+    assert lat_c > lat_o, "closed conversion must admit more users at equal Z"
+    # NOTE: open mode's strict ordering lat < sat is NOT a closed-mode
+    # theorem. The knee converts users with the ZERO-LOAD response while the
+    # latency count uses the congested cycle (W at lam_sla), so the knee can
+    # precede SLA exhaustion — beyond it users buy latency, not throughput,
+    # and the planner's argmin reports whichever gives out first.
+    assert 0 < sat_c < float("inf") and 0 < lat_c < float("inf")
+    assert sat_c > max_users_saturation(m27, tp2, wl, CH, TURN), \
+        "at the reference params the closed knee exceeds the open ceiling"
+    assert (max_users_latency(m27, tp2, wl, CH, SLA, TURN,
+                              closed_z_s=THINK_TIME_S, decode_toks=20.0)
+            > lat_c), "a slower decode must lengthen the cycle -> more users"
+    op_c = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA, closed=True)
+    op_o = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA)
+    assert op_c["ceilings"]["cache"] == op_o["ceilings"]["cache"] and \
+        op_c["ceilings"]["decode"] == op_o["ceilings"]["decode"], \
+        "closed mode must not touch the capacity columns"
     # The planner must REPRODUCE the study's published decision table, not
     # restate it differently: two of its four ceilings are already in § 7's
     # table (warm users p5 = 69 / 177, mns@40 = 118 / 228), and only the

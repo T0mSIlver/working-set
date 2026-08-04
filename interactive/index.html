@@ -453,11 +453,11 @@ svg text{fill:var(--text-2)}
       <div class="ctl-group">
         <div class="ctl-sec">How much traffic</div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="The knob that turns every constraint into ONE unit: a user is assumed to hold one session and send a turn every think-time seconds. The reference load is 64 users / 30 s = 2.13 req/s; both conversions are assumptions, not facts.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
+          <label class="flabel"><span class="tip" data-tip="The knob that turns every constraint into ONE unit: a user is assumed to hold one session and send a MAIN request every think-time seconds, each towing sub_ratio subagent requests through the prefill server. The reference load is 64 users / 30 s = 2.13 main req/s (2.35 total at r = 0.10); assumption 1 is unmeasured, assumption 2 has one measured anchor (43 s — see Think time).">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
           <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Average seconds between one user's REQUESTS (reference: 30 s) — the full turn-to-turn interval, including the previous response's prefill + decode, not idle time on top: arrivals are open-loop, so response time never feeds back into the cadence. Scales the request rate inversely — moves the latency and saturation ceilings linearly while leaving cache and decode untouched.">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
+          <label class="flabel"><span class="tip" data-tip="Average seconds between one user's MAIN requests (reference: 30 s) — the full turn-to-turn interval, including the previous response's prefill + decode, not idle time on top: arrivals are open-loop, so response time never feeds back into the cadence. Measured once (role-tagged pi-agent trace, 2026-08-04): 43 s = 32.5 s waiting (tool + human) + 10.8 s being served, so 30 s is the conservative side — but per-session cycles spanned 4–126 s. Scales the request rate inversely — moves the latency and saturation ceilings linearly while leaving cache and decode untouched. The Python model also offers a closed-loop conversion (operating_point(closed=True)) where waiting alone is the knob and the deployment supplies its own response time.">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
           <input type="range" id="s-think" min="5" max="180" step="5" value="30">
         </div>
         <div class="field">
@@ -1100,7 +1100,13 @@ function spikeMetrics(m, topo, wl, cs, rate, chunk){
    commensurable, and both are stated on the Concurrent users control rather
    than hidden here:
      1. one user holds one session      (a session count becomes a user count)
-     2. a user turns every `think` s    (a user count becomes a work rate)
+     2. a user's MAIN requests come every `think` s — the full open-loop
+        interval (measured 43 s on a role-tagged pi-agent trace; the 30 s
+        reference is the conservative side). Each main request tows
+        `sub_ratio` subagent requests through the prefill server, so the
+        arrival rate carries (1 + r) — the same mixture the service moments
+        already price. (The Python model also offers a CLOSED conversion,
+        operating_point(closed=True); the explorer stays open-loop.)
    Under those, all four ceilings become MAX CONCURRENT USERS and the binding
    one is simply the smallest. Mirrors operating_point() in scenario_model.py.
    -------------------------------------------------------------------------- */
@@ -1139,9 +1145,10 @@ function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
   return { n: lo, censored: false };
 }
 
-// Users at which prefill duty reaches 100% — section 8's f*, in users.
-function maxUsersSaturation(mo, f, think){
-  const eS = f*mo.miss + (1-f)*mo.hit;
+// Users at which prefill duty reaches 100% — section 8's f*, in users. Each
+// user's (1 + subR) requests per interval all land on the prefill server.
+function maxUsersSaturation(mo, f, think, subR){
+  const eS = (f*mo.miss + (1-f)*mo.hit) * (1 + (subR || 0));
   return eS > 0 ? (think||liveThink)/eS : Infinity;
 }
 
@@ -1151,12 +1158,14 @@ function maxUsersSaturation(mo, f, think){
 //   PS    c/(1-lam b) = SLA            ->  lam = (1 - c/SLA)/b
 // ALWAYS strictly inside saturation, since k/(a+kb) < 1/b for any a > 0 — the
 // algebraic form of "the queue diverges before the server does".
-function maxUsersLatency(mo, f, sla, think, discipline){
+function maxUsersLatency(mo, f, sla, think, discipline, subR){
   const b = f*mo.miss + (1-f)*mo.hit;
   const a = f*mo.missSq + (1-f)*mo.hitSq, c = mo.miss;
   if (c >= sla || b <= 0) return 0;
   const lam = discipline === 'ps' ? (1 - c/sla)/b : (2*(sla-c))/(a + 2*(sla-c)*b);
-  return Math.max(0, lam*(think||liveThink));
+  // lam is the TOTAL rate (the moments mix both classes); a user contributes
+  // (1 + subR) requests per interval, so the user count divides it back out
+  return Math.max(0, lam*(think||liveThink)/(1 + (subR || 0)));
 }
 
 // All four ceilings in one unit, plus which binds. `warmUsers` is passed in
@@ -1178,8 +1187,9 @@ function operatingPoint(model, topo, wl, cs, opts){
   const ceilings = {
     cache:      o.warmUsers,
     decode:     o.decodeUsers,
-    latency:    reps * maxUsersLatency(mo, f, sla, think, o.discipline),
-    saturation: reps * maxUsersSaturation(mo, f, think),
+    latency:    reps * maxUsersLatency(mo, f, sla, think, o.discipline,
+                                       wl.sub_ratio),
+    saturation: reps * maxUsersSaturation(mo, f, think, wl.sub_ratio),
   };
   let binding = 'cache';
   for (const k in ceilings) if (ceilings[k] < ceilings[binding]) binding = k;
@@ -1582,6 +1592,9 @@ function sampleFull(wl){
       "a budget below one miss's own prefill cannot be met at any load");
     console.assert(approx(maxUsersLatency(mo, wlRef.invalidation, 10, 60)/lat, 2, 1e-9),
       "think time scales the user ceilings linearly");
+    console.assert(approx(maxUsersSaturation(mo, wlRef.invalidation, 30, 0.10),
+                          sat/1.10, 1e-9),
+      "each main request tows sub_ratio subagent requests: ceilings / (1+r)");
   }
   // The planner's two SAMPLED ceilings (cache, decode) are pinned against
   // section 7's published table in scenario_model.py's self-checks, not here:
