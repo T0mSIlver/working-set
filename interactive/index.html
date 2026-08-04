@@ -591,6 +591,13 @@ svg text{fill:var(--text-2)}
     </div>
   </div>
 
+  <div class="panel card" id="flipCard" style="margin-top:14px">
+    <p class="ct">What would flip this decision</p>
+    <p class="cs">Each bar sweeps <b>one</b> assumption across its plausible range with every other control held at your settings. Colour = which constraint binds there; the red underline marks where your load stops fitting; the ▼ is your current value. Rows are sorted by how close the nearest flip sits — the top row is the assumption your decision leans on hardest.</p>
+    <div class="legend" id="flipLegend"></div>
+    <div id="flipRows"></div>
+  </div>
+
   <div class="panel card" style="margin-top:14px">
     <p class="ct">The frontier — every model × split on the selected GPU</p>
     <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
@@ -2713,6 +2720,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
     renderBindingChart(null); renderSpikeChart(null); renderCeilingBars(null);
     renderDeployCard(null); renderTestCard(null); renderCostCard(null);
+    renderFlipPanel(null); lastFlipAxes = null;
     // The frontier enumerates every configuration and does not depend on the
     // current one fitting — when the answer to "can I run this?" is no, it is
     // the only thing on screen that answers "then what?". It now carries
@@ -2795,6 +2803,13 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   }
   renderSpikeChart(d, others);
   renderFrontierSection(wl, cs, draft, q);
+
+  // the sensitivity panel re-sweeps every soft input, so like the other
+  // sampled halves it runs on SETTLED renders only and drafts reuse the last
+  // result (the 120 ms settle corrects it)
+  if (!draft || !lastFlipAxes)
+    lastFlipAxes = computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps);
+  renderFlipPanel(lastFlipAxes);
 }
 
 /* ---- the frontier section --------------------------------------------------
@@ -3560,6 +3575,266 @@ function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
     + `</div>`;
 }
 
+/* ---- "What would flip this decision" — the sensitivity panel --------------
+   Chart G already sweeps ONE assumption (the miss rate) and marks where the
+   binding constraint changes hands; this panel does the same for every soft
+   input at once, in one glance. Each row sweeps one assumption across its
+   plausible range holding the rest fixed, colours the track by which
+   constraint binds there, underlines where the current load stops fitting,
+   and names the nearest handover. Rows sort by distance-to-flip: the top row
+   is the assumption the current decision leans on hardest.
+
+   The two sampled ceilings (cache, decode) cannot be Monte-Carlo re-filled at
+   every point of every sweep, so the workload axes use MEAN-FIELD stand-ins —
+   expected pool cost per session, mean-context decode speed — each CALIBRATED
+   so it passes exactly through the MC value at the current settings. The
+   approximation is stated in the panel caption; the closed-form axes (miss
+   rate via warmFn, think time, budget, turn, MFU) carry no such caveat. */
+
+// Mean-field warm USER capacity of one replica group: expected pool cost per
+// resident session against both budgets, mirroring warmOnce's accounting
+// (cold sessions occupy their full length but do not count as warm; every
+// resident holds its recurrent state; one reserved block per distinct prefix).
+// Returns a MEAN, not a p5 — the flip calibration ratio absorbs the gap.
+function warmUsersApprox(model, topo, wl, nSamp){
+  const pool = kv_pool_tokens(model, topo);
+  if (pool <= 0) return 0;
+  let reserved = wl.sys_user;
+  if (!wl.sub_shares_prefix && wl.sub_ratio > 0) reserved += wl.sys_sub;
+  const stateTok = model.deltanet_state / model.kv_bpt;
+  let s = 0; const r = {full:0, prefix:0, isCold:false};
+  for (let i = 0; i < nSamp; i++){
+    sampleReqInto(wl, r);
+    s += (r.isCold ? r.full : Math.max(r.full - r.prefix, 0)) + stateTok;
+  }
+  const eU = s / nSamp || 1;
+  const ram = ramPerCache(topo);
+  const gpuB = Math.max(0, pool - reserved);
+  const ramB = ram > 0 ? Math.max(0, ram * GIB / model.kv_bpt - reserved) : 0;
+  return (gpuB + ramB) / eU * (1 - wl.invalidation) * (1 - p_sub(wl));
+}
+
+// Mean-context decode ceiling of one replica group: the concurrency at which
+// per-user speed hits the floor, with every sequence priced at the MEAN
+// context instead of its own draw (the MC bisection prices the spread; the
+// calibration ratio absorbs the difference). Monotone, so plain bisection.
+function decodeUsersApprox(model, topo, samples, floor){
+  const F = floor || DECODE_FLOOR_TOKS, bw = effective_bw(topo);
+  const tk = (model.kv_decode_const && model.kv_decode_topk) ? model.kv_decode_topk : 0;
+  let mL = 0, mT = 0;
+  for (let i = 0; i < samples.length; i++){
+    mL += samples[i];
+    if (tk) mT += Math.min(samples[i], tk);
+  }
+  mL /= samples.length; if (tk) mT /= samples.length;
+  const kvReadBpt = model.kv_decode_bpt ?? model.kv_bpt;
+  const perSeq = mL * kvReadBpt + 2 * model.deltanet_state
+    + (model.kv_decode_const ? (tk ? mT * (model.kv_decode_const / tk)
+                                   : model.kv_decode_const) : 0);
+  const speed = n => model.mtp * bw / (w_decode(model, n) + n * perSeq);
+  if (speed(1) < F) return 0;
+  let lo = 1, hi = 2;
+  while (speed(hi) >= F && hi < 1e7){ lo = hi; hi *= 2; }
+  for (let i = 0; i < 50; i++){ const mid = (lo + hi) / 2; if (speed(mid) >= F) lo = mid; else hi = mid; }
+  return lo;
+}
+
+let lastFlipAxes = null;
+function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
+  const f0 = wl.invalidation, subR = wl.sub_ratio;
+  const cacheNow = op.ceilings.cache, decodeNow = op.ceilings.decode;
+  const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU) => {
+    const c = { cache: cacheU, decode: decodeU,
+      latency: reps * maxUsersLatency(mo_, f_, sla_, think_, undefined, subR),
+      saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };
+    let bind = 'cache';
+    for (const k in c) if (c[k] < c[bind]) bind = k;
+    return { bind, limit: c[bind] };
+  };
+  // calibration anchors: the stand-ins, forced through the MC values at the
+  // current settings, so every sweep passes exactly through the decision tile
+  seedFor('flipCal');
+  const aC = warmUsersApprox(model, topo, wl, 4000);
+  const calC = aC > 0 ? (cacheNow / reps) / aC : 0;
+  const aD = decodeUsersApprox(model, topo, cs.samples);
+  const calD = aD > 0 ? (decodeNow / reps) / aD : 0;
+
+  const axes = [];
+  const sweep = (K, lo, hi, at) => {
+    const pts = [];
+    for (let i = 0; i < K; i++){
+      const v = lo + (hi - lo) * i / (K - 1);
+      pts.push({ v, ...at(v, i) });
+    }
+    return pts;
+  };
+  // 1 · cache-miss rate — warmFn is the SAME sampled curve chart G uses
+  axes.push({ label: 'Cache-miss rate', cur: f0, lo: 0, hi: 0.5,
+    fmt: v => fmt(v * 100, v > 0 && v < 0.02 ? 1 : 0) + '%', approx: false,
+    pts: sweep(41, 0, 0.5, v =>
+      evalAt(mo, v, state.sla, state.think, warmFn(v) * reps, decodeNow)) });
+  // 2 · think time — enters every rate linearly, closed form
+  axes.push({ label: 'Think time', cur: state.think, lo: 5, hi: 180,
+    fmt: v => fmt(v, 0) + ' s', approx: false,
+    pts: sweep(36, 5, 180, v =>
+      evalAt(mo, f0, state.sla, v, cacheNow, decodeNow)) });
+  // 3 · TTFT budget — moves the latency ceiling only, closed form
+  axes.push({ label: 'TTFT budget', cur: state.sla, lo: 1, hi: 60,
+    fmt: v => fmt(v, 0) + ' s', approx: false,
+    pts: sweep(40, 1, 60, v =>
+      evalAt(mo, f0, v, state.think, cacheNow, decodeNow)) });
+  // 4 · warm turn size — re-prices the hit leg of the service moments; the
+  //     moments read the liveTurn mirror, so swap it per point and restore
+  {
+    const saved = liveTurn;
+    const pts = sweep(17, 250, 16000, v => {
+      liveTurn = v;
+      const mo2 = prefillServiceMoments(model, topo, wl, cs);
+      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
+    });
+    liveTurn = saved;
+    axes.push({ label: 'Warm turn size', cur: state.turn, lo: 250, hi: 16000,
+      fmt: v => fmt(v / 1000, v < 1000 ? 2 : 1) + 'k tok', approx: false, pts });
+  }
+  // 5 · prefill MFU — the study's softest input; not a slider, a structural
+  //     unknown, so the sweep runs over the whole stated [30%, 60%] bracket
+  axes.push({ label: 'Prefill MFU', cur: PREFILL_MFU, lo: PREFILL_MFU_LO, hi: PREFILL_MFU_HI,
+    fmt: v => fmt(v * 100, 0) + '%', approx: false,
+    pts: sweep(16, PREFILL_MFU_LO, PREFILL_MFU_HI, v => {
+      const mo2 = prefillServiceMoments(model, topo, wl, cs, null, v);
+      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
+    }) });
+  // 6 · speculative-decode speedup — decode speed is exactly linear in it,
+  //     so the mean-context stand-in only has to move the crossing point
+  if (calD > 0)
+    axes.push({ label: 'Speculative speedup', cur: state.mtp, lo: 1.0, hi: 3.0,
+      fmt: v => '×' + v.toFixed(2), approx: true,
+      pts: sweep(21, 1.0, 3.0, v =>
+        evalAt(mo, f0, state.sla, state.think, cacheNow,
+               decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps)) });
+  // 7 & 8 · the prompt-length distribution — median and shape. Both re-draw
+  //     the context stats (4k samples: flip resolution, not tile precision)
+  //     and move ALL FOUR ceilings through them.
+  const wlAxis = (label, key, lo, hi, cur, fmtFn) => {
+    if (!(calC > 0) || !(calD > 0)) return;
+    axes.push({ label, cur, lo, hi, fmt: fmtFn, approx: true,
+      pts: sweep(13, lo, hi, (v, i) => {
+        const wl2 = { ...wl, [key]: key === 'user_median' ? v * 1000 : v };
+        seedFor('flip|' + key + '|' + i);
+        const cs2 = contextStats(wl2, 4000);
+        const mo2 = prefillServiceMoments(model, topo, wl2, cs2);
+        seedFor('flip|' + key + 'w|' + i);
+        const cacheU = warmUsersApprox(model, topo, wl2, 3000) * calC * reps;
+        const decU = decodeUsersApprox(model, topo, cs2.samples) * calD * reps;
+        return evalAt(mo2, f0, state.sla, state.think, cacheU, decU);
+      }) });
+  };
+  {
+    const el = document.getElementById('s-user_median');
+    wlAxis('User prompt median', 'user_median',
+           parseFloat(el.min), parseFloat(el.max), state.user_median,
+           v => fmt(v, 0) + 'k');
+    wlAxis('User prompt sigma', 'user_sigma', 0.30, 1.40, state.user_sigma,
+           v => v.toFixed(2));
+  }
+  // nearest flip per axis: first sample (scanning outward from the current
+  // value, both directions) where the binding IDENTITY or the fits VERDICT
+  // changes; distance is normalised by the range so the sort is unitless
+  const users = op.users;
+  for (const ax of axes){
+    let ci = 0;
+    for (let i = 1; i < ax.pts.length; i++)
+      if (Math.abs(ax.pts[i].v - ax.cur) < Math.abs(ax.pts[ci].v - ax.cur)) ci = i;
+    ax.ci = ci;
+    const base = ax.pts[ci], fits0 = base.limit >= users;
+    let best = null;
+    for (const dir of [1, -1])
+      for (let i = ci + dir; i >= 0 && i < ax.pts.length; i += dir){
+        const p = ax.pts[i];
+        const bindFlip = p.bind !== base.bind, fitFlip = (p.limit >= users) !== fits0;
+        if (bindFlip || fitFlip){
+          const d = Math.abs(p.v - ax.cur) / (ax.hi - ax.lo);
+          if (!best || d < best.dist)
+            best = { v: p.v, bind: p.bind, bindFlip, fitFlip, dir, dist: d,
+                     nowFits: fits0 };
+          break;
+        }
+      }
+    ax.flip = best;
+  }
+  axes.sort((a, b) => (a.flip ? a.flip.dist : Infinity) - (b.flip ? b.flip.dist : Infinity));
+  return axes;
+}
+
+function renderFlipPanel(axes){
+  const box = document.getElementById('flipRows'), leg = document.getElementById('flipLegend');
+  if (!box) return;
+  if (!axes){
+    leg.innerHTML = '';
+    box.innerHTML = '<p class="cs">model weights do not fit this configuration — nothing binds because nothing runs.</p>';
+    return;
+  }
+  const C = PLANNER_COLORS(), crit = cssv('--crit'), muted = cssv('--muted');
+  const text = cssv('--text'), good = cssv('--good');
+  leg.innerHTML = ['cache', 'decode', 'latency', 'saturation'].map(k =>
+    `<span class="li"><span class="sw" style="background:${C[k]}"></span>${PLANNER_LABEL[k]} binds</span>`).join('')
+    + `<span class="li"><span class="sw" style="background:${crit};height:3px"></span>your load does not fit</span>`;
+  const W = 1120, rowH = 44, mT = 6, mL = 172, mR = 320, H = mT + rowH * axes.length + 6;
+  const pw = W - mL - mR;
+  let g = '';
+  axes.forEach((ax, ri) => {
+    const y = mT + ri * rowH, yc = y + 24;
+    const sx = linScale(ax.lo, ax.hi, mL, mL + pw);
+    // label + current value
+    g += `<text class="axlbl" x="${mL - 10}" y="${yc - 2}" text-anchor="end" fill="${text}">${esc(ax.label)}${ax.approx ? ' <tspan fill="' + muted + '">≈</tspan>' : ''}</text>`;
+    g += `<text class="axtick" x="${mL - 10}" y="${yc + 11}" text-anchor="end">now ${ax.fmt(ax.cur)}</text>`;
+    // track: contiguous runs of the same binding constraint
+    const pts = ax.pts;
+    let i = 0;
+    while (i < pts.length){
+      let j = i;
+      while (j + 1 < pts.length && pts[j + 1].bind === pts[i].bind) j++;
+      const x0 = i === 0 ? sx(pts[0].v) : (sx(pts[i - 1].v) + sx(pts[i].v)) / 2;
+      const x1 = j === pts.length - 1 ? sx(pts[j].v) : (sx(pts[j].v) + sx(pts[j + 1].v)) / 2;
+      g += `<rect x="${x0}" y="${yc - 5}" width="${Math.max(1, x1 - x0)}" height="10" fill="${C[pts[i].bind]}" opacity="0.8"/>`;
+      i = j + 1;
+    }
+    // the does-not-fit underline, same segment logic on the verdict
+    i = 0;
+    while (i < pts.length){
+      if (pts[i].limit >= state.users){ i++; continue; }
+      let j = i;
+      while (j + 1 < pts.length && pts[j + 1].limit < state.users) j++;
+      const x0 = i === 0 ? sx(pts[0].v) : (sx(pts[i - 1].v) + sx(pts[i].v)) / 2;
+      const x1 = j === pts.length - 1 ? sx(pts[j].v) : (sx(pts[j].v) + sx(pts[j + 1].v)) / 2;
+      g += `<rect x="${x0}" y="${yc + 7}" width="${Math.max(1, x1 - x0)}" height="3" rx="1.5" fill="${crit}"/>`;
+      i = j + 1;
+    }
+    // range end labels
+    g += `<text class="axtick" x="${mL - 2}" y="${yc + 20}" text-anchor="start">${ax.fmt(ax.lo)}</text>`;
+    g += `<text class="axtick" x="${mL + pw + 2}" y="${yc + 20}" text-anchor="end">${ax.fmt(ax.hi)}</text>`;
+    // current-value marker
+    const xc = sx(clip(ax.cur, ax.lo, ax.hi));
+    g += `<path d="M ${xc - 5} ${yc - 13} L ${xc + 5} ${yc - 13} L ${xc} ${yc - 6} Z" fill="${text}"/>`;
+    // flip marker + right-hand verdict
+    if (ax.flip){
+      const xf = sx(ax.flip.v);
+      g += `<line x1="${xf}" y1="${yc - 10}" x2="${xf}" y2="${yc + 9}" stroke="${text}" stroke-width="1.3" stroke-dasharray="2 2"/>`;
+      const side = ax.flip.dir > 0 ? '≥' : '≤';
+      const what = ax.flip.fitFlip
+        ? (ax.flip.nowFits ? `stops fitting your ${fmt(state.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`
+                           : `fits your ${fmt(state.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`)
+        : `${PLANNER_LABEL[ax.flip.bind]} takes over at ${side} ${ax.fmt(ax.flip.v)}`;
+      const col = ax.flip.fitFlip ? (ax.flip.nowFits ? crit : good) : C[ax.flip.bind];
+      g += `<text class="dlabel" x="${mL + pw + 14}" y="${yc + 3}" text-anchor="start" fill="${col}">${esc(what)}</text>`;
+    } else {
+      g += `<text class="dlabel" x="${mL + pw + 14}" y="${yc + 3}" text-anchor="start" fill="${muted}" font-weight="400">no handover in this range</text>`;
+    }
+  });
+  box.innerHTML = svgEl(g, W, H,
+    'Sensitivity of the decision: which constraint binds as each assumption sweeps its range, with the nearest flip named per row');
+}
+
 /* ---- The deploy card ------------------------------------------------------
    The page's answer as a recipe: the current controls spelled out as the vLLM
    flags they imply, next to the outcomes the model projects for them. The
@@ -4104,6 +4379,9 @@ function redrawCharts(){
   if (lastFrontierRows) renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
   if (lastDeploy) renderDeployCard(lastDeploy.op, lastDeploy.model, lastDeploy.topo,
                                    lastDeploy.wl, lastDeploy.mo, lastDeploy.decodeUsers);
+  // the flip panel bakes chart-palette colors into the SVG, so repaint it
+  // from the cached sweep (no recompute — a theme flip must not re-roll)
+  if (lastFlipAxes) renderFlipPanel(lastFlipAxes);
 }
 themeBtn.addEventListener('click',()=>{
   const next = currentTheme()==='dark'?'light':'dark';
