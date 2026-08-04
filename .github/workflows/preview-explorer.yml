@@ -13,8 +13,9 @@
 #
 # PR previews are deleted automatically when the PR closes (merged or not);
 # a reopened PR is redeployed on the reopen event. Manually-dispatched
-# previews are not tracked, and a PR whose final diff no longer touches the
-# paths below is filtered out of the close event — clean those up by hand:
+# previews, and PRs whose final diff no longer touches the paths below
+# (their close event is filtered out), are caught by the nightly
+# preview-sweep.yml. Immediate manual cleanup, if ever needed:
 #   npx wrangler delete --name workingset-explorer-<slug>
 name: Preview explorer
 

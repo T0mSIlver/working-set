@@ -1,0 +1,92 @@
+# Nightly sweep for orphaned preview workers — the backstop behind the per-PR
+# cleanup in preview-explorer.yml. Catches everything that job can't:
+#   - workingset-explorer-pr<N> whose PR is closed but whose close event was
+#     filtered out (final diff no longer touched interactive/), or whose
+#     cleanup run failed
+#   - manually-dispatched workingset-explorer-<slug> previews, deleted after
+#     slug_ttl_days without a deploy (default 7)
+# Production (workingset-explorer, no dash suffix) never matches the
+# "workingset-explorer-" prefix filter and is never touched.
+#
+# Manual run (once on main): gh workflow run preview-sweep.yml
+#   -f dry_run=true to only list what would be deleted
+#   -f slug_ttl_days=0 to expire slug previews immediately
+name: Sweep orphaned preview workers
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted without deleting"
+        type: boolean
+        default: false
+      slug_ttl_days:
+        description: "Delete dispatch-named previews not deployed for this many days"
+        default: "7"
+
+concurrency:
+  group: preview-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      # no checkout: pure REST against Cloudflare + the GitHub API.
+      # Fails closed: if listing workers or open PRs fails, bash -e aborts
+      # before anything is deleted.
+      - name: Sweep
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          TTL_DAYS: ${{ inputs.slug_ttl_days || '7' }}
+        run: |
+          [[ "$TTL_DAYS" =~ ^[0-9]+$ ]] || { echo "::error::slug_ttl_days must be a non-negative integer"; exit 1; }
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts"
+          auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+
+          list=$(curl -sS --fail "${auth[@]}" "$api?per_page=100")
+          total=$(jq -r '.result_info.total_count // (.result | length)' <<<"$list")
+          count=$(jq -r '.result | length' <<<"$list")
+          if [ "$total" -gt "$count" ]; then
+            echo "::warning::account has $total workers but only $count were fetched; add pagination"
+          fi
+
+          open_prs=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --paginate --jq '.[].number')
+
+          now=$(date +%s)
+          deleted=0 kept=0
+          while IFS=$'\t' read -r name modified; do
+            suffix="${name#workingset-explorer-}"
+            reason=""
+            if [[ "$suffix" =~ ^pr[0-9]+$ ]]; then
+              n="${suffix#pr}"
+              grep -qx "$n" <<<"$open_prs" || reason="PR #$n is not open"
+            else
+              age_days=$(( (now - $(date -d "$modified" +%s)) / 86400 ))
+              [ "$age_days" -ge "$TTL_DAYS" ] && reason="slug preview idle ${age_days}d (TTL ${TTL_DAYS}d)"
+            fi
+            if [ -z "$reason" ]; then
+              echo "keep    $name"
+              kept=$((kept+1))
+            elif [ "$DRY_RUN" = "true" ]; then
+              echo "DRY RUN would delete $name — $reason"
+            else
+              code=$(curl -sS -o resp.json -w '%{http_code}' -X DELETE "${auth[@]}" "$api/$name?force=true")
+              case "$code" in
+                200|404) echo "deleted $name — $reason"; deleted=$((deleted+1)) ;;
+                *) echo "::error::deleting $name failed with HTTP $code"; cat resp.json; exit 1 ;;
+              esac
+            fi
+          done < <(jq -r '.result[]
+            | select(.id | startswith("workingset-explorer-"))
+            | [.id, (.modified_on // .created_on)] | @tsv' <<<"$list")
+
+          echo "Sweep done: deleted=$deleted kept=$kept dry_run=$DRY_RUN"
