@@ -1,22 +1,42 @@
-# Deploys a PR's interactive/ to a separate preview Worker on workers.dev —
-# no custom-domain route, so production (workingset.tomvaucourt.com) is
-# untouched. One worker per PR (workingset-explorer-pr<N>), updated on every
-# push; the run comments the preview URL on the PR.
+# Uploads a PR's interactive/ as a new *version* of one long-lived preview
+# Worker (workingset-explorer-preview) and comments its preview URL on the PR.
+# Production (workingset-explorer, workingset.tomvaucourt.com) is a different
+# Worker with its own workflow and is untouched.
 #
 # Also manually dispatchable once this file is on main:
-#   gh workflow run preview-explorer.yml --ref <branch> -f name=<slug>
+#   gh workflow run preview-explorer.yml --ref <branch> -f name=<alias>
 #
-# Previews are private: .github/preview-auth.mjs fronts the assets with HTTP
-# Basic auth (user "preview", password = the PREVIEW_PASSWORD repo secret;
-# rotate with `gh secret set PREVIEW_PASSWORD` + re-run). Fails closed (503)
-# if the secret is missing.
+# Versions, not deploys. `wrangler versions upload` uploads a version without
+# routing any traffic to it, and every version gets its own preview URL:
+#   <alias-or-version-prefix>-<worker>.<subdomain>.workers.dev
+# --preview-alias pins a stable one per PR, re-pointed on each push. The
+# preview Worker sets workers_dev: false, so its own *.workers.dev route does
+# not exist; preview_urls: true keeps the per-version URLs (the default would
+# follow workers_dev and disable those too).
 #
-# PR previews are deleted automatically when the PR closes (merged or not);
-# a reopened PR is redeployed on the reopen event. Manually-dispatched
-# previews, and PRs whose final diff no longer touches the paths below
-# (their close event is filtered out), are caught by the nightly
-# preview-sweep.yml. Immediate manual cleanup, if ever needed:
-#   npx wrangler delete --name workingset-explorer-<slug>
+# Previews are private via Cloudflare Access: preview URLs are gated by the
+# account-wide "Cloudflare Workers Preview URLs" reusable policy plus a
+# per-Worker toggle (Workers & Pages > the Worker > Settings > Domains &
+# Routes > Preview URLs > Enable Cloudflare Access). Neither is in version
+# control here, so this workflow refuses to take it on trust: the gate is
+# proven BEFORE the PR content is uploaded. A contentless canary version goes
+# up first and its preview URL is probed unauthenticated; only when it
+# provably answers with Access (a redirect to cloudflareaccess.com, or a
+# 401/403) is the real version uploaded, and the real URL is probed the same
+# way before it is commented on the PR. Every other outcome fails the run:
+# HTTP 200 is proof the gate is off, and an unprovable state (still
+# propagating, transport errors) fails closed rather than shipping on a tie.
+# The toggle is per Worker, so the canary's verdict covers every preview URL
+# of this Worker — including the case where the bootstrap step below has just
+# recreated the Worker and the toggle came back off.
+#
+# What exists per PR is one alias — a name, re-pointed on each push and
+# re-pointed at the placeholder page when the PR closes (the retire job at the
+# bottom). No worker, no route, no DNS record, no certificate is created, so
+# there is no resource cleanup to miss: a failed retire run leaves a stale
+# gated preview, not a leak. preview-gate-watch.yml probes the canary nightly
+# so a gate that goes missing *between* pushes is caught even while nothing is
+# being uploaded.
 name: Preview explorer
 
 on:
@@ -25,19 +45,21 @@ on:
     paths:
       - interactive/**
       - .github/workflows/preview-explorer.yml
-      - .github/preview-auth.mjs
   workflow_dispatch:
     inputs:
       name:
-        description: "Preview slug — deploys workingset-explorer-<slug>.workers.dev. pr<number> is reserved for PR previews (the sweep judges those by PR state)."
+        description: "Preview alias — the URL becomes <alias>-workingset-explorer-preview.<subdomain>.workers.dev. pr<number> and gate are reserved."
         required: true
 
+# Keyed on the alias for every event, so a dispatch and a PR run that would
+# touch the same alias serialize instead of racing (the PR path's alias is
+# pr<number>, and the retire job shares the group of the runs it retires).
 concurrency:
-  group: preview-explorer-${{ github.event_name == 'workflow_dispatch' && inputs.name || github.event.pull_request.number }}
+  group: preview-explorer-${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  preview:
     # secrets are unavailable to fork PRs anyway; skip instead of failing
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -47,89 +69,262 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      WORKER: workingset-explorer-preview
     steps:
       - uses: actions/checkout@v5
-      - name: Write preview wrangler config (no custom-domain route)
+      - name: Validate the alias and write the wrangler configs
+        id: cfg
         env:
-          PREVIEW_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
-        # JSON-encode via node so no value can break the config syntax
+          ALIAS: ${{ github.event_name == 'workflow_dispatch' && inputs.name || format('pr{0}', github.event.pull_request.number) }}
+          EVENT: ${{ github.event_name }}
         run: |
-          node -e 'require("fs").writeFileSync("wrangler.preview.jsonc",
-            JSON.stringify({
-              name: "workingset-explorer-" + process.env.PREVIEW_NAME,
+          # Only the dispatch input needs checking — the PR path builds
+          # pr<number>, which always passes. Cloudflare requires an alias of
+          # lowercase letters, numbers and dashes starting with a letter; no
+          # trailing dash and no xn-- prefix, because the alias starts the DNS
+          # label and would make it malformed or punycode-reserved; the
+          # 35-char cap is what keeps "<alias>-workingset-explorer-preview"
+          # inside the 63-char DNS label limit. Validating here is also what
+          # makes the alias safe to interpolate into command lines below.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if ! [[ "$ALIAS" =~ ^[a-z]([a-z0-9-]{0,33}[a-z0-9])?$ ]] || [[ "$ALIAS" == xn--* ]]; then
+              echo "::error::preview alias must start with a lowercase letter, contain only lowercase letters, numbers and dashes, not end with a dash, not start with xn--, and be at most 35 chars"
+              exit 1
+            fi
+            # pr<number> is what PR events use — a dispatch writing to it
+            # would repoint a live PR preview at unrelated content while the
+            # PR comment still claims it. gate is the canary the gate proof
+            # below and the nightly watch both probe.
+            if [[ "$ALIAS" =~ ^pr[0-9]+$ ]] || [ "$ALIAS" = gate ]; then
+              echo "::error::alias '$ALIAS' is reserved (pr<number> for PR previews, gate for the access-gate canary)"
+              exit 1
+            fi
+          fi
+          echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
+          # JSON-encode via node so no value can break the config syntax
+          node -e '
+            const fs = require("fs");
+            const base = {
+              name: process.env.WORKER,
               compatibility_date: "2026-07-22",
-              workers_dev: true,
-              main: ".github/preview-auth.mjs",
-              assets: { directory: "./interactive", binding: "ASSETS",
-                        run_worker_first: true },
-            }, null, 2));'
-      - uses: cloudflare/wrangler-action@v3
-        id: deploy
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.118.0"
-          command: deploy --config wrangler.preview.jsonc
-      # a real encrypted worker secret, not a plaintext var. Runs after deploy
-      # (secret put needs the worker to exist on first run) and is keyed off
-      # the preview config's name, so it can never touch the production worker
-      # — the action's own `secrets:` input reads the default wrangler.jsonc,
-      # which is exactly the mistake this step replaces.
-      - name: Upload preview password as a worker secret
+              // no <worker>.<subdomain>.workers.dev route: Access is enabled
+              // on the preview URLs, and a live workers.dev route would be an
+              // ungated way to the same assets
+              workers_dev: false,
+              // preview_urls defaults to workers_dev, so it has to be set
+              // back on explicitly — without it there would be no preview URL
+              preview_urls: true,
+            };
+            // assets-only worker: no main script, nothing to auth in-band
+            fs.writeFileSync("wrangler.preview.jsonc", JSON.stringify(
+              { ...base, assets: { directory: "./interactive" } }, null, 2));
+            // the canary/placeholder: what the gate proof uploads before any
+            // real content, and what retired aliases point at
+            fs.mkdirSync(".preview-canary", { recursive: true });
+            fs.writeFileSync(".preview-canary/index.html",
+              "<!doctype html><title>working-set preview</title>" +
+              "<p>Nothing here: this is the access-gate canary, or a retired preview alias for a closed PR.</p>");
+            fs.writeFileSync("wrangler.canary.jsonc", JSON.stringify(
+              { ...base, assets: { directory: "./.preview-canary" } }, null, 2));'
+      - name: Resolve the workers.dev subdomain
+        id: sub
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
         run: |
-          printf '%s' "$PREVIEW_PASSWORD" | npx wrangler secret put PREVIEW_PASSWORD \
-            --config wrangler.preview.jsonc
-      - name: Comment preview URL on the PR
+          # Read from the API each run rather than written down here, so
+          # renaming the account subdomain changes nothing in this repo.
+          # Building both probe URLs from it up front (instead of parsing
+          # wrangler's upload output) means URL resolution cannot fail after
+          # content is already live.
+          resp=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain") \
+            || { echo "::error::reading the workers.dev subdomain failed"; exit 1; }
+          sub=$(jq -r '.result.subdomain // empty' <<<"$resp")
+          if [ -z "$sub" ]; then
+            echo "::error::no workers.dev subdomain in the API response — cannot build a preview URL"
+            jq -c 'del(.result)' <<<"$resp" || true
+            exit 1
+          fi
+          echo "sub=$sub" >> "$GITHUB_OUTPUT"
+      # `versions upload` uploads against an existing Worker, so the very
+      # first run (and any run after the Worker is deleted by hand) needs the
+      # Worker to exist. Creating it with one `wrangler deploy` is safe
+      # precisely because this config has no routes and no workers.dev route:
+      # the deployed version is reachable only through its preview URLs. A
+      # recreated Worker comes back with the Access toggle OFF — which is
+      # exactly what the gate proof below exists to catch, before any content
+      # is uploaded.
+      - name: Create the preview Worker if it does not exist yet
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER")
+          # GET on a script returns its content — which for an assets-only
+          # Worker is empty, i.e. 204, not 200 (seen live in run 30956288700)
+          case "$code" in
+            200|204) echo "$WORKER already exists." ;;
+            404) echo "$WORKER does not exist yet; creating it with a one-off deploy."
+                 npx --yes wrangler@4.118.0 deploy --config wrangler.canary.jsonc ;;
+            *)   echo "::error::checking whether $WORKER exists failed with HTTP $code"; exit 1 ;;
+          esac
+      - name: Prove the Access gate, then upload the preview
+        id: upload
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ALIAS: ${{ steps.cfg.outputs.alias }}
+          SUB: ${{ steps.sub.outputs.sub }}
+        run: |
+          # probe <url>: sets PROBE_STATE to gated / open / unknown and
+          # PROBE_DETAIL to the evidence. No -L — the redirect itself is the
+          # evidence. Accept: text/html because the case that matters is a
+          # human opening the link. Six attempts because a freshly uploaded
+          # version or alias can take a little while to start answering.
+          probe() {
+            PROBE_STATE=unknown; PROBE_DETAIL=""
+            local out code loc attempt
+            for attempt in 1 2 3 4 5 6; do
+              out=$(curl -sS -m 15 -o /dev/null -H 'Accept: text/html' \
+                -w '%{http_code} %{redirect_url}' "$1" || true)
+              code=${out%% *}; loc=${out#* }
+              case "$code" in
+                200) PROBE_STATE=open; PROBE_DETAIL="served content unauthenticated"; return 0 ;;
+                401|403) PROBE_STATE=gated; PROBE_DETAIL="HTTP $code without credentials"; return 0 ;;
+                301|302|303|307|308)
+                  case "$loc" in
+                    *cloudflareaccess.com*) PROBE_STATE=gated; PROBE_DETAIL="redirected to Access"; return 0 ;;
+                    *) PROBE_DETAIL="redirected to ${loc:-<none>}, not an Access login" ;;
+                  esac ;;
+                # curl can also print nothing at all when it fails before the
+                # transfer starts, hence the empty arm alongside 000
+                ""|000) PROBE_DETAIL="unreachable" ;;
+                *) PROBE_DETAIL="HTTP $code" ;;
+              esac
+              # spelled out rather than `[ … ] && sleep`: a trailing failing
+              # test under errexit is exempt only by a subtlety of the &&
+              # rule, and this loop should not depend on knowing that
+              if [ "$attempt" -lt 6 ]; then sleep 10; fi
+            done
+          }
+
+          # 1. Canary first: prove the per-Worker toggle before any PR
+          # content exists on this run. The canary serves only the
+          # placeholder page, so even the proving step exposes nothing if the
+          # gate turns out to be off.
+          npx --yes wrangler@4.118.0 versions upload --config wrangler.canary.jsonc \
+            --preview-alias gate --message "access-gate canary @ $GITHUB_SHA"
+          gate_url="https://gate-$WORKER.$SUB.workers.dev"
+          probe "$gate_url"
+          case "$PROBE_STATE" in
+            gated) echo "gate proven on $gate_url ($PROBE_DETAIL)" ;;
+            *)
+              # Withdraw before failing: a previous run may already have
+              # published content under this alias, and refusing to add more
+              # would leave that live. Re-pointing the alias at the
+              # placeholder retracts what can be retracted — the placeholder
+              # is harmless by construction even if the gate is off.
+              npx --yes wrangler@4.118.0 versions upload --config wrangler.canary.jsonc \
+                --preview-alias "$ALIAS" --message "withdrawn: access gate unproven @ $GITHUB_SHA"
+              if [ "$PROBE_STATE" = open ]; then
+                echo "::error::$gate_url $PROBE_DETAIL — Cloudflare Access is not enabled on this Worker's preview URLs (Workers & Pages > $WORKER > Settings > Domains & Routes > Preview URLs > Enable Cloudflare Access). Failing closed: the preview was NOT uploaded, and the $ALIAS alias now serves the placeholder."
+              else
+                echo "::error::could not prove the Access gate on $gate_url ($PROBE_DETAIL). Failing closed: the preview was NOT uploaded, and the $ALIAS alias now serves the placeholder. Re-run once the canary URL answers."
+              fi
+              exit 1 ;;
+          esac
+
+          # 2. Only now the real content. Version tags are capped at 25
+          # chars, shorter than the 35-char alias bound, hence the truncation.
+          npx --yes wrangler@4.118.0 versions upload --config wrangler.preview.jsonc \
+            --preview-alias "$ALIAS" --tag "${ALIAS:0:25}" --message "$ALIAS @ $GITHUB_SHA"
+          url="https://$ALIAS-$WORKER.$SUB.workers.dev"
+
+          # 3. The URL that will be commented is probed too. The canary just
+          # proved the toggle, so anything but gated here is a hard stop: 200
+          # means the gate broke mid-run, and unknown means this URL has not
+          # been seen to answer with Access — either way it must not be
+          # posted on a public repo.
+          probe "$url"
+          case "$PROBE_STATE" in
+            gated)
+              echo "url=$url" >> "$GITHUB_OUTPUT"
+              echo "Preview URL: $url ($PROBE_DETAIL)" ;;
+            open)
+              # gate broke mid-run: withdraw the content just uploaded
+              npx --yes wrangler@4.118.0 versions upload --config wrangler.canary.jsonc \
+                --preview-alias "$ALIAS" --message "withdrawn: access gate broke mid-run @ $GITHUB_SHA"
+              echo "::error::$url served content unauthenticated even though the canary was gated moments ago — check the Access configuration on $WORKER's preview URLs. The $ALIAS alias has been re-pointed at the placeholder."
+              exit 1 ;;
+            *)
+              # not withdrawn here: the canary just proved the per-Worker
+              # toggle, so this alias is gated too — the URL merely cannot be
+              # shown to answer yet, so it is not commented
+              echo "::error::could not prove the Access gate on $url ($PROBE_DETAIL); not commenting the URL. Re-run once propagation settles."
+              exit 1 ;;
+          esac
+      - name: Comment the preview URL on the PR
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-          URL: ${{ steps.deploy.outputs.deployment-url }}
+          URL: ${{ steps.upload.outputs.url }}
         run: |
-          body="Preview deployed: $URL (updates on every push; method page at $URL/method). Basic auth: user \`preview\`, password = the \`PREVIEW_PASSWORD\` repo secret."
+          # Only reached when both probes above answered with Access — a URL
+          # is never posted to the (public) repo before it has been seen to
+          # be gated.
+          body="Preview uploaded: $URL (updates on every push; method page at $URL/method). Private behind Cloudflare Access — sign in with the email one-time code, or send the \`agents\` service token (\`CF-Access-Client-Id\` / \`CF-Access-Client-Secret\` headers) for curl and Playwright."
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --body "$body" \
             || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
 
-  # Runs on PR close (merged or not) and shares the concurrency group above,
-  # so it queues behind any in-flight deploy instead of racing it.
-  cleanup:
+  # A closed PR's alias would otherwise keep serving its last content
+  # indefinitely (gated, but indefinitely). Re-point it at the placeholder.
+  # This uploads one more inert version — it creates nothing and deletes
+  # nothing, so a failed run here leaves a stale gated preview, not a leak,
+  # and there is no gate proof first because the placeholder is harmless by
+  # construction even if the gate is off.
+  retire:
     if: >-
-      github.event.action == 'closed' &&
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
+      contents: read
+    env:
+      WORKER: workingset-explorer-preview
     steps:
-      # no checkout: a single REST call needs no repo files or config.
-      # DELETE via the API rather than `wrangler delete` — the CLI's
-      # non-interactive confirmation prompt and human-readable error text are
-      # not a stable contract; HTTP status codes are. 404 (deploy skipped or
-      # failed, or worker already deleted by hand) is success; anything else
-      # fails the job. Deleting the worker also removes its secrets.
-      - name: Delete preview worker
+      - name: Re-point the PR alias at the placeholder
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PREVIEW_NAME: pr${{ github.event.pull_request.number }}
+          ALIAS: pr${{ github.event.pull_request.number }}
         run: |
-          code=$(curl -sS -o resp.json -w '%{http_code}' -X DELETE \
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/workingset-explorer-$PREVIEW_NAME?force=true")
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER")
+          # 204, not 200: GET on an assets-only script has no content to return
           case "$code" in
-            200|204) echo "Deleted worker workingset-explorer-$PREVIEW_NAME." ;;
-            404) echo "Worker workingset-explorer-$PREVIEW_NAME does not exist; nothing to delete." ;;
-            *)   echo "Delete failed with HTTP $code:"; cat resp.json; exit 1 ;;
+            404) echo "$WORKER does not exist; nothing to retire."; exit 0 ;;
+            200|204) ;;
+            *)   echo "::error::checking whether $WORKER exists failed with HTTP $code"; exit 1 ;;
           esac
-      - name: Update PR comment
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-        # best-effort: only edits the bot's existing preview comment (if any)
-        # so the dead URL isn't left looking live
-        run: |
-          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last \
-            --body "Preview deleted (PR closed)." || true
+          # no checkout: the placeholder and its config are self-contained
+          node -e '
+            const fs = require("fs");
+            fs.mkdirSync(".preview-canary", { recursive: true });
+            fs.writeFileSync(".preview-canary/index.html",
+              "<!doctype html><title>working-set preview</title>" +
+              "<p>Nothing here: this is the access-gate canary, or a retired preview alias for a closed PR.</p>");
+            fs.writeFileSync("wrangler.canary.jsonc", JSON.stringify({
+              name: process.env.WORKER,
+              compatibility_date: "2026-07-22",
+              workers_dev: false,
+              preview_urls: true,
+              assets: { directory: "./.preview-canary" },
+            }, null, 2));'
+          npx --yes wrangler@4.118.0 versions upload --config wrangler.canary.jsonc \
+            --preview-alias "$ALIAS" --message "retired: PR closed"

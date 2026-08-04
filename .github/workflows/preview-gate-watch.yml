@@ -1,0 +1,81 @@
+# The Access gate on preview URLs is a dashboard toggle plus an account-wide
+# policy — neither lives in this repo, and preview-explorer.yml only proves
+# the gate while something is being uploaded. But the already-uploaded aliases
+# (open PRs, retired placeholders) stay reachable indefinitely, so a toggle
+# that goes missing *between* pushes would make all of them public with no
+# run left to notice. This probes the canary alias nightly to close that gap.
+# The toggle is per Worker, so one canary probe covers every preview URL the
+# Worker has ever handed out; a failed scheduled run emails the repo owner.
+# This never uploads, deletes or changes anything.
+name: Preview gate watch
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      WORKER: workingset-explorer-preview
+    steps:
+      - name: Probe the canary preview URL without credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER")
+          # 204, not 200: GET on an assets-only script has no content to return
+          case "$code" in
+            404) echo "$WORKER does not exist — no preview URLs are live, nothing to watch."; exit 0 ;;
+            200|204) ;;
+            *)   echo "::error::checking whether $WORKER exists failed with HTTP $code"; exit 1 ;;
+          esac
+          resp=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain") \
+            || { echo "::error::reading the workers.dev subdomain failed"; exit 1; }
+          sub=$(jq -r '.result.subdomain // empty' <<<"$resp")
+          if [ -z "$sub" ]; then
+            echo "::error::no workers.dev subdomain in the API response"
+            exit 1
+          fi
+          url="https://gate-$WORKER.$sub.workers.dev"
+
+          # Same lopsided judgement as preview-explorer.yml's gate proof:
+          # only an Access answer passes; 200 is proof the gate is off, and
+          # a state that cannot be proven fails too — a watcher that shrugs
+          # is not a watcher. The canary alias is stable and long-uploaded,
+          # so persistent unreachability is itself a signal (for instance,
+          # the Worker was recreated and the canary has not been re-uploaded
+          # yet — the next preview run will both re-upload and re-prove it).
+          state=unknown; detail=""
+          for attempt in 1 2 3 4 5 6; do
+            out=$(curl -sS -m 15 -o /dev/null -H 'Accept: text/html' \
+              -w '%{http_code} %{redirect_url}' "$url" || true)
+            code=${out%% *}; loc=${out#* }
+            case "$code" in
+              200) state=open; detail="served content unauthenticated"; break ;;
+              401|403) state=gated; detail="HTTP $code without credentials"; break ;;
+              301|302|303|307|308)
+                case "$loc" in
+                  *cloudflareaccess.com*) state=gated; detail="redirected to Access"; break ;;
+                  *) state=unknown; detail="redirected to ${loc:-<none>}, not an Access login" ;;
+                esac ;;
+              ""|000) state=unknown; detail="unreachable" ;;
+              *) state=unknown; detail="HTTP $code" ;;
+            esac
+            if [ "$attempt" -lt 6 ]; then sleep 10; fi
+          done
+          case "$state" in
+            gated) echo "ok — $url $detail" ;;
+            open)
+              echo "::error::$url $detail — Cloudflare Access is OFF on $WORKER's preview URLs, so every uploaded preview (open PRs and retired aliases alike) is public right now. Re-enable it: Workers & Pages > $WORKER > Settings > Domains & Routes > Preview URLs > Enable Cloudflare Access."
+              exit 1 ;;
+            *)
+              echo "::error::could not prove the Access gate on $url ($detail); treating an unprovable gate as an alarm, not a pass."
+              exit 1 ;;
+          esac
