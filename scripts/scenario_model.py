@@ -77,6 +77,42 @@ class GPU:
     # spec sheets with the 2x structured-sparsity number, which no LLM serving
     # path achieves. See research/prefill.md #1 for the per-part derivation.
     peak_flops_fp8: float = 0.0
+    # ---- POWER constants (research/power.md) — used ONLY by power_draw() ----
+    # tdp_w: the vendor spec plate. SPEC (HIGH). H200 SXM "Up to 700W
+    #   (configurable)"; B300 "up to 1,400 W" per NVIDIA's "Inside Blackwell
+    #   Ultra". The air-cooled B300 SXM6 AC variant caps at 1,100 W — deploying
+    #   that part scales all three B300 GPU wattages by ~0.79 (power.md #3);
+    #   not modelled here.
+    # idle_w: warm idle. MEASURED H100 proxy — 72.5 W ± 0.1 per GPU at 0.1 s
+    #   resolution (NLR facility-planning study, 4xH100 nodes), +10% for the
+    #   H200's larger HBM3e array -> 80 W. B300: NO measurement exists
+    #   anywhere; the same ~10.5%-of-TDP fraction transferred -> 150 W.
+    # p_decode_w: bandwidth-bound token-phase draw, 0.55 x TDP central (band
+    #   0.45-0.75 — the note's softest constant). MEASURED band on Hopper:
+    #   Splitwise (ISCA'24) finds token-phase power flat in batch size and
+    #   tolerant of a 700->350 W cap; mixed vLLM serving measured 229-477 W
+    #   on H200-class parts. B300 transfers the FRACTION, not the watts.
+    # p_prefill_w: compute-bound prefill is POWER-CAP-limited, 0.90 x TDP
+    #   central (band 0.80-1.00) — FLAT across the study's MFU 30-60% bracket,
+    #   because the cap binds before the FLOP peak does. MEASURED anchor:
+    #   saturated vLLM inference at ~0.85-0.89 of summed GPU TDP (NLR).
+    # host_w: flat per-GPU chassis adder (CPUs/NVSwitch/NICs/fans/PSU loss),
+    #   DERIVED from system spec maxima: DGX H200 10.2 kW − 8 x 700 W ->
+    #   575 W/GPU; the DGX B300 arithmetic brackets 410-710 W/GPU and 500 sits
+    #   below the 562 mid, weighted toward the 1,400 W-TDP scenario. A spec
+    #   ceiling used FLAT, not duty-cycled — over-charges a lightly-loaded
+    #   chassis by up to ~2x, the same conservative direction as the study's
+    #   other bookkeeping (power.md #4).
+    # B300 rows are ENTIRELY EXTRAPOLATED (Hopper fractions of TDP moved onto
+    # the 1,400 W plate): no published Blackwell Ultra power-state measurement
+    # exists at all (power.md #3). The single measurement that would firm the
+    # softest rows up: one nvidia-smi power trace beside a vllm bench run on
+    # the 2xH200 hardware the study already has.
+    tdp_w: float = 0.0
+    idle_w: float = 0.0
+    p_decode_w: float = 0.0
+    p_prefill_w: float = 0.0
+    host_w: float = 0.0
 
 
 GPUS = {
@@ -84,7 +120,12 @@ GPUS = {
     # "3,958 TFLOPS FP8" — that figure is WITH 2:4 structured sparsity, which
     # no dense LLM GEMM reaches. Halve it. research/prefill.md #1.
     "H200": GPU("H200", 141e9, 4.8e12, supports_nvfp4=False,
-                peak_flops_fp8=1.979e15),
+                peak_flops_fp8=1.979e15,
+                # power (research/power.md #1): spec plate 700 W SXM; idle a
+                # measured H100 proxy +10%; decode/prefill the measured Hopper
+                # fractions 0.55 / 0.90 of TDP; host the DGX H200 spec adder
+                tdp_w=700.0, idle_w=80.0, p_decode_w=385.0, p_prefill_w=630.0,
+                host_w=575.0),
     # Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores.
     # vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
     # quickstart, driver 590.48.01) shows 275,040 MiB = 288.4e9 B per GPU:
@@ -100,7 +141,15 @@ GPUS = {
     # NOT carry to FP8 — "FP8 = half of FP4", true on Hopper, over-credits
     # the B300 by 1.5x. Never measured here. research/prefill.md #1.
     "B300": GPU("B300", 288.4e9, 8.0e12, supports_nvfp4=True,
-                reserve_extra=9.75e9, peak_flops_fp8=4.5e15),
+                reserve_extra=9.75e9, peak_flops_fp8=4.5e15,
+                # power: ENTIRELY EXTRAPOLATED — no Blackwell Ultra power-state
+                # measurement exists. Rule (power.md #3): transfer Hopper's
+                # fractions of TDP (idle ~10.5%, decode 0.55, prefill 0.90)
+                # onto the 1,400 W plate; host_w is the mid of the DGX B300
+                # spec bracket (410-710 W/GPU). If the target is the 1,100 W
+                # air-cooled SXM6 AC part, scale the three GPU wattages ~0.79.
+                tdp_w=1400.0, idle_w=150.0, p_decode_w=770.0,
+                p_prefill_w=1260.0, host_w=500.0),
 }
 
 VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
@@ -2051,6 +2100,145 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
 
 
 # ============================================================================
+# THE ELECTRICITY BILL  (research/power.md)
+# ----------------------------------------------------------------------------
+# Wall power from the duty cycle the model already computes. Three GPU states,
+# priced per research/power.md's measured anchors:
+#
+#   prefill   d_p = the prefill duty rho — compute-bound, power-cap-limited
+#             (~0.90 x TDP, FLAT across the MFU band: the cap binds first)
+#   decode    d_d — bandwidth-bound, well under TDP (~0.55 x, the softest
+#             constant, band 0.45-0.75)
+#   idle      the remainder, at warm-idle watts
+#
+# d_p and d_d PARTITION time (no double counting — power.md #4's integrator
+# trap): d_d is the decode demand the load implies against the decode capacity
+# at the 40 tok/s floor, capped at whatever prefill leaves.
+# P_total = n_gpu x (P_gpu + host) x PUE. Mirrors the explorer's powerDraw /
+# energyCost (interactive/index.html, "THE ELECTRICITY BILL") — same
+# arithmetic, same clamps, so the two cannot disagree.
+#
+# STATUS: mixed provenance, weaker than the capacity notes. TDPs and system
+# maxima are vendor SPEC; idle and the 0.55/0.90 phase split are MEASURED on
+# Hopper (none on this exact H200-SXM/vLLM operating point); every B300 duty
+# figure is an extrapolation rule. GPU term carries ±20-25%; the host adder is
+# a spec ceiling used flat; pue and eur_kwh are exact user-chosen multipliers,
+# not model error.
+# ============================================================================
+
+PUE_DEFAULT = 1.5            # colo — Uptime Institute 2024 survey: mean 1.56,
+                             # capacity-weighted 1.47. Presets the explorer
+                             # offers: 2.0 (server room, LBNL small-DC), 1.2
+                             # (hyperscale). SURVEY, user-chosen multiplier.
+EUR_PER_KWH_DEFAULT = 0.19   # Eurostat non-household EU average €0.1902/kWh
+                             # H1-2025; country spread €0.08 (FI) - €0.26 (CY).
+                             # STATISTICAL (HIGH), user-chosen multiplier.
+HOURS_PER_MONTH = 720.0      # the explorer's flat billing month (30 x 24 h)
+
+# Output tokens ONE REQUEST decodes (applied to every request, subagents
+# included) — ASSUMED, unmeasured (the workload model never needed output
+# lengths before). Consistent with the measured 10.8 s served per turn
+# (MEASURED_SERVICE_R_S) at the observed 50-90 tok/s. Scales d_d linearly;
+# the €/1M-token figure moves hyperbolically (fixed idle/prefill watts
+# amortise as outputs lengthen); the €/month bill moves least (decode is one
+# term of three). Mirrors the explorer's AVG_OUT_TOK.
+AVG_OUT_TOK = 1000
+
+
+def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
+               decode_users_group: float, chunk: float = CHUNK_DEFAULT,
+               # 2_000 = the study's reference warm turn (operating_point's own
+               # default): 0.0 would price every warm hit at zero machine time
+               # and silently under-bill relative to the explorer
+               turn_tokens: float = 2_000, pue: float = PUE_DEFAULT,
+               mfu: float = MFU_DEFAULT,
+               per_pass_overhead: bool = False) -> dict:
+    """Average draw of one GPU and the whole system, at the current load.
+
+    `rate_group` is the TOTAL req/s ONE replica group sees (main + subagent —
+    the serverRate/replicas figure, same unit the queue metrics price);
+    `decode_users_group` is the per-group decode ceiling at the 40 tok/s floor
+    (its capacity proxy, max_users_decode). Returns a dict:
+
+      d_p        prefill duty = min(1, rate x E[S]) — E[S] is the mixed
+                 cold/warm prefill service time the spike model already
+                 computes, so d_p IS the section-8 duty cycle, clamped
+      d_d        decode-active fraction: the output-token demand
+                 (rate x AVG_OUT_TOK) against the floor capacity
+                 (decode_users_group x 40 tok/s), capped at whatever prefill
+                 leaves (partition, no overlap); a non-positive capacity
+                 falls back to d_d = 1 - d_p (the explorer's guard)
+      per_gpu_w  d_p x p_prefill + d_d x p_decode + remainder x idle
+      kw         n_gpu x (per_gpu_w + host_w) x pue / 1000 — at the meter
+      pue        echoed multiplier
+
+    Provenance: the phase watts are MEASURED on Hopper (H100 proxies; B300
+    rows entirely extrapolated — see the GPU dataclass), the duty split is
+    this study's model, and AVG_OUT_TOK is ASSUMED. Mirrors the explorer's
+    powerDraw() exactly.
+    """
+    if rate_group < 0:
+        raise ValueError(f"rate_group must be >= 0, got {rate_group!r}")
+    if decode_users_group < 0:
+        raise ValueError(
+            f"decode_users_group must be >= 0, got {decode_users_group!r}")
+    if pue <= 0:
+        raise ValueError(f"pue must be > 0, got {pue!r}")
+    g = topo.gpu
+    if g.tdp_w <= 0:
+        raise ValueError(f"{g.name}: power constants unset (research/power.md)")
+    # E[S] mixes the classes at f = wl.invalidation — identical to the
+    # explorer's f*mo.miss + (1-f)*mo.hit (prefill_service_moments returns
+    # exactly that mixture as its first element)
+    e_s = prefill_service_moments(model, topo, wl, chunk, turn_tokens, mfu,
+                                  per_pass_overhead)[0]
+    d_p = min(1.0, rate_group * e_s)
+    demand = rate_group * AVG_OUT_TOK                    # output tok/s asked
+    cap = decode_users_group * DECODE_FLOOR_TOKS         # output tok/s at floor
+    d_d = min(max(0.0, 1.0 - d_p), demand / cap if cap > 0 else 1.0)
+    per_gpu_w = (d_p * g.p_prefill_w + d_d * g.p_decode_w
+                 + max(0.0, 1.0 - d_p - d_d) * g.idle_w)
+    kw = topo.n_gpu * (per_gpu_w + g.host_w) * pue / 1000.0
+    return {"d_p": d_p, "d_d": d_d, "per_gpu_w": per_gpu_w, "kw": kw,
+            "pue": pue}
+
+
+def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
+                decode_users_group: float, users: float,
+                chunk: float = CHUNK_DEFAULT, turn_tokens: float = 2_000,
+                pue: float = PUE_DEFAULT,
+                eur_kwh: float = EUR_PER_KWH_DEFAULT,
+                mfu: float = MFU_DEFAULT,
+                per_pass_overhead: bool = False) -> dict:
+    """€ figures on top of power_draw() — the explorer's energyCost().
+
+    720 h/month flat; the €/1M-output-tokens figure divides the whole
+    system's cost rate by the output-token rate the load implies
+    (rate_group x replicas x AVG_OUT_TOK — every group assumed equally
+    loaded, the same symmetry the rest of the study uses), and is Infinity
+    at zero output rather than a silent zero. eur_user divides the monthly
+    bill across `users` (floored at 1, matching the explorer). Both pue and
+    eur_kwh are exact user-chosen multipliers — the bill is LINEAR in each,
+    asserted in _selfcheck — so tariff/facility scenarios are one multiply,
+    never a re-model. The €-per-token figure inherits AVG_OUT_TOK's
+    ASSUMED status linearly.
+    """
+    if users < 0:
+        raise ValueError(f"users must be >= 0, got {users!r}")
+    if eur_kwh < 0:
+        raise ValueError(f"eur_kwh must be >= 0, got {eur_kwh!r}")
+    p = power_draw(model, topo, wl, rate_group, decode_users_group, chunk,
+                   turn_tokens, pue, mfu, per_pass_overhead)
+    eur_month = p["kw"] * HOURS_PER_MONTH * eur_kwh
+    out_tok_s = rate_group * topo.replicas * AVG_OUT_TOK
+    eur_mtok = ((p["kw"] * eur_kwh / 3600.0) / out_tok_s * 1e6
+                if out_tok_s > 0 else float("inf"))
+    return {**p, "eur_month": eur_month,
+            "eur_user": eur_month / max(1.0, users),
+            "eur_mtok": eur_mtok}
+
+
+# ============================================================================
 # SELF-CHECKS  (python scripts/scenario_model.py)
 # ============================================================================
 def _selfcheck():
@@ -2705,6 +2893,87 @@ def _selfcheck():
         except ValueError:
             pass
 
+    # ---- THE ELECTRICITY BILL (research/power.md) --------------------------
+    # constants are the note's exact fractions of the spec plate — decode 0.55,
+    # prefill 0.90 — on BOTH parts (the B300 rows transfer the fraction, they
+    # are entirely extrapolated), and the states order idle < decode < prefill
+    for g_ in GPUS.values():
+        assert abs(g_.p_decode_w - 0.55 * g_.tdp_w) < 1e-9, \
+            f"{g_.name}: p_decode_w must be the note's 0.55 x TDP central"
+        assert abs(g_.p_prefill_w - 0.90 * g_.tdp_w) < 1e-9, \
+            f"{g_.name}: p_prefill_w must be the note's 0.90 x TDP central"
+        assert 0 < g_.idle_w < g_.p_decode_w < g_.p_prefill_w <= g_.tdp_w
+        assert g_.host_w > 0
+        # power.md's honesty cross-check: a 50/50 prefill/decode split lands
+        # at 0.725 x TDP, and the split's band [0.5(0.80+0.45), 0.5(1.00+0.75)]
+        # must CONTAIN the measured 0.85-of-TDP saturated-node anchor (NLR) —
+        # mixed continuous batching runs near, not at, the cap, and the model's
+        # phase constants reproduce that without tuning
+        mix = 0.5 * (g_.p_prefill_w + g_.p_decode_w) / g_.tdp_w
+        assert abs(mix - 0.725) < 1e-9, f"{g_.name}: 50/50 mix must be 0.725 x TDP"
+        assert 0.5 * (0.80 + 0.45) < 0.85 < 0.5 * (1.00 + 0.75), \
+            "the phase bands must keep the measured 0.85 saturation anchor plausible"
+    # duty split: bounded, partitioned, and the draw pinned between the idle
+    # floor and the prefill plateau at EVERY load (a convex mix of the three
+    # states can never leave [idle_w, p_prefill_w])
+    du = max_users_decode(m27, tp2, wl, n_iter=200)
+    rate_ref = request_rate(REF_USERS, sub_ratio=wl.sub_ratio) / tp2.replicas
+    for r_ in (0.0, 0.1, rate_ref, 5 * rate_ref, 1e4):
+        pd_ = power_draw(m27, tp2, wl, r_, du, turn_tokens=TURN)
+        assert 0.0 <= pd_["d_p"] <= 1.0 and 0.0 <= pd_["d_d"] <= 1.0
+        assert pd_["d_p"] + pd_["d_d"] <= 1.0 + 1e-12, "d_p, d_d must partition time"
+        assert (GPUS["H200"].idle_w - 1e-9 <= pd_["per_gpu_w"]
+                <= GPUS["H200"].p_prefill_w + 1e-9), \
+            "per-GPU draw must sit between the idle floor and the prefill plateau"
+    # zero rate is EXACTLY the warm-idle floor...
+    p0 = power_draw(m27, tp2, wl, 0.0, du, turn_tokens=TURN)
+    assert p0["d_p"] == 0.0 and p0["d_d"] == 0.0
+    assert p0["per_gpu_w"] == GPUS["H200"].idle_w, \
+        "an unloaded GPU must draw exactly idle_w"
+    # ...and saturation (d_p -> 1) exactly the prefill plateau: the cap binds
+    assert power_draw(m27, tp2, wl, 1e4, du, turn_tokens=TURN)["d_p"] == 1.0
+    assert (power_draw(m27, tp2, wl, 1e4, du, turn_tokens=TURN)["per_gpu_w"]
+            == GPUS["H200"].p_prefill_w), \
+        "at saturation the draw must be the prefill plateau, not TDP"
+    # a non-positive decode capacity falls back to d_d = 1 - d_p (the
+    # explorer's cap > 0 guard, mirrored)
+    pz = power_draw(m27, tp2, wl, 0.1, 0.0, turn_tokens=TURN)
+    assert abs(pz["d_d"] - (1.0 - pz["d_p"])) < 1e-12, \
+        "cap <= 0 must give d_d = 1 - d_p, matching the explorer's guard"
+    # the bill is LINEAR in the tariff and in PUE — both are user-chosen
+    # multipliers, not model error, and must behave like it
+    cost_ref = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
+                           turn_tokens=TURN)
+    cost_2e = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
+                          turn_tokens=TURN, eur_kwh=2 * EUR_PER_KWH_DEFAULT)
+    cost_2p = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
+                          turn_tokens=TURN, pue=2 * PUE_DEFAULT)
+    assert abs(cost_2e["eur_month"] / cost_ref["eur_month"] - 2) < 1e-12, \
+        "eur_month must be linear in eur_kwh"
+    assert abs(cost_2p["eur_month"] / cost_ref["eur_month"] - 2) < 1e-12 \
+        and abs(cost_2p["kw"] / cost_ref["kw"] - 2) < 1e-12, \
+        "eur_month (via kw) must be linear in pue"
+    assert cost_ref["eur_user"] == cost_ref["eur_month"] / REF_USERS
+    assert 0 < cost_ref["eur_mtok"] < float("inf")
+    # zero output rate: €/1M tokens is undefined (inf), never a silent zero
+    assert energy_cost(m27, tp2, wl, 0.0, du, REF_USERS,
+                       turn_tokens=TURN)["eur_mtok"] == float("inf")
+    # guards
+    for bad_kw in (dict(rate_group=-1.0), dict(decode_users_group=-1.0),
+                   dict(pue=0.0)):
+        try:
+            power_draw(m27, tp2, wl, **{**dict(rate_group=rate_ref,
+                                               decode_users_group=du),
+                                        **bad_kw})
+            raise AssertionError(f"expected ValueError for {bad_kw}")
+        except ValueError:
+            pass
+    try:
+        energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, eur_kwh=-0.01)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
     print("selfcheck OK")
     print(f"  ACT_RESERVE          = {ACT_RESERVE / GIB:6.2f} GiB")
     print(f"  prefill 27B TP2 32k  = {prefill_seconds(m27, tp2, CH) * 1e3:6.0f} ms "
@@ -2712,6 +2981,10 @@ def _selfcheck():
           f"{prefill_flops(m27, CH)[1] / prefill_flops(m27, CH)[2]:.0%} attention)")
     print(f"  cold/warm cost ratio = {th:6.0f}x   breakeven miss rate "
           f"{fstar:.0%} @ 2.13 req/s")
+    print(f"  power 27B TP2 @64u   = {cost_ref['kw']:6.2f} kW "
+          f"({cost_ref['per_gpu_w']:.0f} W/GPU; dP {cost_ref['d_p']:.0%} "
+          f"dD {cost_ref['d_d']:.0%})   EUR {cost_ref['eur_month']:.0f}/mo "
+          f"@ {EUR_PER_KWH_DEFAULT} EUR/kWh, PUE {PUE_DEFAULT}")
     for dtype in KV_DTYPES:
         for mk in MODELS:
             if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:

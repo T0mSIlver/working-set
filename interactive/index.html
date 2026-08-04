@@ -542,6 +542,34 @@ svg text{fill:var(--text-2)}
     <div id="deployBody"></div>
   </div>
 
+  <div class="panel card" id="testCard" style="margin-bottom:14px">
+    <p class="ct">Test these hypotheses on your endpoint</p>
+    <p class="cs">Every number on this page is a projection — the planning stance defines "comfortable capacity" as <b>measured</b> SLO capacity, which no model produces. This button writes the current predictions down as falsifiable hypotheses inside a standalone load-test script (Python, no checkout needed: <code>uv run validate_&hellip;.py</code>): closed-loop users with the shared prefix and log-normal contexts configured above, a load ladder bracketing the predicted limit, and a predicted-vs-measured verdict table at the end. Start with <code>--dry-run</code>; probe B* with <code>--burst N</code>.</p>
+    <div id="testBody"></div>
+  </div>
+
+  <div class="panel card" id="costCard" style="margin-bottom:14px">
+    <p class="ct">The electricity bill</p>
+    <p class="cs">Wall power priced from the duty cycle the model already computes — prefill bursts near the power cap, bandwidth-bound decode well under it, idle in between — plus the chassis and the facility overhead (PUE). Energy only: the GPUs themselves are not priced. GPU term ±20–25%; B300 figures are extrapolated from Hopper measurements — <a href="method.html#power">method &amp; sources</a>.</p>
+    <div class="ctl-grid" style="margin-bottom:4px">
+      <div class="ctl-group">
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="What one kWh costs you. Default €0.19 = the Eurostat EU-27 non-household average (H1-2025); the spread runs €0.077 (FI) to €0.258 (CY). The bill is exactly linear in it.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
+          <input type="range" id="s-ekwh" min="0.05" max="0.60" step="0.01" value="0.19">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Power Usage Effectiveness — facility watts per IT watt (cooling, distribution). 1.2 ≈ hyperscale, 1.5 ≈ the Uptime-survey colo average, 2.0 ≈ a small in-house server room. Multiplies the whole bill.">Facility PUE</span></label>
+          <div class="seg" id="seg-pue" data-key="pue">
+            <button data-v="1.2" aria-pressed="false">1.2 hyperscale</button>
+            <button data-v="1.5" aria-pressed="true">1.5 colo</button>
+            <button data-v="2.0" aria-pressed="false">2.0 server room</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="costBody"></div>
+  </div>
+
   <div class="panel card" id="ceilingCard">
     <p class="ct">All four ceilings, side by side</p>
     <p class="cs">How many concurrent users each constraint allows. The shortest bar is the answer; the marker is your load.</p>
@@ -565,7 +593,7 @@ svg text{fill:var(--text-2)}
 
   <div class="panel card" style="margin-top:14px">
     <p class="ct">The frontier — every model × split on the selected GPU</p>
-    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP.</p>
+    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
     <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
     <div id="frontierTable"></div>
   </div>
@@ -602,9 +630,19 @@ const CONFIG = {
   // 2:4 sparsity, which no dense LLM GEMM reaches — halve it. B300: the DGX
   // B300 datasheet's 72 PFLOPS FP8 (8 GPUs, sparse) -> 4.5 dense/GPU; the
   // Ultra FP4 uplift did NOT carry to FP8, so "FP8 = FP4/2" is wrong here.
+  // Power constants (research/power.md): tdp_w is the spec plate; idle_w a
+  // measured H100 warm-idle proxy +10% (B300 extrapolated at the same ~10.5%
+  // of TDP); p_decode_w the measured bandwidth-bound token-phase draw (0.55 x
+  // TDP central, band 0.45-0.75); p_prefill_w the power-cap-limited prefill
+  // draw (0.90 x TDP — the cap binds before the FLOP peak, so it is FLAT
+  // across the MFU 30-60% band); host_w the DGX chassis adder per GPU (spec
+  // ceiling, conservative). B300 rows are ENTIRELY extrapolated — no
+  // published Blackwell Ultra power-state measurements exist.
   GPUS: {
-    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8, peak_flops_fp8: 1.979e15 },
-    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8, peak_flops_fp8: 4.5e15 },
+    "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8, peak_flops_fp8: 1.979e15,
+              tdp_w: 700,  idle_w: 80,  p_decode_w: 385, p_prefill_w: 630,  host_w: 575 },
+    "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8, peak_flops_fp8: 4.5e15,
+              tdp_w: 1400, idle_w: 150, p_decode_w: 770, p_prefill_w: 1260, host_w: 500 },
   },
   VRAM_PER_GPU: 141e9,     // calibration-anchor GPU (H200) HBM bytes
   HBM_BW:       4.8e12,    // calibration-anchor GPU bandwidth, bytes/s
@@ -1817,6 +1855,11 @@ const state = {
   // UI-only: whether the frontier table shows the four per-ceiling columns.
   // Not part of any compute signature — toggling re-renders from cached rows.
   showCeil: false,
+  // electricity price and facility PUE the cost card multiplies by — pricing
+  // constants, so deliberately NOT in samplingSig (they move no sampled draw).
+  // Defaults: Eurostat EU non-household average and the Uptime-survey colo
+  // figure (research/power.md).
+  ekwh: 0.19, pue: "1.5",
 };
 
 // Snapshot of the published reference configuration, taken BEFORE any URL
@@ -2669,7 +2712,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   if (noFit){
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
     renderBindingChart(null); renderSpikeChart(null); renderCeilingBars(null);
-    renderDeployCard(null);
+    renderDeployCard(null); renderTestCard(null); renderCostCard(null);
     // The frontier enumerates every configuration and does not depend on the
     // current one fitting — when the answer to "can I run this?" is no, it is
     // the only thing on screen that answers "then what?". It now carries
@@ -2734,6 +2777,8 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
   renderCeilingBars(op);
   renderDeployCard(op, model, topo, wl, mo, decodeUsers);
+  renderTestCard(op, model, topo, wl);
+  renderCostCard(op, model, topo, wl, mo, decodeUsers);
   renderBindingChart(d, op);
 
   // context lines on the spike chart: the same model at other widths that fit
@@ -2802,7 +2847,10 @@ function renderFrontierSection(wl, cs, draft, q){
              op: operatingPoint(m2, t2, wl, cs, {
                mo: mo2, reps: r.reps,
                warmUsers: r.warmUsers, decodeUsers: r.decodeUsers }),
-             bstar: bStar(mo2, f, state.sla, r2) };
+             bstar: bStar(mo2, f, state.sla, r2),
+             // energy at YOUR load (research/power.md) — comparable across
+             // rows because every row is priced at the same demand
+             eur: energyCost(t2, mo2, f, r2, r.decodeUsers / r.reps).eurMonth };
   }).sort((a,b)=>b.op.limit-a.op.limit);
   renderFrontierTable(rows, `${state.model}|${state.ngpu/state.tp}x${state.tp}`);
 }
@@ -3299,6 +3347,219 @@ function renderCeilingBars(op){
   box.innerHTML = svgEl(g, W, H, 'The four ceilings compared in max concurrent users, with the current load marked');
 }
 
+/* ---- "TEST THESE HYPOTHESES" — the generated validation harness -----------
+   The deploy card says what to run; this card says how to CHECK it. The
+   button hands out scripts/validate_deployment.py with its CONFIG block
+   replaced by the configuration on screen and the model's predictions
+   restated as falsifiable hypotheses — measured SLO capacity is the number
+   this study defines as the answer and cannot produce itself.
+
+   The template is EMBEDDED (as a JSON string, so no escaping hazards) so the
+   download works from file:// too. GENERATED by scripts/sync_harness.py from
+   the Python file — edit scripts/validate_deployment.py and re-run the sync;
+   never edit the string below by hand. */
+/* @@HARNESS_EMBED_BEGIN@@ */
+const HARNESS_TEMPLATE = "#!/usr/bin/env -S uv run --script\n# /// script\n# requires-python = \">=3.11\"\n# dependencies = [\n#     \"httpx>=0.27\",\n# ]\n# ///\n\"\"\"\nLive-endpoint validation harness for the serving-capacity model\n(scripts/scenario_model.py; interactive/index.html mirrors it in JS).\n\nThe model predicts four ceilings for a configuration \u2014 cache (warm p5),\ndecode (users at the tok/s floor), latency (users where a miss's mean TTFT\nhits the budget) and saturation (prefill duty 100%) \u2014 and the binding one\nis the smallest. Every one of those is a projection: docs/scenarios.md\n(\"Planning stance\") is explicit that the study is a hypothesis generator\nand that \"comfortable capacity\" is DEFINED as measured SLO capacity, a\nnumber the model cannot produce. This script is that measurement: it\ndrives a LIVE vLLM endpoint with the closed-loop workload the model\nassumes and finds the real limit.\n\n  MEASURED SLO CAPACITY := the largest simulated population meeting\n      p{percentile} TTFT <= ttft_budget_s\n      AND per-user p50 decode >= itl_floor_tok_s\n  over a geometric load ladder bracketing the model's predicted limit.\n\nWorkload (one simulated user = one session, assumption 1 of the planner):\nevery session shares ONE byte-identical system prefix (so vLLM prefix\ncaching engages), carries a per-session context drawn from the model's\nlog-normal (median/sigma; tokens ~ chars/4, and the ACHIEVED prompt_tokens\nare read back from `usage` and reported against the intent), and loops:\nthink (exponential, mean think_time_s) -> send prior context + a\nwarm_turn_tokens turn -> stream the response. With probability miss_rate a\nturn prepends a random salt, making the whole request unmatchable \u2014 the\nmodel's cache miss. Subagent sessions (ratio r, leaner prompts) run the\nsame loop. One simplification vs Workload: the model gives subagents their\nown leaner prefix (sys_sub); here both classes share the single CONFIG\nprefix (sub_shares_prefix=True in model terms).\n\nWhat one run establishes, and what it cannot: the ladder separates the\nceilings only by their observed failure mode (TTFT breach vs decode-floor\nbreach); warm capacity is bounded BELOW unless the run reaches eviction;\ncorrelated-flush tolerance (B*) needs --burst. The verdict table names\nwhich is which \u2014 read the \"what this run does not establish\" trailer\nbefore quoting any number from it.\n\nUsage:\n    uv run validate_deployment.py --dry-run        # offline: plan + sampler self-check\n    uv run validate_deployment.py --base-url http://host:8000/v1\n    uv run validate_deployment.py --burst 8        # B* probe instead of the ladder\n\nCtrl-C at any point prints a partial report over the rungs completed.\n\"\"\"\nfrom __future__ import annotations\n\nimport argparse\nimport asyncio\nimport json\nimport math\nimport os\nimport random\nimport sys\nimport time\nfrom dataclasses import dataclass, field\n\n# --- BEGIN CONFIG (generated by the interactive explorer) ---\nCONFIG = {\n    # Reference example: 27B / 2xH200 TP2, f = 1% (docs/scenarios.md H7 row).\n    # The explorer replaces this whole block with the configuration on screen.\n    \"endpoint\": {\n        \"base_url\": \"http://localhost:8000/v1\",\n        \"model\": \"Qwen/Qwen3.6-27B-FP8\",\n        \"api_key_env\": \"VLLM_API_KEY\",       # env var NAME, not the key itself\n    },\n    \"workload\": {\n        \"system_prefix_tokens\": 15_000,      # shared prefix, identical bytes for all sessions\n        \"user_prompt_median_tokens\": 31_000, # log-normal median of a user session's context\n        \"user_prompt_sigma\": 0.81,           # log-normal shape (sigma of ln L)\n        \"warm_turn_tokens\": 2_000,           # new tokens appended per warm turn\n        \"think_time_s\": 30.0,                # mean turn-to-turn interval (exponential)\n        \"subagent_ratio\": 0.10,              # subagent sessions per user session\n        \"subagent_median_tokens\": 8_000,\n        \"subagent_sigma\": 0.9,\n        \"miss_rate\": 0.01,                   # per-turn probability of a forced full re-prefill\n        \"max_output_tokens\": 1_000,          # decoded tokens per turn (OUT_TOKENS_DEFAULT)\n    },\n    \"slo\": {\n        \"ttft_budget_s\": 10.0,\n        \"itl_floor_tok_s\": 40,               # the study's hard per-user decode floor\n        \"percentile\": 95,                    # TTFT percentile the SLO is read at\n    },\n    \"predictions\": {\n        \"warm_capacity_p5\": 177,             # user-class warm sessions, p5 (plan column)\n        \"decode_ceiling_users\": 228,         # users at the 40 tok/s p50 floor (mns@40)\n        \"latency_ceiling_users\": 265,        # users where a miss's mean TTFT = budget\n        \"saturation_ceiling_users\": 283,     # users where prefill duty = 100%\n        \"binding_constraint\": \"cache\",       # argmin of the four ceilings\n        \"predicted_limit_users\": 177,        # the binding ceiling's value\n        \"ttft_miss_s\": 2.6,                  # mean TTFT of a miss at the operating point\n        \"bstar_misses\": 5.1,                 # B*: simultaneous misses drained inside the budget\n    },\n    \"hypotheses\": [\n        \"H-cache: >= 177 user sessions stay warm (p5). This run bounds it below \"\n        \"unless load reaches eviction (watch the effective-cold fraction).\",\n        \"H-decode: per-user p50 decode holds >= 40 tok/s up to ~228 concurrent users.\",\n        \"H-latency: a cache miss's mean TTFT reaches the 10 s budget near ~265 users.\",\n        \"H-saturation: prefill duty reaches 100% near ~283 users; above it the queue \"\n        \"has no steady state.\",\n        \"H-binding: the binding constraint is 'cache' \u2014 measured SLO capacity should \"\n        \"land near 177 users.\",\n        \"H-ttft-miss: a forced miss's mean TTFT at the operating point is ~2.6 s.\",\n        \"H-burst (needs --burst): a simultaneous flush of <= 5 misses (B* = 5.1) \"\n        \"drains inside the TTFT budget; a larger one does not.\",\n    ],\n}\n# --- END CONFIG ---\n\nDEFAULT_RUNGS = \"0.25,0.5,0.75,1,1.25,1.5,2\"\n\n\n# ============================================================================\n# small numerics (no numpy: this file must run standalone from a download)\n# ============================================================================\ndef pct(xs, q: float) -> float:\n    \"\"\"Linear-interpolation percentile; nan on empty input.\"\"\"\n    if not xs:\n        return float(\"nan\")\n    s = sorted(xs)\n    if len(s) == 1:\n        return float(s[0])\n    pos = (len(s) - 1) * q / 100.0\n    lo = math.floor(pos)\n    frac = pos - lo\n    hi = min(lo + 1, len(s) - 1)\n    return float(s[lo] * (1 - frac) + s[hi] * frac)\n\n\ndef fmt(x, unit: str = \"\", nd: int = 2) -> str:\n    if x is None or (isinstance(x, float) and not math.isfinite(x)):\n        return \"-\"\n    return f\"{x:.{nd}f}{unit}\"\n\n\n# ============================================================================\n# synthetic text  (tokens ~ chars / chars_per_token; the run reads back the\n# ACHIEVED prompt_tokens from `usage` and reports the ratio, closing the loop)\n# ============================================================================\n_VOCAB = (\"the build failed on stage three because a header moved and the cache \"\n          \"key did not include it so the runner reused a stale object then the \"\n          \"linker saw two symbols with one name and gave up while the test \"\n          \"suite kept polling a socket that nothing owned anymore\").split()\n\n\ndef make_text(rng: random.Random, tokens: float, cpt: float) -> str:\n    \"\"\"~`tokens` worth of plain prose (cpt chars per token, measured later).\"\"\"\n    budget = max(int(tokens * cpt), 1)\n    out, n = [], 0\n    while n < budget:\n        w = _VOCAB[rng.randrange(len(_VOCAB))]\n        out.append(w)\n        n += len(w) + 1\n    return \" \".join(out)[:budget]\n\n\ndef draw_session_tokens(rng: random.Random, median: float, sigma: float,\n                        prefix: float, cap: float) -> int:\n    \"\"\"One session's full prompt length: log-normal(median, sigma), clipped to\n    [prefix, cap] exactly as Workload.sample clips (a prompt always contains\n    at least its shared prefix, never more than the cap).\"\"\"\n    full = rng.lognormvariate(math.log(median), sigma)\n    return int(min(max(full, prefix), cap))\n\n\n# ============================================================================\n# measurement records\n# ============================================================================\n@dataclass\nclass Turn:\n    uid: int\n    is_sub: bool\n    kind: str                 # \"first\" (session establishment) | \"hit\" | \"miss\"\n    t_start: float\n    ttft: float | None = None\n    decode_tps: float | None = None\n    ptok_intended: int = 0\n    ptok_achieved: int | None = None\n    ctok: int | None = None\n    error: str | None = None\n\n\n@dataclass\nclass RungResult:\n    pop: int                  # user-class sessions (the population axis)\n    n_sub: int\n    n_turns: int = 0\n    n_hit: int = 0\n    n_miss: int = 0\n    n_err: int = 0\n    ttft_hit_p50: float = float(\"nan\")\n    ttft_hit_pX: float = float(\"nan\")\n    ttft_miss_p50: float = float(\"nan\")\n    ttft_miss_pX: float = float(\"nan\")\n    ttft_miss_mean: float = float(\"nan\")\n    ttft_all_pX: float = float(\"nan\")\n    decode_p50: float = float(\"nan\")\n    achieved_rps: float = float(\"nan\")\n    offered_rps: float = float(\"nan\")\n    evict_frac: float = float(\"nan\")   # hit-intended turns that look cold (heuristic)\n    ptok_ratio: float = float(\"nan\")   # achieved / intended prompt tokens, median\n    passed: bool = False\n    reasons: list = field(default_factory=list)\n    blown: bool = False                # SLOs clearly blown -> ladder stops here\n    partial: bool = False              # interrupted mid-window: shown, never counted\n\n\n# ============================================================================\n# one streamed request against the OpenAI-compatible /v1/completions\n# ============================================================================\nasync def send_turn(client, args, cfg, prompt: str, turn: Turn) -> str:\n    \"\"\"Stream one completion; fills `turn` in place, returns the response text\n    (appended to the session so the next warm turn extends the cached run).\"\"\"\n    ep = cfg[\"endpoint\"]\n    payload = {\n        \"model\": args.model or ep[\"model\"],\n        \"prompt\": prompt,\n        \"max_tokens\": cfg[\"workload\"][\"max_output_tokens\"],\n        \"temperature\": 0.7,\n        \"stream\": True,\n        \"stream_options\": {\"include_usage\": True},\n    }\n    if not args.no_ignore_eos:\n        # vLLM extension: guarantees max_output_tokens of decode per turn, so\n        # decode tok/s is measured over a fixed-length stream, not over\n        # whatever an early EOS leaves. Strict non-vLLM endpoints: disable.\n        payload[\"ignore_eos\"] = True\n    headers = {}\n    key = os.environ.get(args.api_key_env or ep[\"api_key_env\"] or \"\", \"\")\n    if key:\n        headers[\"Authorization\"] = f\"Bearer {key}\"\n\n    base = (args.base_url or ep[\"base_url\"]).rstrip(\"/\")\n    t0 = time.monotonic()\n    t_first = t_last = None\n    n_chunks, text, usage = 0, [], None\n    try:\n        async with client.stream(\"POST\", f\"{base}/completions\", json=payload,\n                                 headers=headers,\n                                 timeout=args.request_timeout_s) as r:\n            r.raise_for_status()\n            async for line in r.aiter_lines():\n                if not line.startswith(\"data:\"):\n                    continue\n                data = line[5:].strip()\n                if data == \"[DONE]\":\n                    break\n                obj = json.loads(data)\n                if obj.get(\"usage\"):\n                    usage = obj[\"usage\"]\n                ch = obj.get(\"choices\") or []\n                if ch and ch[0].get(\"text\"):\n                    now = time.monotonic()\n                    if t_first is None:\n                        t_first = now\n                        turn.ttft = now - t0\n                    t_last = now\n                    n_chunks += 1\n                    text.append(ch[0][\"text\"])\n    except asyncio.CancelledError:\n        raise\n    except Exception as e:  # connection, HTTP status, timeout, bad JSON\n        turn.error = f\"{type(e).__name__}: {e}\"[:200]\n        return \"\"\n\n    if usage:\n        turn.ptok_achieved = usage.get(\"prompt_tokens\")\n        turn.ctok = usage.get(\"completion_tokens\")\n    n_tok = turn.ctok if turn.ctok else n_chunks\n    if t_first is not None and t_last is not None and t_last > t_first and n_tok > 1:\n        turn.decode_tps = (n_tok - 1) / (t_last - t_first)\n    return \"\".join(text)\n\n\n# ============================================================================\n# closed-loop session\n# ============================================================================\nasync def user_loop(client, args, cfg, uid: int, is_sub: bool,\n                    system_prefix: str, turns: list, stop: asyncio.Event,\n                    stagger_s: float):\n    wl = cfg[\"workload\"]\n    rng = random.Random((args.seed << 20) ^ uid)\n    cpt = args.chars_per_token\n    median = wl[\"subagent_median_tokens\"] if is_sub else wl[\"user_prompt_median_tokens\"]\n    sigma = wl[\"subagent_sigma\"] if is_sub else wl[\"user_prompt_sigma\"]\n    full = draw_session_tokens(rng, median, sigma,\n                               wl[\"system_prefix_tokens\"],\n                               args.context_cap_tokens)\n    # per-session unique context on top of the shared prefix\n    ctx = make_text(rng, max(full - wl[\"system_prefix_tokens\"], 0), cpt)\n    history = \"\"\n    n_turn = 0\n    cap = args.turns_per_user or math.inf\n\n    await asyncio.sleep(stagger_s)          # spread session establishment over the ramp\n    while not stop.is_set() and n_turn < cap:\n        first = n_turn == 0\n        if not first:\n            # exponential think time; wake early if the rung ends\n            try:\n                await asyncio.wait_for(stop.wait(),\n                                       rng.expovariate(1.0 / wl[\"think_time_s\"]))\n                break\n            except asyncio.TimeoutError:\n                pass\n        is_miss = (not first) and rng.random() < wl[\"miss_rate\"]\n        # a salt ahead of the prefix makes the WHOLE request unmatchable \u2014 the\n        # model's cache miss (full re-prefill), applied to this turn only\n        salt = f\"[miss-salt {rng.getrandbits(64):016x}] \" if is_miss else \"\"\n        turn_text = \"\" if first else \"\\n\" + make_text(rng, wl[\"warm_turn_tokens\"], cpt)\n        prompt = salt + system_prefix + \"\\n\" + ctx + history + turn_text\n        turn = Turn(uid=uid, is_sub=is_sub,\n                    kind=\"first\" if first else (\"miss\" if is_miss else \"hit\"),\n                    t_start=time.monotonic(),\n                    ptok_intended=int(len(prompt) / cpt))\n        turns.append(turn)\n        reply = await send_turn(client, args, cfg, prompt, turn)\n        # the response joins the context: the next warm turn extends the cached\n        # sequence exactly the way a real agentic session does\n        history += turn_text + reply\n        n_turn += 1\n\n\n# ============================================================================\n# one ladder rung\n# ============================================================================\ndef eval_rung(pop: int, n_sub: int, turns: list, measure_start: float,\n              cfg, args) -> RungResult:\n    slo, wl = cfg[\"slo\"], cfg[\"workload\"]\n    p = slo[\"percentile\"]\n    res = RungResult(pop=pop, n_sub=n_sub)\n\n    measured = [t for t in turns\n                if t.t_start >= measure_start and t.kind in (\"hit\", \"miss\")]\n    res.n_err = sum(1 for t in measured if t.error)\n    ok = [t for t in measured if not t.error and t.ttft is not None]\n    hit = [t for t in ok if t.kind == \"hit\"]\n    miss = [t for t in ok if t.kind == \"miss\"]\n    res.n_turns, res.n_hit, res.n_miss = len(ok), len(hit), len(miss)\n\n    res.ttft_hit_p50 = pct([t.ttft for t in hit], 50)\n    res.ttft_hit_pX = pct([t.ttft for t in hit], p)\n    res.ttft_miss_p50 = pct([t.ttft for t in miss], 50)\n    res.ttft_miss_pX = pct([t.ttft for t in miss], p)\n    if miss:\n        res.ttft_miss_mean = sum(t.ttft for t in miss) / len(miss)\n    res.ttft_all_pX = pct([t.ttft for t in ok], p)\n\n    # per-user decode: median within each user, then p50 across users \u2014 the\n    # model's \"per-user p50\" is a population statistic, not a turn statistic\n    by_user: dict[int, list] = {}\n    for t in ok:\n        if t.decode_tps is not None:\n            by_user.setdefault(t.uid, []).append(t.decode_tps)\n    res.decode_p50 = pct([pct(v, 50) for v in by_user.values()], 50)\n\n    res.achieved_rps = len(measured) / args.measure_s\n    res.offered_rps = (pop + n_sub) / wl[\"think_time_s\"]\n\n    # eviction heuristic (the baseline's warm/cold classifier): a hit-intended\n    # turn whose TTFT is >= 0.4x the median forced-miss TTFT re-prefilled \u2014 its\n    # cached run was evicted. A heuristic, flagged as such in the report.\n    if hit and miss and math.isfinite(res.ttft_miss_p50):\n        thresh = 0.4 * res.ttft_miss_p50\n        res.evict_frac = sum(1 for t in hit if t.ttft >= thresh) / len(hit)\n\n    ratios = [t.ptok_achieved / t.ptok_intended for t in ok\n              if t.ptok_achieved and t.ptok_intended]\n    res.ptok_ratio = pct(ratios, 50)\n\n    # SLO verdict for this rung\n    budget, floor = slo[\"ttft_budget_s\"], slo[\"itl_floor_tok_s\"]\n    err_frac = res.n_err / max(len(measured), 1)\n    if not ok:\n        res.reasons.append(\"no successful turns in the measure window\")\n        res.blown = True\n    else:\n        if err_frac > 0.05:\n            res.reasons.append(f\"error rate {err_frac:.0%}\")\n        if res.ttft_all_pX > budget:\n            res.reasons.append(f\"p{p} TTFT {res.ttft_all_pX:.2f}s > {budget:g}s\")\n        if math.isfinite(res.decode_p50) and res.decode_p50 < floor:\n            res.reasons.append(f\"decode p50 {res.decode_p50:.1f} < {floor:g} tok/s\")\n        res.blown = (res.ttft_all_pX > 2 * budget\n                     or (math.isfinite(res.decode_p50)\n                         and res.decode_p50 < 0.5 * floor)\n                     or err_frac > 0.20)\n    res.passed = not res.reasons\n    return res\n\n\nasync def run_rung(client, args, cfg, pop: int, state: dict) -> RungResult:\n    wl = cfg[\"workload\"]\n    n_sub = round(pop * wl[\"subagent_ratio\"])\n    turns: list[Turn] = []\n    state[\"current\"] = (pop, n_sub, turns, None)\n    stop = asyncio.Event()\n    system_prefix = state[\"system_prefix\"]\n\n    tasks = []\n    rng = random.Random(args.seed ^ pop)\n    for i in range(pop + n_sub):\n        tasks.append(asyncio.create_task(user_loop(\n            client, args, cfg, uid=pop * 100_000 + i, is_sub=(i >= pop),\n            system_prefix=system_prefix, turns=turns, stop=stop,\n            stagger_s=rng.uniform(0, max(args.ramp_s, 1.0)))))\n    t0 = time.monotonic()\n    measure_start = t0 + args.ramp_s\n    state[\"current\"] = (pop, n_sub, turns, measure_start)\n    try:\n        await asyncio.sleep(args.ramp_s + args.measure_s)\n    finally:\n        stop.set()\n        for t in tasks:\n            t.cancel()\n        await asyncio.gather(*tasks, return_exceptions=True)\n\n    res = eval_rung(pop, n_sub, turns, measure_start, cfg, args)\n    state[\"rungs\"].append(res)\n    state[\"current\"] = None\n    return res\n\n\n# ============================================================================\n# burst probe  (--burst N: validates B*, the correlated-flush tolerance)\n# ============================================================================\nasync def run_burst(client, args, cfg, state: dict):\n    \"\"\"From steady standing load, fire N simultaneous forced misses and time\n    the drain. B* predicts the largest N whose LAST first-token still lands\n    inside the TTFT budget (spike_tolerance in scenario_model.py).\"\"\"\n    wl = cfg[\"workload\"]\n    pred = cfg[\"predictions\"]\n    pop = args.burst_users or max(1, round(0.5 * pred[\"predicted_limit_users\"]))\n    n_sub = round(pop * wl[\"subagent_ratio\"])\n    n = args.burst\n    print(f\"\\nBURST PROBE: standing load {pop} users (+{n_sub} subagents), \"\n          f\"ramp {args.ramp_s:g}s, then {n} simultaneous forced misses \"\n          f\"(predicted B* = {pred['bstar_misses']:g})\")\n\n    turns: list[Turn] = []\n    stop = asyncio.Event()\n    rng = random.Random(args.seed ^ 0xB0057)\n    tasks = [asyncio.create_task(user_loop(\n        client, args, cfg, uid=900_000 + i, is_sub=(i >= pop),\n        system_prefix=state[\"system_prefix\"], turns=turns, stop=stop,\n        stagger_s=rng.uniform(0, max(args.ramp_s, 1.0))))\n        for i in range(pop + n_sub)]\n    try:\n        await asyncio.sleep(args.ramp_s)\n\n        async def one_miss(i: int) -> Turn:\n            r = random.Random((args.seed << 8) ^ (0xF00D + i))\n            full = draw_session_tokens(r, wl[\"user_prompt_median_tokens\"],\n                                       wl[\"user_prompt_sigma\"],\n                                       wl[\"system_prefix_tokens\"],\n                                       args.context_cap_tokens)\n            salt = f\"[miss-salt {r.getrandbits(64):016x}] \"\n            prompt = (salt + state[\"system_prefix\"] + \"\\n\"\n                      + make_text(r, max(full - wl[\"system_prefix_tokens\"], 0),\n                                  args.chars_per_token))\n            t = Turn(uid=990_000 + i, is_sub=False, kind=\"miss\",\n                     t_start=time.monotonic(),\n                     ptok_intended=int(len(prompt) / args.chars_per_token))\n            await send_turn(client, args, cfg, prompt, t)\n            return t\n\n        t_fire = time.monotonic()\n        burst_turns = await asyncio.gather(*[one_miss(i) for i in range(n)])\n    finally:\n        stop.set()\n        for t in tasks:\n            t.cancel()\n        await asyncio.gather(*tasks, return_exceptions=True)\n\n    ok = [t for t in burst_turns if t.ttft is not None and not t.error]\n    result = {\n        \"n\": n, \"standing_users\": pop,\n        \"n_ok\": len(ok), \"n_err\": n - len(ok),\n        # drain: fire -> the LAST request's first token (all fired together,\n        # so last first-token = the fluid model's T_drain, whatever the\n        # scheduler's discipline \u2014 see burst_drain_seconds)\n        \"drain_s\": (max(t.t_start + t.ttft for t in ok) - t_fire) if ok else None,\n        \"last_ttft_s\": max((t.ttft for t in ok), default=None),\n        \"ttft_p50_s\": pct([t.ttft for t in ok], 50),\n    }\n    state[\"burst\"] = result\n    print(f\"  burst: {len(ok)}/{n} answered | TTFT p50 {fmt(result['ttft_p50_s'], 's')} \"\n          f\"| last first-token {fmt(result['last_ttft_s'], 's')} \"\n          f\"| drain {fmt(result['drain_s'], 's')}\")\n\n\n# ============================================================================\n# verdicts\n# ============================================================================\nCHECK, CROSS, TILDE = \"\u2713\", \"\u2717\", \"~\"\n\n\ndef bracket_verdict(pred: float, lo: float | None, hi: float | None) -> tuple:\n    \"\"\"Compare a predicted ceiling against the measured (largest-pass,\n    smallest-fail] population bracket. lo/hi None = side not observed.\n    ~ means within 25% of the nearest observed edge.\"\"\"\n    if pred is None:\n        return TILDE, \"no prediction\"\n    if lo is None and hi is None:\n        return TILDE, \"no data\"\n    if hi is None:                       # never failed: lower bound only\n        if pred >= lo:\n            return TILDE, f\"not reached (measured >= {lo:g}, predicted {pred:g})\"\n        if lo <= 1.25 * pred:\n            return TILDE, f\"measured >= {lo:g}, within 25% above prediction\"\n        return CROSS, f\"passed at {lo:g} > 1.25x predicted {pred:g} (model conservative)\"\n    if lo is None:                       # every rung failed: upper bound only\n        if pred <= hi:\n            return TILDE, f\"capacity < {hi:g}; prediction {pred:g} not excluded\"\n        if pred <= hi / 0.75:\n            return TILDE, f\"capacity < {hi:g}, within 25% below prediction\"\n        return CROSS, f\"failed at {hi:g} < 0.75x predicted {pred:g} (model optimistic)\"\n    if lo <= pred <= hi:\n        return CHECK, f\"predicted {pred:g} inside measured ({lo:g}, {hi:g}]\"\n    edge = lo if pred < lo else hi\n    if 0.75 <= pred / edge <= 1.25:\n        return TILDE, f\"predicted {pred:g} within 25% of measured ({lo:g}, {hi:g}]\"\n    return CROSS, f\"predicted {pred:g} outside measured ({lo:g}, {hi:g}]\"\n\n\ndef print_report(state: dict, cfg, args, interrupted: bool = False):\n    slo, pred = cfg[\"slo\"], cfg[\"predictions\"]\n    p = slo[\"percentile\"]\n    rungs: list[RungResult] = list(state[\"rungs\"])\n    # a partially-measured current rung still carries information on Ctrl-C\n    if interrupted and state.get(\"current\"):\n        pop, n_sub, turns, ms = state[\"current\"]\n        if ms is not None and any(t.t_start >= ms for t in turns):\n            r = eval_rung(pop, n_sub, turns, ms, cfg, args)\n            r.partial = True           # shown for orientation, excluded from verdicts\n            rungs.append(r)\n\n    print(\"\\n\" + \"=\" * 78)\n    print(\"VALIDATION REPORT\" + (\"  [INTERRUPTED \u2014 partial]\" if interrupted else \"\"))\n    print(\"=\" * 78)\n\n    if rungs:\n        print(f\"\\n{'users':>6} {'turns':>6} {'hit':>5} {'miss':>5} {'err':>4} \"\n              f\"{'TTFT hit p50/p' + str(p):>17} {'TTFT miss p50/p' + str(p):>18} \"\n              f\"{'dec p50':>8} {'req/s':>6} {'verdict'}\")\n        for r in rungs:\n            verdict = \"PASS\" if r.passed else \"FAIL: \" + \"; \".join(r.reasons)\n            if r.partial:\n                verdict += \" [partial \u2014 not counted]\"\n            print(f\"{r.pop:>6} {r.n_turns:>6} {r.n_hit:>5} {r.n_miss:>5} \"\n                  f\"{r.n_err:>4} \"\n                  f\"{fmt(r.ttft_hit_p50, '', 2):>8}/{fmt(r.ttft_hit_pX, 's', 2):<8} \"\n                  f\"{fmt(r.ttft_miss_p50, '', 2):>8}/{fmt(r.ttft_miss_pX, 's', 2):<9} \"\n                  f\"{fmt(r.decode_p50, '', 1):>8} {fmt(r.achieved_rps, '', 2):>6} \"\n                  f\"{verdict}\")\n        ratios = [r.ptok_ratio for r in rungs if math.isfinite(r.ptok_ratio)]\n        if ratios:\n            med = pct(ratios, 50)\n            print(f\"\\nachieved/intended prompt tokens (median): {med:.2f} \"\n                  f\"(tokens ~ chars/{args.chars_per_token:g}; if far from 1.0, \"\n                  f\"re-run with --chars-per-token {args.chars_per_token / med:.1f})\")\n\n    # measured SLO capacity bracket \u2014 full windows only; a partial rung is\n    # orientation, not evidence\n    rungs = [r for r in rungs if not r.partial]\n    passes = [r.pop for r in rungs if r.passed]\n    fails = [r.pop for r in rungs if not r.passed]\n    lo = max(passes) if passes else None\n    hi = min(fails) if fails else None\n    print(\"\\nMEASURED SLO CAPACITY \"\n          f\"(p{p} TTFT <= {slo['ttft_budget_s']:g}s AND per-user p50 decode \"\n          f\">= {slo['itl_floor_tok_s']:g} tok/s):\")\n    if lo is not None and hi is not None:\n        print(f\"  in ({lo}, {hi}] \u2014 largest passing population {lo} users\")\n    elif lo is not None:\n        print(f\"  >= {lo} users (no failing rung observed \u2014 a lower bound)\")\n    elif hi is not None:\n        print(f\"  < {hi} users (no passing rung observed)\")\n    else:\n        print(\"  not measured\")\n\n    # failure-mode split: which ceilings did the ladder actually see?\n    ttft_fails = [r.pop for r in rungs\n                  if any(\"TTFT\" in s for s in r.reasons)]\n    dec_fails = [r.pop for r in rungs\n                 if any(\"decode\" in s for s in r.reasons)]\n    lat_lo = max((r.pop for r in rungs\n                  if r.passed or not any(\"TTFT\" in s for s in r.reasons)),\n                 default=None)\n    dec_lo = max((r.pop for r in rungs\n                  if r.passed or not any(\"decode\" in s for s in r.reasons)),\n                 default=None)\n\n    print(\"\\nPREDICTED vs MEASURED\")\n    print(f\"{'quantity':<28} {'predicted':>10} {'measured':>22}  verdict\")\n\n    def row(name, predicted, measured, verdict, note):\n        print(f\"{name:<28} {predicted:>10} {measured:>22}  {verdict}  {note}\")\n\n    # binding limit\n    v, note = bracket_verdict(pred.get(\"predicted_limit_users\"), lo, hi)\n    row(f\"SLO capacity ({pred.get('binding_constraint', '?')} binds)\",\n        f\"{pred.get('predicted_limit_users', '-')}\",\n        (f\"({lo},{hi}]\" if lo is not None and hi is not None\n         else f\">={lo}\" if lo is not None else f\"<{hi}\" if hi is not None else \"-\"),\n        v, note)\n\n    # latency ceiling: separable only if a rung failed on TTFT\n    if ttft_fails:\n        v, note = bracket_verdict(pred.get(\"latency_ceiling_users\"),\n                                  lat_lo, min(ttft_fails))\n        row(\"latency ceiling\", f\"{pred.get('latency_ceiling_users', '-')}\",\n            f\"({lat_lo},{min(ttft_fails)}]\", v, note)\n    else:\n        row(\"latency ceiling\", f\"{pred.get('latency_ceiling_users', '-')}\",\n            \"not separable\", TILDE, \"no TTFT-mode failure observed\")\n\n    # decode ceiling: separable only if a rung failed on the floor\n    if dec_fails:\n        v, note = bracket_verdict(pred.get(\"decode_ceiling_users\"),\n                                  dec_lo, min(dec_fails))\n        row(\"decode ceiling\", f\"{pred.get('decode_ceiling_users', '-')}\",\n            f\"({dec_lo},{min(dec_fails)}]\", v, note)\n    else:\n        row(\"decode ceiling\", f\"{pred.get('decode_ceiling_users', '-')}\",\n            \"not separable\", TILDE, \"no decode-floor failure observed\")\n\n    # saturation: visible as achieved req/s falling well under the offered rate\n    sat_evidence = [r for r in rungs if not r.passed and r.n_turns > 0\n                    and math.isfinite(r.achieved_rps)\n                    and r.achieved_rps < 0.7 * r.offered_rps]\n    if sat_evidence:\n        r0 = min(sat_evidence, key=lambda r: r.pop)\n        row(\"saturation ceiling\", f\"{pred.get('saturation_ceiling_users', '-')}\",\n            f\"<= {r0.pop}\", TILDE,\n            f\"achieved {r0.achieved_rps:.2f} req/s vs offered \"\n            f\"{r0.offered_rps:.2f} \u2014 throughput plateau\")\n    else:\n        row(\"saturation ceiling\", f\"{pred.get('saturation_ceiling_users', '-')}\",\n            \"not separable\", TILDE,\n            \"closed loop throttles before duty=100% is visible\")\n\n    # warm capacity: bounded below by the largest population whose hit turns\n    # stayed warm (low effective-cold fraction), never bounded above here\n    held = [r.pop for r in rungs if r.n_hit > 0\n            and (not math.isfinite(r.evict_frac) or r.evict_frac < 0.05)]\n    wc = pred.get(\"warm_capacity_p5\")\n    if held:\n        bound = max(held)\n        if wc is not None and bound >= wc:\n            row(\"warm capacity (p5)\", f\"{wc}\", f\">= {bound}\", CHECK,\n                \"held at/above prediction with <5% effective-cold hits (lower bound)\")\n        else:\n            row(\"warm capacity (p5)\", f\"{wc}\", f\">= {bound}\", TILDE,\n                \"lower bound only \u2014 eviction not reached\")\n    else:\n        evicted = [r for r in rungs if math.isfinite(r.evict_frac)\n                   and r.evict_frac >= 0.05]\n        if evicted:\n            r0 = min(evicted, key=lambda r: r.pop)\n            v = (CROSS if wc is not None and r0.pop < 0.75 * wc else TILDE)\n            row(\"warm capacity (p5)\", f\"{wc}\", f\"< ~{r0.pop}\", v,\n                f\"{r0.evict_frac:.0%} of hit turns re-prefilled at {r0.pop} users\")\n        else:\n            row(\"warm capacity (p5)\", f\"{wc}\", \"not separable\", TILDE, \"no data\")\n\n    # miss TTFT level (read at the passing rung nearest the predicted limit)\n    tm = pred.get(\"ttft_miss_s\")\n    cand = [r for r in rungs if r.n_miss > 0 and math.isfinite(r.ttft_miss_mean)]\n    if cand and tm:\n        tgt = pred.get(\"predicted_limit_users\") or cand[-1].pop\n        r0 = min(cand, key=lambda r: abs(r.pop - tgt))\n        ratio = r0.ttft_miss_mean / tm\n        v = CHECK if 0.7 <= ratio <= 1.3 else (TILDE if 0.5 <= ratio <= 2.0 else CROSS)\n        row(\"miss mean TTFT\", f\"{tm:g}s\", f\"{r0.ttft_miss_mean:.2f}s @ {r0.pop}u\",\n            v, f\"{ratio:.2f}x predicted (model quotes order-of-magnitude bounds)\")\n    else:\n        row(\"miss mean TTFT\", f\"{tm if tm else '-'}\", \"not separable\", TILDE,\n            \"no forced-miss samples\")\n\n    # B* (burst mode only)\n    bstar = pred.get(\"bstar_misses\")\n    b = state.get(\"burst\")\n    if b and b.get(\"last_ttft_s\") is not None:\n        within = b[\"n\"] <= (bstar or 0)\n        met = b[\"last_ttft_s\"] <= slo[\"ttft_budget_s\"]\n        v = CHECK if within == met else (\n            TILDE if bstar and 0.75 <= b[\"n\"] / bstar <= 1.33 else CROSS)\n        row(\"B* (burst tolerance)\", f\"{bstar}\",\n            f\"N={b['n']}: last {b['last_ttft_s']:.2f}s\", v,\n            (\"burst <= B* drained inside budget\" if within and met else\n             \"burst > B* breached budget, as predicted\" if not within and not met else\n             \"outcome contradicts B*\"))\n    else:\n        row(\"B* (burst tolerance)\", f\"{bstar}\", \"not measured\", TILDE,\n            \"run with --burst N to probe the correlated-flush tolerance\")\n\n    # ------------------------------------------------------------------\n    print(\"\\nWHAT THIS RUN DOES NOT ESTABLISH\")\n    notes = [\n        \"Warm capacity is bounded BELOW only: unless a rung shows >5% \"\n        \"effective-cold hit turns, the pool was never driven to eviction, and \"\n        \"the eviction classifier itself is the baseline's 0.4x-cold TTFT \"\n        \"heuristic, not a pool measurement.\",\n        \"Ceilings the ladder did not fail on are 'not separable': one run \"\n        \"observes one binding constraint, not four.\",\n        \"Token counts are chars/{:g} approximations; the achieved/intended \"\n        \"ratio above says how far off \u2014 re-run calibrated before trusting \"\n        \"capacity numbers to better than ~15%.\".format(args.chars_per_token),\n        \"Think time is exponential around a fixed mean; real agentic cadence \"\n        \"is burstier (lognormal sigma 2.43 in the measured trace), which \"\n        \"moves the latency ceiling down, not up.\",\n        \"One seed, one window per rung: no variance estimate. Steady state is \"\n        \"assumed after the ramp, not verified.\",\n        \"DP deployments: this drives ONE endpoint; replica-splitting and \"\n        \"session-sticky routing are not exercised.\",\n    ]\n    if not state.get(\"burst\"):\n        notes.append(\"Correlated-flush tolerance (B*) needs the separate \"\n                     \"--burst mode; the ladder's independent per-turn misses \"\n                     \"cannot see it.\")\n    for s in notes:\n        print(f\"  - {s}\")\n\n    if args.json:\n        out = {\n            \"config\": cfg,\n            \"rungs\": [vars(r) for r in rungs],\n            \"burst\": state.get(\"burst\"),\n            \"measured_capacity_bracket\": [lo, hi],\n            \"interrupted\": interrupted,\n        }\n        with open(args.json, \"w\") as f:\n            json.dump(out, f, indent=2, default=str)\n        print(f\"\\nraw results written to {args.json}\")\n\n\n# ============================================================================\n# ladder construction + dry-run self-check\n# ============================================================================\ndef build_ladder(args, cfg) -> list:\n    pred = cfg[\"predictions\"][\"predicted_limit_users\"]\n    mults = [float(x) for x in args.rungs.split(\",\") if x.strip()]\n    pops = sorted({max(1, round(m * pred)) for m in mults})\n    return [p for p in pops if p <= args.max_users]\n\n\ndef dry_run(args, cfg) -> int:\n    \"\"\"Offline plan + sampler self-check. Exercised in CI-style: exits nonzero\n    if the log-normal sampler drifts from its configured median/sigma.\"\"\"\n    wl, slo, pred = cfg[\"workload\"], cfg[\"slo\"], cfg[\"predictions\"]\n    ep = cfg[\"endpoint\"]\n    print(\"DRY RUN \u2014 plan only, no requests sent\\n\")\n    print(f\"endpoint : {args.base_url or ep['base_url']}  \"\n          f\"model={args.model or ep['model']}  \"\n          f\"api key from ${args.api_key_env or ep['api_key_env']}\")\n    print(f\"SLOs     : p{slo['percentile']} TTFT <= {slo['ttft_budget_s']:g}s, \"\n          f\"per-user p50 decode >= {slo['itl_floor_tok_s']:g} tok/s\")\n\n    print(\"\\nLOAD LADDER (users; each rung: \"\n          f\"ramp {args.ramp_s:g}s + measure {args.measure_s:g}s)\")\n    ladder = build_ladder(args, cfg)\n    print(f\"{'users':>8} {'+sub':>6} {'offered req/s':>14}\")\n    for pop in ladder:\n        n_sub = round(pop * wl[\"subagent_ratio\"])\n        print(f\"{pop:>8} {n_sub:>6} {(pop + n_sub) / wl['think_time_s']:>14.2f}\")\n    est = len(ladder) * (args.ramp_s + args.measure_s)\n    print(f\"full-ladder wall clock (no early stop): ~{est / 60:.0f} min\")\n\n    # sampler self-check: the sampled raw median and log-sd must reproduce the\n    # configured (median, sigma) \u2014 this is the distribution warm capacity and\n    # the prefill tail are priced on, so the harness must draw it faithfully\n    print(\"\\nPROMPT-LENGTH SAMPLER (n=20,000 per class; tokens, \"\n          f\"clipped to [prefix, {args.context_cap_tokens:,}])\")\n    rng = random.Random(args.seed)\n    failed = False\n    hdr = (f\"{'class':<10} {'median cfg':>10} {'median smp':>10} \"\n           f\"{'sigma cfg':>9} {'sigma smp':>9} {'p5':>8} {'p50':>8} \"\n           f\"{'p95':>9} {'mean':>9}  check\")\n    print(hdr)\n    for cls, med, sig in ((\"user\", wl[\"user_prompt_median_tokens\"],\n                           wl[\"user_prompt_sigma\"]),\n                          (\"subagent\", wl[\"subagent_median_tokens\"],\n                           wl[\"subagent_sigma\"])):\n        raw = [rng.lognormvariate(math.log(med), sig) for _ in range(20_000)]\n        smp_med = pct(raw, 50)\n        logs = [math.log(x) for x in raw]\n        mu = sum(logs) / len(logs)\n        smp_sig = math.sqrt(sum((x - mu) ** 2 for x in logs) / (len(logs) - 1))\n        clipped = [min(max(x, wl[\"system_prefix_tokens\"]),\n                       args.context_cap_tokens) for x in raw]\n        ok = (abs(smp_med / med - 1) < 0.03 and abs(smp_sig / sig - 1) < 0.03)\n        failed |= not ok\n        print(f\"{cls:<10} {med:>10,.0f} {smp_med:>10,.0f} {sig:>9.2f} \"\n              f\"{smp_sig:>9.3f} {pct(clipped, 5):>8,.0f} {pct(clipped, 50):>8,.0f} \"\n              f\"{pct(clipped, 95):>9,.0f} {sum(clipped) / len(clipped):>9,.0f}  \"\n              f\"{'PASS' if ok else 'FAIL'}\")\n    print(f\"(chars per token: {args.chars_per_token:g}; a p50 user prompt is \"\n          f\"~{pct([min(max(x, wl['system_prefix_tokens']), args.context_cap_tokens) for x in [wl['user_prompt_median_tokens']]], 50) * args.chars_per_token / 1e3:,.0f}k chars on the wire)\")\n\n    print(\"\\nPREDICTIONS UNDER TEST\")\n    for k in (\"warm_capacity_p5\", \"decode_ceiling_users\", \"latency_ceiling_users\",\n              \"saturation_ceiling_users\", \"binding_constraint\",\n              \"predicted_limit_users\", \"ttft_miss_s\", \"bstar_misses\"):\n        print(f\"  {k:<26} {pred.get(k)}\")\n    print(\"\\nHYPOTHESES\")\n    for h in cfg[\"hypotheses\"]:\n        print(f\"  - {h}\")\n    if args.burst:\n        print(f\"\\n--burst {args.burst}: would run the burst probe instead of \"\n              f\"the ladder (standing load \"\n              f\"{args.burst_users or max(1, round(0.5 * pred['predicted_limit_users']))} users)\")\n    if failed:\n        print(\"\\nSAMPLER SELF-CHECK FAILED\", file=sys.stderr)\n        return 1\n    print(\"\\nsampler self-check PASSED; run without --dry-run to measure\")\n    return 0\n\n\n# ============================================================================\n# main\n# ============================================================================\ndef parse_args(argv=None):\n    ap = argparse.ArgumentParser(\n        prog=\"validate_deployment.py\",\n        description=\"Closed-loop load harness that tests the capacity model's \"\n                    \"predictions (CONFIG block) against a live vLLM endpoint.\",\n        epilog=\"Examples:\\n\"\n               \"  uv run validate_deployment.py --dry-run\\n\"\n               \"  uv run validate_deployment.py --base-url http://gpu-node:8000/v1\\n\"\n               \"  uv run validate_deployment.py --rungs 0.5,1,1.5 --measure-s 300\\n\"\n               \"  uv run validate_deployment.py --burst 8 --burst-users 100\\n\",\n        formatter_class=argparse.RawDescriptionHelpFormatter)\n    ap.add_argument(\"--base-url\", default=None,\n                    help=\"override CONFIG endpoint base URL (e.g. http://host:8000/v1)\")\n    ap.add_argument(\"--model\", default=None, help=\"override CONFIG model name\")\n    ap.add_argument(\"--api-key-env\", default=None,\n                    help=\"env var holding the API key (default: CONFIG's)\")\n    ap.add_argument(\"--dry-run\", action=\"store_true\",\n                    help=\"print the plan, sampler self-check and hypotheses; \"\n                         \"send nothing (works offline)\")\n    ap.add_argument(\"--rungs\", default=DEFAULT_RUNGS,\n                    help=\"ladder multipliers of predicted_limit_users \"\n                         f\"(default {DEFAULT_RUNGS})\")\n    ap.add_argument(\"--max-users\", type=int, default=1024,\n                    help=\"hard cap on any rung's population (default 1024)\")\n    ap.add_argument(\"--turns-per-user\", type=int, default=0,\n                    help=\"cap turns per session, 0 = unlimited within the window\")\n    ap.add_argument(\"--ramp-s\", type=float, default=90.0,\n                    help=\"per-rung ramp (sessions establish; not measured) \"\n                         \"(default 90)\")\n    ap.add_argument(\"--measure-s\", type=float, default=180.0,\n                    help=\"per-rung steady-state measure window (default 180)\")\n    ap.add_argument(\"--burst\", type=int, default=0, metavar=\"N\",\n                    help=\"run the B* probe instead of the ladder: from steady \"\n                         \"standing load, fire N simultaneous forced misses\")\n    ap.add_argument(\"--burst-users\", type=int, default=0,\n                    help=\"standing load for --burst \"\n                         \"(default 0.5 x predicted_limit_users)\")\n    ap.add_argument(\"--chars-per-token\", type=float, default=4.0,\n                    help=\"synthetic-text calibration; the report prints the \"\n                         \"achieved ratio to correct it (default 4.0)\")\n    ap.add_argument(\"--context-cap-tokens\", type=int,\n                    # the explorer writes the configuration's own max_seq_len\n                    # cap into CONFIG; the flag still overrides it\n                    default=CONFIG[\"workload\"].get(\"context_cap_tokens\", 180_000),\n                    help=\"truncation cap on sampled contexts, the model's \"\n                         \"max_seq_len analogue (default: CONFIG, else 180000)\")\n    ap.add_argument(\"--request-timeout-s\", type=float, default=300.0,\n                    help=\"per-request read timeout; keep well above the TTFT \"\n                         \"budget so breaches are measured, not dropped (default 300)\")\n    ap.add_argument(\"--seed\", type=int, default=0, help=\"RNG seed (default 0)\")\n    ap.add_argument(\"--no-ignore-eos\", action=\"store_true\",\n                    help=\"drop the vLLM ignore_eos extension (strict OpenAI \"\n                         \"endpoints); decode tok/s then depends on natural EOS\")\n    ap.add_argument(\"--json\", default=None, metavar=\"PATH\",\n                    help=\"also write raw rung results as JSON\")\n    return ap.parse_args(argv)\n\n\nasync def main_async(args, cfg, state: dict):\n    import httpx  # lazy: --dry-run must work without any dependency installed\n\n    limits = httpx.Limits(max_connections=4096, max_keepalive_connections=256)\n    async with httpx.AsyncClient(limits=limits) as client:\n        if args.burst:\n            await run_burst(client, args, cfg, state)\n            return\n        ladder = build_ladder(args, cfg)\n        print(f\"ladder: {ladder} users \"\n              f\"(ramp {args.ramp_s:g}s + measure {args.measure_s:g}s each)\")\n        for pop in ladder:\n            print(f\"\\n--- rung: {pop} users ---\")\n            res = await run_rung(client, args, cfg, pop, state)\n            verdict = \"PASS\" if res.passed else \"FAIL (\" + \"; \".join(res.reasons) + \")\"\n            print(f\"  TTFT hit p50 {fmt(res.ttft_hit_p50, 's')} / miss p50 \"\n                  f\"{fmt(res.ttft_miss_p50, 's')} | all p\"\n                  f\"{cfg['slo']['percentile']} {fmt(res.ttft_all_pX, 's')} | \"\n                  f\"decode p50 {fmt(res.decode_p50, ' tok/s', 1)} | \"\n                  f\"{fmt(res.achieved_rps, ' req/s')} | {verdict}\")\n            if res.blown:\n                print(\"  SLOs clearly blown \u2014 stopping the ladder early \"\n                      \"(higher rungs would only stress the endpoint)\")\n                break\n\n\ndef main(argv=None) -> int:\n    args = parse_args(argv)\n    cfg = CONFIG\n    if args.dry_run:\n        return dry_run(args, cfg)\n\n    # one byte-identical prefix for every session in the process \u2014 the whole\n    # point: vLLM's prefix cache must be able to dedup it across sessions\n    state = {\n        \"rungs\": [],\n        \"current\": None,\n        \"burst\": None,\n        \"system_prefix\": make_text(random.Random(0xC0FFEE),\n                                   cfg[\"workload\"][\"system_prefix_tokens\"],\n                                   args.chars_per_token),\n    }\n    interrupted = False\n    try:\n        asyncio.run(main_async(args, cfg, state))\n    except KeyboardInterrupt:\n        interrupted = True\n    print_report(state, cfg, args, interrupted=interrupted)\n    return 130 if interrupted else 0\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())\n";
+/* @@HARNESS_EMBED_END@@ */
+
+// the CONFIG block the harness template carries between its two marker lines,
+// rebuilt from the live state. All figures are PER REPLICA GROUP — the script
+// drives one endpoint, and one endpoint is one group.
+function harnessPredictions(op, wl, topo){
+  const reps = topo.replicas || 1, perG = x => Math.round(x / reps);
+  return {
+    warm_capacity_p5: Math.round(lastWarmCur.p5 * (1 - p_sub(wl))),
+    decode_ceiling_users: perG(op.ceilings.decode),
+    latency_ceiling_users: perG(op.ceilings.latency),
+    saturation_ceiling_users: isFinite(op.ceilings.saturation) ? perG(op.ceilings.saturation) : 999999,
+    binding_constraint: op.binding,
+    predicted_limit_users: perG(op.limit),
+    ttft_miss_s: Math.round(op.ttftMiss * 10) / 10,
+    bstar_misses: Math.round(op.bstar * 10) / 10,
+  };
+}
+function harnessScript(op, model, topo, wl){
+  const reps = topo.replicas || 1;
+  const base = CONFIG.MODELS[state.model].name.split(" (")[0];
+  const P = harnessPredictions(op, wl, topo);
+  const cfg = {
+    endpoint: {
+      base_url: "http://localhost:8000/v1",
+      model: `<your served model id — a ${base} ${state.wdt === 'nvfp4' ? 'NVFP4' : 'FP8'} checkpoint>`,
+      api_key_env: "VLLM_API_KEY",
+    },
+    workload: {
+      system_prefix_tokens: wl.sys_user,
+      user_prompt_median_tokens: wl.user_median,
+      user_prompt_sigma: wl.user_sigma,
+      warm_turn_tokens: state.turn,
+      think_time_s: state.think,
+      subagent_ratio: wl.sub_ratio,
+      subagent_median_tokens: wl.sub_median,
+      subagent_sigma: wl.sub_sigma,
+      miss_rate: wl.invalidation,
+      max_output_tokens: AVG_OUT_TOK,
+      context_cap_tokens: wl.cap,
+    },
+    slo: { ttft_budget_s: state.sla, itl_floor_tok_s: DECODE_FLOOR_TOKS, percentile: 95 },
+    predictions: P,
+    hypotheses: harnessHypotheses(P, reps),
+  };
+  // JSON is a Python-literal subset once the three keywords are converted
+  const py = JSON.stringify(cfg, null, 4)
+    .replace(/\btrue\b/g, "True").replace(/\bfalse\b/g, "False")
+    .replace(/\bnull\b/g, "None");
+  const head = [
+    `# --- BEGIN CONFIG (generated by the interactive explorer) ---`,
+    `# ${base} · ${topo.name} · generated ${new Date().toISOString().slice(0, 10)}`,
+    `# reproduce these numbers: ${encodeStateURL()}`,
+  ];
+  if (reps > 1) head.push(
+    `# DP${reps}: every figure is PER REPLICA GROUP — point base_url at ONE group.`);
+  const block = head.join('\n') + `\nCONFIG = ${py}\n# --- END CONFIG ---`;
+  return HARNESS_TEMPLATE.replace(
+    /# --- BEGIN CONFIG \(generated by the interactive explorer\) ---[\s\S]*?# --- END CONFIG ---/,
+    block);
+}
+function harnessHypotheses(P, reps){
+  const grp = reps > 1 ? ' (per replica group)' : '';
+  return [
+    `H-cache: >= ${fmt(P.warm_capacity_p5, 0)} user sessions stay warm (p5)${grp}. `
+      + `A run bounds this below unless load reaches eviction.`,
+    `H-decode: per-user p50 decode holds >= ${DECODE_FLOOR_TOKS} tok/s up to `
+      + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
+    `H-latency: a cache miss's mean TTFT reaches the ${fmt(state.sla, 0)} s budget `
+      + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
+    `H-saturation: prefill duty reaches 100% near ~${fmt(P.saturation_ceiling_users, 0)} `
+      + `users${grp}; above it the queue has no steady state.`,
+    `H-binding: the binding constraint is '${P.binding_constraint}' — measured SLO `
+      + `capacity should land near ${fmt(P.predicted_limit_users, 0)} users${grp}.`,
+    `H-ttft-miss: a forced miss's mean TTFT at the operating point is `
+      + `~${P.ttft_miss_s} s.`,
+    `H-burst (needs --burst): a simultaneous flush of <= ${Math.floor(P.bstar_misses)} `
+      + `misses (B* = ${P.bstar_misses}) drains inside the TTFT budget; a larger one does not.`,
+  ];
+}
+let lastHarnessArgs = null;
+function renderTestCard(op, model, topo, wl){
+  const box = document.getElementById('testBody'); if (!box) return;
+  if (!op || !HARNESS_TEMPLATE){
+    lastHarnessArgs = null;
+    box.innerHTML = `<p class="cs">${!op
+      ? 'model weights do not fit this configuration — nothing to test.'
+      : 'harness template missing — run scripts/sync_harness.py'}</p>`;
+    return;
+  }
+  lastHarnessArgs = { op, model, topo, wl };
+  const hyp = harnessHypotheses(harnessPredictions(op, wl, topo), topo.replicas || 1);
+  box.innerHTML =
+    `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:650;margin:2px 0 6px">The hypotheses it will test</h4>`
+    + `<ul style="margin:0 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-2)">`
+    + hyp.map(h => `<li style="margin:3px 0">${esc(h)}</li>`).join('') + `</ul>`
+    + `<div class="preset"><button type="button" id="dlHarness">⬇ download validate_deployment.py</button>`
+    + `<button type="button" id="cpHarness">copy script</button>`
+    + `<span class="plab" style="text-transform:none;letter-spacing:0">then: uv run validate_deployment.py --dry-run</span></div>`;
+}
+document.getElementById('testCard').addEventListener('click', e => {
+  if (!lastHarnessArgs) return;
+  const a = lastHarnessArgs;
+  if (e.target.id === 'dlHarness'){
+    const text = harnessScript(a.op, a.model, a.topo, a.wl);
+    const dp = (a.topo.replicas || 1), tp = a.topo.tp;
+    const blob = new Blob([text], { type: 'text/x-python' });
+    const el = document.createElement('a');
+    el.href = URL.createObjectURL(blob);
+    el.download = `validate_${state.model.toLowerCase()}_${state.gpu.toLowerCase()}_dp${dp}xtp${tp}.py`;
+    document.body.appendChild(el); el.click(); el.remove();
+    setTimeout(() => URL.revokeObjectURL(el.href), 5000);
+  } else if (e.target.id === 'cpHarness'){
+    const text = harnessScript(a.op, a.model, a.topo, a.wl);
+    const btn = e.target, done = t => { btn.textContent = t;
+      setTimeout(() => { btn.textContent = 'copy script'; }, 1500); };
+    if (!navigator.clipboard?.writeText){ done('blocked'); return; }
+    navigator.clipboard.writeText(text).then(() => done('copied')).catch(() => done('blocked'));
+  }
+});
+
+/* ---- THE ELECTRICITY BILL (research/power.md) -----------------------------
+   Wall power from the duty cycle the model already computes. Three GPU
+   states, priced per research/power.md's measured anchors:
+     prefill   d_p = the prefill duty rho — compute-bound, power-cap-limited
+               (~0.90 x TDP, FLAT across the MFU band: the cap binds first)
+     decode    d_d — bandwidth-bound, well under TDP (~0.55 x, the softest
+               constant, band 0.45–0.75)
+     idle      the remainder, at warm-idle watts
+   d_p and d_d PARTITION time (no double counting): d_d is the decode demand
+   the load implies against the decode capacity at the 40 tok/s floor, capped
+   at whatever prefill leaves. P_total = n_gpu x (P_gpu + host) x PUE.
+   -------------------------------------------------------------------------- */
+// Output tokens ONE REQUEST decodes (applied to every request, subagents
+// included) — ASSUMED, unmeasured (the workload model never needed output
+// lengths before). Consistent with the measured 10.8 s served per turn at
+// 50–90 tok/s. Scales d_d linearly; the €/1M-token figure moves
+// hyperbolically (fixed idle/prefill watts amortise as outputs lengthen);
+// the €/month bill moves least (decode is one term of three).
+const AVG_OUT_TOK = 1000;
+
+// Average draw of one GPU and the whole system, at the current load.
+// rateGroup = TOTAL req/s one replica group sees; decodeUsersGroup = the
+// per-group decode ceiling at the floor (its capacity proxy).
+function powerDraw(topo, mo, f, rateGroup, decodeUsersGroup){
+  const g = topo.gpu || CONFIG.GPUS["H200"];
+  const eS = f * mo.miss + (1 - f) * mo.hit;
+  const dP = Math.min(1, rateGroup * eS);
+  const demand = rateGroup * AVG_OUT_TOK;                       // tok/s asked
+  const cap = decodeUsersGroup * DECODE_FLOOR_TOKS;             // tok/s at floor
+  const dD = Math.min(Math.max(0, 1 - dP), cap > 0 ? demand / cap : 1);
+  const perGpu = dP * g.p_prefill_w + dD * g.p_decode_w
+               + Math.max(0, 1 - dP - dD) * g.idle_w;
+  const pue = parseFloat(state.pue) || 1.5;
+  const kw = topo.n_gpu * (perGpu + g.host_w) * pue / 1000;
+  return { dP, dD, perGpu, kw, pue };
+}
+// € figures on top of the draw. 720 h/month; €/1M output tokens divides the
+// whole system's cost rate by the output-token rate the load implies.
+function energyCost(topo, mo, f, rateGroup, decodeUsersGroup){
+  const p = powerDraw(topo, mo, f, rateGroup, decodeUsersGroup);
+  const eurMonth = p.kw * 720 * state.ekwh;
+  const outTokS = rateGroup * (topo.replicas || 1) * AVG_OUT_TOK;
+  const eurMtok = outTokS > 0 ? (p.kw * state.ekwh / 3600) / outTokS * 1e6 : Infinity;
+  return { ...p, eurMonth, eurUser: eurMonth / Math.max(1, state.users), eurMtok };
+}
+
+function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
+  const box = document.getElementById('costBody'); if (!box) return;
+  if (!op){
+    box.innerHTML = '<p class="cs">model weights do not fit this configuration — no deployment, no bill.</p>';
+    return;
+  }
+  const reps = topo.replicas || 1;
+  const rate = serverRate(state.users, state.think, wl.sub_ratio) / reps;
+  const c = energyCost(topo, mo, wl.invalidation, rate, decodeUsersGroup);
+  const g = topo.gpu || CONFIG.GPUS["H200"];
+  const idleFrac = Math.max(0, 1 - c.dP - c.dD);
+  const draw = [
+    ['Average draw', `${fmt(c.kw, 2)} kW`],
+    ['Per GPU (of TDP)', `${fmt(c.perGpu, 0)} W (${fmt(c.perGpu / g.tdp_w * 100, 0)}%)`],
+    ['Time split', `${fmt(c.dP * 100, 0)}% prefill · ${fmt(c.dD * 100, 0)}% decode · ${fmt(idleFrac * 100, 0)}% idle`],
+    ['Host + PUE', `${fmt(g.host_w, 0)} W/GPU · ×${c.pue}`],
+  ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
+  const bill = [
+    ['Energy / month', `€${fmt(c.eurMonth, 0)}`],
+    ['Per user / month', `€${fmt(c.eurUser, 2)}`],
+    ['Per 1M output tokens', isFinite(c.eurMtok) ? `€${fmt(c.eurMtok, 2)}` : '—'],
+    ['At idle (floor)', `€${fmt(topo.n_gpu * (g.idle_w + g.host_w) * c.pue / 1000 * 720 * state.ekwh, 0)} /mo`],
+  ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
+  box.innerHTML =
+    `<div class="deploy">`
+    + `<div><h4>Draw</h4><dl class="spec">${draw}</dl></div>`
+    + `<div><h4>Bill</h4><dl class="spec">${bill}</dl></div>`
+    + `<p class="verdictline" style="color:${cssv('--muted')};font-weight:400">`
+    + `Output assumed at ${fmt(AVG_OUT_TOK, 0)} tokens per request (unmeasured). `
+    + `Two seemingly equal configurations rarely bill equally: idle watts scale with GPU count, decode watts with the load.</p>`
+    + `</div>`;
+}
+
 /* ---- The deploy card ------------------------------------------------------
    The page's answer as a recipe: the current controls spelled out as the vLLM
    flags they imply, next to the outcomes the model projects for them. The
@@ -3407,7 +3668,7 @@ function renderFrontierTable(rows, curKey){
       + `<th class="num">latency</th><th class="num">saturation</th>` : '';
   const head = `<tr><th>configuration</th><th>your load</th><th class="num">max users</th>`
              + `<th>binds on</th><th class="num">headroom</th>${ceilHead}`
-             + `<th class="num">B*</th></tr>`;   // .num headers right-align over their digits
+             + `<th class="num">B*</th><th class="num">€/mo</th></tr>`;   // .num headers right-align over their digits
   const body = rows.map(r=>{
     const you = r.key===curKey ? ' class="you"' : '';
     const viable = r.op.limit >= 1;
@@ -3436,7 +3697,9 @@ function renderFrontierTable(rows, curKey){
             ? `<td class="num" style="color:${fits?(room>1.25?good:warn):crit}">×${fmt(room, room<10?1:0)}${cen?'+':''}</td>`
             : `<td class="num" style="color:${muted}">—</td>`)
          + ceilCells
-         + `<td class="num">${fmt(r.bstar,1)}</td></tr>`;
+         + `<td class="num">${fmt(r.bstar,1)}</td>`
+         // energy is meaningful only where the load can actually be served
+         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td></tr>`;
   }).join('');
   document.getElementById('frontierTable').innerHTML =
     `<div class="ftable-wrap"><table class="ftable">${head}${body}</table></div>`;
@@ -3605,6 +3868,7 @@ const sliderMap=[
   ['s-sla','sla',v=>parseInt(v,10)],
   ['s-turn','turn',v=>parseInt(v,10)],
   ['s-burst','burst',v=>parseInt(v,10)],
+  ['s-ekwh','ekwh',v=>parseFloat(v)],
 ];
 sliderMap.forEach(([id,key,cast])=>{
   const el=document.getElementById(id);
@@ -3711,6 +3975,7 @@ function syncLabels(){
   document.getElementById('v-sub_ratio').textContent=r.toFixed(2)+perTxt;
   document.getElementById('v-sys').textContent=fmt(state.sys,0);
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
+  document.getElementById('v-ekwh').textContent=state.ekwh.toFixed(2);
 }
 
 /* ---- share link: the whole configuration in the URL fragment ------------
@@ -3726,6 +3991,7 @@ const URL_ENUMS = {
   gpu:   () => Object.keys(CONFIG.GPUS),
   wdt:   () => ["fp8","nvfp4"], kv: () => ["fp8","fp16"],
   state_dt: () => ["bf16","fp32"], wover: () => ["pub","p15"],
+  pue: () => ["1.2","1.5","2.0"],
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
@@ -3787,7 +4053,7 @@ function applyURLState(){
 // reflect enum state into the two segmented controls enforceConstraints does
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
-  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu']])
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;
