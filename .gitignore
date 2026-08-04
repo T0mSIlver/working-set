@@ -18,3 +18,9 @@ venv/
 # Local agent configs for cross-review runs (installed per-machine by the
 # delegate skills; not part of the study)
 .opencode/
+
+# Generated in CI by preview-explorer.yml (the committed wrangler.jsonc is
+# production's); never committed
+/wrangler.preview.jsonc
+/wrangler.canary.jsonc
+/.preview-canary/
