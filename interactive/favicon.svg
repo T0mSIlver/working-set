@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <style>
+    .a { fill: #0d9488; }
+    .m { fill: #52514e; }
+    @media (prefers-color-scheme: dark) {
+      .a { fill: #2dd4bf; }
+      .m { fill: #c3c2b7; }
+    }
+  </style>
+  <rect class="m" opacity=".45" x="5" y="6" width="22" height="5" rx="2.5"/>
+  <rect class="m" opacity=".7" x="5" y="14" width="22" height="5" rx="2.5"/>
+  <rect class="a" x="5" y="22" width="22" height="5" rx="2.5"/>
+</svg>
