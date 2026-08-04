@@ -1722,7 +1722,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
 #
 # Assumption 2 now has a measured anchor (the MEASURED_* block below): a
 # role-tagged pi-agent trace puts the open-loop interval at 43 s — waiting
-# Z = 32.3 s (47% tool execution, 53% human) plus being-served R = 10.8 s on
+# Z = 32.5 s (47% tool execution, 53% human) plus being-served R = 10.8 s on
 # the traced API backend. R does NOT transfer to an on-prem deployment, which
 # is exactly why the CLOSED variants of the latency and saturation ceilings
 # exist: they take Z as the knob and let the model supply its own R
@@ -1759,7 +1759,7 @@ def think_z(req_per_turn: float = MEASURED_REQ_PER_TURN,
     first n-1 each followed by a tool wait and the last by a human wait.
 
     With the raw measured means this returns 51 s against the directly
-    measured 32.3 s (MEASURED_THINK_Z_S). The gap is censoring, not error:
+    measured 32.5 s (MEASURED_THINK_Z_S). The gap is censoring, not error:
     session-final turns never show their human gap (only 19 of the 39 traced
     turns have one), so the formula is the upper edge and the direct anchor
     the lower edge of an honest [32, 51] s band for Z. The knobs exist for
@@ -1831,6 +1831,60 @@ def max_users_decode(model: Model, topo: Topology, wl: Workload,
     return float(lo)
 
 
+def _check_closed_args(closed_z_s: float, out_tokens: float,
+                       decode_toks: float) -> None:
+    if closed_z_s < 0:
+        raise ValueError(f"closed_z_s must be >= 0, got {closed_z_s!r}")
+    if out_tokens < 0:
+        raise ValueError(f"out_tokens must be >= 0, got {out_tokens!r}")
+    if decode_toks <= 0:
+        raise ValueError(f"decode_toks must be > 0, got {decode_toks!r}")
+
+
+def closed_request_rate(model: Model, topo: Topology, wl, users: float,
+                        chunk: float, turn_tokens: float = 0.0,
+                        z_think_s: float = MEASURED_THINK_Z_S,
+                        out_tokens: float = OUT_TOKENS_DEFAULT,
+                        decode_toks: float = DECODE_FLOOR_TOKS,
+                        mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
+                        per_pass_overhead: bool = False) -> float:
+    """MAIN-agent req/s a CLOSED population of `users` sustains: the fixed
+    point of  users = lam_total (Z + R(lam_total)) / (1 + r)  with R the
+    prefill sojourn plus decode time. The right side is strictly increasing
+    in lam_total on [0, 1/E[S]) and diverges at the wall, so every finite
+    population has exactly one rate — found by bisection, returned divided
+    by (1 + r) to match request_rate()'s main-agent unit.
+    """
+    if users < 0:
+        raise ValueError(f"users must be >= 0, got {users!r}")
+    _check_closed_args(z_think_s, out_tokens, decode_toks)
+    if users == 0:
+        return 0.0
+    e_s, e_s2, _, _ = prefill_service_moments(model, topo, wl, chunk,
+                                              turn_tokens, mfu,
+                                              per_pass_overhead)
+    if e_s <= 0:
+        return float("inf")
+    dec = out_tokens / decode_toks
+    one_r = 1.0 + wl.sub_ratio
+
+    def pop(lam):
+        if discipline == "ps":
+            resp = e_s / (1 - lam * e_s)
+        else:
+            resp = lam * e_s2 / (2 * (1 - lam * e_s)) + e_s
+        return lam * (z_think_s + resp + dec) / one_r
+
+    lo, hi = 0.0, (1.0 / e_s) * (1 - 1e-12)
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if pop(mid) < users:
+            lo = mid
+        else:
+            hi = mid
+    return lo / one_r
+
+
 def max_users_saturation(model: Model, topo: Topology, wl, chunk: float,
                          turn_tokens: float = 0.0,
                          think_time_s: float = THINK_TIME_S,
@@ -1863,8 +1917,7 @@ def max_users_saturation(model: Model, topo: Topology, wl, chunk: float,
         return float("inf")
     if closed_z_s is None:
         return think_time_s / demand
-    if closed_z_s < 0:
-        raise ValueError(f"closed_z_s must be >= 0, got {closed_z_s!r}")
+    _check_closed_args(closed_z_s, out_tokens, decode_toks)
     r0 = e_s + out_tokens / decode_toks
     return (closed_z_s + r0) / demand
 
@@ -1919,8 +1972,7 @@ def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
         lam = k / (a + k * b)
     if closed_z_s is None:
         return max(0.0, lam * think_time_s / (1.0 + wl.sub_ratio))
-    if closed_z_s < 0:
-        raise ValueError(f"closed_z_s must be >= 0, got {closed_z_s!r}")
+    _check_closed_args(closed_z_s, out_tokens, decode_toks)
     if discipline == "ps":
         resp = b / (1 - lam * b)
     else:
@@ -1950,7 +2002,7 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
     under balanced routing, which sticky routing works against (spike.md #3).
 
     `closed=True` switches the latency and saturation columns to the
-    closed-loop conversion: `z_think_s` (waiting only — measured 32.3 s)
+    closed-loop conversion: `z_think_s` (waiting only — measured 32.5 s)
     replaces `think_time_s` (the full interval — measured 43 s, reference
     30 s), and the model supplies its own service time. Cache is unchanged
     on purpose (held sessions occupy KV whether or not the user is active),
@@ -1981,7 +2033,15 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
     limit = ceilings[binding]
     return {
         "users": users,
-        "req_rate": request_rate(users, think_time_s),
+        # MAIN-agent req/s in BOTH modes (the prefill server sees (1 + r) x
+        # this). Open: the assumption-2 conversion. Closed: solved from the
+        # cycle fixed point — response feedback slows the cadence, so this
+        # is below users / z_think_s by construction.
+        "req_rate": (closed_request_rate(model, topo, wl, users, chunk,
+                                         turn_tokens, z_think_s, out_tokens,
+                                         decode_floor, mfu, discipline,
+                                         per_pass_overhead)
+                     if closed else request_rate(users, think_time_s)),
         "ceilings": ceilings,
         "binding": binding,
         "limit": limit,
@@ -2544,6 +2604,18 @@ def _selfcheck():
     assert abs(request_rate(REF_USERS, sub_ratio=wl.sub_ratio)
                - request_rate(REF_USERS) * (1 + wl.sub_ratio)) < 1e-9, \
         "total request rate must be (1 + sub_ratio) x the main-agent rate"
+    # ...and the PLACEMENT is pinned two ways: against the published § 9
+    # numbers (like the cache/decode pins below — these are the regenerated
+    # 2026-08-04 values), and against the closed-form identity, so a
+    # multiply-where-divide regression cannot slip past a lucky ordering
+    sat_ref = max_users_saturation(m27, tp2, wl, CH, TURN)
+    assert abs(max_users_latency(m27, tp2, wl, CH, SLA, TURN) - 273) <= 2, \
+        "latency ceiling must reproduce the published 273 (27B/TP2, f=1%)"
+    assert abs(sat_ref - 283) <= 2, \
+        "saturation ceiling must reproduce the published 283 (27B/TP2, f=1%)"
+    e_s_mix = prefill_service_moments(m27, tp2, wl, CH, TURN)[0]
+    assert abs(sat_ref * (1 + wl.sub_ratio) * e_s_mix - THINK_TIME_S) < 1e-6, \
+        "saturation must be think / ((1 + r) E[S]) exactly"
     # closed loop: at the SAME interval parameter the closed count is larger
     # (response time stretches the cycle), latency stays inside the knee at
     # the reference configuration, and a slower decode admits MORE users
@@ -2570,6 +2642,27 @@ def _selfcheck():
     assert op_c["ceilings"]["cache"] == op_o["ceilings"]["cache"] and \
         op_c["ceilings"]["decode"] == op_o["ceilings"]["decode"], \
         "closed mode must not touch the capacity columns"
+    # closed req_rate: the fixed point must invert back to the population
+    # (roundtrip), and response feedback must slow the cadence below the
+    # no-feedback bound users / (Z + decode)
+    lam_main = op_c["req_rate"]
+    lam_tot = lam_main * (1 + wl.sub_ratio)
+    a_, b_, c_ = (lambda m: (m[1], m[0], m[2]))(
+        prefill_service_moments(m27, tp2, wl, CH, TURN))
+    resp_ = lam_tot * a_ / (2 * (1 - lam_tot * b_)) + b_
+    cyc_ = MEASURED_THINK_Z_S + resp_ + OUT_TOKENS_DEFAULT / DECODE_FLOOR_TOKS
+    assert abs(lam_tot * cyc_ / (1 + wl.sub_ratio) - REF_USERS) < 1e-6, \
+        "closed req_rate must satisfy users = lam (Z + R(lam)) / (1 + r)"
+    assert lam_main < REF_USERS / (MEASURED_THINK_Z_S
+                                   + OUT_TOKENS_DEFAULT / DECODE_FLOOR_TOKS), \
+        "response feedback must slow the closed cadence below the Z+dec bound"
+    for bad in (dict(decode_toks=0.0), dict(out_tokens=-1.0)):
+        try:
+            max_users_saturation(m27, tp2, wl, CH, TURN,
+                                 closed_z_s=THINK_TIME_S, **bad)
+            raise AssertionError(f"expected ValueError for {bad}")
+        except ValueError:
+            pass
     # The planner must REPRODUCE the study's published decision table, not
     # restate it differently: two of its four ceilings are already in § 7's
     # table (warm users p5 = 69 / 177, mns@40 = 118 / 228), and only the

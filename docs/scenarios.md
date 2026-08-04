@@ -644,7 +644,10 @@ spike. That is the thrash.
 
 Because prefill is FLOP-bound, no amount of KV pool, CPU offload or warm
 headroom raises this. `f*` is the miss rate at which prefill duty reaches 100%
-at 2.13 req/s (64 users, one turn every 30 s), warm turns included. The last
+at 2.13 req/s — the section's reference **total** rate at the prefill server;
+under § 9's corrected assumption 2 that is ≈58 users with subagent tow at
+r = 0.1 (64 main-agent-only), and everything here is a function of the rate
+itself, so the results are unchanged either way — warm turns included. The last
 column is a **sensitivity band for the prefill axis alone**, not a two-axis
 planner — KV capacity is a separate constraint in different units (sessions
 held vs work rate), and the bracketed flag marks rows where the cache is

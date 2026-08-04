@@ -422,7 +422,11 @@ def prefill_tables():
     w0 = wl()
     CH = 32_768          # vLLM max_num_batched_tokens
     TURN = 2_000         # tokens a warm hit still prefills (the new turn)
-    RATE = 2.13          # req/s: 64 users, one turn every 30 s
+    RATE = 2.13          # req/s TOTAL at the prefill server — the section's
+                         # reference RATE. Under the corrected assumption 2
+                         # (subagent tow, r = 0.1) this is ~58 users, or 64
+                         # main-agent-only; results here are functions of
+                         # the rate itself, so they are unchanged either way
 
     print("\n== Prefill is the OTHER roofline (research/prefill.md) ==")
     print("  Every capacity/decode figure above prices HBM bytes. Prefill prices")
@@ -535,7 +539,11 @@ def spike_tables():
     w0 = wl()
     CH = 32_768          # vLLM max_num_batched_tokens
     TURN = 2_000         # tokens a warm hit still prefills (the new turn)
-    RATE = 2.13          # req/s: 64 users, one turn every 30 s
+    RATE = 2.13          # req/s TOTAL at the prefill server — the section's
+                         # reference RATE. Under the corrected assumption 2
+                         # (subagent tow, r = 0.1) this is ~58 users, or 64
+                         # main-agent-only; results here are functions of
+                         # the rate itself, so they are unchanged either way
     SLA = 10.0           # TTFT budget (s). B* is LINEAR in it: halve for 5 s
     BURST = 32           # reference simultaneous-miss spike
     rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
@@ -686,6 +694,10 @@ def planner_tables():
     w0 = wl()
     CH, TURN, SLA = 32_768, 2_000, 10.0
     THINK = M.THINK_TIME_S
+    # B* is quoted at section 8's TOTAL-rate reference, NOT derived from
+    # REF_USERS: request_rate(REF_USERS) is a MAIN-agent rate and would
+    # understate the server's arrival stream by (1 + r) (see spike_tables)
+    SEC8_RATE = 2.13
     rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
             ("35BA3B", 1, 1, "H200"), ("35BA3B", 1, 2, "H200"),
             ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
@@ -785,16 +797,14 @@ def planner_tables():
     print("  TTFT budget moves only the latency ceiling (and B* with it):")
     for sla in (5.0, 10.0, 20.0, 30.0):
         lat = M.max_users_latency(m27, tp2, w0, CH, sla, TURN)
-        b = M.spike_tolerance(m27, tp2, w0, sla, M.request_rate(M.REF_USERS),
-                              CH, TURN)
+        b = M.spike_tolerance(m27, tp2, w0, sla, SEC8_RATE, CH, TURN)
         print(f"  budget {sla:5.0f} s  latency ceiling {lat:6.0f} users   B* {b:5.1f}")
     print("  MFU is the soft input, not a decision — the [30-60%] bracket is an")
     print("  ERROR BAR on every prefill-derived ceiling, and it is wide:")
     for mfu, lab in ((M.MFU_LOW, "30%"), (M.MFU_DEFAULT, "45%"), (M.MFU_HIGH, "60%")):
         lat = M.max_users_latency(m27, tp2, w0, CH, SLA, TURN, mfu=mfu)
         sat = M.max_users_saturation(m27, tp2, w0, CH, TURN, mfu=mfu)
-        b = M.spike_tolerance(m27, tp2, w0, SLA, M.request_rate(M.REF_USERS),
-                              CH, TURN, mfu=mfu)
+        b = M.spike_tolerance(m27, tp2, w0, SLA, SEC8_RATE, CH, TURN, mfu=mfu)
         print(f"  MFU {lab}  latency {lat:6.0f}  sat {sat:6.0f}  B* {b:5.1f}")
 
     print("\n== The frontier: every configuration ranked by its binding ceiling ==")
@@ -803,7 +813,7 @@ def planner_tables():
     table = []
     for mk, m, t in cfgs():
         op = M.operating_point(m, t, w0, M.REF_USERS, CH, TURN, SLA, n_iter=600)
-        b = M.spike_tolerance(m, t, w0, SLA, M.request_rate(M.REF_USERS), CH, TURN)
+        b = M.spike_tolerance(m, t, w0, SLA, SEC8_RATE, CH, TURN)
         table.append((op["limit"] * (t.replicas or 1), mk, t, op, b))
     for total, mk, t, op, b in sorted(table, reverse=True):
         dp_note = (f" ({op['limit']:.0f}/group x {t.replicas} replicas)"
