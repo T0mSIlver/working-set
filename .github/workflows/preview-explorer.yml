@@ -29,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       name:
-        description: "Preview slug — deploys workingset-explorer-<slug>.workers.dev"
+        description: "Preview slug — deploys workingset-explorer-<slug>.workers.dev. pr<number> is reserved for PR previews (the sweep judges those by PR state)."
         required: true
 
 concurrency:
@@ -120,7 +120,7 @@ jobs:
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/workingset-explorer-$PREVIEW_NAME?force=true")
           case "$code" in
-            200) echo "Deleted worker workingset-explorer-$PREVIEW_NAME." ;;
+            200|204) echo "Deleted worker workingset-explorer-$PREVIEW_NAME." ;;
             404) echo "Worker workingset-explorer-$PREVIEW_NAME does not exist; nothing to delete." ;;
             *)   echo "Delete failed with HTTP $code:"; cat resp.json; exit 1 ;;
           esac

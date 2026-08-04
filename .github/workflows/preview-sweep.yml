@@ -6,7 +6,9 @@
 #   - manually-dispatched workingset-explorer-<slug> previews, deleted after
 #     slug_ttl_days without a deploy (default 7)
 # Production (workingset-explorer, no dash suffix) never matches the
-# "workingset-explorer-" prefix filter and is never touched.
+# "workingset-explorer-" prefix filter and is never touched. The pr<N> name
+# space is reserved for PR previews — don't dispatch-deploy a slug shaped
+# like pr<number>, the sweep will judge it by PR #<number>'s state.
 #
 # Manual run (once on main): gh workflow run preview-sweep.yml
 #   -f dry_run=true to only list what would be deleted
@@ -38,7 +40,9 @@ jobs:
     steps:
       # no checkout: pure REST against Cloudflare + the GitHub API.
       # Fails closed: if listing workers or open PRs fails, bash -e aborts
-      # before anything is deleted.
+      # before anything is deleted. Deploy races are handled per worker: the
+      # PR's state is re-resolved immediately before each DELETE, so a PR
+      # reopened mid-sweep keeps its fresh preview.
       - name: Sweep
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -51,42 +55,70 @@ jobs:
           api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts"
           auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
 
-          list=$(curl -sS --fail "${auth[@]}" "$api?per_page=100")
-          total=$(jq -r '.result_info.total_count // (.result | length)' <<<"$list")
-          count=$(jq -r '.result | length' <<<"$list")
-          if [ "$total" -gt "$count" ]; then
-            echo "::warning::account has $total workers but only $count were fetched; add pagination"
-          fi
+          workers='[]'
+          page=1
+          while :; do
+            chunk=$(curl -sS --fail "${auth[@]}" "$api?per_page=100&page=$page")
+            workers=$(jq -c '.[0] + .[1].result' <<<"[$workers,$chunk]")
+            pages=$(jq -r '.result_info.total_pages // 1' <<<"$chunk")
+            [ "$page" -ge "$pages" ] && break
+            page=$((page + 1))
+          done
 
           open_prs=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
             --paginate --jq '.[].number')
 
           now=$(date +%s)
-          deleted=0 kept=0
+          deleted=0 kept=0 would_delete=0
           while IFS=$'\t' read -r name modified; do
             suffix="${name#workingset-explorer-}"
-            reason=""
+            reason="" recheck_pr=""
             if [[ "$suffix" =~ ^pr[0-9]+$ ]]; then
               n="${suffix#pr}"
-              grep -qx "$n" <<<"$open_prs" || reason="PR #$n is not open"
+              grep -qx "$n" <<<"$open_prs" || { reason="PR #$n is not open"; recheck_pr="$n"; }
             else
+              [ -n "$modified" ] || { echo "::error::no timestamp on $name; refusing to age it"; exit 1; }
               age_days=$(( (now - $(date -d "$modified" +%s)) / 86400 ))
               [ "$age_days" -ge "$TTL_DAYS" ] && reason="slug preview idle ${age_days}d (TTL ${TTL_DAYS}d)"
             fi
             if [ -z "$reason" ]; then
               echo "keep    $name"
               kept=$((kept+1))
-            elif [ "$DRY_RUN" = "true" ]; then
-              echo "DRY RUN would delete $name — $reason"
-            else
-              code=$(curl -sS -o resp.json -w '%{http_code}' -X DELETE "${auth[@]}" "$api/$name?force=true")
-              case "$code" in
-                200|404) echo "deleted $name — $reason"; deleted=$((deleted+1)) ;;
-                *) echo "::error::deleting $name failed with HTTP $code"; cat resp.json; exit 1 ;;
-              esac
+              continue
             fi
-          done < <(jq -r '.result[]
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "DRY RUN would delete $name — $reason"
+              would_delete=$((would_delete+1))
+              continue
+            fi
+            # re-resolve PR state right before deleting: the open_prs snapshot
+            # is stale by now, and a PR reopened mid-sweep has a live preview.
+            # A 404 (PR never existed) is deletable garbage; any other GH
+            # failure skips the worker rather than deleting on uncertainty.
+            if [ -n "$recheck_pr" ]; then
+              if state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$recheck_pr" --jq .state 2>&1); then
+                :
+              elif grep -q "HTTP 404" <<<"$state"; then
+                state=missing
+              else
+                echo "::warning::could not resolve PR #$recheck_pr; skipping $name"
+                kept=$((kept+1))
+                continue
+              fi
+              if [ "$state" = "open" ]; then
+                echo "keep    $name — PR #$recheck_pr reopened mid-sweep"
+                kept=$((kept+1))
+                continue
+              fi
+            fi
+            resp=$(mktemp)
+            code=$(curl -sS -o "$resp" -w '%{http_code}' -X DELETE "${auth[@]}" "$api/$name?force=true")
+            case "$code" in
+              200|204|404) echo "deleted $name — $reason"; deleted=$((deleted+1)) ;;
+              *) echo "::error::deleting $name failed with HTTP $code"; cat "$resp"; exit 1 ;;
+            esac
+          done < <(jq -r '.[]
             | select(.id | startswith("workingset-explorer-"))
-            | [.id, (.modified_on // .created_on)] | @tsv' <<<"$list")
+            | [.id, (.modified_on // .created_on)] | @tsv' <<<"$workers")
 
-          echo "Sweep done: deleted=$deleted kept=$kept dry_run=$DRY_RUN"
+          echo "Sweep done: deleted=$deleted kept=$kept would_delete=$would_delete dry_run=$DRY_RUN"
