@@ -1,6 +1,10 @@
 # Data (real provider CSVs are private / not committed)
 data/*.csv
 
+# Think-time trace exports (session names + timestamps are private; only the
+# MEASURED_* anchors in scripts/scenario_model.py are committed)
+inter_event_gaps*.csv
+
 # Python
 __pycache__/
 *.pyc

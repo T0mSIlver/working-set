@@ -422,7 +422,11 @@ def prefill_tables():
     w0 = wl()
     CH = 32_768          # vLLM max_num_batched_tokens
     TURN = 2_000         # tokens a warm hit still prefills (the new turn)
-    RATE = 2.13          # req/s: 64 users, one turn every 30 s
+    RATE = 2.13          # req/s TOTAL at the prefill server — the section's
+                         # reference RATE. Under the corrected assumption 2
+                         # (subagent tow, r = 0.1) this is ~58 users, or 64
+                         # main-agent-only; results here are functions of
+                         # the rate itself, so they are unchanged either way
 
     print("\n== Prefill is the OTHER roofline (research/prefill.md) ==")
     print("  Every capacity/decode figure above prices HBM bytes. Prefill prices")
@@ -535,7 +539,11 @@ def spike_tables():
     w0 = wl()
     CH = 32_768          # vLLM max_num_batched_tokens
     TURN = 2_000         # tokens a warm hit still prefills (the new turn)
-    RATE = 2.13          # req/s: 64 users, one turn every 30 s
+    RATE = 2.13          # req/s TOTAL at the prefill server — the section's
+                         # reference RATE. Under the corrected assumption 2
+                         # (subagent tow, r = 0.1) this is ~58 users, or 64
+                         # main-agent-only; results here are functions of
+                         # the rate itself, so they are unchanged either way
     SLA = 10.0           # TTFT budget (s). B* is LINEAR in it: halve for 5 s
     BURST = 32           # reference simultaneous-miss spike
     rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
@@ -686,6 +694,10 @@ def planner_tables():
     w0 = wl()
     CH, TURN, SLA = 32_768, 2_000, 10.0
     THINK = M.THINK_TIME_S
+    # B* is quoted at section 8's TOTAL-rate reference, NOT derived from
+    # REF_USERS: request_rate(REF_USERS) is a MAIN-agent rate and would
+    # understate the server's arrival stream by (1 + r) (see spike_tables)
+    SEC8_RATE = 2.13
     rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
             ("35BA3B", 1, 1, "H200"), ("35BA3B", 1, 2, "H200"),
             ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
@@ -746,26 +758,53 @@ def planner_tables():
     print("  The sessions-per-user assumption acts on the other pair: a user who")
     print("  keeps k concurrent sessions divides the cache ceiling by k and leaves")
     print("  latency alone (the work rate is unchanged).")
-    for think in (15.0, 30.0, 60.0):
+    for think in (15.0, 30.0, M.MEASURED_CYCLE_S, 60.0):
         op = M.operating_point(m27, tp2, w0, M.REF_USERS, CH, TURN, SLA,
                                think_time_s=think, n_iter=600)
         c = op["ceilings"]
+        mark = "  <-- measured interval" if think == M.MEASURED_CYCLE_S else ""
         print(f"  think {think:5.0f} s  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
               f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
-              f"{op['binding'].upper()}")
+              f"{op['binding'].upper()}{mark}")
+
+    print("\n== Think time, measured (scripts/think_time_trace.py) ==")
+    print("  Role-tagged pi-agent trace (2026-08-04, 8 sessions / 306 requests):")
+    print(f"  the open-loop interval is {M.MEASURED_CYCLE_S:.0f} s = Z "
+          f"{M.MEASURED_THINK_Z_S:.1f} s waiting ({M.MEASURED_REQ_PER_TURN:.1f} "
+          f"requests/turn; tool waits mean {M.MEASURED_T_TOOL_S:.1f} s but")
+    print(f"  median 0.61 s — build-dominated; human waits mean "
+          f"{M.MEASURED_T_HUMAN_S:.0f} s) + R {M.MEASURED_SERVICE_R_S:.1f} s "
+          f"being served on the traced API")
+    print("  backend. The study's 30 s reference is therefore the CONSERVATIVE")
+    print("  side of the measurement. R does not port to an on-prem box, so the")
+    print("  CLOSED conversion drops it: Z is the knob and the deployment")
+    print("  supplies its own response time (queue + prefill + decode at the")
+    print("  40 tok/s floor) — a slower deployment stretches its users' cycles")
+    print("  and lightens its own arrival rate. Cache/decode columns unchanged")
+    print("  by construction; in closed mode 'sat' is the throughput KNEE (past")
+    print("  it users buy latency, not throughput), and it can bind before the")
+    print("  SLA is exhausted — the open ordering lat < sat is open-only.")
+    for f in (0.01, 0.10):
+        opo = M.operating_point(m27, tp2, wl(invalidation=f), M.REF_USERS,
+                                CH, TURN, SLA, n_iter=600)
+        opc = M.operating_point(m27, tp2, wl(invalidation=f), M.REF_USERS,
+                                CH, TURN, SLA, closed=True, n_iter=600)
+        co, cc = opo["ceilings"], opc["ceilings"]
+        print(f"  f={f:4.0%}  open   latency {co['latency']:5.0f}  sat "
+              f"{co['saturation']:5.0f}  -> {opo['binding'].upper()}")
+        print(f"          closed latency {cc['latency']:5.0f}  knee "
+              f"{cc['saturation']:5.0f}  -> {opc['binding'].upper()}")
     print("  TTFT budget moves only the latency ceiling (and B* with it):")
     for sla in (5.0, 10.0, 20.0, 30.0):
         lat = M.max_users_latency(m27, tp2, w0, CH, sla, TURN)
-        b = M.spike_tolerance(m27, tp2, w0, sla, M.request_rate(M.REF_USERS),
-                              CH, TURN)
+        b = M.spike_tolerance(m27, tp2, w0, sla, SEC8_RATE, CH, TURN)
         print(f"  budget {sla:5.0f} s  latency ceiling {lat:6.0f} users   B* {b:5.1f}")
     print("  MFU is the soft input, not a decision — the [30-60%] bracket is an")
     print("  ERROR BAR on every prefill-derived ceiling, and it is wide:")
     for mfu, lab in ((M.MFU_LOW, "30%"), (M.MFU_DEFAULT, "45%"), (M.MFU_HIGH, "60%")):
         lat = M.max_users_latency(m27, tp2, w0, CH, SLA, TURN, mfu=mfu)
         sat = M.max_users_saturation(m27, tp2, w0, CH, TURN, mfu=mfu)
-        b = M.spike_tolerance(m27, tp2, w0, SLA, M.request_rate(M.REF_USERS),
-                              CH, TURN, mfu=mfu)
+        b = M.spike_tolerance(m27, tp2, w0, SLA, SEC8_RATE, CH, TURN, mfu=mfu)
         print(f"  MFU {lab}  latency {lat:6.0f}  sat {sat:6.0f}  B* {b:5.1f}")
 
     print("\n== The frontier: every configuration ranked by its binding ceiling ==")
@@ -774,7 +813,7 @@ def planner_tables():
     table = []
     for mk, m, t in cfgs():
         op = M.operating_point(m, t, w0, M.REF_USERS, CH, TURN, SLA, n_iter=600)
-        b = M.spike_tolerance(m, t, w0, SLA, M.request_rate(M.REF_USERS), CH, TURN)
+        b = M.spike_tolerance(m, t, w0, SLA, SEC8_RATE, CH, TURN)
         table.append((op["limit"] * (t.replicas or 1), mk, t, op, b))
     for total, mk, t, op, b in sorted(table, reverse=True):
         dp_note = (f" ({op['limit']:.0f}/group x {t.replicas} replicas)"
