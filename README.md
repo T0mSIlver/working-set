@@ -9,10 +9,11 @@ for agentic coding workloads.
 **Start with the [interactive explorer](https://workingset.tomvaucourt.com/)** —
 live sliders for the workload, model (Qwen3.6-27B / 35B-A3B / Mistral-Medium-3.5 /
 GLM-5.2 / DeepSeek-V4-Flash), GPU (H200 / B300), weight & KV dtypes, and
-DP × TP topology. Configurations are **shareable** (a link encodes every
-control), the explorer prices the **electricity bill** (€/kWh slider,
-duty-cycle power model, `research/power.md`), and a **"Test these
-hypotheses" button** generates a standalone load-test script
+DP × TP topology. It answers as a decision tool: a binding-constraint verdict,
+a deploy recipe (vLLM flags), the **electricity bill** (€/kWh slider, duty-cycle
+power model), a **sensitivity panel** showing which assumption would flip the
+decision, **shareable links** that encode the whole configuration, and a
+**"Test these hypotheses" button** that generates a standalone load-test script
 ([`scripts/validate_deployment.py`](scripts/validate_deployment.py)) preloaded
 with the on-screen predictions — run it against a live vLLM endpoint to find
 the real limits.
