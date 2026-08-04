@@ -98,7 +98,8 @@ class GPU:
     #   saturated vLLM inference at ~0.85-0.89 of summed GPU TDP (NLR).
     # host_w: flat per-GPU chassis adder (CPUs/NVSwitch/NICs/fans/PSU loss),
     #   DERIVED from system spec maxima: DGX H200 10.2 kW − 8 x 700 W ->
-    #   575 W/GPU; the DGX B300 arithmetic brackets 410-710 -> 500 mid. A spec
+    #   575 W/GPU; the DGX B300 arithmetic brackets 410-710 W/GPU and 500 sits
+    #   below the 562 mid, weighted toward the 1,400 W-TDP scenario. A spec
     #   ceiling used FLAT, not duty-cycled — over-charges a lightly-loaded
     #   chassis by up to ~2x, the same conservative direction as the study's
     #   other bookkeeping (power.md #4).
@@ -2134,17 +2135,22 @@ EUR_PER_KWH_DEFAULT = 0.19   # Eurostat non-household EU average €0.1902/kWh
                              # STATISTICAL (HIGH), user-chosen multiplier.
 HOURS_PER_MONTH = 720.0      # the explorer's flat billing month (30 x 24 h)
 
-# Output tokens one MAIN request decodes — ASSUMED, unmeasured (the workload
-# model never needed output lengths before). Consistent with the measured
-# 10.8 s served per turn (MEASURED_SERVICE_R_S) at the observed 50-90 tok/s.
-# Scales d_d and the €/1M-token figure linearly; the €/month bill moves far
-# less (decode is one term of three). Mirrors the explorer's AVG_OUT_TOK.
+# Output tokens ONE REQUEST decodes (applied to every request, subagents
+# included) — ASSUMED, unmeasured (the workload model never needed output
+# lengths before). Consistent with the measured 10.8 s served per turn
+# (MEASURED_SERVICE_R_S) at the observed 50-90 tok/s. Scales d_d linearly;
+# the €/1M-token figure moves hyperbolically (fixed idle/prefill watts
+# amortise as outputs lengthen); the €/month bill moves least (decode is one
+# term of three). Mirrors the explorer's AVG_OUT_TOK.
 AVG_OUT_TOK = 1000
 
 
 def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
                decode_users_group: float, chunk: float = CHUNK_DEFAULT,
-               turn_tokens: float = 0.0, pue: float = PUE_DEFAULT,
+               # 2_000 = the study's reference warm turn (operating_point's own
+               # default): 0.0 would price every warm hit at zero machine time
+               # and silently under-bill relative to the explorer
+               turn_tokens: float = 2_000, pue: float = PUE_DEFAULT,
                mfu: float = MFU_DEFAULT,
                per_pass_overhead: bool = False) -> dict:
     """Average draw of one GPU and the whole system, at the current load.
@@ -2199,7 +2205,7 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
 
 def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
                 decode_users_group: float, users: float,
-                chunk: float = CHUNK_DEFAULT, turn_tokens: float = 0.0,
+                chunk: float = CHUNK_DEFAULT, turn_tokens: float = 2_000,
                 pue: float = PUE_DEFAULT,
                 eur_kwh: float = EUR_PER_KWH_DEFAULT,
                 mfu: float = MFU_DEFAULT,

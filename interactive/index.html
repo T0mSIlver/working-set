@@ -3352,10 +3352,12 @@ function renderCeilingBars(op){
    the load implies against the decode capacity at the 40 tok/s floor, capped
    at whatever prefill leaves. P_total = n_gpu x (P_gpu + host) x PUE.
    -------------------------------------------------------------------------- */
-// Output tokens one MAIN request decodes — ASSUMED, unmeasured (the workload
-// model never needed output lengths before). Consistent with the measured
-// 10.8 s served per turn at 50–90 tok/s. Scales d_d and the €/1M-token figure
-// linearly; the €/month bill moves far less (decode is one term of three).
+// Output tokens ONE REQUEST decodes (applied to every request, subagents
+// included) — ASSUMED, unmeasured (the workload model never needed output
+// lengths before). Consistent with the measured 10.8 s served per turn at
+// 50–90 tok/s. Scales d_d linearly; the €/1M-token figure moves
+// hyperbolically (fixed idle/prefill watts amortise as outputs lengthen);
+// the €/month bill moves least (decode is one term of three).
 const AVG_OUT_TOK = 1000;
 
 // Average draw of one GPU and the whole system, at the current load.
