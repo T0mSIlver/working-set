@@ -55,12 +55,20 @@ jobs:
           api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts"
           auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
 
+          tmp=$(mktemp)
+          trap 'rm -f "$tmp"' EXIT
+
           workers='[]'
           page=1
           while :; do
             chunk=$(curl -sS --fail "${auth[@]}" "$api?per_page=100&page=$page")
             workers=$(jq -c '.[0] + .[1].result' <<<"[$workers,$chunk]")
-            pages=$(jq -r '.result_info.total_pages // 1' <<<"$chunk")
+            pages=$(jq -r '.result_info.total_pages
+              // (if .result_info.total_count then ((.result_info.total_count / 100) | ceil) else empty end)' <<<"$chunk")
+            if [ -z "$pages" ]; then
+              echo "::warning::result_info has neither total_pages nor total_count; assuming a single page"
+              pages=1
+            fi
             [ "$page" -ge "$pages" ] && break
             page=$((page + 1))
           done
@@ -69,7 +77,7 @@ jobs:
             --paginate --jq '.[].number')
 
           now=$(date +%s)
-          deleted=0 kept=0 would_delete=0
+          deleted=0 kept=0 would_delete=0 skipped=0
           while IFS=$'\t' read -r name modified; do
             suffix="${name#workingset-explorer-}"
             reason="" recheck_pr=""
@@ -96,13 +104,15 @@ jobs:
             # A 404 (PR never existed) is deletable garbage; any other GH
             # failure skips the worker rather than deleting on uncertainty.
             if [ -n "$recheck_pr" ]; then
-              if state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$recheck_pr" --jq .state 2>&1); then
+              # stderr goes to a file, never into $state — a stray gh warning
+              # on a successful call must not corrupt the "open" comparison
+              if state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$recheck_pr" --jq .state 2>"$tmp"); then
                 :
-              elif grep -q "HTTP 404" <<<"$state"; then
+              elif grep -q "HTTP 404" "$tmp"; then
                 state=missing
               else
                 echo "::warning::could not resolve PR #$recheck_pr; skipping $name"
-                kept=$((kept+1))
+                skipped=$((skipped+1))
                 continue
               fi
               if [ "$state" = "open" ]; then
@@ -111,14 +121,13 @@ jobs:
                 continue
               fi
             fi
-            resp=$(mktemp)
-            code=$(curl -sS -o "$resp" -w '%{http_code}' -X DELETE "${auth[@]}" "$api/$name?force=true")
+            code=$(curl -sS -o "$tmp" -w '%{http_code}' -X DELETE "${auth[@]}" "$api/$name?force=true")
             case "$code" in
               200|204|404) echo "deleted $name — $reason"; deleted=$((deleted+1)) ;;
-              *) echo "::error::deleting $name failed with HTTP $code"; cat "$resp"; exit 1 ;;
+              *) echo "::error::deleting $name failed with HTTP $code"; cat "$tmp"; exit 1 ;;
             esac
           done < <(jq -r '.[]
             | select(.id | startswith("workingset-explorer-"))
             | [.id, (.modified_on // .created_on)] | @tsv' <<<"$workers")
 
-          echo "Sweep done: deleted=$deleted kept=$kept would_delete=$would_delete dry_run=$DRY_RUN"
+          echo "Sweep done: deleted=$deleted kept=$kept would_delete=$would_delete skipped=$skipped dry_run=$DRY_RUN"
