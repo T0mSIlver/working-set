@@ -89,6 +89,13 @@ dd{margin:3px 0 0 0}
 .eq i{font-style:italic; font-family:Georgia,"Times New Roman",serif; font-size:1.06em}
 .eq sub,.eq sup{font-size:.72em}
 .fn{color:var(--muted); font-size:12px; font-weight:480; margin-left:8px}
+.eq .term{display:inline-flex; flex-direction:column; align-items:center; vertical-align:top}
+.eq .term .ub{align-self:stretch; height:5px; margin-top:4px;
+  border-left:1px solid var(--axis); border-right:1px solid var(--axis);
+  border-bottom:1px solid var(--axis); border-radius:0 0 5px 5px}
+.eq .term .lbl{font-size:11px; line-height:1.35; color:var(--muted); margin-top:4px;
+  max-width:170px; white-space:normal; text-align:center}
+.eq .op{display:inline-block; vertical-align:top; padding:0 7px}
 ul.where{font-size:13px; margin:4px 0 14px}
 ul.where li{margin:3px 0}
 .tblwrap{overflow-x:auto; margin:10px 0 4px}
@@ -342,7 +349,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
 
     <h3 id="f-prefill">F.3 — Prefill (compute roofline)</h3>
     <p><b>FLOPs of one forward pass</b><span class="fn">prefill_flops()</span></p>
-    <div class="eq"><i>F</i>(<i>T</i>, <i>H</i>) = 2·<i>N</i><sub>p</sub>·<i>T</i> &nbsp;+&nbsp; 2·<i>d</i>·<i>ℓ</i>·<i>T</i>² &nbsp;+&nbsp; 4·<i>d</i>·<i>ℓ</i>·<i>T</i>·<i>H</i></div>
+    <div class="eq"><span class="op" style="padding-left:0"><i>F</i>(<i>T</i>, <i>H</i>) =</span><span class="term"><span>2·<i>N</i><sub>p</sub>·<i>T</i></span><span class="ub"></span><span class="lbl">GEMM: every new token through the active weights (2 FLOPs per multiply-accumulate)</span></span><span class="op">+</span><span class="term"><span>2·<i>d</i>·<i>ℓ</i>·<i>T</i>²</span><span class="ub"></span><span class="lbl">intra-chunk attention: the new tokens attending to each other (causal masking halves the pairs)</span></span><span class="op">+</span><span class="term"><span>4·<i>d</i>·<i>ℓ</i>·<i>T</i>·<i>H</i></span><span class="ub"></span><span class="lbl">cross attention: every new query over all <i>H</i> cached tokens (QK<sup>T</sup> and AV, 2 FLOPs each)</span></span></div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td><i>F</i>(<i>T</i>, <i>H</i>)</td><td class="d">total FLOPs of one prefill pass (<code>prefill_flops()</code>, third return)</td><td class="tnum">1.82×10¹⁵ at (32,768, 0)</td><td>FLOP</td></tr>
