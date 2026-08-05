@@ -232,7 +232,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
 
     <h3 id="f-memory">F.1 — Memory &amp; warm capacity</h3>
     <p><b>The solved activation reserve</b><span class="fn">_act_reserve() → ACT_RESERVE</span></p>
-    <div class="eq"><i>R</i><sub>act</sub> = <i>V</i><sub>H200</sub> − <i>W</i><sub>27B</sub> − <i>P</i>₀·<i>b</i><sub>27B</sub> = 141×10⁹ − 30.92×10⁹ − 2.77×10⁶ × 32,768 = 19.31×10⁹ B ≈ 17.98 GiB</div>
+    <div class="eq"><span class="op" style="padding-left:0"><i>R</i><sub>act</sub> =</span><span class="term"><span><i>V</i><sub>H200</sub></span><span class="ub"></span><span class="lbl">HBM of the anchor GPU</span></span><span class="op">−</span><span class="term"><span><i>W</i><sub>27B</sub></span><span class="ub"></span><span class="lbl">the 27B's resident weights</span></span><span class="op">−</span><span class="term"><span><i>P</i>₀·<i>b</i><sub>27B</sub></span><span class="ub"></span><span class="lbl">the measured anchor pool, converted to bytes</span></span><span class="op">= 141×10⁹ − 30.92×10⁹ − 2.77×10⁶ × 32,768 = 19.31×10⁹ B ≈ 17.98 GiB</span></div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td><i>R</i><sub>act</sub></td><td class="d">per-GPU activation/workspace/fragmentation reserve (<code>ACT_RESERVE</code>)</td><td class="tnum">19.31×10⁹ ≈ 17.98 GiB</td><td>B</td></tr>
@@ -244,7 +244,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p class="tnote">The reserve is <em>solved</em> from the anchor, not guessed: it is whatever is left of the anchor GPU's HBM once the 27B's weights and the anchor pool are subtracted. If the FP8 pool is ever measured directly, updating <i>P</i>₀ re-derives everything.</p>
 
     <p><b>KV pool of one replica group</b><span class="fn">kv_pool_tokens()</span></p>
-    <div class="eq"><i>P</i><sub>kv</sub> = max(<i>t</i>·<i>V</i> − <i>W</i><sub>res</sub> − <i>t</i>·(<i>R</i><sub>act</sub> + <i>R</i><sub>extra</sub>),&nbsp;0) / <i>b</i><sub>kv</sub></div>
+    <div class="eq"><span class="op" style="padding-left:0"><i>P</i><sub>kv</sub> = max(</span><span class="term"><span><i>t</i>·<i>V</i></span><span class="ub"></span><span class="lbl">HBM of the whole group</span></span><span class="op">−</span><span class="term"><span><i>W</i><sub>res</sub></span><span class="ub"></span><span class="lbl">weights, sharded — stored once per group</span></span><span class="op">−</span><span class="term"><span><i>t</i>·(<i>R</i><sub>act</sub> + <i>R</i><sub>extra</sub>)</span><span class="ub"></span><span class="lbl">scratch reserve, charged per GPU</span></span><span class="op">,&nbsp;0) / <i>b</i><sub>kv</sub></span></div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td><i>P</i><sub>kv</sub></td><td class="d">KV-cache capacity of one replica group's pool (<code>kv_pool_tokens()</code>)</td><td class="tnum">6.48×10⁶</td><td>tok</td></tr>
@@ -258,7 +258,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p class="tnote">Weights are sharded across the group and counted once; the reserve is scratch space and charged per GPU. <i>R</i><sub>extra</sub> exists because the H200 actually delivers ~150.75 GB against the 141 GB vendor figure the calibration uses — the anchor silently absorbs that surplus into <i>R</i><sub>act</sub>, so a part that delivers nominal bytes with no over-provision (the B300, per a measured <code>nvidia-smi</code> dump) must add the hidden margin back or inherit ~9.75 GB/GPU of phantom HBM. A DP deployment has <code>dp</code> independent pools of this size — the system total multiplies by dp only under session-sticky routing. FP16 KV doubles <i>b</i><sub>kv</sub> (<code>with_kv_dtype</code>); NVFP4 swaps the weight constants (<code>with_weight_dtype</code>), never <i>b</i><sub>kv</sub>.</p>
 
     <p><b>Session cost and the Monte-Carlo fill</b><span class="fn">_warm_once() / warm_capacity()</span></p>
-    <div class="eq"><i>c</i><sub>i</sub> = <i>u</i><sub>i</sub> + <i>S</i>/<i>b</i><sub>kv</sub>,&nbsp;&nbsp; <i>u</i><sub>i</sub> = <i>L</i><sub>i</sub> − <i>x</i><sub>i</sub> (warm) &nbsp;|&nbsp; <i>L</i><sub>i</sub> (cold)<br>
+    <div class="eq"><span class="op" style="padding-left:0"><i>c</i><sub>i</sub> =</span><span class="term"><span><i>u</i><sub>i</sub></span><span class="ub"></span><span class="lbl">unique context KV after prefix dedup</span></span><span class="op">+</span><span class="term"><span><i>S</i>/<i>b</i><sub>kv</sub></span><span class="ub"></span><span class="lbl">recurrent state, in token equivalents</span></span><span class="op">,&nbsp;&nbsp; <i>u</i><sub>i</sub> = <i>L</i><sub>i</sub> − <i>x</i><sub>i</sub> (warm) &nbsp;|&nbsp; <i>L</i><sub>i</sub> (cold)</span><br>
     <i>N</i><sub>warm</sub> = #{reusable sessions among the first <i>n</i>* in arrival order},&nbsp;&nbsp; <i>n</i>* = max <i>n</i> : Σ<sub>i≤n</sub> <i>c</i><sub>i</sub> ≤ <i>P</i><sub>kv</sub> − <i>x</i><sub>res</sub></div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
@@ -308,7 +308,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p class="tnote">The 27B is dense, so the MoE rows take their example from the 35B-A3B, where <i>W</i><sub>sh</sub> = 1.94×10⁹ B and <i>W</i><sub>dec</sub>(64) = 34.15×10⁹ B linear / 29.93×10⁹ B coverage. The two unions bracket reality: linear is the no-overlap upper bound on bytes, coverage the expectation under independent uniform routing (real routing is correlated, so it grows slower). The linear union's slope break sits at <i>n</i> = <i>w</i><sub>E</sub>/<i>w</i><sub>e</sub>: 32 on the 35B-A3B and GLM-5.2, ≈ 42.7 on DSv4-Flash.</p>
 
     <p><b>Bytes and speed of one decode step</b><span class="fn">decode_curves()</span></p>
-    <div class="eq"><i>B</i><sub>step</sub>(<i>n</i>) = <i>W</i><sub>dec</sub>(<i>n</i>) + Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>kv</sub> + 2·<i>n</i>·<i>S</i><br>
+    <div class="eq"><span class="op" style="padding-left:0"><i>B</i><sub>step</sub>(<i>n</i>) =</span><span class="term"><span><i>W</i><sub>dec</sub>(<i>n</i>)</span><span class="ub"></span><span class="lbl">weight read, amortised across the whole batch</span></span><span class="op">+</span><span class="term"><span>Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>kv</sub></span><span class="ub"></span><span class="lbl">KV read of every active context</span></span><span class="op">+</span><span class="term"><span>2·<i>n</i>·<i>S</i></span><span class="ub"></span><span class="lbl">recurrent state, read + written each step</span></span><br>
     <i>v</i><sub>user</sub>(<i>n</i>) = <i>m</i>·<i>BW</i><sub>g</sub> / <i>B</i><sub>step</sub>(<i>n</i>);&nbsp;&nbsp; <i>V</i><sub>agg</sub> = dp·<i>n</i>·p50(<i>v</i><sub>user</sub>)</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
@@ -327,7 +327,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p class="tnote">j indexes the <i>n</i> active sequences; percentiles are over 3,000 sampled batches. In the example the step splits into 30.9 GB weights + 83.8 GB KV + 10.1 GB state. p50(·) is the median over draws.</p>
 
     <p><b>Sparse-attention decode read (DSA/CSA models only)</b><span class="fn">kv_decode_* in decode_curves()</span></p>
-    <div class="eq">KV read = Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>dec</sub> &nbsp;+&nbsp; (<i>c</i><sub>top</sub>/<i>τ</i>)·Σ<sub>j</sub> min(<i>L</i><sub>j</sub>, <i>τ</i>) &nbsp;&nbsp;&nbsp;(replaces Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>kv</sub> in <i>B</i><sub>step</sub>)</div>
+    <div class="eq"><span class="op" style="padding-left:0">KV read =</span><span class="term"><span>Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>dec</sub></span><span class="ub"></span><span class="lbl">indexer scan over the full cached context</span></span><span class="op">+</span><span class="term"><span>(<i>c</i><sub>top</sub>/<i>τ</i>)·Σ<sub>j</sub> min(<i>L</i><sub>j</sub>, <i>τ</i>)</span><span class="ub"></span><span class="lbl">top-<i>τ</i> sparse read per sequence, scaled for short ones</span></span><span class="op">(replaces Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>kv</sub> in <i>B</i><sub>step</sub>)</span></div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example (GLM-5.2)</th><th>Unit</th></tr>
       <tr><td><i>b</i><sub>dec</sub></td><td class="d">indexer-scan bytes read per cached context token (<code>kv_decode_bpt</code>)</td><td class="tnum">2,772</td><td>B/tok</td></tr>
@@ -375,7 +375,8 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p class="tnote">MFU is the softest input on the page: unmeasured here, and it scales every prefill figure almost proportionally. Reusing <i>η</i>(<i>t</i>) for compute is an assumption flagged in the code — the real prefill TP haircut is probably gentler. Roofline ridge <i>C</i><sub>fp8</sub>/<i>BW</i><sub>HBM</sub>: 412 FLOP/B (H200), 563 (B300); prefill sits orders of magnitude above it, decode far below — which is why the two interfere when batched.</p>
 
     <p><b>Per-pass overhead and the solved MFU ceiling</b><span class="fn">prefill_overhead_seconds() / mfu_ceiling() / prefill_pass_seconds()</span></p>
-    <div class="eq"><i>t</i><sub>ov</sub> = <i>W</i><sub>res</sub> / <i>BW</i><sub>g</sub>;&nbsp;&nbsp; 1/<i>μ</i><sub>c</sub> = 1/MFU − <i>C</i><sub>g</sub>·<i>t</i><sub>ov</sub> / <i>F</i>(chunk₀, 0);&nbsp;&nbsp; <i>t</i><sub>pass</sub> = <i>F</i>(<i>T</i>, <i>H</i>)/(<i>C</i><sub>g</sub>·<i>μ</i><sub>c</sub>) + <i>t</i><sub>ov</sub></div>
+    <div class="eq"><i>t</i><sub>ov</sub> = <i>W</i><sub>res</sub> / <i>BW</i><sub>g</sub>;&nbsp;&nbsp; 1/<i>μ</i><sub>c</sub> = 1/MFU − <i>C</i><sub>g</sub>·<i>t</i><sub>ov</sub> / <i>F</i>(chunk₀, 0)<br>
+    <span class="op" style="padding-left:0"><i>t</i><sub>pass</sub> =</span><span class="term"><span><i>F</i>(<i>T</i>, <i>H</i>)/(<i>C</i><sub>g</sub>·<i>μ</i><sub>c</sub>)</span><span class="ub"></span><span class="lbl">compute leg, at the solved MFU ceiling</span></span><span class="op">+</span><span class="term"><span><i>t</i><sub>ov</sub></span><span class="ub"></span><span class="lbl">weight stream, paid once per pass — does not telescope</span></span></div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td><i>t</i><sub>ov</sub></td><td class="d">per-pass cost that does not telescope: streaming the resident weights once (<code>prefill_overhead_seconds()</code>)</td><td class="tnum">3.58×10⁻³</td><td>s</td></tr>
@@ -392,8 +393,8 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p class="tnote"><i>μ</i><sub>c</sub> is solved so that a first cache-empty chunk of chunk₀ tokens nets exactly the anchor MFU — by construction <i>t</i><sub>pass</sub> = <i>t</i><sub>pf</sub> there, as the example shows. At small chunks the overhead no longer amortises and the <em>effective</em> MFU falls (<code>mfu_effective()</code> — the explorer's chart E); warm hits and the ITL-spike chunk stay on the marginal <i>t</i><sub>pf</sub> pricing because their pass's weight stream is already paid by the decode batch they join.</p>
 
     <p><b>Expected miss and hit cost</b><span class="fn">cold_request_seconds() / warm_request_seconds()</span></p>
-    <div class="eq">E[<i>C</i><sub>cold</sub>] = (2·<i>N</i><sub>p</sub>·E[<i>L</i>] + 2·<i>d</i>·<i>ℓ</i>·E[<i>L</i>²]) / (<i>C</i><sub>g</sub>·MFU)&nbsp;&nbsp;&nbsp;(explorer pricing adds + E[⌈<i>L</i>/chunk₀⌉]·<i>t</i><sub>ov</sub>, FLOPs leg at <i>μ</i><sub>c</sub>)<br>
-    <i>C</i><sub>warm</sub> = <i>t</i><sub>pf</sub>(<i>T</i><sub>turn</sub>, <i>H</i> = E[<i>L</i>])</div>
+    <div class="eq"><span class="op" style="padding-left:0">E[<i>C</i><sub>cold</sub>] = (</span><span class="term"><span>2·<i>N</i><sub>p</sub>·E[<i>L</i>]</span><span class="ub"></span><span class="lbl">GEMM leg: the mean context</span></span><span class="op">+</span><span class="term"><span>2·<i>d</i>·<i>ℓ</i>·E[<i>L</i>²]</span><span class="ub"></span><span class="lbl">attention leg: the heavy tail — second moment, not mean²</span></span><span class="op">) / (<i>C</i><sub>g</sub>·MFU)</span><br>
+    <i>C</i><sub>warm</sub> = <i>t</i><sub>pf</sub>(<i>T</i><sub>turn</sub>, <i>H</i> = E[<i>L</i>])&nbsp;&nbsp;&nbsp;(explorer pricing adds + E[⌈<i>L</i>/chunk₀⌉]·<i>t</i><sub>ov</sub> to the miss and runs its FLOPs leg at <i>μ</i><sub>c</sub>)</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td>E[<i>C</i><sub>cold</sub>]</td><td class="d">expected machine time of one cache miss: re-prefill the whole context (<code>cold_request_seconds()</code>)</td><td class="tnum">1.570</td><td>s</td></tr>
@@ -412,7 +413,8 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
 
     <p><b>The hypothesis numbers</b><span class="fn">thrash_ratio() / max_cold_rate() / prefill_duty() / breakeven_miss_rate()</span></p>
     <div class="eq">thrash = E[<i>C</i><sub>cold</sub>] / <i>C</i><sub>warm</sub>;&nbsp;&nbsp; <i>λ</i><sub>cold,max</sub> = 1 / E[<i>C</i><sub>cold</sub>]<br>
-    <i>ρ</i>(<i>f</i>) = <i>λ</i>·(<i>f</i>·E[<i>C</i><sub>cold</sub>] + (1−<i>f</i>)·<i>C</i><sub>warm</sub>);&nbsp;&nbsp; <i>f</i>* = (1/<i>λ</i> − <i>C</i><sub>warm</sub>) / (E[<i>C</i><sub>cold</sub>] − <i>C</i><sub>warm</sub>)</div>
+    <span class="op" style="padding-left:0"><i>ρ</i>(<i>f</i>) = <i>λ</i>·(</span><span class="term"><span><i>f</i>·E[<i>C</i><sub>cold</sub>]</span><span class="ub"></span><span class="lbl">miss leg: full re-prefills</span></span><span class="op">+</span><span class="term"><span>(1−<i>f</i>)·<i>C</i><sub>warm</sub></span><span class="ub"></span><span class="lbl">hit leg: new-turn prefills</span></span><span class="op">)</span><br>
+    <i>f</i>* = (1/<i>λ</i> − <i>C</i><sub>warm</sub>) / (E[<i>C</i><sub>cold</sub>] − <i>C</i><sub>warm</sub>)</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td>thrash</td><td class="d">machine-time ratio of a miss to a hit (<code>thrash_ratio()</code>)</td><td class="tnum">19.3</td><td>—</td></tr>
@@ -427,9 +429,9 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
 
     <h3 id="f-queue">F.4 — Queueing &amp; bursts</h3>
     <p><b>Service moments and the M/G/1 queue</b><span class="fn">prefill_service_moments() / queue_wait_seconds() / prefill_ttft_seconds()</span></p>
-    <div class="eq">E[<i>S</i>] = <i>f</i>·E[<i>S</i>|miss] + (1−<i>f</i>)·E[<i>S</i>|hit] &nbsp;&nbsp;(E[<i>S</i>²] mixed the same way);&nbsp;&nbsp; <i>ρ</i> = <i>λ</i>·E[<i>S</i>]<br>
+    <div class="eq"><span class="op" style="padding-left:0">E[<i>S</i>] =</span><span class="term"><span><i>f</i>·E[<i>S</i>|miss]</span><span class="ub"></span><span class="lbl">miss leg</span></span><span class="op">+</span><span class="term"><span>(1−<i>f</i>)·E[<i>S</i>|hit]</span><span class="ub"></span><span class="lbl">hit leg</span></span><span class="op">(E[<i>S</i>²] mixed the same way);&nbsp;&nbsp; <i>ρ</i> = <i>λ</i>·E[<i>S</i>]</span><br>
     E[<i>W</i>] = <i>λ</i>·E[<i>S</i>²] / (2·(1 − <i>ρ</i>))<br>
-    TTFT<sub>FCFS</sub> = E[<i>W</i>] + E[<i>S</i>|class];&nbsp;&nbsp; TTFT<sub>PS</sub> = E[<i>S</i>|class] / (1 − <i>ρ</i>)</div>
+    <span class="op" style="padding-left:0">TTFT<sub>FCFS</sub> =</span><span class="term"><span>E[<i>W</i>]</span><span class="ub"></span><span class="lbl">shared wait behind the queue — same for every request</span></span><span class="op">+</span><span class="term"><span>E[<i>S</i>|class]</span><span class="ub"></span><span class="lbl">the request's own prefill</span></span><span class="op">;&nbsp;&nbsp; TTFT<sub>PS</sub> = E[<i>S</i>|class] / (1 − <i>ρ</i>)</span></div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td>E[<i>S</i>]</td><td class="d">mean prefill service time over the mixed request stream (<code>prefill_service_moments()</code>[0])</td><td class="tnum">0.0962</td><td>s</td></tr>
@@ -460,7 +462,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
 
     <p><b>Bursts, drains, and what the warm users lose</b><span class="fn">burst_drain_seconds() / spike_tolerance() / itl_spike() / spike_token_debt()</span></p>
     <div class="eq"><i>T</i><sub>drain</sub> = <i>B</i>·E[<i>S</i>|miss] / (1 − <i>ρ</i>);&nbsp;&nbsp; <i>B</i>* = SLA·(1 − <i>ρ</i>) / E[<i>S</i>|miss]<br>
-    <i>t</i><sub>dec</sub> = <i>m</i> / <i>v</i><sub>user</sub>(<i>n</i><sub>w</sub>);&nbsp;&nbsp; <i>t</i><sub>mix</sub> = <i>t</i><sub>dec</sub> + <i>t</i><sub>pf</sub>(chunk₀, <i>H</i> = E[<i>L</i>]/2)<br>
+    <span class="op" style="padding-left:0"><i>t</i><sub>dec</sub> = <i>m</i> / <i>v</i><sub>user</sub>(<i>n</i><sub>w</sub>);&nbsp;&nbsp; <i>t</i><sub>mix</sub> =</span><span class="term"><span><i>t</i><sub>dec</sub></span><span class="ub"></span><span class="lbl">the normal decode step</span></span><span class="op">+</span><span class="term"><span><i>t</i><sub>pf</sub>(chunk₀, <i>H</i> = E[<i>L</i>]/2)</span><span class="ub"></span><span class="lbl">the prefill chunk sharing the forward pass</span></span><br>
     <i>Δ</i><sub>tok</sub> = <i>T</i><sub>drain</sub>·(1/<i>t</i><sub>dec</sub> − 1/<i>t</i><sub>mix</sub>)</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
@@ -522,7 +524,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <h3 id="f-power">F.6 — Power &amp; cost</h3>
     <p><b>Duty split and draw</b><span class="fn">power_draw()</span></p>
     <div class="eq"><i>d</i><sub>p</sub> = min(1, <i>λ</i><sub>g</sub>·E[<i>S</i>]);&nbsp;&nbsp; <i>d</i><sub>d</sub> = min(1 − <i>d</i><sub>p</sub>, &nbsp;<i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub> / (<i>U</i><sub>dec</sub>·<i>v</i><sub>floor</sub>))<br>
-    <i>P</i><sub>gpu</sub> = <i>d</i><sub>p</sub>·<i>P</i><sub>prefill</sub> + <i>d</i><sub>d</sub>·<i>P</i><sub>decode</sub> + (1 − <i>d</i><sub>p</sub> − <i>d</i><sub>d</sub>)·<i>P</i><sub>idle</sub><br>
+    <span class="op" style="padding-left:0"><i>P</i><sub>gpu</sub> =</span><span class="term"><span><i>d</i><sub>p</sub>·<i>P</i><sub>prefill</sub></span><span class="ub"></span><span class="lbl">prefilling: compute-bound, power-cap-limited</span></span><span class="op">+</span><span class="term"><span><i>d</i><sub>d</sub>·<i>P</i><sub>decode</sub></span><span class="ub"></span><span class="lbl">decoding: bandwidth-bound, well under TDP</span></span><span class="op">+</span><span class="term"><span>(1 − <i>d</i><sub>p</sub> − <i>d</i><sub>d</sub>)·<i>P</i><sub>idle</sub></span><span class="ub"></span><span class="lbl">remainder at warm idle</span></span><br>
     <i>P</i><sub>sys</sub> = <i>n</i><sub>gpu</sub>·(<i>P</i><sub>gpu</sub> + <i>P</i><sub>host</sub>)·PUE</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
