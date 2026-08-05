@@ -825,17 +825,23 @@ def dry_run(args, cfg) -> int:
            f"{'sigma cfg':>9} {'sigma smp':>9} {'p5':>8} {'p50':>8} "
            f"{'p95':>9} {'mean':>9}  check")
     print(hdr)
-    for cls, med, sig in (("user", wl["user_prompt_median_tokens"],
-                           wl["user_prompt_sigma"]),
-                          ("subagent", wl["subagent_median_tokens"],
-                           wl["subagent_sigma"])):
+    # per-class clip floor, mirroring user_loop: subagents clip to THEIR
+    # prefix unless sub_shares_prefix — displaying both classes at the user
+    # floor overstated the subagent p50 by ~87% under the default config
+    sub_floor = (wl["system_prefix_tokens"]
+                 if wl.get("sub_shares_prefix", False)
+                 else wl.get("subagent_prefix_tokens", 3_000))
+    for cls, med, sig, floor in (
+            ("user", wl["user_prompt_median_tokens"],
+             wl["user_prompt_sigma"], wl["system_prefix_tokens"]),
+            ("subagent", wl["subagent_median_tokens"],
+             wl["subagent_sigma"], sub_floor)):
         raw = [rng.lognormvariate(math.log(med), sig) for _ in range(20_000)]
         smp_med = pct(raw, 50)
         logs = [math.log(x) for x in raw]
         mu = sum(logs) / len(logs)
         smp_sig = math.sqrt(sum((x - mu) ** 2 for x in logs) / (len(logs) - 1))
-        clipped = [min(max(x, wl["system_prefix_tokens"]),
-                       args.context_cap_tokens) for x in raw]
+        clipped = [min(max(x, floor), args.context_cap_tokens) for x in raw]
         ok = (abs(smp_med / med - 1) < 0.03 and abs(smp_sig / sig - 1) < 0.03)
         failed |= not ok
         print(f"{cls:<10} {med:>10,.0f} {smp_med:>10,.0f} {sig:>9.2f} "
@@ -854,9 +860,11 @@ def dry_run(args, cfg) -> int:
     for h in cfg["hypotheses"]:
         print(f"  - {h}")
     if args.burst:
+        burst_pop = args.burst_users or max(1, round(
+            pred.get("operating_point_users")
+            or 0.5 * pred["predicted_limit_users"]))
         print(f"\n--burst {args.burst}: would run the burst probe instead of "
-              f"the ladder (standing load "
-              f"{args.burst_users or max(1, round(0.5 * pred['predicted_limit_users']))} users)")
+              f"the ladder (standing load {burst_pop} users)")
     if failed:
         print("\nSAMPLER SELF-CHECK FAILED", file=sys.stderr)
         return 1
@@ -902,8 +910,9 @@ def parse_args(argv=None):
                     help="run the B* probe instead of the ladder: from steady "
                          "standing load, fire N simultaneous forced misses")
     ap.add_argument("--burst-users", type=int, default=0,
-                    help="standing load for --burst "
-                         "(default 0.5 x predicted_limit_users)")
+                    help="standing load for --burst (default: "
+                         "operating_point_users, else 0.5 x "
+                         "predicted_limit_users)")
     ap.add_argument("--chars-per-token", type=float, default=4.0,
                     help="synthetic-text calibration; the report prints the "
                          "achieved ratio to correct it (default 4.0)")
