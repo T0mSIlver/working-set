@@ -3639,8 +3639,9 @@ function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
    every point of every sweep, so the workload axes use MEAN-FIELD stand-ins —
    expected pool cost per session, mean-context decode speed — each CALIBRATED
    so it passes exactly through the MC value at the current settings. The
-   approximation is stated in the panel caption; the closed-form axes (miss
-   rate via warmFn, think time, budget, turn, MFU) carry no such caveat. */
+   approximation is stated in the panel caption; the directly-priced axes (miss
+   rate via the same sampled warmFn chart G uses, think time, budget, turn,
+   MFU) carry no such caveat. */
 
 // Mean-field warm USER capacity of one replica group: expected pool cost per
 // resident session against both budgets, mirroring warmOnce's accounting
@@ -3741,13 +3742,17 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   // 4 · warm turn size — re-prices the hit leg of the service moments; the
   //     moments read the liveTurn mirror, so swap it per point and restore
   {
+    // try/finally: an exception mid-sweep must not leave the liveTurn mirror
+    // poisoned for every later render until the next syncState()
     const saved = liveTurn;
-    const pts = sweep(17, 250, 16000, v => {
-      liveTurn = v;
-      const mo2 = prefillServiceMoments(model, topo, wl, cs);
-      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
-    }, state.turn);
-    liveTurn = saved;
+    let pts;
+    try {
+      pts = sweep(17, 250, 16000, v => {
+        liveTurn = v;
+        const mo2 = prefillServiceMoments(model, topo, wl, cs);
+        return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
+      }, state.turn);
+    } finally { liveTurn = saved; }
     axes.push({ label: 'Warm turn size', cur: state.turn, lo: 250, hi: 16000,
       fmt: v => fmt(v / 1000, v < 1000 ? 2 : 1) + 'k tok', approx: false, pts });
   }
@@ -3771,17 +3776,32 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   //     the context stats (4k samples: flip resolution, not tile precision)
   //     and move ALL FOUR ceilings through them.
   const wlAxis = (label, key, lo, hi, cur, fmtFn) => {
-    if (!(calC > 0) || !(calD > 0)) return;
+    // seeds are keyed by VALUE, not sweep index: inserting the current value
+    // into the grid must not shift every later point onto different draws
+    // (cross-state stability), and the anchor below must reproduce the cur
+    // sample bit-for-bit
+    const at = v => {
+      const wl2 = { ...wl, [key]: key === 'user_median' ? v * 1000 : v };
+      seedFor('flip|' + key + '|' + v.toFixed(4));
+      const cs2 = contextStats(wl2, 4000);
+      const mo2 = prefillServiceMoments(model, topo, wl2, cs2);
+      seedFor('flip|' + key + 'w|' + v.toFixed(4));
+      return { mo2, warm: warmUsersApprox(model, topo, wl2, 3000),
+               dec: decodeUsersApprox(model, topo, cs2.samples) };
+    };
+    // per-axis anchor at the CURRENT value, same seeds and sample counts as
+    // the sweep — so the calibrated curve passes exactly through the MC
+    // ceilings at cur (the global flipCal anchor uses different counts and
+    // would leave ~1/sqrt(N) daylight between the ▼ and the decision tile)
+    const a = at(cur);
+    const cC = a.warm > 0 ? (cacheNow / reps) / a.warm : 0;
+    const cD = a.dec > 0 ? (decodeNow / reps) / a.dec : 0;
+    if (!(cC > 0) || !(cD > 0)) return;
     axes.push({ label, cur, lo, hi, fmt: fmtFn, approx: true,
-      pts: sweep(13, lo, hi, (v, i) => {
-        const wl2 = { ...wl, [key]: key === 'user_median' ? v * 1000 : v };
-        seedFor('flip|' + key + '|' + i);
-        const cs2 = contextStats(wl2, 4000);
-        const mo2 = prefillServiceMoments(model, topo, wl2, cs2);
-        seedFor('flip|' + key + 'w|' + i);
-        const cacheU = warmUsersApprox(model, topo, wl2, 3000) * calC * reps;
-        const decU = decodeUsersApprox(model, topo, cs2.samples) * calD * reps;
-        return evalAt(mo2, f0, state.sla, state.think, cacheU, decU);
+      pts: sweep(13, lo, hi, v => {
+        const q = at(v);
+        return evalAt(q.mo2, f0, state.sla, state.think,
+                      q.warm * cC * reps, q.dec * cD * reps);
       }, cur) });
   };
   {
@@ -3818,6 +3838,10 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     ax.flip = best;
   }
   axes.sort((a, b) => (a.flip ? a.flip.dist : Infinity) - (b.flip ? b.flip.dist : Infinity));
+  // stamp the population every verdict was judged against: a draft render
+  // reuses this sweep while state.users moves, and the underline must not
+  // slide against flip labels that still say the old count
+  for (const ax of axes) ax.users = users;
   return axes;
 }
 
@@ -3859,9 +3883,9 @@ function renderFlipPanel(axes){
     // the does-not-fit underline, same segment logic on the verdict
     i = 0;
     while (i < pts.length){
-      if (pts[i].limit >= state.users){ i++; continue; }
+      if (pts[i].limit >= ax.users){ i++; continue; }
       let j = i;
-      while (j + 1 < pts.length && pts[j + 1].limit < state.users) j++;
+      while (j + 1 < pts.length && pts[j + 1].limit < ax.users) j++;
       const x0 = i === 0 ? sx(pts[0].v) : (sx(pts[i - 1].v) + sx(pts[i].v)) / 2;
       const x1 = j === pts.length - 1 ? sx(pts[j].v) : (sx(pts[j].v) + sx(pts[j + 1].v)) / 2;
       g += `<rect x="${x0}" y="${yc + 7}" width="${Math.max(1, x1 - x0)}" height="3" rx="1.5" fill="${crit}"/>`;
@@ -3878,8 +3902,8 @@ function renderFlipPanel(axes){
       const xf = sx(ax.flip.v);
       const side = ax.flip.dir > 0 ? '≥' : '≤';
       const what = ax.flip.fitFlip
-        ? (ax.flip.nowFits ? `stops fitting your ${fmt(state.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`
-                           : `fits your ${fmt(state.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`)
+        ? (ax.flip.nowFits ? `stops fitting your ${fmt(ax.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`
+                           : `fits your ${fmt(ax.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`)
         : `${PLANNER_LABEL[ax.flip.bind]} takes over at ${side} ${ax.fmt(ax.flip.v)}`;
       // the tick, its label and the thing that changes at it share ONE colour:
       // a verdict flip is red/green (and lands where the red underline starts
