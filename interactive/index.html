@@ -543,8 +543,11 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
   <div class="charts">
     <div class="panel card">
       <p class="ct">E · The max_num_batched_tokens trade</p>
-      <p class="cs">Why vLLM's prefill chunk is 32k, not 2k: small chunks shrink the ITL spike (bottom) but sink effective MFU (top) and the cold-request ceiling with it (middle). Dashed = the 32,768 default every tile is priced at.</p>
+      <p class="cs">When a request arrives that must (re)prefill, its chunks ride the decode batch's fused forward passes — one chunk per pass, and nobody's next token exists until the pass completes. <b>Bottom:</b> that one gap as a <b>multiple of the normal inter-token gap</b> (the baseline: every session decoding, nothing prefilling). <b>Middle:</b> the most misses one replica group can re-prefill per second, flat out — 1 / the machine time of a mean-length miss. <b>Top:</b> the share of a miss-side pass spent computing rather than re-streaming weights. Small chunks shrink each freeze but pay the weight stream once per pass, sinking MFU and the cold ceiling with it. Dashed = the 32,768 default every tile is priced at.</p>
       <div class="chartbox"><div id="chartE"></div><div class="tt" id="ttE"></div></div>
+      <!-- MOCKUP: live worked example under the real chart, filled by
+           renderChartEMocks — the numbers move with every knob -->
+      <p class="cs" id="chartEworked" style="margin-top:6px"></p>
     </div>
 
     <div class="panel card">
@@ -581,7 +584,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">Option 2 · What a decoder feels — the token stream itself</p>
-      <p class="cs">One mean-length miss interleaved into a live decode stream, at three chunk sizes. Ticks are tokens arriving; green blocks are the stream frozen behind a prefill chunk. Small chunks turn the freeze into a drizzle, big chunks into a few solid blocks — the green total is the same in every row.</p>
+      <p class="cs">One mean-length miss interleaved into a live decode stream, at three chunk sizes. Ticks are tokens arriving; green blocks are the stream frozen behind a prefill chunk; <b>each waiting gap is labeled in ms</b>, so a row reads like the stream itself ("40 ms, …, 2,080 ms, 540 ms, 40 ms"). Small chunks turn the freeze into a drizzle, big chunks into a few solid blocks — the green total is the same in every row.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>stream frozen behind a chunk</span>
         <span class="li"><span class="sw" style="background:var(--axis); width:2px; height:10px"></span>a token arrives</span>
@@ -2737,8 +2740,11 @@ function renderMockStrip(divId, d, series, o){
 // stream frozen behind an interleaved prefill chunk (one token rides each
 // pass, so a pass is stepS + chunk time). Same green total in every row.
 function renderMockTexture(divId, model, topo, d){
-  const W=560, rh=26, rgap=22, mL=52, mR=118, mT=18, rows=MOCK_TEXTURE_CS;
-  const H=mT + (rows.length-1)*(rh+rgap) + rh + 40;
+  // lab = a label lane above each bar: every waiting gap in ms, so the row
+  // reads like the stream itself — "40 ms, 40 ms, 2,080 ms, 540 ms, 40 ms"
+  const W=560, rh=24, lab=13, rgap=16, mL=52, mR=118, mT=8, rows=MOCK_TEXTURE_CS;
+  const slot=lab+rh+rgap;
+  const H=mT + rows.length*slot - rgap + 40;
   const pw=W-mL-mR;
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
   const data=rows.map(C=>{
@@ -2748,30 +2754,44 @@ function renderMockTexture(divId, model, topo, d){
   const lead=0.25, tail=0.35;   // s of normal decode either side of the miss
   const Tmax=Math.max(...data.map(r=>lead+r.ts.length*d.stepS+r.stall+tail));
   const sx=linScale(0, Tmax, mL, mL+pw);
-  const tick=(t,y)=>`<line x1="${sx(t)}" y1="${y+3}" x2="${sx(t)}" y2="${y+rh-3}" stroke="${axis}" stroke-width="1"/>`;
   let g='';
   data.forEach((r,ri)=>{
-    const y=mT+ri*(rh+rgap);
+    const y=mT+ri*slot+lab, yl=y-4;
+    const tick=(t)=>`<line x1="${sx(t)}" y1="${y+3}" x2="${sx(t)}" y2="${y+rh-3}" stroke="${axis}" stroke-width="1"/>`;
     g+=`<text class="axtick" x="${mL-8}" y="${y+rh/2+3}" text-anchor="end">${r.C/1024}k</text>`;
     g+=`<rect x="${mL}" y="${y}" width="${pw}" height="${rh}" fill="${grid}" opacity="0.30"/>`;
     let t=0;
-    for(; t<lead; t+=d.stepS) g+=tick(t,y);
+    for(; t<lead; t+=d.stepS) g+=tick(t);
+    g+=`<text class="axtick" x="${mL}" y="${yl}" text-anchor="start" fill="${muted}">${fmt(d.stepS*1000,0)} ms</text>`;
+    const blocks=[];
     for(const p of r.ts){
-      g+=`<rect x="${sx(t)}" y="${y}" width="${Math.max(1, sx(t+p)-sx(t))}" height="${rh}" fill="${cssv('--s3')}" opacity="0.8"/>`;
+      const x0=sx(t), x1=sx(t+p);
+      g+=`<rect x="${x0}" y="${y}" width="${Math.max(1, x1-x0)}" height="${rh}" fill="${cssv('--s3')}" opacity="0.8"/>`;
+      blocks.push({x0, x1, ms:(d.stepS+p)*1000});   // the full token gap: step + chunk
       t+=p+d.stepS;
-      g+=tick(Math.min(t,Tmax), y);
+      g+=tick(Math.min(t,Tmax));
     }
-    for(t+=d.stepS; t<Tmax; t+=d.stepS) g+=tick(t,y);
-    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+9}" text-anchor="start">worst ${fmt(Math.max(...r.ts),2)} s</text>`;
+    for(t+=d.stepS; t<Tmax; t+=d.stepS) g+=tick(t);
+    // gap labels: one per block when they fit, else one summary for the row
+    const avgW=blocks.reduce((a,b)=>a+b.x1-b.x0,0)/blocks.length;
+    if(avgW>=36){
+      blocks.forEach(b=>{
+        g+=`<text class="axtick" x="${(b.x0+b.x1)/2}" y="${yl}" text-anchor="middle">${fmt(b.ms,0)} ms</text>`;
+      });
+    } else {
+      const meanMs=blocks.reduce((a,b)=>a+b.ms,0)/blocks.length;
+      g+=`<text class="axtick" x="${(blocks[0].x0+blocks[blocks.length-1].x1)/2}" y="${yl}" text-anchor="middle">${blocks.length} gaps of ≈ ${fmt(meanMs,0)} ms</text>`;
+    }
+    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+9}" text-anchor="start">worst ${fmt(Math.max(...r.ts)+d.stepS,2)} s</text>`;
     g+=`<text class="axtick" x="${mL+pw+7}" y="${y+21}" text-anchor="start" fill="${muted}">Σ frozen ${fmt(r.stall,2)} s</text>`;
   });
-  const yBot=mT+(rows.length-1)*(rh+rgap)+rh;   // bottom of the last row
+  const yBot=mT+rows.length*slot-rgap;          // bottom of the last row's bar
   niceTicksIn(0, Tmax, 5).forEach(v=>{
     g+=`<text class="axtick" x="${sx(v)}" y="${yBot+15}" text-anchor="middle">${fmt(Math.abs(v)<1e-9?0:v,1)}</text>`;
   });
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${yBot+32}" text-anchor="middle">seconds — one mean-length miss mid-stream</text>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${yBot+32}" text-anchor="middle">seconds — one mean-length miss mid-stream; labels = gap between consecutive tokens</text>`;
   document.getElementById(divId).innerHTML=
-    svgEl(g, W, H, 'Token stream of a decoder while one miss re-prefills, at three chunk sizes');
+    svgEl(g, W, H, 'Token stream of a decoder while one miss re-prefills, at three chunk sizes, each waiting gap labeled in milliseconds');
 }
 
 function renderMockMsg(divId, msg){
@@ -2881,6 +2901,7 @@ function renderChartEMocks(model, topo, wl, cs, stress, noFit){
       .forEach(id=>renderNoFit(id,'chunk-size trade'));
     document.getElementById('chartEm5legend').innerHTML='';
     document.getElementById('chartEm7legend').innerHTML='';
+    document.getElementById('chartEworked').textContent='';
     mockGeoms={}; mockAnatomyState=null;
     return;
   }
@@ -2933,6 +2954,25 @@ function renderChartEMocks(model, topo, wl, cs, stress, noFit){
   }
   renderMockAnatomy(model, topo, null);
   renderMockExperts();
+  // the worked-example line under the real chart E: the ITL gap sequence of
+  // one mean-length miss, and the cold ceiling as its reciprocal-cost sum
+  const wEl=document.getElementById('chartEworked');
+  if(wEl){
+    let html='';
+    if(d.stepS>0){
+      const ts=mockPassTimes(model, topo, cs.mean, PREFILL_CHUNK);
+      const norm=fmt(d.stepS*1000,0);
+      const gaps=ts.slice(0,4).map(t=>fmt((d.stepS+t)*1000,0));
+      html=`Worked, at the current knobs and the 32k default — one mean-length miss (${fmt(cs.mean/1000,0)}k tok) re-prefills in ${ts.length} fused pass${ts.length>1?'es':''}, so a decoder's token gaps read <b class="tnum">${norm} ms, ${gaps.join(' ms, ')} ms${ts.length>4?', …':''}, ${norm} ms</b>.`;
+    }
+    try{
+      const csec=coldRequestSeconds(model, topo, wl, cs, PREFILL_CHUNK);
+      const tollMs=prefillOverheadSeconds(model, topo)*1000;
+      const p=meanPasses(cs, PREFILL_CHUNK);
+      html+=` And the middle strip: E[one miss] = ${fmt(csec-p*tollMs/1000,2)} s of compute (averaged over the context tail) + ${fmt(p,1)} passes × ${fmt(tollMs,1)} ms weight-stream toll ≈ ${fmt(csec,2)} s of machine time, so one replica group prefilling flat out absorbs at most 1/${fmt(csec,2)} ≈ <b class="tnum">${fmt(1/csec,2)} cold req/s</b>.`;
+    }catch(e){}
+    wEl.innerHTML=html;
+  }
   if(d.models.length){
     renderMockStrip('chartEm5', d,
       d.models.map(m=>({label:m.name, short:m.key, color:cssv(m.color),
