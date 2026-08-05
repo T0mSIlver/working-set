@@ -234,7 +234,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>P</i>₀</td><td class="d">calibration-anchor KV pool, 1×H200 + 27B (<code>BASELINE_POOL_TOKENS_27B_1GPU</code>)</td><td class="tnum">2.77×10⁶</td><td>tok</td></tr>
       <tr><td><i>b</i><sub>27B</sub></td><td class="d">27B KV-cache bytes per token, FP8 (<code>MODELS["27B"].kv_bpt</code>)</td><td class="tnum">32,768</td><td>B/tok</td></tr>
     </table></div>
-    <p class="tnote">The reserve is <em>solved</em> from the anchor, not guessed. The H200 actually delivers ~150.75 GB against the 141 GB vendor figure; that hidden surplus is absorbed into <i>R</i><sub>act</sub>, which is why parts without the over-provision (B300) must add it back as <i>R</i><sub>extra</sub> = 9.75 GB.</p>
+    <p class="tnote">The reserve is <em>solved</em> from the anchor, not guessed: it is whatever is left of the anchor GPU's HBM once the 27B's weights and the anchor pool are subtracted. If the FP8 pool is ever measured directly, updating <i>P</i>₀ re-derives everything.</p>
 
     <p><b>KV pool of one replica group</b><span class="fn">kv_pool_tokens()</span></p>
     <div class="eq"><i>P</i><sub>kv</sub> = max(<i>t</i>·<i>V</i> − <i>W</i><sub>res</sub> − <i>t</i>·(<i>R</i><sub>act</sub> + <i>R</i><sub>extra</sub>),&nbsp;0) / <i>b</i><sub>kv</sub></div>
@@ -248,7 +248,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>R</i><sub>extra</sub></td><td class="d">per-GPU reserve correction of the part (<code>GPU.reserve_extra</code>)</td><td class="tnum">0 (H200); 9.75×10⁹ on B300</td><td>B</td></tr>
       <tr><td><i>b</i><sub>kv</sub></td><td class="d">model KV-cache bytes per token (<code>Model.kv_bpt</code>)</td><td class="tnum">32,768</td><td>B/tok</td></tr>
     </table></div>
-    <p class="tnote">Weights are sharded across the group and counted once; the reserve is scratch space and charged per GPU. A DP deployment has <code>dp</code> independent pools of this size — the system total multiplies by dp only under session-sticky routing. FP16 KV doubles <i>b</i><sub>kv</sub> (<code>with_kv_dtype</code>); NVFP4 swaps the weight constants (<code>with_weight_dtype</code>), never <i>b</i><sub>kv</sub>.</p>
+    <p class="tnote">Weights are sharded across the group and counted once; the reserve is scratch space and charged per GPU. <i>R</i><sub>extra</sub> exists because the H200 actually delivers ~150.75 GB against the 141 GB vendor figure the calibration uses — the anchor silently absorbs that surplus into <i>R</i><sub>act</sub>, so a part that delivers nominal bytes with no over-provision (the B300, per a measured <code>nvidia-smi</code> dump) must add the hidden margin back or inherit ~9.75 GB/GPU of phantom HBM. A DP deployment has <code>dp</code> independent pools of this size — the system total multiplies by dp only under session-sticky routing. FP16 KV doubles <i>b</i><sub>kv</sub> (<code>with_kv_dtype</code>); NVFP4 swaps the weight constants (<code>with_weight_dtype</code>), never <i>b</i><sub>kv</sub>.</p>
 
     <p><b>Session cost and the Monte-Carlo fill</b><span class="fn">_warm_once() / warm_capacity()</span></p>
     <div class="eq"><i>c</i><sub>i</sub> = <i>u</i><sub>i</sub> + <i>S</i>/<i>b</i><sub>kv</sub>,&nbsp;&nbsp; <i>u</i><sub>i</sub> = <i>L</i><sub>i</sub> − <i>x</i><sub>i</sub> (warm) &nbsp;|&nbsp; <i>L</i><sub>i</sub> (cold)<br>
@@ -379,6 +379,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>C</i><sub>g</sub></td><td class="d">group compute (above)</td><td class="tnum">3.56×10¹⁵</td><td>FLOP/s</td></tr>
       <tr><td>chunk₀</td><td class="d">anchor chunk size, vLLM's <code>max_num_batched_tokens</code> default (<code>CHUNK_DEFAULT</code>)</td><td class="tnum">32,768</td><td>tok</td></tr>
       <tr><td><i>F</i>(·, ·)</td><td class="d">pass FLOPs (above)</td><td class="tnum">1.82×10¹⁵ at (chunk₀, 0)</td><td>FLOP</td></tr>
+      <tr><td><i>T</i>, <i>H</i></td><td class="d">new tokens in the pass and tokens already cached (above)</td><td class="tnum">chunk₀, 0</td><td>tok</td></tr>
       <tr><td><i>t</i><sub>pass</sub></td><td class="d">one miss-side pass at the solved ceiling (<code>prefill_pass_seconds()</code>)</td><td class="tnum">1.13 at (chunk₀, 0)</td><td>s</td></tr>
     </table></div>
     <p class="tnote"><i>μ</i><sub>c</sub> is solved so that a first cache-empty chunk of chunk₀ tokens nets exactly the anchor MFU — by construction <i>t</i><sub>pass</sub> = <i>t</i><sub>pf</sub> there, as the example shows. At small chunks the overhead no longer amortises and the <em>effective</em> MFU falls (<code>mfu_effective()</code> — the explorer's chart E); warm hits and the ITL-spike chunk stay on the marginal <i>t</i><sub>pf</sub> pricing because their pass's weight stream is already paid by the decode batch they join.</p>
@@ -432,7 +433,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>λ</i></td><td class="d">total arrival rate at the group, Poisson assumed (§ F.5)</td><td class="tnum">2.35</td><td>req/s</td></tr>
       <tr><td><i>ρ</i></td><td class="d">server utilisation = the prefill duty of § F.3, warm turns included</td><td class="tnum">0.226</td><td>—</td></tr>
       <tr><td>E[<i>W</i>]</td><td class="d">mean wait before a request's own prefill starts, M/G/1 FCFS, Pollaczek–Khinchine (<code>queue_wait_seconds()</code>)</td><td class="tnum">0.0912</td><td>s</td></tr>
-      <tr><td>TTFT<sub>FCFS</sub>, TTFT<sub>PS</sub></td><td class="d">mean time-to-first-token under first-come-first-served / processor sharing (<code>prefill_ttft_seconds()</code>)</td><td class="tnum">cold: 1.66 / 2.03; warm: 0.173 / —</td><td>s</td></tr>
+      <tr><td>TTFT<sub>FCFS</sub>, TTFT<sub>PS</sub></td><td class="d">mean time-to-first-token under first-come-first-served / processor sharing (<code>prefill_ttft_seconds()</code>)</td><td class="tnum">cold: 1.66 / 2.03; warm: 0.173 / 0.105</td><td>s</td></tr>
       <tr><td>E[<i>S</i>|class]</td><td class="d">the requesting class's own mean service time: E[<i>S</i>|miss] or E[<i>S</i>|hit]</td><td class="tnum">1.570 (cold)</td><td>s</td></tr>
     </table></div>
     <p class="tnote">E[<i>W</i>] diverges at <i>ρ</i> ≥ 1. A miss's service time runs as <i>L</i>² on a lognormal <i>L</i>, so the stream's squared coefficient of variation E[<i>S</i>²]/E[<i>S</i>]² − 1 lands at 5.5 in the example (5.5–8.3 across configs) where an exponential server would sit at 1 — E[<i>S</i>²] is exactly what the duty cycle cannot see. FCFS and PS bracket vLLM's chunked-prefill scheduling; neither end is uniformly optimistic, and which is which flips by request class.</p>
@@ -545,7 +546,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>c</i><sub>kWh</sub></td><td class="d">electricity tariff (<code>EUR_PER_KWH_DEFAULT</code>)</td><td class="tnum">0.19</td><td>€/kWh</td></tr>
       <tr><td><i>λ</i><sub>g</sub>, dp, <i>N</i><sub>out</sub></td><td class="d">group request rate, replica count, output tokens (above)</td><td class="tnum">2.35 req/s, 1, 1,000 tok</td><td></td></tr>
     </table></div>
-    <p class="tnote">The bill is linear in both PUE and <i>c</i><sub>kWh</sub> (asserted in the self-checks), so tariff and facility scenarios are one multiply. <code>eur_user</code> divides €<sub>month</sub> across the users (example: €5.50/user); the €/Mtok figure inherits <i>N</i><sub>out</sub>'s assumed status linearly. Energy only — hardware amortisation is out of scope.</p>
+    <p class="tnote">The literals are unit conversions: /1000 W → kW, /3600 kWh → kWs (so the numerator is a cost rate in €/s), ×10⁶ tokens → millions; the denominator <i>λ</i><sub>g</sub>·dp·<i>N</i><sub>out</sub> is the system's output-token rate in tok/s. The bill is linear in both PUE and <i>c</i><sub>kWh</sub> (asserted in the self-checks), so tariff and facility scenarios are one multiply. <code>eur_user</code> divides €<sub>month</sub> across the users (example: €5.50/user); the €/Mtok figure inherits <i>N</i><sub>out</sub>'s assumed status linearly. Energy only — hardware amortisation is out of scope.</p>
 
     <h3 id="f-constants">F.7 — Constants</h3>
     <p><b>Global constants</b></p>
