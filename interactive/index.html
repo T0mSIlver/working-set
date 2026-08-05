@@ -612,6 +612,35 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
       <div class="chartbox"><div id="chartEm5"></div><div class="tt" id="ttEm5"></div></div>
     </div>
 
+    <div class="panel card">
+      <p class="ct">Option 6 · Anatomy of one pass — the toll and the math</p>
+      <p class="cs">Every miss-side pass = a fixed weight-stream toll (gray, the whole resident checkpoint through HBM) + GEMM that grows with the chunk (blue). The gray never changes; the chunk only chooses how much math amortizes it. Switch the model selector: dense's gray nearly vanishes, an MoE's dominates at 2k. <b>Hover any chunk chart</b> (chart E included) and a third bar tracks your cursor.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--muted)"></span>weight-stream toll (fixed)</span>
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>GEMM (grows with chunk)</span>
+      </div>
+      <div class="chartbox"><div id="chartEm6"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">Option 7 · Option 5 + break-even markers (T*)</p>
+      <p class="cs">Same overlay, axis widened down to 256 tokens. ▲ marks each model's break-even chunk T* — where the stream toll equals the GEMM — the point below which streaming dominates the pass. The MoE break-evens sit just left of 2k, so the knob's real range starts right on their pain threshold; the dense break-evens (~100 tok) fall off even this axis. The reader derives the dense/MoE rule from where the ▲ sits.</p>
+      <div class="legend" id="chartEm7legend"></div>
+      <div class="chartbox"><div id="chartEm7"></div><div class="tt" id="ttEm7"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">Option 8 · Why an MoE can't stream less (method-page candidate)</p>
+      <p class="cs">The "just stream the experts you use" objection, answered: tokens route top-k independently, so the share of the expert bank a single pass touches saturates within a few dozen tokens — three orders of magnitude below any real chunk. Dashed gray = the study's linear pricing. Routing specs hard-coded for the mockup (8-of-256; DeepSeek 6-of-256).</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>dense: everything, always</span>
+        <span class="li"><span class="sw" style="background:var(--s2)"></span>8-of-256 (35B-A3B, GLM-5.2)</span>
+        <span class="li"><span class="sw" style="background:var(--s4)"></span>6-of-256 (DSV4F)</span>
+        <span class="li"><span class="sw dash2" style="background:var(--muted)"></span>linear pricing</span>
+      </div>
+      <div class="chartbox"><div id="chartEm8"></div></div>
+    </div>
+
   </div>
 
   <div class="act-h" id="act3">
@@ -2548,8 +2577,13 @@ function renderChartE(data){
     tt.style.left=Math.max(pad,Math.min(left,parRect.width-tw-pad))+'px';
     tt.style.top =Math.max(pad,Math.min(top, parRect.height-th-pad))+'px';
     tt.style.opacity=1;
+    // MOCKUP hook (delete with the mockups): live pass-anatomy bar, option 6
+    if(typeof mockAnatomyHover==='function') mockAnatomyHover(C);
   }
-  function leave(){ tt.style.opacity=0; const svg=box.querySelector('svg'); if(svg) removeCross(svg); }
+  function leave(){
+    tt.style.opacity=0; const svg=box.querySelector('svg'); if(svg) removeCross(svg);
+    if(typeof mockAnatomyHover==='function') mockAnatomyHover(null);   // MOCKUP hook
+  }
   box.addEventListener('mousemove', handler);
   box.addEventListener('mouseleave', leave);
   box.addEventListener('touchmove',(e)=>{ if(e.touches[0]) handler(e.touches[0]); },{passive:true});
@@ -2602,21 +2636,34 @@ function chartEMockData(model, topo, wl, cs, stress){
       d.spike.push((stepS + prefillSeconds(model, topo, C, cs.mean/2))/stepS);
     }
   }
+  // option 7's wider axis: down to 256 tokens, so the MoE break-evens land
+  // ON the plot instead of just off its left edge (eighth-octaves from 2^8)
+  d.extCs=[];
+  for(let i=0;i<=64;i++) d.extCs.push(Math.round(Math.pow(2, 8+i/8)));
   Object.keys(CONFIG.MODELS).forEach((key,idx)=>{
     const m=CONFIG.MODELS[key];
-    let ref;
-    try{ ref=coldRequestSeconds(m, topo, wl, cs, PREFILL_CHUNK); }
+    let ref, tStar;
+    try{
+      ref=coldRequestSeconds(m, topo, wl, cs, PREFILL_CHUNK);
+      // break-even chunk: per-pass weight-stream toll == GEMM time, i.e. the
+      // T at which streaming stops dominating (attention term ignored — it
+      // only shortens T*, and T* is a marker, not a priced quantity)
+      tStar=prefillOverheadSeconds(m, topo)
+           / (2*m.params_prefill / (peakFlops(topo)*mfuCeil(m, topo)));
+    }
     catch(e){ return; }              // anchor unsolvable on this topology
     const rel=d.Cs.map(C=>ref / coldRequestSeconds(m, topo, wl, cs, C));
-    d.models.push({key, name:m.name, rel,
+    const relExt=d.extCs.map(C=>ref / coldRequestSeconds(m, topo, wl, cs, C));
+    d.models.push({key, name:m.name, rel, relExt, tStar,
                    color:MOCK_MODEL_COLORS[idx % MOCK_MODEL_COLORS.length],
                    sel: m===model});
   });
   return d;
 }
-// value at C read off the drawn segments (same eighth-octave grid as chart E)
-function interpMock(vals, C){
-  const f=clip((Math.log2(C)-11)*8, 0, vals.length-1);
+// value at C read off the drawn segments — eighth-octave grid starting at
+// xlo (chart E's own grid when omitted)
+function interpMock(vals, C, xlo){
+  const f=clip((Math.log2(C)-Math.log2(xlo||CHUNK_LO))*8, 0, vals.length-1);
   const i=Math.min(Math.floor(f), vals.length-2), t=f-i;
   return vals[i]+t*(vals[i+1]-vals[i]);
 }
@@ -2629,7 +2676,8 @@ function renderMockStrip(divId, d, series, o){
   const pw=W-mL-mR, ph=H-mT-mB;
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
   const surface=cssv('--surface');
-  const sx=logScale(CHUNK_LO, CHUNK_HI, mL, mL+pw);
+  const XLO=o.xlo||CHUNK_LO, XHI=o.xhi||CHUNK_HI;
+  const sx=logScale(XLO, XHI, mL, mL+pw);
   const all=series.flatMap(s=>s.vals);
   let lo=Math.min(...all), hi=o.hi!=null?o.hi:Math.max(...all);
   const span=(hi-lo)||Math.abs(hi)||1;
@@ -2637,10 +2685,10 @@ function renderMockStrip(divId, d, series, o){
   if(o.hi==null) hi=hi+span*0.10;
   const sy=linScale(lo, hi, mT+ph, mT);
   let g='';
-  [2048,4096,8192,16384,32768,65536].forEach(t=>{
+  (o.xticks||[2048,4096,8192,16384,32768,65536]).forEach(t=>{
     const X=sx(t);
     g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
-    g+=`<text class="axtick" x="${X}" y="${mT+ph+15}" text-anchor="middle">${t/1024}k</text>`;
+    g+=`<text class="axtick" x="${X}" y="${mT+ph+15}" text-anchor="middle">${t>=1024?(t/1024)+'k':t}</text>`;
   });
   niceTicksIn(lo, hi, o.nticks||4).forEach(v=>{
     const Y=sy(v);
@@ -2651,7 +2699,10 @@ function renderMockStrip(divId, d, series, o){
   g+=`<text class="axlbl" x="${mL}" y="${mT-10}" text-anchor="start">${o.title}</text>`;
   const XD=sx(PREFILL_CHUNK);
   g+=`<line x1="${XD}" y1="${mT}" x2="${XD}" y2="${mT+ph}" stroke="${muted}" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.8"/>`;
-  g+=`<text class="axtick" x="${XD+5}" y="${mT+10}" text-anchor="start" fill="${muted}">default 32,768</text>`;
+  // flip the label to the left of the line when the default sits near the
+  // right edge (option 7's widened axis) so it cannot clip
+  const dLeft=XD > mL+pw*0.82;
+  g+=`<text class="axtick" x="${XD+(dLeft?-5:5)}" y="${mT+10}" text-anchor="${dLeft?'end':'start'}" fill="${muted}">default 32,768</text>`;
   // left-edge direct labels (option 5): de-overlapped downward in y order
   const leftLabels=[];
   for(const s of series){
@@ -2659,7 +2710,7 @@ function renderMockStrip(divId, d, series, o){
     for(let i=1;i<d.Cs.length;i++)
       ln+=` L ${sx(d.Cs[i])} ${sy(clip(s.vals[i],lo,hi))}`;
     g+=`<path d="${ln}" fill="none" stroke="${s.color}" stroke-width="${s.w||2}" stroke-linecap="round" stroke-linejoin="round"/>`;
-    const vD=interpMock(s.vals, PREFILL_CHUNK), YD=sy(clip(vD,lo,hi));
+    const vD=interpMock(s.vals, PREFILL_CHUNK, XLO), YD=sy(clip(vD,lo,hi));
     g+=`<circle cx="${XD}" cy="${YD}" r="4" fill="${s.color}" stroke="${surface}" stroke-width="1.5"/>`;
     if(o.labelAt==='left')
       leftLabels.push({y:sy(clip(s.vals[0],lo,hi)), color:s.color,
@@ -2678,7 +2729,8 @@ function renderMockStrip(divId, d, series, o){
   if(o.annotate) g+=o.annotate({sx, sy, lo, hi, mT, ph, mL, pw});
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-4}" text-anchor="middle">max_num_batched_tokens (log)</text>`;
   document.getElementById(divId).innerHTML=svgEl(g, W, H, o.aria||o.title);
-  mockGeoms[divId]={W,H,mL,pw,mT,ph,sx,sy,lo,hi,d,series,dfmt:o.dfmt};
+  mockGeoms[divId]={W,H,mL,pw,mT,ph,sx,sy,lo,hi,d,series,dfmt:o.dfmt,
+                    xlo:XLO, xhi:XHI, ttRows:o.ttRows};
 }
 
 // Option 2: the token stream itself. Ticks = tokens arriving; blocks = the
@@ -2728,12 +2780,108 @@ function renderMockMsg(divId, msg){
     svgEl(`<text x="${W/2}" y="${H/2+4}" text-anchor="middle" class="axtick">${esc(msg)}</text>`, W, H, msg);
 }
 
+// Option 6: anatomy of one MISS-side pass — a fixed weight-stream toll plus
+// GEMM that grows with the chunk. Same gray bytes in every bar; the chunk
+// only chooses how much math amortizes them. Third bar tracks the hover on
+// any chunk chart (chart E included), via the mockAnatomyHover hook.
+let mockAnatomyState=null;
+function renderMockAnatomy(model, topo, hoverC){
+  const el=document.getElementById('chartEm6'); if(!el) return;
+  let ceil, toll;
+  try{ ceil=mfuCeil(model, topo); toll=prefillOverheadSeconds(model, topo); }
+  catch(e){ renderMockMsg('chartEm6','MFU anchor unsolvable — no pass anatomy'); mockAnatomyState=null; return; }
+  mockAnatomyState={model, topo};
+  const pf=peakFlops(topo);
+  const rows=[{C:2048},{C:32768}];
+  if(hoverC) rows.push({C:Math.round(hoverC), hover:true});
+  rows.forEach(r=>{ r.g=prefillFlops(model, r.C, 0)/(pf*ceil); r.t=r.g+toll; });
+  const Tmax=Math.max(...rows.map(r=>r.t));
+  const W=560, mL=52, mR=126, mT=16, rh=24, rgap=16;
+  const pw=W-mL-mR, H=mT+3*(rh+rgap)+24;
+  const sw=linScale(0, Tmax, 0, pw);
+  const muted=cssv('--muted'), s1=cssv('--s1');
+  let g='';
+  rows.forEach((r,i)=>{
+    const y=mT+i*(rh+rgap);
+    g+=`<text class="axtick" x="${mL-8}" y="${y+rh/2+3}" text-anchor="end">${r.C>=1024?fmt(r.C/1024,r.C%1024?1:0)+'k':r.C}</text>`;
+    g+=`<rect x="${mL}" y="${y}" width="${Math.max(1,sw(toll))}" height="${rh}" fill="${muted}" opacity="0.6"/>`;
+    g+=`<rect x="${mL+sw(toll)+1}" y="${y}" width="${Math.max(1,sw(r.g)-1)}" height="${rh}" fill="${s1}" opacity="0.85"/>`;
+    const tp=100*toll/r.t;
+    g+=`<text class="axtick" x="${mL+sw(r.t)+7}" y="${y+rh/2+3}" text-anchor="start">${fmt(r.t*1000,0)} ms, toll ${fmt(tp,tp<10?1:0)}%${r.hover?' (hover)':''}</text>`;
+  });
+  if(!hoverC){
+    const y=mT+2*(rh+rgap);
+    g+=`<text class="axtick" x="${mL}" y="${y+rh/2+3}" fill="${muted}">hover any chunk chart above — a third bar tracks it live</text>`;
+  }
+  const yAx=mT+3*(rh+rgap)-rgap+6;
+  niceTicksIn(0, Tmax*1000, 5).forEach(v=>{
+    g+=`<text class="axtick" x="${mL+sw(v/1000)}" y="${yAx+8}" text-anchor="middle">${fmt(Math.abs(v)<1e-9?0:v,0)}</text>`;
+  });
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-2}" text-anchor="middle">one miss-side pass, ms — gray toll never changes</text>`;
+  el.innerHTML=svgEl(g, W, H,
+    'One prefill pass as a fixed weight-stream toll plus GEMM time that grows with the chunk');
+}
+function mockAnatomyHover(C){
+  if(!mockAnatomyState) return;
+  renderMockAnatomy(mockAnatomyState.model, mockAnatomyState.topo, C);
+}
+
+// Option 8: why an MoE cannot stream less — per-token top-k routing touches
+// essentially the whole expert bank within a few dozen tokens. Coupon-
+// collector coverage E[% streamed] = 1 - (1 - k/E)^T; the study's linear
+// pricing (min(kT,E)/E, saturating at exactly T=32 for 8-of-256) drawn for
+// reference. Routing specs are hard-coded here (mockup): 8-of-256 for the
+// 35B-A3B and GLM-5.2, 6-of-256 for DeepSeek-V4-Flash.
+function renderMockExperts(){
+  const W=560, H=206, mL=52, mR=14, mT=20, mB=36;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const sx=logScale(1, 65536, mL, mL+pw);
+  const sy=linScale(0, 100, mT+ph, mT);
+  let g='';
+  // the region real chunks occupy, first, under everything else
+  g+=`<rect x="${sx(2048)}" y="${mT}" width="${sx(65536)-sx(2048)}" height="${ph}" fill="${muted}" opacity="0.08"/>`;
+  g+=`<text class="axtick" x="${(sx(2048)+sx(65536))/2}" y="${mT+12}" text-anchor="middle" fill="${muted}">real chunks live here</text>`;
+  [1,8,64,512,4096,32768].forEach(t=>{
+    const X=sx(t);
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${X}" y="${mT+ph+15}" text-anchor="middle">${t>=1024?(t/1024)+'k':t}</text>`;
+  });
+  [0,50,100].forEach(v=>{
+    const Y=sy(v);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${v}%</text>`;
+  });
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL}" y="${mT-8}" text-anchor="start">share of the expert bank one pass must stream</text>`;
+  const line=(f, color, dash)=>{
+    let ln='';
+    for(let i=0;i<=128;i++){
+      const T=Math.pow(2, i/8), v=f(T);
+      ln+=(i?' L ':'M ')+sx(T)+' '+sy(clip(v,0,100));
+    }
+    return `<path d="${ln}" fill="none" stroke="${color}" stroke-width="2" ${dash?`stroke-dasharray="${dash}"`:''} stroke-linecap="round"/>`;
+  };
+  g+=line(()=>100, cssv('--s1'));                                    // dense
+  g+=line(T=>100*(1-Math.pow(1-8/256, T)), cssv('--s2'));            // 8-of-256
+  g+=line(T=>100*(1-Math.pow(1-6/256, T)), cssv('--s4'));            // 6-of-256
+  g+=line(T=>100*Math.min(1, 8*T/256), muted, '5 3');                // linear pricing
+  const X32=sx(32);
+  g+=`<line x1="${X32}" y1="${mT}" x2="${X32}" y2="${mT+ph}" stroke="${muted}" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.8"/>`;
+  g+=`<text class="axtick" x="${X32+5}" y="${mT+ph-6}" text-anchor="start" fill="${muted}">n = 32: the study's saturation constant</text>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-4}" text-anchor="middle">tokens in the pass (log)</text>`;
+  document.getElementById('chartEm8').innerHTML=svgEl(g, W, H,
+    'Share of the expert bank a single pass streams versus tokens in the pass; saturates far below real chunk sizes');
+}
+
 function renderChartEMocks(model, topo, wl, cs, stress, noFit){
   const spikeIds=['chartEm1','chartEm2','chartEm3','chartEm4'];
   if(noFit){
-    spikeIds.concat('chartEm5').forEach(id=>renderNoFit(id,'chunk-size trade'));
+    spikeIds.concat('chartEm5','chartEm6','chartEm7','chartEm8')
+      .forEach(id=>renderNoFit(id,'chunk-size trade'));
     document.getElementById('chartEm5legend').innerHTML='';
-    mockGeoms={};
+    document.getElementById('chartEm7legend').innerHTML='';
+    mockGeoms={}; mockAnatomyState=null;
     return;
   }
   mockGeoms={};
@@ -2766,14 +2914,25 @@ function renderChartEMocks(model, topo, wl, cs, stress, noFit){
         +`<g transform="${B}" text-anchor="end"><text x="0" y="0">${xGap(b.w)} × ${b.p} ≈ ${xGap(b.tot)} total —</text>`
         +`<text x="0" y="13">the same stall, in ${b.p} lumps</text></g></g>`;
     };
+    // tooltip-arithmetic demo (the structural change proposed for the
+    // winner): the toll × pass-count line lives in the hover, not the panel
+    let tollMs=0;
+    try{ tollMs=prefillOverheadSeconds(model, topo)*1000; }catch(e){}
     renderMockStrip('chartEm4', d, [
       {label:'ITL spike every decoder sees', color:cssv('--s3'), vals:d.spike},
     ], {title:'ITL spike every decoder sees (× one inter-token gap)',
         tfmt:v=>'×'+fmt(v,0), dfmt:xGap, annotate:ann,
+        ttRows:C=>{
+          const p=Math.round(interpMock(d.passes,C));
+          return [`toll ${fmt(tollMs,1)} ms × ${p} passes = ${fmt(tollMs*p,0)} ms per miss`,
+                  `total stall ×${fmt(interpMock(d.total,C),0)} gaps at every chunk size`];
+        },
         aria:'Chart E spike panel with callouts showing per-freeze times freeze-count is constant'});
   } else {
     spikeIds.forEach(id=>renderMockMsg(id,'no decode operating point at this load — options 1–4 need one'));
   }
+  renderMockAnatomy(model, topo, null);
+  renderMockExperts();
   if(d.models.length){
     renderMockStrip('chartEm5', d,
       d.models.map(m=>({label:m.name, short:m.key, color:cssv(m.color),
@@ -2783,9 +2942,43 @@ function renderChartEMocks(model, topo, wl, cs, stress, noFit){
        aria:'Cold-request ceiling versus chunk size per model, normalized to each model’s value at 32k'});
     document.getElementById('chartEm5legend').innerHTML=d.models.map(m=>
       `<span class="li"><span class="sw" style="background:${cssv(m.color)}"></span>${esc(m.name)}${m.sel?' (selected)':''}</span>`).join('');
+    // option 7: option 5 widened to 256 tokens, with each model's break-even
+    // T* (stream toll == GEMM) marked — the MoE markers land just left of
+    // 2,048, the dense ones fall off even THIS axis
+    const annT=({sx, sy, mT, ph, mL})=>{
+      let out='', off=0;
+      const yAx=mT+ph;
+      out+=`<rect x="${sx(256)}" y="${mT}" width="${sx(2048)-sx(256)}" height="${ph}" fill="${cssv('--muted')}" opacity="0.07"/>`;
+      out+=`<text class="axtick" x="${sx(700)}" y="${mT+12}" text-anchor="middle" fill="${cssv('--muted')}">below any real knob setting</text>`;
+      for(const m of d.models){
+        const c=cssv(m.color);
+        if(m.tStar>=256){
+          const X=sx(m.tStar);
+          out+=`<path d="M ${X} ${yAx-7} L ${X-4.5} ${yAx} L ${X+4.5} ${yAx} Z" fill="${c}"/>`;
+        } else {
+          // dense break-evens fall off even this axis: an edge glyph each,
+          // exact values live in the legend
+          out+=`<text x="${mL+2+off}" y="${yAx-3}" fill="${c}" font-size="10">◀</text>`;
+          off+=11;
+        }
+      }
+      return out;
+    };
+    renderMockStrip('chartEm7', {Cs:d.extCs},
+      d.models.map(m=>({label:m.name, short:m.key, color:cssv(m.color),
+                        vals:m.relExt, w:m.sel?2.6:1.6})),
+      {title:'cold-request ceiling, % of its own 32k value  (▲ = break-even: stream toll = GEMM)',
+       xlo:256, xhi:CHUNK_HI, xticks:[256,1024,4096,16384,65536],
+       tfmt:v=>fmt(v*100,0)+'%', dfmt:v=>fmt(v*100,0)+'%', hi:1.04,
+       labelAt:'left', annotate:annT,
+       aria:'Cold-request ceiling versus chunk size per model down to 256 tokens, with break-even chunk markers'});
+    document.getElementById('chartEm7legend').innerHTML=d.models.map(m=>
+      `<span class="li"><span class="sw" style="background:${cssv(m.color)}"></span>${esc(m.key)}${m.sel?' (selected)':''} — T* ${fmt(m.tStar,0)}${m.tStar<256?' (◀ off-axis)':''}</span>`).join('');
   } else {
     renderMockMsg('chartEm5','the MFU anchor solves for no model on this topology');
+    renderMockMsg('chartEm7','the MFU anchor solves for no model on this topology');
     document.getElementById('chartEm5legend').innerHTML='';
+    document.getElementById('chartEm7legend').innerHTML='';
   }
 }
 
@@ -2800,15 +2993,17 @@ function attachMockHover(divId, ttId){
     const vx=(e.clientX-rect.left)/rect.width*geom.W;
     if(vx<geom.mL || vx>geom.mL+geom.pw){ tt.style.opacity=0; removeCross(svg); return; }
     const C=Math.round(clip(
-      Math.exp(Math.log(CHUNK_LO) + (vx-geom.mL)/geom.pw*Math.log(CHUNK_HI/CHUNK_LO)),
-      CHUNK_LO, CHUNK_HI));
+      Math.exp(Math.log(geom.xlo) + (vx-geom.mL)/geom.pw*Math.log(geom.xhi/geom.xlo)),
+      geom.xlo, geom.xhi));
     const px=geom.sx(C);
     const marks=geom.series.map(s=>({color:s.color, r:3.5,
-      y:geom.sy(clip(interpMock(s.vals,C), geom.lo, geom.hi))}));
+      y:geom.sy(clip(interpMock(s.vals,C,geom.xlo), geom.lo, geom.hi))}));
     drawCross(svg, px, geom, marks);
     tt.innerHTML=`<div class="tth tnum">chunk = ${fmt(C,0)} tok</div>`
       +geom.series.map(s=>`<div class="row"><span class="sw" style="background:${s.color}"></span>`
-        +`${esc(s.label)} <b class="tnum">${geom.dfmt(interpMock(s.vals,C))}</b></div>`).join('');
+        +`${esc(s.label)} <b class="tnum">${geom.dfmt(interpMock(s.vals,C,geom.xlo))}</b></div>`).join('')
+      +(geom.ttRows?geom.ttRows(C).map(r=>`<div class="row tnum" style="color:var(--muted)">${esc(r)}</div>`).join(''):'');
+    if(typeof mockAnatomyHover==='function') mockAnatomyHover(C);
     const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();
     const scale=rect.width/geom.W;
     const cx=(rect.left-parRect.left)+px*scale;
@@ -2822,12 +3017,15 @@ function attachMockHover(divId, ttId){
     tt.style.top =Math.max(pad,Math.min(top, parRect.height-th-pad))+'px';
     tt.style.opacity=1;
   }
-  function leave(){ tt.style.opacity=0; const svg=box.querySelector('svg'); if(svg) removeCross(svg); }
+  function leave(){
+    tt.style.opacity=0; const svg=box.querySelector('svg'); if(svg) removeCross(svg);
+    if(typeof mockAnatomyHover==='function') mockAnatomyHover(null);
+  }
   box.addEventListener('mousemove', handler);
   box.addEventListener('mouseleave', leave);
   box.addEventListener('touchmove',(e)=>{ if(e.touches[0]) handler(e.touches[0]); },{passive:true});
 }
-['1','3','4','5'].forEach(n=>attachMockHover('chartEm'+n, 'ttEm'+n));
+['1','3','4','5','7'].forEach(n=>attachMockHover('chartEm'+n, 'ttEm'+n));
 
 /* ============================================================================
    TOOLTIP / crosshair for C and D
