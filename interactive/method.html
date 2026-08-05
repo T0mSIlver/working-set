@@ -82,6 +82,31 @@ dt .gt{font-weight:480; color:var(--muted); font-size:12.5px; margin-left:6px}
 dd{margin:3px 0 0 0}
 .foot{color:var(--muted); font-size:11.5px; margin-top:34px; text-align:center}
 .foot code{background:var(--control); padding:1px 5px; border-radius:4px}
+/* ---- formula appendix ---- */
+.eq{background:var(--tile); border:1px solid var(--border); border-radius:8px;
+  padding:9px 14px; margin:10px 0 6px; overflow-x:auto; white-space:nowrap;
+  font-size:13.5px; line-height:2; color:var(--text);}
+.eq i{font-style:italic; font-family:Georgia,"Times New Roman",serif; font-size:1.06em}
+.eq sub,.eq sup{font-size:.72em}
+.fn{color:var(--muted); font-size:12px; font-weight:480; margin-left:8px}
+.eq .term{display:inline-flex; flex-direction:column; align-items:center; vertical-align:top}
+.eq .term .ub{align-self:stretch; height:5px; margin-top:4px;
+  border-left:1px solid var(--axis); border-right:1px solid var(--axis);
+  border-bottom:1px solid var(--axis); border-radius:0 0 5px 5px}
+.eq .term .lbl{font-size:11px; line-height:1.35; color:var(--muted); margin-top:4px;
+  max-width:170px; white-space:normal; text-align:center}
+.eq .op{display:inline-block; vertical-align:top; padding:0 7px}
+ul.where{font-size:13px; margin:4px 0 14px}
+ul.where li{margin:3px 0}
+.tblwrap{overflow-x:auto; margin:10px 0 4px}
+table.c{border-collapse:collapse; font-size:12.5px}
+table.c th,table.c td{border:1px solid var(--border); padding:4px 9px;
+  text-align:right; white-space:nowrap; color:var(--text-2)}
+table.c th{color:var(--text); font-weight:640; background:var(--control)}
+table.c td:first-child,table.c th:first-child{text-align:left}
+table.c i{font-style:italic; font-family:Georgia,"Times New Roman",serif}
+table.c td.d{text-align:left; white-space:normal; min-width:240px}
+.tnote{color:var(--muted); font-size:12px; margin:4px 0 14px}
 </style>
 </head>
 <body>
@@ -101,6 +126,7 @@ dd{margin:3px 0 0 0}
     <a href="#workload">Workload model</a>
     <a href="#prefill">Prefill &amp; queueing</a>
     <a href="#hardware">Hardware &amp; models</a>
+    <a href="#formulas">Formulas</a>
     <a href="#glossary">Glossary</a>
   </nav>
 
@@ -197,6 +223,383 @@ dd{margin:3px 0 0 0}
     <p>The planning stance defines "comfortable capacity" as <b>measured SLO capacity</b> — the largest replayed population meeting explicit p95 TTFT and per-user decode targets — and is explicit that this model cannot produce it. The explorer's "Test these hypotheses" button generates <code>scripts/validate_deployment.py</code> preloaded with the on-screen configuration and the model's predictions restated as falsifiable hypotheses: closed-loop simulated users sharing one byte-identical prefix (so vLLM prefix caching engages), log-normal contexts, forced-miss injection, a load ladder bracketing the predicted limit, and a predicted-vs-measured verdict table. One run bounds warm capacity from <em>below</em> unless it reaches eviction, and B* needs the <code>--burst</code> mode — the script prints its own "what this run does not establish" trailer.</p>
     <h3 id="provenance">Provenance</h3>
     <p>The B300 / NVFP4 / Mistral-3.5 / GLM-5.2 constants were researched 2026-07-27 with HuggingFace and NVIDIA domains proxy-blocked — chains run through first-party GitHub repos, three-way config mirrors, and cross-checked snippets, with an assumptions / re-verification ledger in each research note and per-claim confidence tiers in <code>nvfp4.md</code> and <code>gpu_b300.md</code>. Strongest cross-check: the derived GLM-5.2 NVFP4 resident matches the vLLM recipe's ~465 GB within 0.05%.</p>
+  </section>
+
+  <section id="formulas">
+    <h2>The formulas</h2>
+    <p>Every equation the model computes, transcribed from <code>scripts/scenario_model.py</code> — the source of truth the explorer mirrors in JS. Each block names the function that computes it, and below each equation a table defines <em>every</em> symbol that appears in it: definition and code name, its value in the running example, and its unit. Conventions: <b>B</b> = bytes, <b>tok</b> = tokens, <b>s</b> = seconds; GB = 10⁹ B, GiB = 2³⁰ B, KiB = 1,024 B; "—" marks a dimensionless quantity.</p>
+    <p><b>The running example</b>, used for every Example column: Qwen3.6-27B, FP8 weights and KV cache, on 2×H200 tensor-parallel — one replica group (dp = 1, <i>t</i> = 2) — under the reference workload and load: 64 users, 30 s think time, subagent ratio 0.10, miss rate <i>f</i> = 0.01, 2,000-token warm turn, 32,768-token chunks, MFU 0.45, 10 s TTFT budget, 40 tok/s decode floor, PUE 1.5, €0.19/kWh. Where an equation needs a decode batch, <i>n</i> = 64. MoE-specific quantities, undefined on the dense 27B, get their example from Qwen3.6-35B-A3B and say so.</p>
+
+    <h3 id="f-memory">F.1 — Memory &amp; warm capacity</h3>
+    <p><b>The solved activation reserve</b><span class="fn">_act_reserve() → ACT_RESERVE</span></p>
+    <div class="eq"><span class="op" style="padding-left:0"><i>R</i><sub>act</sub> =</span><span class="term"><span><i>V</i><sub>H200</sub></span><span class="ub"></span><span class="lbl">HBM of the anchor GPU</span></span><span class="op">−</span><span class="term"><span><i>W</i><sub>27B</sub></span><span class="ub"></span><span class="lbl">the 27B's resident weights</span></span><span class="op">−</span><span class="term"><span><i>P</i>₀·<i>b</i><sub>27B</sub></span><span class="ub"></span><span class="lbl">the measured anchor pool, converted to bytes</span></span><span class="op">= 141×10⁹ − 30.92×10⁹ − 2.77×10⁶ × 32,768 = 19.31×10⁹ B ≈ 17.98 GiB</span></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>R</i><sub>act</sub></td><td class="d">per-GPU activation/workspace/fragmentation reserve (<code>ACT_RESERVE</code>)</td><td class="tnum">19.31×10⁹ ≈ 17.98 GiB</td><td>B</td></tr>
+      <tr><td><i>V</i><sub>H200</sub></td><td class="d">usable H200 HBM, the vendor figure the calibration uses (<code>GPU.vram</code>)</td><td class="tnum">141×10⁹</td><td>B</td></tr>
+      <tr><td><i>W</i><sub>27B</sub></td><td class="d">27B as-deployed FP8 weight bytes (<code>MODELS["27B"].w_resident</code>)</td><td class="tnum">30.92×10⁹ = 28.8 GiB</td><td>B</td></tr>
+      <tr><td><i>P</i>₀</td><td class="d">calibration-anchor KV pool, 1×H200 + 27B (<code>BASELINE_POOL_TOKENS_27B_1GPU</code>)</td><td class="tnum">2.77×10⁶</td><td>tok</td></tr>
+      <tr><td><i>b</i><sub>27B</sub></td><td class="d">27B KV-cache bytes per token, FP8 (<code>MODELS["27B"].kv_bpt</code>)</td><td class="tnum">32,768</td><td>B/tok</td></tr>
+    </table></div>
+    <p class="tnote">The reserve is <em>solved</em> from the anchor, not guessed: it is whatever is left of the anchor GPU's HBM once the 27B's weights and the anchor pool are subtracted. If the FP8 pool is ever measured directly, updating <i>P</i>₀ re-derives everything.</p>
+
+    <p><b>KV pool of one replica group</b><span class="fn">kv_pool_tokens()</span></p>
+    <div class="eq"><span class="op" style="padding-left:0"><i>P</i><sub>kv</sub> = max(</span><span class="term"><span><i>t</i>·<i>V</i></span><span class="ub"></span><span class="lbl">HBM of the whole group</span></span><span class="op">−</span><span class="term"><span><i>W</i><sub>res</sub></span><span class="ub"></span><span class="lbl">weights, sharded — stored once per group</span></span><span class="op">−</span><span class="term"><span><i>t</i>·(<i>R</i><sub>act</sub> + <i>R</i><sub>extra</sub>)</span><span class="ub"></span><span class="lbl">scratch reserve, charged per GPU</span></span><span class="op">,&nbsp;0) / <i>b</i><sub>kv</sub></span></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>P</i><sub>kv</sub></td><td class="d">KV-cache capacity of one replica group's pool (<code>kv_pool_tokens()</code>)</td><td class="tnum">6.48×10⁶</td><td>tok</td></tr>
+      <tr><td><i>t</i></td><td class="d">tensor-parallel width: GPUs per replica group (<code>Topology.tp</code>)</td><td class="tnum">2</td><td>GPUs</td></tr>
+      <tr><td><i>V</i></td><td class="d">usable HBM per GPU (<code>GPU.vram</code>)</td><td class="tnum">141×10⁹</td><td>B</td></tr>
+      <tr><td><i>W</i><sub>res</sub></td><td class="d">resident weight bytes, stored once per group (<code>Model.w_resident</code>)</td><td class="tnum">30.92×10⁹</td><td>B</td></tr>
+      <tr><td><i>R</i><sub>act</sub></td><td class="d">solved per-GPU reserve (<code>ACT_RESERVE</code>, above)</td><td class="tnum">19.31×10⁹</td><td>B</td></tr>
+      <tr><td><i>R</i><sub>extra</sub></td><td class="d">per-GPU reserve correction of the part (<code>GPU.reserve_extra</code>)</td><td class="tnum">0 (H200); 9.75×10⁹ on B300</td><td>B</td></tr>
+      <tr><td><i>b</i><sub>kv</sub></td><td class="d">model KV-cache bytes per token (<code>Model.kv_bpt</code>)</td><td class="tnum">32,768</td><td>B/tok</td></tr>
+    </table></div>
+    <p class="tnote">Weights are sharded across the group and counted once; the reserve is scratch space and charged per GPU. <i>R</i><sub>extra</sub> exists because the H200 actually delivers ~150.75 GB against the 141 GB vendor figure the calibration uses — the anchor silently absorbs that surplus into <i>R</i><sub>act</sub>, so a part that delivers nominal bytes with no over-provision (the B300, per a measured <code>nvidia-smi</code> dump) must add the hidden margin back or inherit ~9.75 GB/GPU of phantom HBM. A DP deployment has <code>dp</code> independent pools of this size — the system total multiplies by dp only under session-sticky routing. FP16 KV doubles <i>b</i><sub>kv</sub> (<code>with_kv_dtype</code>); NVFP4 swaps the weight constants (<code>with_weight_dtype</code>), never <i>b</i><sub>kv</sub>.</p>
+
+    <p><b>Session cost and the Monte-Carlo fill</b><span class="fn">_warm_once() / warm_capacity()</span></p>
+    <div class="eq"><span class="op" style="padding-left:0"><i>c</i><sub>i</sub> =</span><span class="term"><span><i>u</i><sub>i</sub></span><span class="ub"></span><span class="lbl">unique context KV after prefix dedup</span></span><span class="op">+</span><span class="term"><span><i>S</i>/<i>b</i><sub>kv</sub></span><span class="ub"></span><span class="lbl">recurrent state, in token equivalents</span></span><span class="op">,&nbsp;&nbsp; <i>u</i><sub>i</sub> = <i>L</i><sub>i</sub> − <i>x</i><sub>i</sub> (warm) &nbsp;|&nbsp; <i>L</i><sub>i</sub> (cold)</span><br>
+    <i>N</i><sub>warm</sub> = #{reusable sessions among the first <i>n</i>* in arrival order},&nbsp;&nbsp; <i>n</i>* = max <i>n</i> : Σ<sub>i≤n</sub> <i>c</i><sub>i</sub> ≤ <i>P</i><sub>kv</sub> − <i>x</i><sub>res</sub></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>c</i><sub>i</sub></td><td class="d">pool cost of session i (<code>gpu_cost</code> in <code>_warm_once()</code>)</td><td class="tnum">per draw; mean ≈ 28,700</td><td>tok</td></tr>
+      <tr><td><i>u</i><sub>i</sub></td><td class="d">session i's unique, non-deduplicated tokens (<code>unique</code>)</td><td class="tnum">per draw; mean ≈ 26,300</td><td>tok</td></tr>
+      <tr><td><i>L</i><sub>i</sub></td><td class="d">session i's sampled context length (<code>full</code>, from <code>Workload.sample()</code>)</td><td class="tnum">per draw; E[<i>L</i>] ≈ 40,141</td><td>tok</td></tr>
+      <tr><td><i>x</i><sub>i</sub></td><td class="d">shared prefix of session i's request class (<code>prefix</code>: <code>sys_user</code> / <code>sys_sub</code>)</td><td class="tnum">15,000 user / 3,000 sub</td><td>tok</td></tr>
+      <tr><td><i>S</i></td><td class="d">per-session recurrent/window state bytes (<code>Model.deltanet_state</code>)</td><td class="tnum">78.6×10⁶ (= 75 MiB = 2,400 tok-equiv)</td><td>B</td></tr>
+      <tr><td><i>b</i><sub>kv</sub></td><td class="d">KV bytes per token (<code>Model.kv_bpt</code>)</td><td class="tnum">32,768</td><td>B/tok</td></tr>
+      <tr><td><i>n</i>, <i>n</i>*</td><td class="d">sessions admitted in arrival order; <i>n</i>* the last that fits (<code>searchsorted</code> on the cumulative sum)</td><td class="tnum"><i>n</i>* ≈ 222 (p50)</td><td>sessions</td></tr>
+      <tr><td><i>P</i><sub>kv</sub></td><td class="d">the group's pool (above)</td><td class="tnum">6.48×10⁶</td><td>tok</td></tr>
+      <tr><td><i>x</i><sub>res</sub></td><td class="d">prefix blocks reserved once per class present (<code>reserved</code>)</td><td class="tnum">18,000</td><td>tok</td></tr>
+      <tr><td><i>N</i><sub>warm</sub></td><td class="d">warm reusable capacity of one pool (<code>warm_capacity()</code>)</td><td class="tnum">p5/p50/p95 = 195/222/252; user-class p5 = 176</td><td>sessions</td></tr>
+    </table></div>
+    <p class="tnote">Cold draws (probability <i>f</i>, § F.5) occupy their full length and never count as warm. Percentiles are taken over 4,000 draws of 2,000 sessions (<code>n_iter</code>, <code>draw</code>); the explorer seeds the RNG from the configuration. Token equivalents of <i>S</i> on the other models: 3,264 (35B-A3B), 4,521 (DSv4-Flash), 0 (Mistral-3.5, GLM-5.2). CPU offload: a session past the pool costs <i>u</i><sub>i</sub>·<i>b</i><sub>kv</sub> + <i>S</i> bytes of host RAM — counted as capacity (<code>which="all"</code>) but not as decodable (<code>which="gpu"</code>); with no offload buffer the two coincide, as in the example.</p>
+
+    <h3 id="f-decode">F.2 — Decode (HBM roofline)</h3>
+    <p><b>TP efficiency and group bandwidth</b><span class="fn">tp_efficiency() / effective_bw()</span></p>
+    <div class="eq"><i>η</i>(<i>t</i>) = <i>η</i>₂<sup>log₂ <i>t</i></sup> &nbsp;(<i>t</i> ≤ <i>N</i><sub>nvl</sub>);&nbsp; × <i>η</i><sub>x</sub><sup>log₂(<i>t</i>/<i>N</i><sub>nvl</sub>)</sup> past the NVLink domain<br>
+    <i>BW</i><sub>g</sub> = <i>t</i>·<i>BW</i><sub>HBM</sub>·<i>η</i>(<i>t</i>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>η</i>(<i>t</i>)</td><td class="d">aggregate-bandwidth efficiency of a TP group (<code>tp_efficiency()</code>)</td><td class="tnum">0.90</td><td>—</td></tr>
+      <tr><td><i>η</i>₂</td><td class="d">haircut per GPU-count doubling (<code>TP_EFFICIENCY</code>)</td><td class="tnum">0.90</td><td>—</td></tr>
+      <tr><td><i>η</i><sub>x</sub></td><td class="d">extra haircut per doubling past the NVLink domain (<code>CROSS_DOMAIN_EFFICIENCY</code>)</td><td class="tnum">0.65</td><td>—</td></tr>
+      <tr><td><i>N</i><sub>nvl</sub></td><td class="d">GPUs reachable inside one NVLink/NVSwitch domain (<code>GPU.nvlink_domain</code>)</td><td class="tnum">8</td><td>GPUs</td></tr>
+      <tr><td><i>t</i></td><td class="d">TP width (<code>Topology.tp</code>)</td><td class="tnum">2</td><td>GPUs</td></tr>
+      <tr><td><i>BW</i><sub>HBM</sub></td><td class="d">HBM bandwidth of one GPU (<code>GPU.hbm_bw</code>)</td><td class="tnum">4.8×10¹²</td><td>B/s</td></tr>
+      <tr><td><i>BW</i><sub>g</sub></td><td class="d">effective decode bandwidth of one replica group (<code>effective_bw()</code>)</td><td class="tnum">8.64×10¹²</td><td>B/s</td></tr>
+    </table></div>
+    <p class="tnote"><i>η</i>(2) = 0.90 is the baseline's assumption, consistent with the TP2 measurement; <i>η</i>(4) = 0.81 and <i>η</i>(8) = 0.73 are projections. <i>η</i><sub>x</sub> is an unmeasured pessimistic guard no configuration in the study reaches (both parts are 8-GPU nodes).</p>
+
+    <p><b>Weight bytes per decode step</b><span class="fn">Model.w_decode(n)</span></p>
+    <div class="eq">dense:&nbsp; <i>W</i><sub>dec</sub>(<i>n</i>) = <i>W</i><sub>sh</sub><br>
+    MoE, linear union (default):&nbsp; <i>W</i><sub>dec</sub>(<i>n</i>) = <i>W</i><sub>sh</sub> + min(<i>n</i>·<i>w</i><sub>e</sub>, <i>w</i><sub>E</sub>)<br>
+    MoE, coverage union:&nbsp; <i>W</i><sub>dec</sub>(<i>n</i>) = <i>W</i><sub>sh</sub> + <i>w</i><sub>E</sub>·(1 − (1 − <i>k</i><sub>r</sub>/<i>E</i>)<sup><i>n</i></sup>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>W</i><sub>dec</sub>(<i>n</i>)</td><td class="d">weight bytes read in one decode step at batch <i>n</i> (<code>Model.w_decode(n)</code>)</td><td class="tnum">30.92×10⁹ (dense 27B, any <i>n</i>)</td><td>B</td></tr>
+      <tr><td><i>W</i><sub>sh</sub></td><td class="d">always-active weight bytes per step: attention/DeltaNet + shared expert (<code>w_decode_shared</code>)</td><td class="tnum">30.92×10⁹</td><td>B</td></tr>
+      <tr><td><i>n</i></td><td class="d">concurrent decoding sequences (vLLM <code>max_num_seqs</code>)</td><td class="tnum">64</td><td>seqs</td></tr>
+      <tr><td><i>w</i><sub>e</sub></td><td class="d">routed-expert bytes one decoding token activates (<code>w_route_pertok</code>)</td><td class="tnum">1.01×10⁹ (35B-A3B)</td><td>B</td></tr>
+      <tr><td><i>w</i><sub>E</sub></td><td class="d">all routed-expert bytes, the saturation ceiling (<code>w_route_total</code>)</td><td class="tnum">32.21×10⁹ (35B-A3B)</td><td>B</td></tr>
+      <tr><td><i>k</i><sub>r</sub></td><td class="d">routed experts activated per token (from the model config)</td><td class="tnum">8 (35B-A3B)</td><td>experts</td></tr>
+      <tr><td><i>E</i></td><td class="d">total routed experts (from the model config)</td><td class="tnum">256 (35B-A3B)</td><td>experts</td></tr>
+    </table></div>
+    <p class="tnote">The 27B is dense, so the MoE rows take their example from the 35B-A3B, where <i>W</i><sub>sh</sub> = 1.94×10⁹ B and <i>W</i><sub>dec</sub>(64) = 34.15×10⁹ B linear / 29.93×10⁹ B coverage. The two unions bracket reality: linear is the no-overlap upper bound on bytes, coverage the expectation under independent uniform routing (real routing is correlated, so it grows slower). The linear union's slope break sits at <i>n</i> = <i>w</i><sub>E</sub>/<i>w</i><sub>e</sub>: 32 on the 35B-A3B and GLM-5.2, ≈ 42.7 on DSv4-Flash.</p>
+
+    <p><b>Bytes and speed of one decode step</b><span class="fn">decode_curves()</span></p>
+    <div class="eq"><span class="op" style="padding-left:0"><i>B</i><sub>step</sub>(<i>n</i>) =</span><span class="term"><span><i>W</i><sub>dec</sub>(<i>n</i>)</span><span class="ub"></span><span class="lbl">weight read, amortised across the whole batch</span></span><span class="op">+</span><span class="term"><span>Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>kv</sub></span><span class="ub"></span><span class="lbl">KV read of every active context</span></span><span class="op">+</span><span class="term"><span>2·<i>n</i>·<i>S</i></span><span class="ub"></span><span class="lbl">recurrent state, read + written each step</span></span><br>
+    <i>v</i><sub>user</sub>(<i>n</i>) = <i>m</i>·<i>BW</i><sub>g</sub> / <i>B</i><sub>step</sub>(<i>n</i>);&nbsp;&nbsp; <i>V</i><sub>agg</sub> = dp·<i>n</i>·p50(<i>v</i><sub>user</sub>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>B</i><sub>step</sub>(<i>n</i>)</td><td class="d">bytes one decode forward pass reads/writes (<code>step_bytes</code> in <code>decode_curves()</code>)</td><td class="tnum">124.8×10⁹ (p50, <i>n</i> = 64)</td><td>B</td></tr>
+      <tr><td><i>W</i><sub>dec</sub>(<i>n</i>)</td><td class="d">weight read (above)</td><td class="tnum">30.92×10⁹</td><td>B</td></tr>
+      <tr><td><i>L</i><sub>j</sub></td><td class="d">context length of active sequence j, sampled from the workload (<code>full</code>)</td><td class="tnum">per draw; Σ<sub>j</sub> <i>L</i><sub>j</sub> ≈ 2.56×10⁶ (p50)</td><td>tok</td></tr>
+      <tr><td><i>b</i><sub>kv</sub></td><td class="d">KV bytes per token (<code>Model.kv_bpt</code>)</td><td class="tnum">32,768</td><td>B/tok</td></tr>
+      <tr><td><i>n</i></td><td class="d">concurrent decoding sequences (<code>max_num_seqs</code>)</td><td class="tnum">64</td><td>seqs</td></tr>
+      <tr><td><i>S</i></td><td class="d">per-session recurrent state; each step reads <em>and</em> writes it, hence the 2 (<code>deltanet_state</code>)</td><td class="tnum">78.6×10⁶</td><td>B</td></tr>
+      <tr><td><i>m</i></td><td class="d">speculative-decode speedup (<code>Model.mtp</code>; next block)</td><td class="tnum">1.7</td><td>—</td></tr>
+      <tr><td><i>BW</i><sub>g</sub></td><td class="d">group bandwidth (above)</td><td class="tnum">8.64×10¹²</td><td>B/s</td></tr>
+      <tr><td><i>v</i><sub>user</sub>(<i>n</i>)</td><td class="d">per-user decode speed (<code>decode_curves()</code> percentiles)</td><td class="tnum">117.7 (p50, <i>n</i> = 64)</td><td>tok/s</td></tr>
+      <tr><td>dp</td><td class="d">replica groups (<code>Topology.dp</code>)</td><td class="tnum">1</td><td>groups</td></tr>
+      <tr><td><i>V</i><sub>agg</sub></td><td class="d">aggregate system decode throughput (<code>agg</code>)</td><td class="tnum">7,532</td><td>tok/s</td></tr>
+    </table></div>
+    <p class="tnote">j indexes the <i>n</i> active sequences; percentiles are over 3,000 sampled batches. In the example the step splits into 30.9 GB weights + 83.8 GB KV + 10.1 GB state. p50(·) is the median over draws.</p>
+
+    <p><b>Sparse-attention decode read (DSA/CSA models only)</b><span class="fn">kv_decode_* in decode_curves()</span></p>
+    <div class="eq"><span class="op" style="padding-left:0">KV read =</span><span class="term"><span>Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>dec</sub></span><span class="ub"></span><span class="lbl">indexer scan over the full cached context</span></span><span class="op">+</span><span class="term"><span>(<i>c</i><sub>top</sub>/<i>τ</i>)·Σ<sub>j</sub> min(<i>L</i><sub>j</sub>, <i>τ</i>)</span><span class="ub"></span><span class="lbl">top-<i>τ</i> sparse read per sequence, scaled for short ones</span></span><span class="op">(replaces Σ<sub>j</sub> <i>L</i><sub>j</sub>·<i>b</i><sub>kv</sub> in <i>B</i><sub>step</sub>)</span></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example (GLM-5.2)</th><th>Unit</th></tr>
+      <tr><td><i>b</i><sub>dec</sub></td><td class="d">indexer-scan bytes read per cached context token (<code>kv_decode_bpt</code>)</td><td class="tnum">2,772</td><td>B/tok</td></tr>
+      <tr><td><i>c</i><sub>top</sub></td><td class="d">top-k sparse read per active sequence at full window (<code>kv_decode_const</code>)</td><td class="tnum">92.0×10⁶</td><td>B/seq</td></tr>
+      <tr><td><i>τ</i></td><td class="d">top-k window in token space (<code>kv_decode_topk</code>)</td><td class="tnum">2,048</td><td>tok</td></tr>
+      <tr><td><i>L</i><sub>j</sub>, <i>b</i><sub>kv</sub></td><td class="d">as above; <i>b</i><sub>kv</sub> still prices <em>storage</em>, only the decode read changes</td><td class="tnum">—</td><td></td></tr>
+    </table></div>
+    <p class="tnote">Applies to GLM-5.2 (DSA) and DeepSeek-V4-Flash (CSA: <i>b</i><sub>dec</sub> = 426 B/tok, <i>c</i><sub>top</sub> = 9.36×10⁶ B, <i>τ</i> = 2,048); the min(·) term keeps a sequence shorter than the window from being charged tokens it does not have. The dense 27B of the running example never enters this branch.</p>
+
+    <p><b>Speculative decoding (MTP)</b><span class="fn">mtp_speedup()</span></p>
+    <div class="eq"><i>m</i>(<i>α</i>) = 1 + <i>α</i> + <i>α</i>² &nbsp;&nbsp;(<i>k</i><sub>d</sub> = 2 draft tokens; generally Σ<sub>i=0…k<sub>d</sub></sub> <i>α</i><sup>i</sup>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>m</i></td><td class="d">expected decode speedup (<code>mtp_speedup()</code> → <code>Model.mtp</code>)</td><td class="tnum">1.7</td><td>—</td></tr>
+      <tr><td><i>α</i></td><td class="d">per-draft acceptance probability, i.i.d. accept-until-first-rejection</td><td class="tnum">0.475</td><td>—</td></tr>
+      <tr><td><i>k</i><sub>d</sub></td><td class="d">draft tokens per forward pass</td><td class="tnum">2</td><td>tok</td></tr>
+    </table></div>
+    <p class="tnote">1.7× is the 27B's measured fit; a measured 87% acceptance would give <i>m</i> ≈ 2.6. The inversion is exact for the Qwens' 2-draft MTP only — GLM-5.2 drafts 5, DSv4-Flash 7, Mistral-3.5 has no MTP module (<i>m</i> = 1.0).</p>
+
+    <h3 id="f-prefill">F.3 — Prefill (compute roofline)</h3>
+    <p><b>FLOPs of one forward pass</b><span class="fn">prefill_flops()</span></p>
+    <div class="eq"><span class="op" style="padding-left:0"><i>F</i>(<i>T</i>, <i>H</i>) =</span><span class="term"><span>2·<i>N</i><sub>p</sub>·<i>T</i></span><span class="ub"></span><span class="lbl">GEMM: every new token through the active weights (2 FLOPs per multiply-accumulate)</span></span><span class="op">+</span><span class="term"><span>2·<i>d</i>·<i>ℓ</i>·<i>T</i>²</span><span class="ub"></span><span class="lbl">intra-chunk attention: the new tokens attending to each other (causal masking halves the pairs)</span></span><span class="op">+</span><span class="term"><span>4·<i>d</i>·<i>ℓ</i>·<i>T</i>·<i>H</i></span><span class="ub"></span><span class="lbl">cross attention: every new query over all <i>H</i> cached tokens (QK<sup>T</sup> and AV, 2 FLOPs each)</span></span></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>F</i>(<i>T</i>, <i>H</i>)</td><td class="d">total FLOPs of one prefill pass (<code>prefill_flops()</code>, third return)</td><td class="tnum">1.82×10¹⁵ at (32,768, 0)</td><td>FLOP</td></tr>
+      <tr><td><i>T</i></td><td class="d">new tokens prefilled in this pass (<code>tokens</code>)</td><td class="tnum">32,768</td><td>tok</td></tr>
+      <tr><td><i>H</i></td><td class="d">tokens already in the KV cache when the pass runs (<code>prior</code>)</td><td class="tnum">0 (first chunk of a cold context)</td><td>tok</td></tr>
+      <tr><td><i>N</i><sub>p</sub></td><td class="d">GEMM-active parameters per token (<code>params_prefill</code>)</td><td class="tnum">24.5×10⁹</td><td>params</td></tr>
+      <tr><td><i>d</i></td><td class="d">attention width: query heads × head_dim (<code>attn_d</code>)</td><td class="tnum">6,144</td><td>—</td></tr>
+      <tr><td><i>ℓ</i></td><td class="d">full-attention layer count (<code>attn_layers</code>)</td><td class="tnum">16</td><td>layers</td></tr>
+    </table></div>
+    <p class="tnote">In the example the GEMM term is 1.61×10¹⁵ and the quadratic attention term 0.21×10¹⁵ FLOP. The cache spares recomputing the <i>H</i> tokens' keys and values, <em>not</em> attending over them — hence the cross term. The pair count telescopes: however a context is chunked, its total FLOPs are identical. Linear-attention (DeltaNet) layers have no quadratic term and live inside <i>N</i><sub>p</sub>.</p>
+
+    <p><b>Group compute and pass time</b><span class="fn">peak_flops() / prefill_seconds()</span></p>
+    <div class="eq"><i>C</i><sub>g</sub> = <i>t</i>·<i>C</i><sub>fp8</sub>·<i>η</i>(<i>t</i>);&nbsp;&nbsp; <i>t</i><sub>pf</sub> = <i>F</i>(<i>T</i>, <i>H</i>) / (<i>C</i><sub>g</sub>·MFU)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>C</i><sub>g</sub></td><td class="d">dense-FP8 compute of one replica group (<code>peak_flops()</code>)</td><td class="tnum">3.56×10¹⁵</td><td>FLOP/s</td></tr>
+      <tr><td><i>t</i>, <i>η</i>(<i>t</i>)</td><td class="d">TP width and its efficiency (§ F.2)</td><td class="tnum">2, 0.90</td><td>GPUs, —</td></tr>
+      <tr><td><i>C</i><sub>fp8</sub></td><td class="d">dense FP8 tensor-core peak of one GPU (<code>GPU.peak_flops_fp8</code>)</td><td class="tnum">1.979×10¹⁵</td><td>FLOP/s</td></tr>
+      <tr><td>MFU</td><td class="d">model FLOP utilisation: achieved / dense peak (<code>MFU_DEFAULT</code>)</td><td class="tnum">0.45 [0.30–0.60]</td><td>—</td></tr>
+      <tr><td><i>t</i><sub>pf</sub></td><td class="d">wall-clock of the pass (<code>prefill_seconds()</code>)</td><td class="tnum">1.13 at (32,768, 0)</td><td>s</td></tr>
+      <tr><td><i>F</i>(<i>T</i>, <i>H</i>)</td><td class="d">pass FLOPs (above)</td><td class="tnum">1.82×10¹⁵</td><td>FLOP</td></tr>
+    </table></div>
+    <p class="tnote">MFU is the softest input on the page: unmeasured here, and it scales every prefill figure almost proportionally. Reusing <i>η</i>(<i>t</i>) for compute is an assumption flagged in the code — the real prefill TP haircut is probably gentler. Roofline ridge <i>C</i><sub>fp8</sub>/<i>BW</i><sub>HBM</sub>: 412 FLOP/B (H200), 563 (B300); prefill sits orders of magnitude above it, decode far below — which is why the two interfere when batched.</p>
+
+    <p><b>Per-pass overhead and the solved MFU ceiling</b><span class="fn">prefill_overhead_seconds() / mfu_ceiling() / prefill_pass_seconds()</span></p>
+    <div class="eq"><i>t</i><sub>ov</sub> = <i>W</i><sub>res</sub> / <i>BW</i><sub>g</sub>;&nbsp;&nbsp; 1/<i>μ</i><sub>c</sub> = 1/MFU − <i>C</i><sub>g</sub>·<i>t</i><sub>ov</sub> / <i>F</i>(chunk₀, 0)<br>
+    <span class="op" style="padding-left:0"><i>t</i><sub>pass</sub> =</span><span class="term"><span><i>F</i>(<i>T</i>, <i>H</i>)/(<i>C</i><sub>g</sub>·<i>μ</i><sub>c</sub>)</span><span class="ub"></span><span class="lbl">compute leg, at the solved MFU ceiling</span></span><span class="op">+</span><span class="term"><span><i>t</i><sub>ov</sub></span><span class="ub"></span><span class="lbl">weight stream, paid once per pass — does not telescope</span></span></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>t</i><sub>ov</sub></td><td class="d">per-pass cost that does not telescope: streaming the resident weights once (<code>prefill_overhead_seconds()</code>)</td><td class="tnum">3.58×10⁻³</td><td>s</td></tr>
+      <tr><td><i>W</i><sub>res</sub></td><td class="d">resident weight bytes (<code>w_resident</code>) — a MoE streams <em>every</em> expert here</td><td class="tnum">30.92×10⁹</td><td>B</td></tr>
+      <tr><td><i>BW</i><sub>g</sub></td><td class="d">group bandwidth (§ F.2)</td><td class="tnum">8.64×10¹²</td><td>B/s</td></tr>
+      <tr><td><i>μ</i><sub>c</sub></td><td class="d">compute-leg MFU ceiling, solved per (model, topology) (<code>mfu_ceiling()</code>)</td><td class="tnum">0.4514</td><td>—</td></tr>
+      <tr><td>MFU</td><td class="d">the anchor the solve targets (<code>mfu_anchor</code>)</td><td class="tnum">0.45</td><td>—</td></tr>
+      <tr><td><i>C</i><sub>g</sub></td><td class="d">group compute (above)</td><td class="tnum">3.56×10¹⁵</td><td>FLOP/s</td></tr>
+      <tr><td>chunk₀</td><td class="d">anchor chunk size, vLLM's <code>max_num_batched_tokens</code> default (<code>CHUNK_DEFAULT</code>)</td><td class="tnum">32,768</td><td>tok</td></tr>
+      <tr><td><i>F</i>(·, ·)</td><td class="d">pass FLOPs (above)</td><td class="tnum">1.82×10¹⁵ at (chunk₀, 0)</td><td>FLOP</td></tr>
+      <tr><td><i>T</i>, <i>H</i></td><td class="d">new tokens in the pass and tokens already cached (above)</td><td class="tnum">chunk₀, 0</td><td>tok</td></tr>
+      <tr><td><i>t</i><sub>pass</sub></td><td class="d">one miss-side pass at the solved ceiling (<code>prefill_pass_seconds()</code>)</td><td class="tnum">1.13 at (chunk₀, 0)</td><td>s</td></tr>
+    </table></div>
+    <p class="tnote"><i>μ</i><sub>c</sub> is solved so that a first cache-empty chunk of chunk₀ tokens nets exactly the anchor MFU — by construction <i>t</i><sub>pass</sub> = <i>t</i><sub>pf</sub> there, as the example shows. At small chunks the overhead no longer amortises and the <em>effective</em> MFU falls (<code>mfu_effective()</code> — the explorer's chart E); warm hits and the ITL-spike chunk stay on the marginal <i>t</i><sub>pf</sub> pricing because their pass's weight stream is already paid by the decode batch they join.</p>
+
+    <p><b>Expected miss and hit cost</b><span class="fn">cold_request_seconds() / warm_request_seconds()</span></p>
+    <div class="eq"><span class="op" style="padding-left:0">E[<i>C</i><sub>cold</sub>] = (</span><span class="term"><span>2·<i>N</i><sub>p</sub>·E[<i>L</i>]</span><span class="ub"></span><span class="lbl">GEMM leg: the mean context</span></span><span class="op">+</span><span class="term"><span>2·<i>d</i>·<i>ℓ</i>·E[<i>L</i>²]</span><span class="ub"></span><span class="lbl">attention leg: the heavy tail — second moment, not mean²</span></span><span class="op">) / (<i>C</i><sub>g</sub>·MFU)</span><br>
+    <i>C</i><sub>warm</sub> = <i>t</i><sub>pf</sub>(<i>T</i><sub>turn</sub>, <i>H</i> = E[<i>L</i>])&nbsp;&nbsp;&nbsp;(explorer pricing adds + E[⌈<i>L</i>/chunk₀⌉]·<i>t</i><sub>ov</sub> to the miss and runs its FLOPs leg at <i>μ</i><sub>c</sub>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td>E[<i>C</i><sub>cold</sub>]</td><td class="d">expected machine time of one cache miss: re-prefill the whole context (<code>cold_request_seconds()</code>)</td><td class="tnum">1.570</td><td>s</td></tr>
+      <tr><td>E[<i>L</i>]</td><td class="d">mean context length of the workload (<code>context_moments()</code>)</td><td class="tnum">40,141</td><td>tok</td></tr>
+      <tr><td>E[<i>L</i>²]</td><td class="d">second moment of the context length (<code>context_moments()</code>)</td><td class="tnum">2.80×10⁹</td><td>tok²</td></tr>
+      <tr><td><i>N</i><sub>p</sub>, <i>d</i>, <i>ℓ</i></td><td class="d">prefill constants (above)</td><td class="tnum">24.5×10⁹, 6,144, 16</td><td></td></tr>
+      <tr><td><i>C</i><sub>g</sub>, MFU</td><td class="d">group compute and utilisation (above)</td><td class="tnum">3.56×10¹⁵, 0.45</td><td>FLOP/s, —</td></tr>
+      <tr><td>E[⌈<i>L</i>/chunk₀⌉]</td><td class="d">expected pass count of a miss (<code>mean_passes()</code>)</td><td class="tnum">1.72</td><td>passes</td></tr>
+      <tr><td><i>t</i><sub>ov</sub>, <i>μ</i><sub>c</sub>, chunk₀</td><td class="d">per-pass overhead, solved ceiling, chunk (above)</td><td class="tnum">3.58×10⁻³ s, 0.4514, 32,768 tok</td><td></td></tr>
+      <tr><td><i>C</i><sub>warm</sub></td><td class="d">machine time of one warm hit: prefill the new turn over the cached context (<code>warm_request_seconds()</code>)</td><td class="tnum">0.0813</td><td>s</td></tr>
+      <tr><td><i>T</i><sub>turn</sub></td><td class="d">new-turn tokens a warm hit still prefills (<code>turn_tokens</code>)</td><td class="tnum">2,000</td><td>tok</td></tr>
+      <tr><td><i>t</i><sub>pf</sub>(·, <i>H</i>)</td><td class="d">pass time (above), priced at the marginal rate</td><td class="tnum">—</td><td>s</td></tr>
+      <tr><td><i>H</i></td><td class="d">cached tokens the hit's queries attend over</td><td class="tnum">E[<i>L</i>] = 40,141</td><td>tok</td></tr>
+    </table></div>
+    <p class="tnote">E[<i>L</i>²] is 1.74× E[<i>L</i>]²: the quadratic term must be priced on the heavy tail, never on the mean draw. Both example moments are the reference workload's (user + subagent mixture, § F.5). The published tables use the flat-MFU form; the explorer prices the parenthesised per-pass-overhead variant — at chunk₀ the two agree within 1%.</p>
+
+    <p><b>The hypothesis numbers</b><span class="fn">thrash_ratio() / max_cold_rate() / prefill_duty() / breakeven_miss_rate()</span></p>
+    <div class="eq">thrash = E[<i>C</i><sub>cold</sub>] / <i>C</i><sub>warm</sub>;&nbsp;&nbsp; <i>λ</i><sub>cold,max</sub> = 1 / E[<i>C</i><sub>cold</sub>]<br>
+    <span class="op" style="padding-left:0"><i>ρ</i>(<i>f</i>) = <i>λ</i>·(</span><span class="term"><span><i>f</i>·E[<i>C</i><sub>cold</sub>]</span><span class="ub"></span><span class="lbl">miss leg: full re-prefills</span></span><span class="op">+</span><span class="term"><span>(1−<i>f</i>)·<i>C</i><sub>warm</sub></span><span class="ub"></span><span class="lbl">hit leg: new-turn prefills</span></span><span class="op">)</span><br>
+    <i>f</i>* = (1/<i>λ</i> − <i>C</i><sub>warm</sub>) / (E[<i>C</i><sub>cold</sub>] − <i>C</i><sub>warm</sub>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td>thrash</td><td class="d">machine-time ratio of a miss to a hit (<code>thrash_ratio()</code>)</td><td class="tnum">19.3</td><td>—</td></tr>
+      <tr><td><i>λ</i><sub>cold,max</sub></td><td class="d">cold req/s at which prefill alone consumes the whole group (<code>max_cold_rate()</code>)</td><td class="tnum">0.637</td><td>req/s</td></tr>
+      <tr><td><i>ρ</i>(<i>f</i>)</td><td class="d">prefill duty: fraction of the group spent prefilling (<code>prefill_duty()</code>)</td><td class="tnum">0.226 at <i>f</i> = 0.01</td><td>—</td></tr>
+      <tr><td><i>f</i></td><td class="d">cache-miss / invalidation rate (<code>Workload.invalidation</code>)</td><td class="tnum">0.01</td><td>—</td></tr>
+      <tr><td><i>λ</i></td><td class="d">total request rate one group sees, both classes (§ F.5)</td><td class="tnum">2.35</td><td>req/s</td></tr>
+      <tr><td><i>f</i>*</td><td class="d">miss rate at which <i>ρ</i> = 1, the saturation point (<code>breakeven_miss_rate()</code>)</td><td class="tnum">0.232</td><td>—</td></tr>
+      <tr><td>E[<i>C</i><sub>cold</sub>], <i>C</i><sub>warm</sub></td><td class="d">miss and hit cost (above)</td><td class="tnum">1.570, 0.0813</td><td>s</td></tr>
+    </table></div>
+    <p class="tnote">The thrash ratio is the study's founding number — ≈ 18–19× near-identically across the architectures priced in <code>docs/scenarios.md</code> § 8. In the flat-MFU form both MFU and the GPU part cancel out of it. <i>f</i>* solves <i>ρ</i>(<i>f</i>) = 1, which is linear in <i>f</i>; it is a limit, not an operating point — burst tolerance (§ F.4) reaches zero exactly there.</p>
+
+    <h3 id="f-queue">F.4 — Queueing &amp; bursts</h3>
+    <p><b>Service moments and the M/G/1 queue</b><span class="fn">prefill_service_moments() / queue_wait_seconds() / prefill_ttft_seconds()</span></p>
+    <div class="eq"><span class="op" style="padding-left:0">E[<i>S</i>] =</span><span class="term"><span><i>f</i>·E[<i>S</i>|miss]</span><span class="ub"></span><span class="lbl">miss leg</span></span><span class="op">+</span><span class="term"><span>(1−<i>f</i>)·E[<i>S</i>|hit]</span><span class="ub"></span><span class="lbl">hit leg</span></span><span class="op">(E[<i>S</i>²] mixed the same way);&nbsp;&nbsp; <i>ρ</i> = <i>λ</i>·E[<i>S</i>]</span><br>
+    E[<i>W</i>] = <i>λ</i>·E[<i>S</i>²] / (2·(1 − <i>ρ</i>))<br>
+    <span class="op" style="padding-left:0">TTFT<sub>FCFS</sub> =</span><span class="term"><span>E[<i>W</i>]</span><span class="ub"></span><span class="lbl">shared wait behind the queue — same for every request</span></span><span class="op">+</span><span class="term"><span>E[<i>S</i>|class]</span><span class="ub"></span><span class="lbl">the request's own prefill</span></span><span class="op">;&nbsp;&nbsp; TTFT<sub>PS</sub> = E[<i>S</i>|class] / (1 − <i>ρ</i>)</span></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td>E[<i>S</i>]</td><td class="d">mean prefill service time over the mixed request stream (<code>prefill_service_moments()</code>[0])</td><td class="tnum">0.0962</td><td>s</td></tr>
+      <tr><td>E[<i>S</i>²]</td><td class="d">second moment of the service time (<code>…[1]</code>)</td><td class="tnum">0.0602</td><td>s²</td></tr>
+      <tr><td>E[<i>S</i>|miss]</td><td class="d">mean service time of a miss (<code>…[2]</code>; = E[<i>C</i><sub>cold</sub>] of § F.3)</td><td class="tnum">1.570</td><td>s</td></tr>
+      <tr><td>E[<i>S</i>|hit]</td><td class="d">mean service time of a warm hit (<code>…[3]</code>; = <i>C</i><sub>warm</sub>)</td><td class="tnum">0.0813</td><td>s</td></tr>
+      <tr><td><i>f</i></td><td class="d">miss rate (<code>Workload.invalidation</code>)</td><td class="tnum">0.01</td><td>—</td></tr>
+      <tr><td><i>λ</i></td><td class="d">total arrival rate at the group, Poisson assumed (§ F.5)</td><td class="tnum">2.35</td><td>req/s</td></tr>
+      <tr><td><i>ρ</i></td><td class="d">server utilisation = the prefill duty of § F.3, warm turns included</td><td class="tnum">0.226</td><td>—</td></tr>
+      <tr><td>E[<i>W</i>]</td><td class="d">mean wait before a request's own prefill starts, M/G/1 FCFS, Pollaczek–Khinchine (<code>queue_wait_seconds()</code>)</td><td class="tnum">0.0912</td><td>s</td></tr>
+      <tr><td>TTFT<sub>FCFS</sub>, TTFT<sub>PS</sub></td><td class="d">mean time-to-first-token under first-come-first-served / processor sharing (<code>prefill_ttft_seconds()</code>)</td><td class="tnum">cold: 1.66 / 2.03; warm: 0.173 / 0.105</td><td>s</td></tr>
+      <tr><td>E[<i>S</i>|class]</td><td class="d">the requesting class's own mean service time: E[<i>S</i>|miss] or E[<i>S</i>|hit]</td><td class="tnum">1.570 (cold)</td><td>s</td></tr>
+    </table></div>
+    <p class="tnote">E[<i>W</i>] diverges at <i>ρ</i> ≥ 1. A miss's service time runs as <i>L</i>² on a lognormal <i>L</i>, so the stream's squared coefficient of variation E[<i>S</i>²]/E[<i>S</i>]² − 1 lands at 5.5 in the example (5.5–8.3 across configs) where an exponential server would sit at 1 — E[<i>S</i>²] is exactly what the duty cycle cannot see. FCFS and PS bracket vLLM's chunked-prefill scheduling; neither end is uniformly optimistic, and which is which flips by request class.</p>
+
+    <p><b>The latency ceiling, closed form</b><span class="fn">max_users_latency() / sla_miss_rate()</span></p>
+    <div class="eq">FCFS:&nbsp; <i>λ</i><sub>sla</sub> = <i>K</i> / (<i>a</i> + <i>K</i>·<i>b</i>), &nbsp;<i>K</i> = 2·(SLA − <i>c</i>);&nbsp;&nbsp; PS:&nbsp; <i>λ</i><sub>sla</sub> = (1 − <i>c</i>/SLA) / <i>b</i></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>λ</i><sub>sla</sub></td><td class="d">arrival rate at which a miss's mean TTFT reaches the budget (inside <code>max_users_latency()</code>)</td><td class="tnum">10.02 FCFS / 8.76 PS</td><td>req/s</td></tr>
+      <tr><td><i>a</i></td><td class="d">E[<i>S</i>²] (above)</td><td class="tnum">0.0602</td><td>s²</td></tr>
+      <tr><td><i>b</i></td><td class="d">E[<i>S</i>] (above)</td><td class="tnum">0.0962</td><td>s</td></tr>
+      <tr><td><i>c</i></td><td class="d">E[<i>S</i>|miss] (above)</td><td class="tnum">1.570</td><td>s</td></tr>
+      <tr><td>SLA</td><td class="d">the TTFT budget (<code>sla_seconds</code>)</td><td class="tnum">10</td><td>s</td></tr>
+      <tr><td><i>K</i></td><td class="d">auxiliary: twice the budget left after the miss's own prefill</td><td class="tnum">16.86</td><td>s</td></tr>
+    </table></div>
+    <p class="tnote">Solving TTFT<sub>FCFS</sub> = SLA for <i>λ</i>, possible in closed form because the moments do not depend on the arrival rate. Always <i>λ</i><sub>sla</sub> &lt; 1/<i>b</i> for any <i>a</i> &gt; 0 — the algebraic statement of "the queue diverges before the server saturates". <code>sla_miss_rate()</code> inverts the same curve for <i>f</i> instead of <i>λ</i>, by bisection (TTFT is monotone in <i>f</i>).</p>
+
+    <p><b>Bursts, drains, and what the warm users lose</b><span class="fn">burst_drain_seconds() / spike_tolerance() / itl_spike() / spike_token_debt()</span></p>
+    <div class="eq"><i>T</i><sub>drain</sub> = <i>B</i>·E[<i>S</i>|miss] / (1 − <i>ρ</i>);&nbsp;&nbsp; <i>B</i>* = SLA·(1 − <i>ρ</i>) / E[<i>S</i>|miss]<br>
+    <span class="op" style="padding-left:0"><i>t</i><sub>dec</sub> = <i>m</i> / <i>v</i><sub>user</sub>(<i>n</i><sub>w</sub>);&nbsp;&nbsp; <i>t</i><sub>mix</sub> =</span><span class="term"><span><i>t</i><sub>dec</sub></span><span class="ub"></span><span class="lbl">the normal decode step</span></span><span class="op">+</span><span class="term"><span><i>t</i><sub>pf</sub>(chunk₀, <i>H</i> = E[<i>L</i>]/2)</span><span class="ub"></span><span class="lbl">the prefill chunk sharing the forward pass</span></span><br>
+    <i>Δ</i><sub>tok</sub> = <i>T</i><sub>drain</sub>·(1/<i>t</i><sub>dec</sub> − 1/<i>t</i><sub>mix</sub>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>T</i><sub>drain</sub></td><td class="d">wall-clock to clear a burst on top of the standing load (<code>burst_drain_seconds()</code>)</td><td class="tnum">10.0 at <i>B</i> = <i>B</i>*</td><td>s</td></tr>
+      <tr><td><i>B</i></td><td class="d">simultaneous cache misses in the burst (<code>burst</code>)</td><td class="tnum">4.93 (= <i>B</i>*)</td><td>misses</td></tr>
+      <tr><td><i>B</i>*</td><td class="d">cold-spike tolerance: largest burst whose last request meets the budget (<code>spike_tolerance()</code>)</td><td class="tnum">4.93</td><td>misses</td></tr>
+      <tr><td>E[<i>S</i>|miss], <i>ρ</i>, SLA</td><td class="d">as above</td><td class="tnum">1.570 s, 0.226, 10 s</td><td></td></tr>
+      <tr><td><i>t</i><sub>dec</sub></td><td class="d">normal inter-token latency per decoding user (from <code>decode_curves()</code> via <code>itl_spike()</code>)</td><td class="tnum">0.0365</td><td>s/tok</td></tr>
+      <tr><td><i>t</i><sub>mix</sub></td><td class="d">inter-token gap when a prefill chunk shares the forward pass (<code>itl_spike()</code>)</td><td class="tnum">1.33</td><td>s/tok</td></tr>
+      <tr><td><i>m</i>, <i>v</i><sub>user</sub>(·)</td><td class="d">MTP speedup and per-user decode speed (§ F.2)</td><td class="tnum">1.7, at <i>n</i><sub>w</sub></td><td></td></tr>
+      <tr><td><i>n</i><sub>w</sub></td><td class="d">decoding population at the stress point: GPU-resident p5 warm sessions (§ F.1)</td><td class="tnum">194</td><td>seqs</td></tr>
+      <tr><td><i>t</i><sub>pf</sub>(·, ·), chunk₀</td><td class="d">marginal pass time and chunk size (§ F.3)</td><td class="tnum">—, 32,768 tok</td><td></td></tr>
+      <tr><td><i>H</i>, E[<i>L</i>]</td><td class="d">cached tokens the spike chunk attends over, mean context (§ F.3)</td><td class="tnum">20,070, 40,141</td><td>tok</td></tr>
+      <tr><td><i>Δ</i><sub>tok</sub></td><td class="d">output tokens one warm user never receives during the drain (<code>spike_token_debt()</code>)</td><td class="tnum">266 (× 194 users ≈ 51,600 total)</td><td>tok</td></tr>
+    </table></div>
+    <p class="tnote">A backlog drains at (1 − <i>ρ</i>) seconds of work per second because standing traffic keeps arriving; the burst's <em>last</em> request gets its first token at <i>T</i><sub>drain</sub> under either discipline. <i>B</i>* inverts the drain equation, is linear in the SLA, and reaches zero exactly at <i>f</i>* — with <i>B</i> = <i>B</i>* the drain equals the budget by construction, as the example shows. The spike chunk is priced mid-re-prefill (<i>H</i> = E[<i>L</i>]/2); during a drain the scheduler has a chunk to place in every pass, so <i>t</i><sub>mix</sub> is the steady state for the whole drain, and <i>Δ</i><sub>tok</sub> integrates the difference.</p>
+
+    <h3 id="f-workload">F.5 — Workload &amp; the user conversion</h3>
+    <p><b>Prompt lengths</b><span class="fn">Workload.sample()</span></p>
+    <div class="eq"><i>L</i> = clip(<i>M</i>·e<sup><i>σZ</i></sup>, [<i>x</i>, cap]), &nbsp;<i>Z</i> ~ 𝒩(0, 1);&nbsp;&nbsp; p<sub>sub</sub> = <i>r</i>/(1+<i>r</i>);&nbsp;&nbsp; cold with probability <i>f</i></div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>L</i></td><td class="d">a request's full context length (<code>full</code>)</td><td class="tnum">per draw; E[<i>L</i>] ≈ 40,141</td><td>tok</td></tr>
+      <tr><td><i>M</i></td><td class="d">lognormal median of the class (<code>user_median</code> / <code>sub_median</code>)</td><td class="tnum">31,000 user / 8,000 sub</td><td>tok</td></tr>
+      <tr><td><i>σ</i></td><td class="d">lognormal shape of the class (<code>user_sigma</code> / <code>sub_sigma</code>)</td><td class="tnum">0.81 user / 0.90 sub</td><td>—</td></tr>
+      <tr><td><i>Z</i></td><td class="d">standard-normal draw</td><td class="tnum">per draw</td><td>—</td></tr>
+      <tr><td><i>x</i></td><td class="d">the class's shared prefix, the clip floor (<code>sys_user</code> / <code>sys_sub</code>)</td><td class="tnum">15,000 user / 3,000 sub</td><td>tok</td></tr>
+      <tr><td>cap</td><td class="d">max_seq_len truncation (<code>Workload.cap</code>)</td><td class="tnum">180,000</td><td>tok</td></tr>
+      <tr><td>p<sub>sub</sub></td><td class="d">probability a sampled request is subagent-class (<code>p_sub()</code>)</td><td class="tnum">0.091</td><td>—</td></tr>
+      <tr><td><i>r</i></td><td class="d">subagent requests per user request (<code>sub_ratio</code>)</td><td class="tnum">0.10</td><td>—</td></tr>
+      <tr><td><i>f</i></td><td class="d">invalidation / miss probability (<code>invalidation</code>)</td><td class="tnum">0.01</td><td>—</td></tr>
+    </table></div>
+    <p class="tnote">The user-class (<i>M</i>, <i>σ</i>) is a maximum-likelihood fit on 1,850 real request lengths; the subagent class is assumed. Lognormal mean = <i>M</i>·e<sup><i>σ</i>²/2</sup> = 1.39·<i>M</i> at <i>σ</i> = 0.81 — the mean, not the median, drives warm capacity and prefill cost. A cold draw's prefix is set to 0 (it matches nothing).</p>
+
+    <p><b>Users ↔ request rates, and the four ceilings' common unit</b><span class="fn">request_rate() / max_users_saturation() / max_users_latency() / closed_request_rate()</span></p>
+    <div class="eq">open loop:&nbsp; <i>λ</i><sub>main</sub> = <i>U</i> / <i>T</i><sub>think</sub>;&nbsp;&nbsp; <i>λ</i> = (1+<i>r</i>)·<i>λ</i><sub>main</sub><br>
+    <i>U</i><sub>sat</sub> = <i>T</i><sub>think</sub> / ((1+<i>r</i>)·E[<i>S</i>]);&nbsp;&nbsp; <i>U</i><sub>lat</sub> = <i>λ</i><sub>sla</sub>·<i>T</i><sub>think</sub> / (1+<i>r</i>)<br>
+    closed loop:&nbsp; <i>N</i>* = (<i>Z</i><sub>think</sub> + <i>R</i>₀) / <i>D</i>, &nbsp;<i>D</i> = (1+<i>r</i>)·E[<i>S</i>], &nbsp;<i>R</i>₀ = E[<i>S</i>] + <i>N</i><sub>out</sub>/<i>v</i><sub>floor</sub><br>
+    closed rate:&nbsp; fixed point of&nbsp; <i>U</i> = <i>λ</i>·(<i>Z</i><sub>think</sub> + <i>R</i>(<i>λ</i>) + <i>N</i><sub>out</sub>/<i>v</i><sub>floor</sub>) / (1+<i>r</i>)</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>U</i></td><td class="d">concurrent users; one user = one session, one main request per interval (<code>users</code>)</td><td class="tnum">64</td><td>users</td></tr>
+      <tr><td><i>T</i><sub>think</sub></td><td class="d">open-loop inter-request interval of one user (<code>THINK_TIME_S</code>)</td><td class="tnum">30</td><td>s</td></tr>
+      <tr><td><i>λ</i><sub>main</sub></td><td class="d">main-agent request rate (<code>request_rate()</code>)</td><td class="tnum">2.13</td><td>req/s</td></tr>
+      <tr><td><i>λ</i></td><td class="d">total arrival rate incl. towed subagent requests</td><td class="tnum">2.35</td><td>req/s</td></tr>
+      <tr><td><i>r</i>, E[<i>S</i>], <i>λ</i><sub>sla</sub></td><td class="d">subagent ratio (above), mean service time (§ F.4), latency-ceiling rate (§ F.4)</td><td class="tnum">0.10, 0.0962 s, 10.02 req/s</td><td></td></tr>
+      <tr><td><i>U</i><sub>sat</sub></td><td class="d">users at which prefill duty reaches 100% (<code>max_users_saturation()</code>)</td><td class="tnum">283 open / 544 closed</td><td>users</td></tr>
+      <tr><td><i>U</i><sub>lat</sub></td><td class="d">users at which a miss's mean TTFT reaches the budget (<code>max_users_latency()</code>)</td><td class="tnum">273 (FCFS)</td><td>users</td></tr>
+      <tr><td><i>N</i>*</td><td class="d">closed-loop saturation knee of the machine-repairman model</td><td class="tnum">544</td><td>users</td></tr>
+      <tr><td><i>Z</i><sub>think</sub></td><td class="d">waiting-only think time, closed loop (<code>MEASURED_THINK_Z_S</code>)</td><td class="tnum">32.5</td><td>s</td></tr>
+      <tr><td><i>R</i>₀</td><td class="d">zero-load response: own prefill + decoding <i>N</i><sub>out</sub> at the floor</td><td class="tnum">25.1</td><td>s</td></tr>
+      <tr><td><i>D</i></td><td class="d">prefill demand one user-cycle places on the bottleneck</td><td class="tnum">0.106</td><td>s</td></tr>
+      <tr><td><i>R</i>(<i>λ</i>)</td><td class="d">mean prefill sojourn at rate <i>λ</i> (wait + own prefill, § F.4)</td><td class="tnum">0.187 at <i>λ</i> = 2.35</td><td>s</td></tr>
+      <tr><td><i>N</i><sub>out</sub></td><td class="d">output tokens decoded per request (<code>OUT_TOKENS_DEFAULT</code>)</td><td class="tnum">1,000</td><td>tok</td></tr>
+      <tr><td><i>v</i><sub>floor</sub></td><td class="d">per-user decode floor (<code>DECODE_FLOOR_TOKS</code>)</td><td class="tnum">40</td><td>tok/s</td></tr>
+    </table></div>
+    <p class="tnote">These conversions are the planner's two stated assumptions, and both are limitations (docs/scenarios.md § 9). <i>T</i><sub>think</sub> is the full interval, response time included (measured cycle 43.3 s; the 30 s reference is the conservative side); the closed variants take waiting-only <i>Z</i><sub>think</sub> and let the model supply its own response time, so a slower deployment lightens its own arrival rate. The remaining two ceilings come from earlier sections: <code>max_users_cache()</code> = the warm p5 user-class count of § F.1 (example: 176), <code>max_users_decode()</code> = the <i>n</i> where p50 <i>v</i><sub>user</sub> hits the floor (example: 228). <code>operating_point()</code> takes the minimum of the four — here cache (176) binds.</p>
+
+    <h3 id="f-power">F.6 — Power &amp; cost</h3>
+    <p><b>Duty split and draw</b><span class="fn">power_draw()</span></p>
+    <div class="eq"><i>d</i><sub>p</sub> = min(1, <i>λ</i><sub>g</sub>·E[<i>S</i>]);&nbsp;&nbsp; <i>d</i><sub>d</sub> = min(1 − <i>d</i><sub>p</sub>, &nbsp;<i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub> / (<i>U</i><sub>dec</sub>·<i>v</i><sub>floor</sub>))<br>
+    <span class="op" style="padding-left:0"><i>P</i><sub>gpu</sub> =</span><span class="term"><span><i>d</i><sub>p</sub>·<i>P</i><sub>prefill</sub></span><span class="ub"></span><span class="lbl">prefilling: compute-bound, power-cap-limited</span></span><span class="op">+</span><span class="term"><span><i>d</i><sub>d</sub>·<i>P</i><sub>decode</sub></span><span class="ub"></span><span class="lbl">decoding: bandwidth-bound, well under TDP</span></span><span class="op">+</span><span class="term"><span>(1 − <i>d</i><sub>p</sub> − <i>d</i><sub>d</sub>)·<i>P</i><sub>idle</sub></span><span class="ub"></span><span class="lbl">remainder at warm idle</span></span><br>
+    <i>P</i><sub>sys</sub> = <i>n</i><sub>gpu</sub>·(<i>P</i><sub>gpu</sub> + <i>P</i><sub>host</sub>)·PUE</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td><i>d</i><sub>p</sub></td><td class="d">fraction of time spent prefilling — the § F.4 duty, clamped (<code>d_p</code>)</td><td class="tnum">0.226</td><td>—</td></tr>
+      <tr><td><i>d</i><sub>d</sub></td><td class="d">fraction of time decode-active: output demand over floor capacity, capped at what prefill leaves (<code>d_d</code>)</td><td class="tnum">0.257</td><td>—</td></tr>
+      <tr><td><i>λ</i><sub>g</sub></td><td class="d">total req/s one replica group sees (= <i>λ</i>/dp)</td><td class="tnum">2.35</td><td>req/s</td></tr>
+      <tr><td>E[<i>S</i>]</td><td class="d">mean prefill service time (§ F.4)</td><td class="tnum">0.0962</td><td>s</td></tr>
+      <tr><td><i>N</i><sub>out</sub></td><td class="d">output tokens per request (<code>AVG_OUT_TOK</code>)</td><td class="tnum">1,000</td><td>tok</td></tr>
+      <tr><td><i>U</i><sub>dec</sub></td><td class="d">the group's decode ceiling at the floor (<code>max_users_decode()</code>)</td><td class="tnum">228</td><td>users</td></tr>
+      <tr><td><i>v</i><sub>floor</sub></td><td class="d">decode floor (<code>DECODE_FLOOR_TOKS</code>)</td><td class="tnum">40</td><td>tok/s</td></tr>
+      <tr><td><i>P</i><sub>prefill</sub>, <i>P</i><sub>decode</sub>, <i>P</i><sub>idle</sub></td><td class="d">per-GPU phase draw (<code>p_prefill_w</code>, <code>p_decode_w</code>, <code>idle_w</code>)</td><td class="tnum">630, 385, 80</td><td>W</td></tr>
+      <tr><td><i>P</i><sub>gpu</sub></td><td class="d">average draw of one GPU (<code>per_gpu_w</code>)</td><td class="tnum">283</td><td>W</td></tr>
+      <tr><td><i>n</i><sub>gpu</sub></td><td class="d">GPUs in the deployment (<code>Topology.n_gpu</code> = dp·<i>t</i>)</td><td class="tnum">2</td><td>GPUs</td></tr>
+      <tr><td><i>P</i><sub>host</sub></td><td class="d">flat per-GPU chassis adder (<code>host_w</code>)</td><td class="tnum">575</td><td>W</td></tr>
+      <tr><td>PUE</td><td class="d">facility power-usage effectiveness (<code>PUE_DEFAULT</code>)</td><td class="tnum">1.5</td><td>—</td></tr>
+      <tr><td><i>P</i><sub>sys</sub></td><td class="d">draw at the meter (<code>kw</code> × 1000)</td><td class="tnum">2,573</td><td>W</td></tr>
+    </table></div>
+    <p class="tnote">The three states partition time — no double counting. The phase watts are measured Hopper fractions of TDP (0.90 / 0.55 / warm idle); every B300 figure is extrapolated. The GPU term carries ±20–25%.</p>
+
+    <p><b>The bill</b><span class="fn">energy_cost()</span></p>
+    <div class="eq">€<sub>month</sub> = (<i>P</i><sub>sys</sub>/1000)·<i>h</i><sub>mo</sub>·<i>c</i><sub>kWh</sub>;&nbsp;&nbsp; €<sub>Mtok</sub> = ((<i>P</i><sub>sys</sub>/1000)·<i>c</i><sub>kWh</sub>/3600) / (<i>λ</i><sub>g</sub>·dp·<i>N</i><sub>out</sub>) × 10⁶</div>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
+      <tr><td>€<sub>month</sub></td><td class="d">monthly energy bill (<code>eur_month</code>)</td><td class="tnum">352</td><td>€</td></tr>
+      <tr><td>€<sub>Mtok</sub></td><td class="d">energy cost per million output tokens (<code>eur_mtok</code>)</td><td class="tnum">0.058</td><td>€</td></tr>
+      <tr><td><i>P</i><sub>sys</sub></td><td class="d">system draw (above); /1000 converts W → kW</td><td class="tnum">2,573</td><td>W</td></tr>
+      <tr><td><i>h</i><sub>mo</sub></td><td class="d">flat billing month (<code>HOURS_PER_MONTH</code>)</td><td class="tnum">720</td><td>h</td></tr>
+      <tr><td><i>c</i><sub>kWh</sub></td><td class="d">electricity tariff (<code>EUR_PER_KWH_DEFAULT</code>)</td><td class="tnum">0.19</td><td>€/kWh</td></tr>
+      <tr><td><i>λ</i><sub>g</sub>, dp, <i>N</i><sub>out</sub></td><td class="d">group request rate, replica count, output tokens (above)</td><td class="tnum">2.35 req/s, 1, 1,000 tok</td><td></td></tr>
+    </table></div>
+    <p class="tnote">The literals are unit conversions: /1000 W → kW, /3600 kWh → kWs (so the numerator is a cost rate in €/s), ×10⁶ tokens → millions; the denominator <i>λ</i><sub>g</sub>·dp·<i>N</i><sub>out</sub> is the system's output-token rate in tok/s. The bill is linear in both PUE and <i>c</i><sub>kWh</sub> (asserted in the self-checks), so tariff and facility scenarios are one multiply. <code>eur_user</code> divides €<sub>month</sub> across the users (example: €5.50/user); the €/Mtok figure inherits <i>N</i><sub>out</sub>'s assumed status linearly. Energy only — hardware amortisation is out of scope.</p>
+
+    <h3 id="f-constants">F.7 — Constants</h3>
+    <p><b>Global constants</b></p>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Symbol</th><th>Code name</th><th>Value</th><th>Status</th></tr>
+      <tr><td><i>η</i> haircut / doubling</td><td><code>TP_EFFICIENCY</code></td><td class="tnum">0.90</td><td>assumed, TP2-consistent</td></tr>
+      <tr><td>cross-domain penalty</td><td><code>CROSS_DOMAIN_EFFICIENCY</code></td><td class="tnum">0.65</td><td>unmeasured guard</td></tr>
+      <tr><td><i>P</i>₀ calibration anchor</td><td><code>BASELINE_POOL_TOKENS_27B_1GPU</code></td><td class="tnum">2.77×10⁶ tok</td><td>projected from FP16 measurement</td></tr>
+      <tr><td><i>R</i><sub>act</sub></td><td><code>ACT_RESERVE</code></td><td class="tnum">19.31 GB (17.98 GiB)</td><td>solved from the anchor</td></tr>
+      <tr><td>TP2 cross-check pool</td><td><code>MEASURED_POOL_TOKENS_27B_TP2_FP16</code></td><td class="tnum">3,233,564 tok</td><td>measured 2026-07-22</td></tr>
+      <tr><td>MFU</td><td><code>MFU_DEFAULT</code> [<code>_LOW</code>, <code>_HIGH</code>]</td><td class="tnum">0.45 [0.30–0.60]</td><td>assumed</td></tr>
+      <tr><td>chunk₀</td><td><code>CHUNK_DEFAULT</code></td><td class="tnum">32,768 tok</td><td>vLLM default</td></tr>
+      <tr><td><i>v</i><sub>floor</sub></td><td><code>DECODE_FLOOR_TOKS</code></td><td class="tnum">40 tok/s</td><td>study policy</td></tr>
+      <tr><td><i>T</i><sub>think</sub> / <i>Z</i><sub>think</sub></td><td><code>THINK_TIME_S</code> / <code>MEASURED_THINK_Z_S</code></td><td class="tnum">30 s / 32.5 s</td><td>reference / measured 2026-08-04</td></tr>
+      <tr><td><i>U</i><sub>ref</sub>, <i>T</i><sub>turn</sub></td><td><code>REF_USERS</code>, turn</td><td class="tnum">64 users, 2,000 tok</td><td>reference workload</td></tr>
+      <tr><td><i>N</i><sub>out</sub></td><td><code>AVG_OUT_TOK</code> / <code>OUT_TOKENS_DEFAULT</code></td><td class="tnum">1,000 tok</td><td>assumed</td></tr>
+      <tr><td>PUE, <i>c</i><sub>kWh</sub>, hours</td><td><code>PUE_DEFAULT</code>, <code>EUR_PER_KWH_DEFAULT</code>, <code>HOURS_PER_MONTH</code></td><td class="tnum">1.5, €0.19, 720 h</td><td>user-chosen multipliers</td></tr>
+    </table></div>
+
+    <p><b>GPUs</b><span class="fn">GPUS = {…}</span></p>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Part</th><th><i>V</i> [GB]</th><th><i>BW</i><sub>HBM</sub> [TB/s]</th><th><i>C</i><sub>fp8</sub> dense [PFLOP/s]</th><th><i>R</i><sub>extra</sub> [GB]</th><th>NVLink</th><th>TDP [W]</th><th><i>P</i><sub>idle</sub></th><th><i>P</i><sub>decode</sub></th><th><i>P</i><sub>prefill</sub></th><th><i>P</i><sub>host</sub></th></tr>
+      <tr><td>H200</td><td class="tnum">141</td><td class="tnum">4.8</td><td class="tnum">1.979</td><td class="tnum">0</td><td class="tnum">8</td><td class="tnum">700</td><td class="tnum">80</td><td class="tnum">385</td><td class="tnum">630</td><td class="tnum">575</td></tr>
+      <tr><td>B300</td><td class="tnum">288.4</td><td class="tnum">8.0</td><td class="tnum">4.5</td><td class="tnum">9.75</td><td class="tnum">8</td><td class="tnum">1,400</td><td class="tnum">150</td><td class="tnum">770</td><td class="tnum">1,260</td><td class="tnum">500</td></tr>
+    </table></div>
+    <p class="tnote">Watts per GPU; decode/prefill = 0.55/0.90 × TDP (measured Hopper fractions). Every B300 power row is extrapolated — no published Blackwell Ultra power-state measurement exists. <i>C</i><sub>fp8</sub> is the <em>dense</em> rate (vendor sheets lead with 2:4 sparsity, which no LLM GEMM reaches).</p>
+
+    <p><b>Models (FP8 serving checkpoints)</b><span class="fn">MODELS = {…}</span></p>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Model</th><th><i>b</i><sub>kv</sub> [B/tok]</th><th><i>S</i> [/session]</th><th><i>W</i><sub>res</sub> [GB]</th><th><i>W</i><sub>sh</sub> [GB]</th><th><i>w</i><sub>e</sub> [GB]</th><th><i>w</i><sub>E</sub> [GB]</th><th><i>m</i></th><th><i>N</i><sub>p</sub> [10⁹]</th><th><i>ℓ</i></th><th><i>d</i></th><th>max ctx [tok]</th></tr>
+      <tr><td>Qwen3.6-27B</td><td class="tnum">32,768</td><td class="tnum">75 MiB</td><td class="tnum">30.9</td><td class="tnum">30.9</td><td class="tnum">—</td><td class="tnum">—</td><td class="tnum">1.7</td><td class="tnum">24.5</td><td class="tnum">16</td><td class="tnum">6,144</td><td class="tnum">1,048,576</td></tr>
+      <tr><td>Qwen3.6-35B-A3B</td><td class="tnum">10,240</td><td class="tnum">31.9 MiB</td><td class="tnum">35.5</td><td class="tnum">1.94</td><td class="tnum">1.01</td><td class="tnum">32.2</td><td class="tnum">1.7</td><td class="tnum">2.44</td><td class="tnum">10</td><td class="tnum">4,096</td><td class="tnum">1,048,576</td></tr>
+      <tr><td>Mistral-Medium-3.5</td><td class="tnum">180,224</td><td class="tnum">0</td><td class="tnum">133.6</td><td class="tnum">125.0</td><td class="tnum">—</td><td class="tnum">—</td><td class="tnum">1.0</td><td class="tnum">121.8</td><td class="tnum">88</td><td class="tnum">12,288</td><td class="tnum">262,144</td></tr>
+      <tr><td>GLM-5.2</td><td class="tnum">48,408</td><td class="tnum">0</td><td class="tnum">755.5</td><td class="tnum">18.9</td><td class="tnum">22.6</td><td class="tnum">724.8</td><td class="tnum">1.7</td><td class="tnum">37.4</td><td class="tnum">78</td><td class="tnum">16,384</td><td class="tnum">1,048,576</td></tr>
+      <tr><td>DeepSeek-V4-Flash</td><td class="tnum">3,450</td><td class="tnum">14.9 MiB</td><td class="tnum">166.9</td><td class="tnum">7.66</td><td class="tnum">3.45</td><td class="tnum">147.2</td><td class="tnum">1.7</td><td class="tnum">12.7</td><td class="tnum">41</td><td class="tnum">649*</td><td class="tnum">1,048,576</td></tr>
+    </table></div>
+    <p class="tnote">GB = 10⁹ B. *DSv4-Flash's <i>d</i> is 26,624 summed across its 41 mixed-class layers, stored as <code>attn_d = 26,624/41</code>. NVFP4 checkpoints swap (<i>W</i><sub>res</sub>, <i>W</i><sub>sh</sub>, <i>w</i><sub>e</sub>, <i>w</i><sub>E</sub>) per <code>nvfp4_w</code> (see <code>research/nvfp4.md</code>); FP16 KV doubles <i>b</i><sub>kv</sub>.</p>
+
+    <p><b>Sparse-attention decode constants</b><span class="fn">kv_decode_*</span></p>
+    <div class="tblwrap"><table class="c">
+      <tr><th>Model</th><th><i>b</i><sub>dec</sub> [B/ctx-tok]</th><th><i>c</i><sub>top</sub> [B/seq]</th><th><i>τ</i> [tok]</th></tr>
+      <tr><td>GLM-5.2 (DSA)</td><td class="tnum">2,772</td><td class="tnum">92.0×10⁶</td><td class="tnum">2,048</td></tr>
+      <tr><td>DeepSeek-V4-Flash (CSA)</td><td class="tnum">426</td><td class="tnum">9.36×10⁶</td><td class="tnum">2,048</td></tr>
+    </table></div>
   </section>
 
   <section id="glossary">
