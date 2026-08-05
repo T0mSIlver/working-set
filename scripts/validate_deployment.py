@@ -33,9 +33,9 @@ think (exponential, mean think_time_s) -> send prior context + a
 warm_turn_tokens turn -> stream the response. With probability miss_rate a
 turn prepends a random salt, making the whole request unmatchable — the
 model's cache miss. Subagent sessions (ratio r, leaner prompts) run the
-same loop. One simplification vs Workload: the model gives subagents their
-own leaner prefix (sys_sub); here both classes share the single CONFIG
-prefix (sub_shares_prefix=True in model terms).
+same loop with their OWN byte-stable prefix (subagent_prefix_tokens),
+exactly as Workload prices them — unless sub_shares_prefix points both
+classes at the single user prefix.
 
 What one run establishes, and what it cannot: the ladder separates the
 ceilings only by their observed failure mode (TTFT breach vs decode-floor
@@ -81,6 +81,8 @@ CONFIG = {
         "subagent_ratio": 0.10,              # subagent sessions per user session
         "subagent_median_tokens": 8_000,
         "subagent_sigma": 0.9,
+        "subagent_prefix_tokens": 3_000,     # subagents' own lean shared prefix
+        "sub_shares_prefix": False,          # True = subagents reuse the user prefix
         "miss_rate": 0.01,                   # per-turn probability of a forced full re-prefill
         "max_output_tokens": 1_000,          # decoded tokens per turn (OUT_TOKENS_DEFAULT)
     },
@@ -96,6 +98,7 @@ CONFIG = {
         "saturation_ceiling_users": 283,     # users where prefill duty = 100%
         "binding_constraint": "cache",       # argmin of the four ceilings
         "predicted_limit_users": 177,        # the binding ceiling's value
+        "operating_point_users": 64,         # the load ttft_miss_s / bstar were computed AT
         "ttft_miss_s": 2.6,                  # mean TTFT of a miss at the operating point
         "bstar_misses": 5.1,                 # B*: simultaneous misses drained inside the budget
     },
@@ -284,18 +287,26 @@ async def send_turn(client, args, cfg, prompt: str, turn: Turn) -> str:
 # closed-loop session
 # ============================================================================
 async def user_loop(client, args, cfg, uid: int, is_sub: bool,
-                    system_prefix: str, turns: list, stop: asyncio.Event,
-                    stagger_s: float):
+                    system_prefix: str, sub_prefix: str, turns: list,
+                    stop: asyncio.Event, stagger_s: float):
     wl = cfg["workload"]
     rng = random.Random((args.seed << 20) ^ uid)
     cpt = args.chars_per_token
     median = wl["subagent_median_tokens"] if is_sub else wl["user_prompt_median_tokens"]
     sigma = wl["subagent_sigma"] if is_sub else wl["user_prompt_sigma"]
-    full = draw_session_tokens(rng, median, sigma,
-                               wl["system_prefix_tokens"],
+    # each request class carries ITS OWN byte-stable prefix, exactly as
+    # Workload.sample prices it: subagents get the lean sub prefix unless
+    # sub_shares_prefix points them at the user prefix (the old behaviour
+    # — always the user prefix — silently tested a ~3x lighter subagent
+    # workload than the one the predictions were computed on)
+    own_sub = is_sub and not wl.get("sub_shares_prefix", False)
+    prefix_tok = wl.get("subagent_prefix_tokens", 3_000) if own_sub \
+        else wl["system_prefix_tokens"]
+    prefix_txt = sub_prefix if own_sub else system_prefix
+    full = draw_session_tokens(rng, median, sigma, prefix_tok,
                                args.context_cap_tokens)
-    # per-session unique context on top of the shared prefix
-    ctx = make_text(rng, max(full - wl["system_prefix_tokens"], 0), cpt)
+    # per-session unique context on top of this class's shared prefix
+    ctx = make_text(rng, max(full - prefix_tok, 0), cpt)
     history = ""
     n_turn = 0
     cap = args.turns_per_user or math.inf
@@ -316,7 +327,7 @@ async def user_loop(client, args, cfg, uid: int, is_sub: bool,
         # model's cache miss (full re-prefill), applied to this turn only
         salt = f"[miss-salt {rng.getrandbits(64):016x}] " if is_miss else ""
         turn_text = "" if first else "\n" + make_text(rng, wl["warm_turn_tokens"], cpt)
-        prompt = salt + system_prefix + "\n" + ctx + history + turn_text
+        prompt = salt + prefix_txt + "\n" + ctx + history + turn_text
         turn = Turn(uid=uid, is_sub=is_sub,
                     kind="first" if first else ("miss" if is_miss else "hit"),
                     t_start=time.monotonic(),
@@ -410,7 +421,8 @@ async def run_rung(client, args, cfg, pop: int, state: dict) -> RungResult:
     for i in range(pop + n_sub):
         tasks.append(asyncio.create_task(user_loop(
             client, args, cfg, uid=pop * 100_000 + i, is_sub=(i >= pop),
-            system_prefix=system_prefix, turns=turns, stop=stop,
+            system_prefix=system_prefix, sub_prefix=state["sub_prefix"],
+            turns=turns, stop=stop,
             stagger_s=rng.uniform(0, max(args.ramp_s, 1.0)))))
     t0 = time.monotonic()
     measure_start = t0 + args.ramp_s
@@ -438,7 +450,12 @@ async def run_burst(client, args, cfg, state: dict):
     inside the TTFT budget (spike_tolerance in scenario_model.py)."""
     wl = cfg["workload"]
     pred = cfg["predictions"]
-    pop = args.burst_users or max(1, round(0.5 * pred["predicted_limit_users"]))
+    # standing load defaults to the OPERATING POINT the B* prediction was
+    # computed at (old default 0.5 x limit drained the burst into a
+    # different duty cycle than the one that priced it)
+    pop = args.burst_users or max(1, round(
+        pred.get("operating_point_users")
+        or 0.5 * pred["predicted_limit_users"]))
     n_sub = round(pop * wl["subagent_ratio"])
     n = args.burst
     print(f"\nBURST PROBE: standing load {pop} users (+{n_sub} subagents), "
@@ -450,7 +467,8 @@ async def run_burst(client, args, cfg, state: dict):
     rng = random.Random(args.seed ^ 0xB0057)
     tasks = [asyncio.create_task(user_loop(
         client, args, cfg, uid=900_000 + i, is_sub=(i >= pop),
-        system_prefix=state["system_prefix"], turns=turns, stop=stop,
+        system_prefix=state["system_prefix"], sub_prefix=state["sub_prefix"],
+        turns=turns, stop=stop,
         stagger_s=rng.uniform(0, max(args.ramp_s, 1.0))))
         for i in range(pop + n_sub)]
     try:
@@ -672,16 +690,21 @@ def print_report(state: dict, cfg, args, interrupted: bool = False):
         else:
             row("warm capacity (p5)", f"{wc}", "not separable", TILDE, "no data")
 
-    # miss TTFT level (read at the passing rung nearest the predicted limit)
+    # miss TTFT level — read at the rung nearest the OPERATING POINT the
+    # prediction was computed at (the explorer's Concurrent-users setting):
+    # ttft_miss rises steeply with load, so sampling it at the predicted
+    # LIMIT instead systematically failed a correct model
     tm = pred.get("ttft_miss_s")
     cand = [r for r in rungs if r.n_miss > 0 and math.isfinite(r.ttft_miss_mean)]
     if cand and tm:
-        tgt = pred.get("predicted_limit_users") or cand[-1].pop
+        tgt = (pred.get("operating_point_users")
+               or pred.get("predicted_limit_users") or cand[-1].pop)
         r0 = min(cand, key=lambda r: abs(r.pop - tgt))
         ratio = r0.ttft_miss_mean / tm
         v = CHECK if 0.7 <= ratio <= 1.3 else (TILDE if 0.5 <= ratio <= 2.0 else CROSS)
         row("miss mean TTFT", f"{tm:g}s", f"{r0.ttft_miss_mean:.2f}s @ {r0.pop}u",
-            v, f"{ratio:.2f}x predicted (model quotes order-of-magnitude bounds)")
+            v, f"{ratio:.2f}x predicted at the ~{tgt}-user operating point "
+               f"(model quotes order-of-magnitude bounds)")
     else:
         row("miss mean TTFT", f"{tm if tm else '-'}", "not separable", TILDE,
             "no forced-miss samples")
@@ -723,6 +746,17 @@ def print_report(state: dict, cfg, args, interrupted: bool = False):
         "DP deployments: this drives ONE endpoint; replica-splitting and "
         "session-sticky routing are not exercised.",
     ]
+    wl_n = cfg["workload"]
+    sub_floor = (wl_n["system_prefix_tokens"]
+                 if wl_n.get("sub_shares_prefix", False)
+                 else wl_n.get("subagent_prefix_tokens", 3_000))
+    if sub_floor >= wl_n["subagent_median_tokens"]:
+        notes.append(
+            "Subagent leg is DEGENERATE under this config: the prefix floor "
+            f"({sub_floor:,} tok) >= the subagent median "
+            f"({wl_n['subagent_median_tokens']:,} tok), so most subagent "
+            "first turns are byte-identical and vLLM dedups them to one "
+            "cache entry — the subagent KV load is not being exercised.")
     if not state.get("burst"):
         notes.append("Correlated-flush tolerance (B*) needs the separate "
                      "--burst mode; the ladder's independent per-turn misses "
@@ -749,8 +783,13 @@ def print_report(state: dict, cfg, args, interrupted: bool = False):
 def build_ladder(args, cfg) -> list:
     pred = cfg["predictions"]["predicted_limit_users"]
     mults = [float(x) for x in args.rungs.split(",") if x.strip()]
-    pops = sorted({max(1, round(m * pred)) for m in mults})
-    return [p for p in pops if p <= args.max_users]
+    pops = {max(1, round(m * pred)) for m in mults}
+    # always ladder THROUGH the operating point: ttft_miss_s (and B*) are
+    # predictions AT that load, so the verdict needs a rung there
+    op = cfg["predictions"].get("operating_point_users")
+    if op:
+        pops.add(max(1, round(op)))
+    return [p for p in sorted(pops) if p <= args.max_users]
 
 
 def dry_run(args, cfg) -> int:
@@ -786,17 +825,23 @@ def dry_run(args, cfg) -> int:
            f"{'sigma cfg':>9} {'sigma smp':>9} {'p5':>8} {'p50':>8} "
            f"{'p95':>9} {'mean':>9}  check")
     print(hdr)
-    for cls, med, sig in (("user", wl["user_prompt_median_tokens"],
-                           wl["user_prompt_sigma"]),
-                          ("subagent", wl["subagent_median_tokens"],
-                           wl["subagent_sigma"])):
+    # per-class clip floor, mirroring user_loop: subagents clip to THEIR
+    # prefix unless sub_shares_prefix — displaying both classes at the user
+    # floor overstated the subagent p50 by ~87% under the default config
+    sub_floor = (wl["system_prefix_tokens"]
+                 if wl.get("sub_shares_prefix", False)
+                 else wl.get("subagent_prefix_tokens", 3_000))
+    for cls, med, sig, floor in (
+            ("user", wl["user_prompt_median_tokens"],
+             wl["user_prompt_sigma"], wl["system_prefix_tokens"]),
+            ("subagent", wl["subagent_median_tokens"],
+             wl["subagent_sigma"], sub_floor)):
         raw = [rng.lognormvariate(math.log(med), sig) for _ in range(20_000)]
         smp_med = pct(raw, 50)
         logs = [math.log(x) for x in raw]
         mu = sum(logs) / len(logs)
         smp_sig = math.sqrt(sum((x - mu) ** 2 for x in logs) / (len(logs) - 1))
-        clipped = [min(max(x, wl["system_prefix_tokens"]),
-                       args.context_cap_tokens) for x in raw]
+        clipped = [min(max(x, floor), args.context_cap_tokens) for x in raw]
         ok = (abs(smp_med / med - 1) < 0.03 and abs(smp_sig / sig - 1) < 0.03)
         failed |= not ok
         print(f"{cls:<10} {med:>10,.0f} {smp_med:>10,.0f} {sig:>9.2f} "
@@ -815,9 +860,11 @@ def dry_run(args, cfg) -> int:
     for h in cfg["hypotheses"]:
         print(f"  - {h}")
     if args.burst:
+        burst_pop = args.burst_users or max(1, round(
+            pred.get("operating_point_users")
+            or 0.5 * pred["predicted_limit_users"]))
         print(f"\n--burst {args.burst}: would run the burst probe instead of "
-              f"the ladder (standing load "
-              f"{args.burst_users or max(1, round(0.5 * pred['predicted_limit_users']))} users)")
+              f"the ladder (standing load {burst_pop} users)")
     if failed:
         print("\nSAMPLER SELF-CHECK FAILED", file=sys.stderr)
         return 1
@@ -863,8 +910,9 @@ def parse_args(argv=None):
                     help="run the B* probe instead of the ladder: from steady "
                          "standing load, fire N simultaneous forced misses")
     ap.add_argument("--burst-users", type=int, default=0,
-                    help="standing load for --burst "
-                         "(default 0.5 x predicted_limit_users)")
+                    help="standing load for --burst (default: "
+                         "operating_point_users, else 0.5 x "
+                         "predicted_limit_users)")
     ap.add_argument("--chars-per-token", type=float, default=4.0,
                     help="synthetic-text calibration; the report prints the "
                          "achieved ratio to correct it (default 4.0)")
@@ -927,6 +975,11 @@ def main(argv=None) -> int:
         "system_prefix": make_text(random.Random(0xC0FFEE),
                                    cfg["workload"]["system_prefix_tokens"],
                                    args.chars_per_token),
+        # the subagents' own lean prefix — a DIFFERENT byte-stable block,
+        # deduplicated among subagents only (used unless sub_shares_prefix)
+        "sub_prefix": make_text(random.Random(0x5AB4EF1C),
+                                cfg["workload"].get("subagent_prefix_tokens", 3_000),
+                                args.chars_per_token),
     }
     interrupted = False
     try:
