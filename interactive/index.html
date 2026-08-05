@@ -560,6 +560,60 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
     </div>
   </div>
 
+  <!-- ======================================================================
+       CHART E MOCKUPS — five candidate retellings of the chunk-size trade.
+       MOCKUP-ONLY section: same closed forms as chart E, but nothing here
+       prices a tile. Delete all but the chosen option (and this banner).
+       ==================================================================== -->
+  <div class="sub-h" id="emocks"><span class="n">E?</span><h3>Chart E mockups — the chunk-size trade, retold</h3><span class="lede">five candidates; the current chart E stays above for comparison</span></div>
+  <p style="font-size:12.5px; color:var(--muted); margin:2px 0 10px">Chart E today reads as "big chunks slow things down for everyone" because its only dramatic curve is the per-freeze spike. These mockups each try to say the true sentence instead: <b>the chunk sets the texture of the stall, not its total</b> — what a big chunk buys with its big freezes is prefill throughput, and how much depends on how MoE the model is.</p>
+  <div class="charts">
+
+    <div class="panel card">
+      <p class="ct">Option 1 · Plot the invariant next to the spike</p>
+      <p class="cs">The bottom strip gains the line the current chart implies but never draws: the <b>total</b> added stall of one mean-length miss, which is flat across the whole axis. Both lines price the same chunked re-prefill (worst = its largest single pass), so they meet at the right edge once one chunk swallows the whole context — one freeze <i>is</i> the total. Top two strips would stay as they are.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>worst single freeze</span>
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>total added stall, one mean-length miss</span>
+      </div>
+      <div class="chartbox"><div id="chartEm1"></div><div class="tt" id="ttEm1"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">Option 2 · What a decoder feels — the token stream itself</p>
+      <p class="cs">One mean-length miss interleaved into a live decode stream, at three chunk sizes. Ticks are tokens arriving; green blocks are the stream frozen behind a prefill chunk. Small chunks turn the freeze into a drizzle, big chunks into a few solid blocks — the green total is the same in every row.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>stream frozen behind a chunk</span>
+        <span class="li"><span class="sw" style="background:var(--axis); width:2px; height:10px"></span>a token arrives</span>
+      </div>
+      <div class="chartbox"><div id="chartEm2"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">Option 3 · Mean vs worst — the latency-dashboard idiom</p>
+      <p class="cs">Two ITL statistics on one axis: the worst single gap explodes with chunk size, while the <b>average</b> ITL over a 30-second window containing that miss barely leaves ×1 — the same total stall spread over the same window. Familiar shape: tail rising, mean flat ⇒ a granularity story, not a slowdown.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>worst single gap</span>
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>mean ITL, 30-s window with one miss</span>
+      </div>
+      <div class="chartbox"><div id="chartEm3"></div><div class="tt" id="ttEm3"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">Option 4 · Keep the chart, spell out the arithmetic</p>
+      <p class="cs">The current spike panel unchanged, plus the multiplication the reader is otherwise left to do alone: freezes shrink exactly as fast as they multiply, so the total is the same at both ends. Cheapest fix — no new geometry, but it asks the reader to trust two callouts.</p>
+      <div class="chartbox"><div id="chartEm4"></div><div class="tt" id="ttEm4"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">Option 5 · The middle panel carries the real argument</p>
+      <p class="cs">Why the default is high: every model's cold-request ceiling vs chunk size, each normalized to its own 32k value, on the current topology (curve <b>shape</b> only — weight fit is not checked here). The dense models barely care; the MoEs pay ~20%+ at 2k because every pass streams the whole expert bank. Selected model drawn thick.</p>
+      <div class="legend" id="chartEm5legend"></div>
+      <div class="chartbox"><div id="chartEm5"></div><div class="tt" id="ttEm5"></div></div>
+    </div>
+
+  </div>
+
   <div class="act-h" id="act3">
     <div class="act-t"><span class="act-n">3</span><h2>So what should I run?</h2></div>
     <p>Every ceiling above, converted into one unit — <b>max concurrent users</b> — so the binding one is simply the smallest. Five beats: the <a href="#verdict">verdict</a>, <a href="#fragility">how fragile it is</a>, <a href="#recipe">the recipe and its bill</a>, <a href="#validate">the script that tests it</a>, and <a href="#frontier">every alternative ranked</a>.</p>
@@ -2502,6 +2556,280 @@ function renderChartE(data){
 })();
 
 /* ============================================================================
+   CHART E MOCKUPS — five candidate retellings of the chunk-size trade.
+   MOCKUP-ONLY block: same closed forms as chart E, nothing here prices a
+   tile. Delete all but the chosen option's code path.
+   ========================================================================== */
+const MOCK_WIN_S = 30;                          // option 3's averaging window
+const MOCK_TEXTURE_CS = [2048, 8192, 32768];    // option 2's rows
+
+// Pass times (s) of ONE mean-length miss chunked at C — MARGINAL pricing
+// (the interleaved chunk rides a decode pass that streams the weights
+// regardless: research/prefill.md's pricing boundary), prior starting at 0
+// (a miss re-prefills from empty), so later passes carry more cross-
+// attention and the last FULL chunk is the worst freeze. The sum telescopes
+// -> chunk-invariant, which is options 1-4's whole point. NOTE the worst
+// freeze here therefore differs slightly from chart E's spike, which prices
+// one midpoint chunk (prior = E[L]/2) instead of the max over real passes.
+function mockPassTimes(m, topo, context, C){
+  const ts=[]; let done=0;
+  while(done<context){
+    const step=Math.min(C, context-done);
+    ts.push(prefillSeconds(m, topo, step, done));
+    done+=step;
+  }
+  return ts;
+}
+// Series colors for option 5, FIXED per model key (never re-assigned when a
+// model is deselected). 5th slot falls back to muted — flagged in the PR: if
+// option 5 wins, the palette gains a validated 5th categorical step instead.
+const MOCK_MODEL_COLORS = ['--s1','--s2','--s3','--s4','--muted'];
+
+function chartEMockData(model, topo, wl, cs, stress){
+  const stepS=(stress && stress.pu>0) ? model.mtp/stress.pu : 0;
+  const d={Cs:[], worst:[], total:[], meanWin:[], spike:[], passes:[],
+           stepS, mean:cs.mean, models:[]};
+  for(let i=0;i<=40;i++){
+    const C=Math.round(Math.pow(2, 11+i/8));
+    d.Cs.push(C);
+    if(stepS>0){
+      const ts=mockPassTimes(model, topo, cs.mean, C);
+      const stall=ts.reduce((a,b)=>a+b,0);
+      d.worst.push(1 + Math.max(...ts)/stepS);
+      d.total.push(stall/stepS);
+      d.meanWin.push(1 + stall/MOCK_WIN_S);
+      d.passes.push(ts.length);
+      d.spike.push((stepS + prefillSeconds(model, topo, C, cs.mean/2))/stepS);
+    }
+  }
+  Object.keys(CONFIG.MODELS).forEach((key,idx)=>{
+    const m=CONFIG.MODELS[key];
+    let ref;
+    try{ ref=coldRequestSeconds(m, topo, wl, cs, PREFILL_CHUNK); }
+    catch(e){ return; }              // anchor unsolvable on this topology
+    const rel=d.Cs.map(C=>ref / coldRequestSeconds(m, topo, wl, cs, C));
+    d.models.push({key, name:m.name, rel,
+                   color:MOCK_MODEL_COLORS[idx % MOCK_MODEL_COLORS.length],
+                   sel: m===model});
+  });
+  return d;
+}
+// value at C read off the drawn segments (same eighth-octave grid as chart E)
+function interpMock(vals, C){
+  const f=clip((Math.log2(C)-11)*8, 0, vals.length-1);
+  const i=Math.min(Math.floor(f), vals.length-2), t=f-i;
+  return vals[i]+t*(vals[i+1]-vals[i]);
+}
+
+let mockGeoms={};
+// One strip, N series on ONE shared y-scale, log x — the shape options 1, 3,
+// 4 and 5 share. o: {title, tfmt, dfmt, hi?, labelAt?, annotate?}
+function renderMockStrip(divId, d, series, o){
+  const W=560, H=o.H||220, mL=52, mR=14, mT=22, mB=34;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const surface=cssv('--surface');
+  const sx=logScale(CHUNK_LO, CHUNK_HI, mL, mL+pw);
+  const all=series.flatMap(s=>s.vals);
+  let lo=Math.min(...all), hi=o.hi!=null?o.hi:Math.max(...all);
+  const span=(hi-lo)||Math.abs(hi)||1;
+  lo=Math.max(o.floor??0, lo-span*0.10);
+  if(o.hi==null) hi=hi+span*0.10;
+  const sy=linScale(lo, hi, mT+ph, mT);
+  let g='';
+  [2048,4096,8192,16384,32768,65536].forEach(t=>{
+    const X=sx(t);
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${X}" y="${mT+ph+15}" text-anchor="middle">${t/1024}k</text>`;
+  });
+  niceTicksIn(lo, hi, o.nticks||4).forEach(v=>{
+    const Y=sy(v);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${o.tfmt(Math.abs(v)<1e-9?0:v)}</text>`;
+  });
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL}" y="${mT-10}" text-anchor="start">${o.title}</text>`;
+  const XD=sx(PREFILL_CHUNK);
+  g+=`<line x1="${XD}" y1="${mT}" x2="${XD}" y2="${mT+ph}" stroke="${muted}" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.8"/>`;
+  g+=`<text class="axtick" x="${XD+5}" y="${mT+10}" text-anchor="start" fill="${muted}">default 32,768</text>`;
+  // left-edge direct labels (option 5): de-overlapped downward in y order
+  const leftLabels=[];
+  for(const s of series){
+    let ln=`M ${sx(d.Cs[0])} ${sy(clip(s.vals[0],lo,hi))}`;
+    for(let i=1;i<d.Cs.length;i++)
+      ln+=` L ${sx(d.Cs[i])} ${sy(clip(s.vals[i],lo,hi))}`;
+    g+=`<path d="${ln}" fill="none" stroke="${s.color}" stroke-width="${s.w||2}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    const vD=interpMock(s.vals, PREFILL_CHUNK), YD=sy(clip(vD,lo,hi));
+    g+=`<circle cx="${XD}" cy="${YD}" r="4" fill="${s.color}" stroke="${surface}" stroke-width="1.5"/>`;
+    if(o.labelAt==='left')
+      leftLabels.push({y:sy(clip(s.vals[0],lo,hi)), color:s.color,
+                       txt:o.dfmt(s.vals[0])+' '+(s.short||s.label)});
+    else
+      g+=`<text class="dlabel" x="${XD-8}" y="${YD-7}" text-anchor="end" fill="${s.color}">${o.dfmt(vD)}</text>`;
+  }
+  if(leftLabels.length){
+    leftLabels.sort((a,b)=>a.y-b.y);
+    let prev=-1e9;
+    for(const L of leftLabels){
+      const y=Math.max(L.y, prev+11); prev=y;
+      g+=`<text class="dlabel" x="${mL+6}" y="${clip(y,mT+8,mT+ph-2)}" text-anchor="start" fill="${L.color}">${esc(L.txt)}</text>`;
+    }
+  }
+  if(o.annotate) g+=o.annotate({sx, sy, lo, hi, mT, ph, mL, pw});
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-4}" text-anchor="middle">max_num_batched_tokens (log)</text>`;
+  document.getElementById(divId).innerHTML=svgEl(g, W, H, o.aria||o.title);
+  mockGeoms[divId]={W,H,mL,pw,mT,ph,sx,sy,lo,hi,d,series,dfmt:o.dfmt};
+}
+
+// Option 2: the token stream itself. Ticks = tokens arriving; blocks = the
+// stream frozen behind an interleaved prefill chunk (one token rides each
+// pass, so a pass is stepS + chunk time). Same green total in every row.
+function renderMockTexture(divId, model, topo, d){
+  const W=560, rh=26, rgap=22, mL=52, mR=118, mT=18, rows=MOCK_TEXTURE_CS;
+  const H=mT + (rows.length-1)*(rh+rgap) + rh + 40;
+  const pw=W-mL-mR;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const data=rows.map(C=>{
+    const ts=mockPassTimes(model, topo, d.mean, C);
+    return {C, ts, stall:ts.reduce((a,b)=>a+b,0)};
+  });
+  const lead=0.25, tail=0.35;   // s of normal decode either side of the miss
+  const Tmax=Math.max(...data.map(r=>lead+r.ts.length*d.stepS+r.stall+tail));
+  const sx=linScale(0, Tmax, mL, mL+pw);
+  const tick=(t,y)=>`<line x1="${sx(t)}" y1="${y+3}" x2="${sx(t)}" y2="${y+rh-3}" stroke="${axis}" stroke-width="1"/>`;
+  let g='';
+  data.forEach((r,ri)=>{
+    const y=mT+ri*(rh+rgap);
+    g+=`<text class="axtick" x="${mL-8}" y="${y+rh/2+3}" text-anchor="end">${r.C/1024}k</text>`;
+    g+=`<rect x="${mL}" y="${y}" width="${pw}" height="${rh}" fill="${grid}" opacity="0.30"/>`;
+    let t=0;
+    for(; t<lead; t+=d.stepS) g+=tick(t,y);
+    for(const p of r.ts){
+      g+=`<rect x="${sx(t)}" y="${y}" width="${Math.max(1, sx(t+p)-sx(t))}" height="${rh}" fill="${cssv('--s3')}" opacity="0.8"/>`;
+      t+=p+d.stepS;
+      g+=tick(Math.min(t,Tmax), y);
+    }
+    for(t+=d.stepS; t<Tmax; t+=d.stepS) g+=tick(t,y);
+    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+9}" text-anchor="start">worst ${fmt(Math.max(...r.ts),2)} s</text>`;
+    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+21}" text-anchor="start" fill="${muted}">Σ frozen ${fmt(r.stall,2)} s</text>`;
+  });
+  const yBot=mT+(rows.length-1)*(rh+rgap)+rh;   // bottom of the last row
+  niceTicksIn(0, Tmax, 5).forEach(v=>{
+    g+=`<text class="axtick" x="${sx(v)}" y="${yBot+15}" text-anchor="middle">${fmt(Math.abs(v)<1e-9?0:v,1)}</text>`;
+  });
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${yBot+32}" text-anchor="middle">seconds — one mean-length miss mid-stream</text>`;
+  document.getElementById(divId).innerHTML=
+    svgEl(g, W, H, 'Token stream of a decoder while one miss re-prefills, at three chunk sizes');
+}
+
+function renderMockMsg(divId, msg){
+  const W=560, H=90;
+  document.getElementById(divId).innerHTML=
+    svgEl(`<text x="${W/2}" y="${H/2+4}" text-anchor="middle" class="axtick">${esc(msg)}</text>`, W, H, msg);
+}
+
+function renderChartEMocks(model, topo, wl, cs, stress, noFit){
+  const spikeIds=['chartEm1','chartEm2','chartEm3','chartEm4'];
+  if(noFit){
+    spikeIds.concat('chartEm5').forEach(id=>renderNoFit(id,'chunk-size trade'));
+    document.getElementById('chartEm5legend').innerHTML='';
+    mockGeoms={};
+    return;
+  }
+  mockGeoms={};
+  const d=chartEMockData(model, topo, wl, cs, stress);
+  const xGap=v=>'×'+fmt(v, v<10?1:0);
+  if(d.stepS>0){
+    renderMockStrip('chartEm1', d, [
+      {label:'worst single freeze',                    color:cssv('--s3'), vals:d.worst},
+      {label:'total added stall, one mean-length miss', color:cssv('--s1'), vals:d.total},
+    ], {title:'stall a decoder feels (× one inter-token gap)',
+        tfmt:v=>'×'+fmt(v,0), dfmt:xGap,
+        aria:'Worst single freeze rises with chunk size while the total added stall of one miss stays flat'});
+    renderMockTexture('chartEm2', model, topo, d);
+    renderMockStrip('chartEm3', d, [
+      {label:'worst single gap',                 color:cssv('--s3'), vals:d.worst},
+      {label:'mean ITL, 30-s window w/ one miss', color:cssv('--s1'), vals:d.meanWin},
+    ], {title:'ITL (× one normal inter-token gap)',
+        tfmt:v=>'×'+fmt(v,0), dfmt:xGap,
+        aria:'Worst single inter-token gap rises with chunk size while the 30-second mean barely moves'});
+    // option 4's callout arithmetic, at the two ends the caption argues about
+    const ann=({sx, sy, lo, hi, mT})=>{
+      const mk=(C)=>({w:interpMock(d.worst,C), p:Math.round(interpMock(d.passes,C)),
+                      tot:interpMock(d.total,C)});
+      const a=mk(2048), b=mk(PREFILL_CHUNK), muted=cssv('--muted');
+      const A=`translate(${sx(2048)+8},${mT+16})`;
+      const B=`translate(${sx(PREFILL_CHUNK)-10},${mT+16})`;
+      return `<g class="axtick" fill="${muted}">`
+        +`<g transform="${A}"><text x="0" y="0">${xGap(a.w)} per freeze × ${a.p} freezes</text>`
+        +`<text x="0" y="13">≈ ${xGap(a.tot)} gaps of total stall</text></g>`
+        +`<g transform="${B}" text-anchor="end"><text x="0" y="0">${xGap(b.w)} × ${b.p} ≈ ${xGap(b.tot)} total —</text>`
+        +`<text x="0" y="13">the same stall, in ${b.p} lumps</text></g></g>`;
+    };
+    renderMockStrip('chartEm4', d, [
+      {label:'ITL spike every decoder sees', color:cssv('--s3'), vals:d.spike},
+    ], {title:'ITL spike every decoder sees (× one inter-token gap)',
+        tfmt:v=>'×'+fmt(v,0), dfmt:xGap, annotate:ann,
+        aria:'Chart E spike panel with callouts showing per-freeze times freeze-count is constant'});
+  } else {
+    spikeIds.forEach(id=>renderMockMsg(id,'no decode operating point at this load — options 1–4 need one'));
+  }
+  if(d.models.length){
+    renderMockStrip('chartEm5', d,
+      d.models.map(m=>({label:m.name, short:m.key, color:cssv(m.color),
+                        vals:m.rel, w:m.sel?2.6:1.6})),
+      {title:'cold-request ceiling, % of its own 32k value', labelAt:'left',
+       tfmt:v=>fmt(v*100,0)+'%', dfmt:v=>fmt(v*100,0)+'%', hi:1.04,
+       aria:'Cold-request ceiling versus chunk size per model, normalized to each model’s value at 32k'});
+    document.getElementById('chartEm5legend').innerHTML=d.models.map(m=>
+      `<span class="li"><span class="sw" style="background:${cssv(m.color)}"></span>${esc(m.name)}${m.sel?' (selected)':''}</span>`).join('');
+  } else {
+    renderMockMsg('chartEm5','the MFU anchor solves for no model on this topology');
+    document.getElementById('chartEm5legend').innerHTML='';
+  }
+}
+
+// shared hover for the mockup line strips (same log invert as chart E's)
+function attachMockHover(divId, ttId){
+  const box=document.getElementById(divId), tt=document.getElementById(ttId);
+  if(!box || !tt) return;
+  function handler(e){
+    const geom=mockGeoms[divId]; if(!geom){ tt.style.opacity=0; return; }
+    const svg=box.querySelector('svg'); if(!svg) return;
+    const rect=svg.getBoundingClientRect();
+    const vx=(e.clientX-rect.left)/rect.width*geom.W;
+    if(vx<geom.mL || vx>geom.mL+geom.pw){ tt.style.opacity=0; removeCross(svg); return; }
+    const C=Math.round(clip(
+      Math.exp(Math.log(CHUNK_LO) + (vx-geom.mL)/geom.pw*Math.log(CHUNK_HI/CHUNK_LO)),
+      CHUNK_LO, CHUNK_HI));
+    const px=geom.sx(C);
+    const marks=geom.series.map(s=>({color:s.color, r:3.5,
+      y:geom.sy(clip(interpMock(s.vals,C), geom.lo, geom.hi))}));
+    drawCross(svg, px, geom, marks);
+    tt.innerHTML=`<div class="tth tnum">chunk = ${fmt(C,0)} tok</div>`
+      +geom.series.map(s=>`<div class="row"><span class="sw" style="background:${s.color}"></span>`
+        +`${esc(s.label)} <b class="tnum">${geom.dfmt(interpMock(s.vals,C))}</b></div>`).join('');
+    const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();
+    const scale=rect.width/geom.W;
+    const cx=(rect.left-parRect.left)+px*scale;
+    const cy=(rect.top-parRect.top)+(marks.length?marks[0].y:geom.mT)*scale;
+    const tw=tt.offsetWidth, th=tt.offsetHeight, pad=4, gap=12;
+    let left=cx+gap;
+    if(left+tw>parRect.width-pad) left=cx-gap-tw;
+    let top=cy-th-gap;
+    if(top<pad) top=cy+gap;
+    tt.style.left=Math.max(pad,Math.min(left,parRect.width-tw-pad))+'px';
+    tt.style.top =Math.max(pad,Math.min(top, parRect.height-th-pad))+'px';
+    tt.style.opacity=1;
+  }
+  function leave(){ tt.style.opacity=0; const svg=box.querySelector('svg'); if(svg) removeCross(svg); }
+  box.addEventListener('mousemove', handler);
+  box.addEventListener('mouseleave', leave);
+  box.addEventListener('touchmove',(e)=>{ if(e.touches[0]) handler(e.touches[0]); },{passive:true});
+}
+['1','3','4','5'].forEach(n=>attachMockHover('chartEm'+n, 'ttEm'+n));
+
+/* ============================================================================
    TOOLTIP / crosshair for C and D
    ========================================================================== */
 // Value of a plotted series at an arbitrary x, read off the SAME straight
@@ -2739,6 +3067,7 @@ function computeAndRender(draft){
   seedFor('context');
   lastCS = noFit ? null : contextStats(wl);
   renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
+  renderChartEMocks(model, topo, wl, lastCS, lastStress, noFit);
 
   renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS);
   renderPlanner(model, topo, wl, lastCS, noFit, draft, q);
