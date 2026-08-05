@@ -543,7 +543,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
   <div class="charts">
     <div class="panel card">
       <p class="ct">E · The max_num_batched_tokens trade</p>
-      <p class="cs">When a request arrives that must (re)prefill, its chunks ride the decode batch's fused forward passes — one chunk per pass, and nobody's next token exists until the pass completes. <b>Bottom:</b> that one gap as a <b>multiple of the normal inter-token gap</b> (the baseline: every session decoding, nothing prefilling). <b>Middle:</b> the most misses one replica group can re-prefill per second, flat out — 1 / the machine time of a mean-length miss. <b>Top:</b> the share of a miss-side pass spent computing rather than re-streaming weights. Small chunks shrink each freeze but pay the weight stream once per pass, sinking MFU and the cold ceiling with it. Dashed = the 32,768 default every tile is priced at.</p>
+      <p class="cs">A (re)prefilling request's chunks ride the decode batch's fused passes, and the pass duration is everyone's inter-token gap. <b>Bottom:</b> that gap ÷ the normal all-decoding gap. <b>Middle:</b> cold requests one replica group can prefill per second (1 / mean miss machine time). <b>Top:</b> the compute share of a miss pass. Small chunks shrink each freeze but pay the weight stream every pass — sinking MFU and the cold ceiling. Dashed = the 32,768 default every tile prices.</p>
       <div class="chartbox"><div id="chartE"></div><div class="tt" id="ttE"></div></div>
       <!-- MOCKUP: live worked example under the real chart, filled by
            renderChartEMocks — the numbers move with every knob -->
@@ -569,12 +569,12 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
        prices a tile. Delete all but the chosen option (and this banner).
        ==================================================================== -->
   <div class="sub-h" id="emocks"><span class="n">E?</span><h3>Chart E mockups — the chunk-size trade, retold</h3><span class="lede">five candidates; the current chart E stays above for comparison</span></div>
-  <p style="font-size:12.5px; color:var(--muted); margin:2px 0 10px">Chart E today reads as "big chunks slow things down for everyone" because its only dramatic curve is the per-freeze spike. These mockups each try to say the true sentence instead: <b>the chunk sets the texture of the stall, not its total</b> — what a big chunk buys with its big freezes is prefill throughput, and how much depends on how MoE the model is.</p>
+  <p style="font-size:12.5px; color:var(--muted); margin:2px 0 10px">Chart E reads as "big chunks slow everyone down" because only its spike curve is dramatic. Each candidate tries to draw the true sentence instead: <b>the chunk sets the texture of the stall, not its total</b> — and big freezes buy prefill throughput, most of all on MoEs.</p>
   <div class="charts">
 
     <div class="panel card">
       <p class="ct">Option 1 · Plot the invariant next to the spike</p>
-      <p class="cs">The bottom strip gains the line the current chart implies but never draws: the <b>total</b> added stall of one mean-length miss, which is flat across the whole axis. Both lines price the same chunked re-prefill (worst = its largest single pass), so they meet at the right edge once one chunk swallows the whole context — one freeze <i>is</i> the total. Top two strips would stay as they are.</p>
+      <p class="cs">The spike's missing companion line: <b>total</b> added stall of one mean-length miss — flat. The chunk sizes each freeze, not their sum; the curves meet once one chunk swallows the whole context.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>worst single freeze</span>
         <span class="li"><span class="sw" style="background:var(--s1)"></span>total added stall, one mean-length miss</span>
@@ -584,7 +584,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">Option 2 · What a decoder feels — the token stream itself</p>
-      <p class="cs">One mean-length miss interleaved into a live decode stream, at three chunk sizes. Ticks are tokens arriving; green blocks are the stream frozen behind a prefill chunk; <b>each waiting gap is labeled in ms</b>, so a row reads like the stream itself ("40 ms, …, 2,080 ms, 540 ms, 40 ms"). Small chunks turn the freeze into a drizzle, big chunks into a few solid blocks — the green total is the same in every row.</p>
+      <p class="cs">One mean-length miss in a live token stream (ticks = tokens), at three chunk sizes; <b>every waiting gap labeled in ms</b>. The green total is identical in every row — drizzle vs blocks is the only choice.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>stream frozen behind a chunk</span>
         <span class="li"><span class="sw" style="background:var(--axis); width:2px; height:10px"></span>a token arrives</span>
@@ -594,7 +594,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">Option 3 · Mean vs worst — the latency-dashboard idiom</p>
-      <p class="cs">Two ITL statistics on one axis: the worst single gap explodes with chunk size, while the <b>average</b> ITL over a 30-second window containing that miss barely leaves ×1 — the same total stall spread over the same window. Familiar shape: tail rising, mean flat ⇒ a granularity story, not a slowdown.</p>
+      <p class="cs">The worst gap explodes; the mean over a 30-s window with that miss barely leaves ×1. Tail up, mean flat — granularity, not slowdown.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>worst single gap</span>
         <span class="li"><span class="sw" style="background:var(--s1)"></span>mean ITL, 30-s window with one miss</span>
@@ -604,20 +604,20 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">Option 4 · Keep the chart, spell out the arithmetic</p>
-      <p class="cs">The current spike panel unchanged, plus the multiplication the reader is otherwise left to do alone: freezes shrink exactly as fast as they multiply, so the total is the same at both ends. Cheapest fix — no new geometry, but it asks the reader to trust two callouts.</p>
+      <p class="cs">The current panel plus the multiplication it leaves to the reader: freezes shrink exactly as fast as they multiply. Cheapest fix; the totals also live in the hover.</p>
       <div class="chartbox"><div id="chartEm4"></div><div class="tt" id="ttEm4"></div></div>
     </div>
 
     <div class="panel card">
       <p class="ct">Option 5 · The middle panel carries the real argument</p>
-      <p class="cs">Why the default is high: every model's cold-request ceiling vs chunk size, each normalized to its own 32k value, on the current topology (curve <b>shape</b> only — weight fit is not checked here). The dense models barely care; the MoEs pay ~20%+ at 2k because every pass streams the whole expert bank. Selected model drawn thick.</p>
+      <p class="cs">Each model's cold ceiling vs chunk, normalized to its own 32k value (shape only; weight fit unchecked). Dense models barely care; MoEs pay 20%+ at 2k — every pass streams the whole expert bank. Selected = thick.</p>
       <div class="legend" id="chartEm5legend"></div>
       <div class="chartbox"><div id="chartEm5"></div><div class="tt" id="ttEm5"></div></div>
     </div>
 
     <div class="panel card">
       <p class="ct">Option 6 · Anatomy of one pass — the toll and the math</p>
-      <p class="cs">Every miss-side pass = a fixed weight-stream toll (gray, the whole resident checkpoint through HBM) + GEMM that grows with the chunk (blue). The gray never changes; the chunk only chooses how much math amortizes it. Switch the model selector: dense's gray nearly vanishes, an MoE's dominates at 2k. <b>Hover any chunk chart</b> (chart E included) and a third bar tracks your cursor.</p>
+      <p class="cs">One miss-side pass = fixed weight-stream toll (gray) + GEMM that grows with the chunk (blue). The gray never changes — the chunk decides how much math amortizes it. <b>Hover any chunk chart</b> for a live third bar; switch models to watch the gray flip from sliver (dense) to dominant (MoE at 2k).</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--muted)"></span>weight-stream toll (fixed)</span>
         <span class="li"><span class="sw" style="background:var(--s1)"></span>GEMM (grows with chunk)</span>
@@ -627,14 +627,14 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">Option 7 · Option 5 + break-even markers (T*)</p>
-      <p class="cs">Same overlay, axis widened down to 256 tokens. ▲ marks each model's break-even chunk T* — where the stream toll equals the GEMM — the point below which streaming dominates the pass. The MoE break-evens sit just left of 2k, so the knob's real range starts right on their pain threshold; the dense break-evens (~100 tok) fall off even this axis. The reader derives the dense/MoE rule from where the ▲ sits.</p>
+      <p class="cs">Option 5 widened to 256 tokens; ▲ = each model's break-even T* (stream toll = GEMM). The MoE ▲s sit just left of 2k — the knob range starts on their pain threshold; dense T* (~100 tok) falls off even this axis (◀, values in legend).</p>
       <div class="legend" id="chartEm7legend"></div>
       <div class="chartbox"><div id="chartEm7"></div><div class="tt" id="ttEm7"></div></div>
     </div>
 
     <div class="panel card">
       <p class="ct">Option 8 · Why an MoE can't stream less (method-page candidate)</p>
-      <p class="cs">The "just stream the experts you use" objection, answered: tokens route top-k independently, so the share of the expert bank a single pass touches saturates within a few dozen tokens — three orders of magnitude below any real chunk. Dashed gray = the study's linear pricing. Routing specs hard-coded for the mockup (8-of-256; DeepSeek 6-of-256).</p>
+      <p class="cs">Tokens route top-k independently, so one pass touches the whole expert bank within ~150 tokens — three decades below real chunks. "Stream only the experts you use" is what it already does. (Routing specs hard-coded for the mockup.)</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>dense: everything, always</span>
         <span class="li"><span class="sw" style="background:var(--s2)"></span>8-of-256 (35B-A3B, GLM-5.2)</span>
@@ -2963,13 +2963,13 @@ function renderChartEMocks(model, topo, wl, cs, stress, noFit){
       const ts=mockPassTimes(model, topo, cs.mean, PREFILL_CHUNK);
       const norm=fmt(d.stepS*1000,0);
       const gaps=ts.slice(0,4).map(t=>fmt((d.stepS+t)*1000,0));
-      html=`Worked, at the current knobs and the 32k default — one mean-length miss (${fmt(cs.mean/1000,0)}k tok) re-prefills in ${ts.length} fused pass${ts.length>1?'es':''}, so a decoder's token gaps read <b class="tnum">${norm} ms, ${gaps.join(' ms, ')} ms${ts.length>4?', …':''}, ${norm} ms</b>.`;
+      html=`Worked, current knobs, 32k default: a mean miss (${fmt(cs.mean/1000,0)}k tok) = ${ts.length} fused pass${ts.length>1?'es':''} — token gaps <b class="tnum">${norm}, ${gaps.join(', ')}${ts.length>4?', …':''}, ${norm} ms</b>.`;
     }
     try{
       const csec=coldRequestSeconds(model, topo, wl, cs, PREFILL_CHUNK);
       const tollMs=prefillOverheadSeconds(model, topo)*1000;
       const p=meanPasses(cs, PREFILL_CHUNK);
-      html+=` And the middle strip: E[one miss] = ${fmt(csec-p*tollMs/1000,2)} s of compute (averaged over the context tail) + ${fmt(p,1)} passes × ${fmt(tollMs,1)} ms weight-stream toll ≈ ${fmt(csec,2)} s of machine time, so one replica group prefilling flat out absorbs at most 1/${fmt(csec,2)} ≈ <b class="tnum">${fmt(1/csec,2)} cold req/s</b>.`;
+      html+=` Middle strip: ${fmt(csec-p*tollMs/1000,2)} s compute + ${fmt(p,1)} passes × ${fmt(tollMs,1)} ms toll ≈ ${fmt(csec,2)} s per miss → <b class="tnum">${fmt(1/csec,2)} cold req/s</b> per group.`;
     }catch(e){}
     wEl.innerHTML=html;
   }
