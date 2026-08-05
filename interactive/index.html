@@ -584,7 +584,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">Option 2 · What a decoder feels — the token stream itself</p>
-      <p class="cs">One mean-length miss in a live token stream (ticks = tokens), at three chunk sizes; <b>every waiting gap labeled in ms</b>. The green total is identical in every row — drizzle vs blocks is the only choice.</p>
+      <p class="cs">One mean-length miss in a live token stream (ticks = tokens), at three chunk sizes; <b>every waiting gap labeled in ms</b>. The green total is identical in every row; ▲ = the miss's own first token, which small chunks postpone — the decoders' comfort is paid by the cold request.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>stream frozen behind a chunk</span>
         <span class="li"><span class="sw" style="background:var(--axis); width:2px; height:10px"></span>a token arrives</span>
@@ -2782,8 +2782,15 @@ function renderMockTexture(divId, model, topo, d){
       const meanMs=blocks.reduce((a,b)=>a+b.ms,0)/blocks.length;
       g+=`<text class="axtick" x="${(blocks[0].x0+blocks[blocks.length-1].x1)/2}" y="${yl}" text-anchor="middle">${blocks.length} gaps of ≈ ${fmt(meanMs,0)} ms</text>`;
     }
-    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+9}" text-anchor="start">worst ${fmt(Math.max(...r.ts)+d.stepS,2)} s</text>`;
-    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+21}" text-anchor="start" fill="${muted}">Σ frozen ${fmt(r.stall,2)} s</text>`;
+    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+8}" text-anchor="start">worst ${fmt(Math.max(...r.ts)+d.stepS,2)} s</text>`;
+    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+19}" text-anchor="start" fill="${muted}">Σ frozen ${fmt(r.stall,2)} s</text>`;
+    // the miss's own side of the trade: its first token arrives when its
+    // LAST chunk clears — later at small chunks, one interleaved decode
+    // step per extra pass
+    const tft=r.stall+(r.ts.length-1)*d.stepS;
+    const xEnd=blocks[blocks.length-1].x1;
+    g+=`<path d="M ${xEnd} ${y+rh+2} L ${xEnd-4} ${y+rh+8} L ${xEnd+4} ${y+rh+8} Z" fill="${cssv('--s2')}"/>`;
+    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+30}" text-anchor="start" fill="${cssv('--s2')}">▲ 1st tok ${fmt(tft,2)} s</text>`;
   });
   const yBot=mT+rows.length*slot-rgap;          // bottom of the last row's bar
   niceTicksIn(0, Tmax, 5).forEach(v=>{
