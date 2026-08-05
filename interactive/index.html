@@ -3830,8 +3830,8 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
         if (bindFlip || fitFlip){
           const d = Math.abs(p.v - ax.cur) / (ax.hi - ax.lo);
           if (!best || d < best.dist)
-            best = { v: p.v, bind: p.bind, bindFlip, fitFlip, dir, dist: d,
-                     nowFits: fits0 };
+            best = { v: p.v, prev: ax.pts[i - dir].v, bind: p.bind,
+                     bindFlip, fitFlip, dir, dist: d, nowFits: fits0 };
           break;
         }
       }
@@ -3899,7 +3899,10 @@ function renderFlipPanel(axes){
     g += `<path d="M ${xc - 5} ${yc - 13} L ${xc + 5} ${yc - 13} L ${xc} ${yc - 6} Z" fill="${text}"/>`;
     // flip marker + right-hand verdict
     if (ax.flip){
-      const xf = sx(ax.flip.v);
+      // the tick marks the VISUAL transition, so it must share the bands'
+      // convention: segment edges sit at the midpoint between adjacent
+      // samples, not at the first sample past the flip (half a stride off)
+      const xf = (sx(ax.flip.prev) + sx(ax.flip.v)) / 2;
       const side = ax.flip.dir > 0 ? '≥' : '≤';
       const what = ax.flip.fitFlip
         ? (ax.flip.nowFits ? `stops fitting your ${fmt(ax.users, 0)} users at ${side} ${ax.fmt(ax.flip.v)}`
