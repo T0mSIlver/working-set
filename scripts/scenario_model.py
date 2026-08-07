@@ -1880,6 +1880,101 @@ def max_users_decode(model: Model, topo: Topology, wl: Workload,
     return float(lo)
 
 
+def steady_decode_point(model: Model, topo: Topology, wl: Workload,
+                        rate_group: float,
+                        out_tokens: float = OUT_TOKENS_DEFAULT,
+                        union: str = "linear", n_iter: int = 400,
+                        seed: int = 0, hi: int = 4096) -> dict:
+    """The decode batch a given LOAD actually produces, and its per-user speed.
+
+    Every other decode figure in this model is a stress test: max_users_decode
+    and the explorer's v@warm both ask what one user gets when the whole warm
+    population decodes at once. That is the right worst case and the wrong
+    expectation. Arrivals are open-loop — a user fires once every think-time
+    seconds and spends most of that interval waiting on a tool or a human — so
+    the number of sequences in the decode batch at any instant is far below the
+    warm population, and each of them runs far faster.
+
+    Little's law on the DECODE phase alone (a request queueing for prefill, or
+    being prefilled, is not yet decoding):
+
+        E[n] = rate_group x E[seconds spent decoding]
+             = rate_group x out_tokens / v(n)
+
+    Multiply through and the fixed point is a flow balance needing no inversion:
+
+        n x v(n)   =   rate_group x out_tokens
+        (delivered output tok/s)  (demanded output tok/s)
+
+    n x v(n) is the aggregate decode curve, strictly increasing in n, so the
+    crossing is unique. Bracketed by doubling and bisected on the integers the
+    curve is actually sampled at, then interpolated across the final unit
+    interval; `rate_group` is the TOTAL req/s ONE replica group sees (main +
+    subagent), the same unit every queue metric here uses.
+
+    Returns {"n", "per_user_tok_s", "demand_tok_s", "agg_tok_s", "saturated"},
+    with n and per_user_tok_s per replica group and agg_tok_s system-wide.
+    `saturated` is True when the demand exceeds what `hi` concurrent decoders
+    could retire: no steady state exists, so n is a floor, not an estimate.
+
+    Approximations, both material enough to state wherever this is quoted:
+      MEAN FIELD  v is evaluated at the MEAN batch, not averaged over the
+          batch-size distribution. v is convex in n, so E[v(N)] >= v(E[N]) by
+          Jensen: this returns the conservative side.
+      DECODE ONLY  prefill chunks sharing a forward pass are priced separately
+          (itl_spike); this is the clean-decode speed BETWEEN those spikes.
+    It also says nothing about whether the requests get served at all — if
+    prefill_duty() is at 1.0 the queue is unbounded and no steady state exists
+    upstream of this one. Check that first; the explorer does.
+
+    Mirrors steadyDecodePoint() in interactive/index.html.
+    """
+    if rate_group < 0:
+        raise ValueError(f"rate_group must be >= 0, got {rate_group!r}")
+    if out_tokens < 0:
+        raise ValueError(f"out_tokens must be >= 0, got {out_tokens!r}")
+    if hi < 1:
+        raise ValueError(f"hi must be >= 1, got {hi!r}")
+    reps = topo.replicas
+    demand = rate_group * out_tokens
+
+    def v(n: int) -> float:
+        return float(decode_curves(model, topo, wl, [n], n_iter=n_iter,
+                                   seed=seed, union=union)[1][0])
+
+    out = {"demand_tok_s": demand, "saturated": False}
+    if demand == 0:                        # no load: nothing is decoding
+        return {**out, "n": 0.0, "per_user_tok_s": v(1), "agg_tok_s": 0.0}
+    v1 = v(1)
+    if demand <= v1:
+        # below one decoder the batch holds a single sequence whenever anyone
+        # is decoding at all, so v stays v(1) and the fixed point is exact
+        return {**out, "n": demand / v1, "per_user_tok_s": v1,
+                "agg_tok_s": demand * reps}
+    lo, up = 1, 2
+    while up <= hi and up * v(up) < demand:
+        lo, up = up, up * 2
+    if up > hi:
+        # the study does not do silent caps: say the demand ran off the end
+        return {**out, "n": float(hi), "per_user_tok_s": v(hi),
+                "agg_tok_s": hi * v(hi) * reps, "saturated": True}
+    while up - lo > 1:
+        mid = (lo + up) // 2
+        if mid * v(mid) < demand:
+            lo = mid
+        else:
+            up = mid
+    a_lo, a_up = lo * v(lo), up * v(up)
+    # linear across the final unit interval — the aggregate curve is smooth
+    # and near-linear over one sequence, so this is the last digit, not a model
+    frac = 0.0 if a_up <= a_lo else (demand - a_lo) / (a_up - a_lo)
+    n = lo + min(max(frac, 0.0), 1.0)
+    # per-user speed is the demand shared out: at the fixed point the batch
+    # delivers exactly what the load asks for, by construction
+    return {**out, "n": n, "per_user_tok_s": demand / n,
+            "agg_tok_s": demand * reps}
+
+
 def _check_closed_args(closed_z_s: float, out_tokens: float,
                        decode_toks: float) -> None:
     if closed_z_s < 0:
@@ -2142,7 +2237,11 @@ HOURS_PER_MONTH = 720.0      # the explorer's flat billing month (30 x 24 h)
 # the €/1M-token figure moves hyperbolically (fixed idle/prefill watts
 # amortise as outputs lengthen); the €/month bill moves least (decode is one
 # term of three). Mirrors the explorer's AVG_OUT_TOK.
-AVG_OUT_TOK = 1000
+#
+# ALIAS, not a second constant: the closed-loop conversion and the steady-state
+# decode point price exactly the same quantity, and OUT_TOKENS_DEFAULT got there
+# first. Two literals that must stay equal is a drift bug waiting to happen.
+AVG_OUT_TOK = OUT_TOKENS_DEFAULT
 
 
 def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
@@ -2151,7 +2250,7 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
                # default): 0.0 would price every warm hit at zero machine time
                # and silently under-bill relative to the explorer
                turn_tokens: float = 2_000, pue: float = PUE_DEFAULT,
-               mfu: float = MFU_DEFAULT,
+               mfu: float = MFU_DEFAULT, out_tokens: float = AVG_OUT_TOK,
                per_pass_overhead: bool = False) -> dict:
     """Average draw of one GPU and the whole system, at the current load.
 
@@ -2164,7 +2263,7 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
                  cold/warm prefill service time the spike model already
                  computes, so d_p IS the section-8 duty cycle, clamped
       d_d        decode-active fraction: the output-token demand
-                 (rate x AVG_OUT_TOK) against the floor capacity
+                 (rate x out_tokens) against the floor capacity
                  (decode_users_group x 40 tok/s), capped at whatever prefill
                  leaves (partition, no overlap); a non-positive capacity
                  falls back to d_d = 1 - d_p (the explorer's guard)
@@ -2174,7 +2273,7 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
 
     Provenance: the phase watts are MEASURED on Hopper (H100 proxies; B300
     rows entirely extrapolated — see the GPU dataclass), the duty split is
-    this study's model, and AVG_OUT_TOK is ASSUMED. Mirrors the explorer's
+    this study's model, and out_tokens is ASSUMED. Mirrors the explorer's
     powerDraw() exactly.
     """
     if rate_group < 0:
@@ -2193,7 +2292,9 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
     e_s = prefill_service_moments(model, topo, wl, chunk, turn_tokens, mfu,
                                   per_pass_overhead)[0]
     d_p = min(1.0, rate_group * e_s)
-    demand = rate_group * AVG_OUT_TOK                    # output tok/s asked
+    if out_tokens < 0:
+        raise ValueError(f"out_tokens must be >= 0, got {out_tokens!r}")
+    demand = rate_group * out_tokens                     # output tok/s asked
     cap = decode_users_group * DECODE_FLOOR_TOKS         # output tok/s at floor
     d_d = min(max(0.0, 1.0 - d_p), demand / cap if cap > 0 else 1.0)
     per_gpu_w = (d_p * g.p_prefill_w + d_d * g.p_decode_w
@@ -2208,29 +2309,32 @@ def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
                 chunk: float = CHUNK_DEFAULT, turn_tokens: float = 2_000,
                 pue: float = PUE_DEFAULT,
                 eur_kwh: float = EUR_PER_KWH_DEFAULT,
-                mfu: float = MFU_DEFAULT,
+                mfu: float = MFU_DEFAULT, out_tokens: float = AVG_OUT_TOK,
                 per_pass_overhead: bool = False) -> dict:
     """€ figures on top of power_draw() — the explorer's energyCost().
 
     720 h/month flat; the €/1M-output-tokens figure divides the whole
     system's cost rate by the output-token rate the load implies
-    (rate_group x replicas x AVG_OUT_TOK — every group assumed equally
+    (rate_group x replicas x out_tokens — every group assumed equally
     loaded, the same symmetry the rest of the study uses), and is Infinity
     at zero output rather than a silent zero. eur_user divides the monthly
     bill across `users` (floored at 1, matching the explorer). Both pue and
     eur_kwh are exact user-chosen multipliers — the bill is LINEAR in each,
     asserted in _selfcheck — so tariff/facility scenarios are one multiply,
-    never a re-model. The €-per-token figure inherits AVG_OUT_TOK's
+    never a re-model. The €-per-token figure inherits out_tokens'
     ASSUMED status linearly.
     """
     if users < 0:
         raise ValueError(f"users must be >= 0, got {users!r}")
     if eur_kwh < 0:
         raise ValueError(f"eur_kwh must be >= 0, got {eur_kwh!r}")
+    # keywords past `chunk`: power_draw grew an out_tokens parameter, and a
+    # positional tail would silently feed per_pass_overhead into it
     p = power_draw(model, topo, wl, rate_group, decode_users_group, chunk,
-                   turn_tokens, pue, mfu, per_pass_overhead)
+                   turn_tokens=turn_tokens, pue=pue, mfu=mfu,
+                   out_tokens=out_tokens, per_pass_overhead=per_pass_overhead)
     eur_month = p["kw"] * HOURS_PER_MONTH * eur_kwh
-    out_tok_s = rate_group * topo.replicas * AVG_OUT_TOK
+    out_tok_s = rate_group * topo.replicas * out_tokens
     eur_mtok = ((p["kw"] * eur_kwh / 3600.0) / out_tok_s * 1e6
                 if out_tok_s > 0 else float("inf"))
     return {**p, "eur_month": eur_month,
@@ -2890,6 +2994,61 @@ def _selfcheck():
         try:
             operating_point(m27, tp2, wl, bad_users, n_iter=50)
             raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+    # ---- THE STEADY-STATE DECODE POINT -------------------------------------
+    # The counterpart to every stress figure above: what the load ACTUALLY
+    # produces. Open-loop arrivals mean the decode batch holds a handful of
+    # sequences, not the warm population, and each runs multiples faster.
+    rate_g = request_rate(REF_USERS, THINK_TIME_S, wl.sub_ratio)
+    sdp = steady_decode_point(m27, tp2, wl, rate_g, n_iter=400)
+    # 1. THE identity — n x per-user speed = arrival rate x output tokens.
+    #    Everything the explorer's act-2 tiles print is a reading of this line.
+    assert abs(sdp["n"] * sdp["per_user_tok_s"] - rate_g * OUT_TOKENS_DEFAULT) \
+        < 1e-6 * rate_g * OUT_TOKENS_DEFAULT, \
+        "steady point must balance delivered against demanded output tok/s"
+    # 2. ...which is Little's law read the other way round
+    assert abs(sdp["n"] - rate_g * (OUT_TOKENS_DEFAULT
+                                    / sdp["per_user_tok_s"])) < 1e-9, \
+        "steady n must equal arrival rate x seconds spent decoding"
+    # 3. the headline, PINNED: the 27B on TP2 at the published reference load
+    #    decodes ~6 sequences at a time at ~370 tok/s, against the 228-decoder
+    #    / 40 tok/s ceiling the planner's decode column reports. The gap IS the
+    #    finding; if it closes, the load conversion has broken somewhere.
+    assert abs(sdp["n"] - 6.4) <= 0.8, \
+        f"27B/TP2 reference load: ~6 decoders expected, got {sdp['n']:.2f}"
+    assert abs(sdp["per_user_tok_s"] - 370) <= 40, \
+        f"27B/TP2 reference load: ~370 tok/s expected, " \
+        f"got {sdp['per_user_tok_s']:.0f}"
+    assert sdp["n"] < max_users_decode(m27, tp2, wl, n_iter=200) / 20, \
+        "the steady batch must sit far inside the decode ceiling at this load"
+    # 4. exactly linear in the PRODUCT rate x output tokens, and in nothing else
+    assert (steady_decode_point(m27, tp2, wl, 2 * rate_g, n_iter=200)["n"]
+            > sdp["n"]), "more arrivals must mean more concurrent decoders"
+    a = steady_decode_point(m27, tp2, wl, 2 * rate_g, n_iter=200)
+    b = steady_decode_point(m27, tp2, wl, rate_g,
+                            out_tokens=2 * OUT_TOKENS_DEFAULT, n_iter=200)
+    assert abs(a["n"] - b["n"]) < 1e-9 and abs(a["demand_tok_s"]
+                                               - b["demand_tok_s"]) < 1e-9, \
+        "only the product rate x output tokens can move the steady point"
+    # 5. no load, no decoders — and no division by zero on the way there
+    z = steady_decode_point(m27, tp2, wl, 0.0, n_iter=100)
+    assert z["n"] == 0.0 and z["agg_tok_s"] == 0.0 and z["per_user_tok_s"] > 0
+    # 6. a demand past what `hi` decoders could retire is CENSORED, not clamped
+    hot = steady_decode_point(m27, tp2, wl, 1e6, n_iter=100, hi=64)
+    assert hot["saturated"] and hot["n"] == 64.0, \
+        "demand beyond the decode curve must flag saturated, not invent a batch"
+    # 7. per-group vs system: n is what ONE cache decodes, agg is the estate
+    dpg = topology_grid(dp=2, tp=1)
+    sd_dp = steady_decode_point(m27, dpg, wl, rate_g, n_iter=200)
+    assert abs(sd_dp["agg_tok_s"] - 2 * rate_g * OUT_TOKENS_DEFAULT) < 1e-6, \
+        "the aggregate, and only the aggregate, carries the replica count"
+    for bad in (dict(rate_group=-1.0), dict(out_tokens=-1.0), dict(hi=0)):
+        try:
+            steady_decode_point(m27, tp2, wl,
+                                **{**dict(rate_group=rate_g, n_iter=50), **bad})
+            raise AssertionError(f"expected ValueError for {bad}")
         except ValueError:
             pass
 

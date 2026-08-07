@@ -89,6 +89,15 @@ Stated up front, with predicted direction; outcomes are in [§ Outcomes](#outcom
   **compound** into spike tolerance (cheap misses *and* low standing load), except
   on a global flush, where its larger warm population is the thing being
   re-prefilled and the advantage should partly cancel.
+- **H9 — The steady state is not the stress test** *(added 2026-08-07)*. Every
+  decode figure this study publishes prices the whole warm population decoding
+  at once. Because arrivals are open-loop — a user waits out most of the
+  think-time interval on a tool or a human — the batch a given load actually
+  produces should be **an order of magnitude smaller**, and the per-user speed
+  correspondingly **several times higher**, than the stress figure. The gap
+  should widen with the machine's decode headroom (worst on the configs the
+  study already calls comfortable) and vanish on the config decode already
+  binds.
 
 ## Model
 
@@ -1023,6 +1032,97 @@ model. One burst-replay experiment — hold a warm population, invalidate B
 sessions at once, record burst TTFT and bystander ITL — observes `T_drain`, the
 convoy tax and the token debt directly, on hardware that already exists.
 
+### 10. The steady-state decode point — what the load actually produces (H9)
+
+*Regenerate: `uv run scripts/tables.py` (§ THE STEADY-STATE DECODE POINT).*
+
+Every decode number above — § 7's `mns@40` column, the `v@warm` figures, the
+explorer's act-1 tiles — is a **stress test**: it prices the decode curve with
+every GPU-resident warm session decoding simultaneously. That is the correct
+worst case (a cache flush or a correlated burst really does put the whole
+population in the batch) and the wrong expectation. Arrivals here are
+open-loop: a user fires once every `think` seconds and spends most of that
+interval waiting on a tool or a human. So the batch size follows from Little's
+law on the **decode phase alone** — a request queueing for prefill, or being
+prefilled, is not yet decoding:
+
+```
+E[n] = λ × E[seconds spent decoding] = λ × out / v(n)
+```
+
+which rearranges into a flow balance that needs no inversion:
+
+```
+n × v(n)   =   λ × out
+delivered      demanded      (output tok/s, one replica group)
+```
+
+`n × v(n)` is the aggregate decode curve — strictly increasing in *n* — so the
+crossing is unique, and it is what `steady_decode_point()` bisects.
+
+At the reference load (64 users / 30 s, r = 0.10, 1,000 output tokens per
+response):
+
+| config | warm p5 | n@load | v@load | v@warm | ratio | % of `mns@40` capacity |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 27B 1×H200 | 77 | 15.2 | 155 | 57 | 2.7× | 50% |
+| 27B 2×H200 TP2 | 195 | 6.4 | 366 | 46 | 7.9× | 26% |
+| 35B-A3B 1×H200 | 250 | 0.9 | 2,474 | 53 | 46× | 17% |
+| 35B-A3B 2×H200 TP2 | 632 | 0.5 | 4,453 | 44 | 102× | 8% |
+| Mistral-3.5 4×H200 TP4 | 56 | — | — | 29 | — | 163% — **saturated** |
+| GLM-5.2 8×H200 TP8 | 143 | 37.0 | 63 | 62 | 1.0× | 3% |
+| 27B 1×B300 | 210 | 7.1 | 330 | 40 | 8.2× | 28% |
+| 35B-A3B 2×B300 TP2 | 1,506 | 0.3 | 7,422 | 33 | 228× | 5% |
+
+The ratio column is **the size of a reporting error, not a hardware result**:
+both numbers are the same curve read at two batch sizes. Two rows are the
+interesting ones. Mistral-3.5/TP4 has *no* steady state at this load — its
+output demand exceeds what the cache can retire at any batch size, which is the
+same finding § 9's planner reports as `DECODE`-bound at 36 users, arrived at
+independently. GLM-5.2/TP8 is the row where the gap closes to 1.0×: it is slow
+enough that the reference load already fills its batch, so for that config the
+stress figure *was* the expectation all along. Everywhere else the study has
+been quoting a number 2.7–228× pessimistic against what a user at this load
+would see.
+
+Sensitivity (27B / TP2). The point depends on the request rate and the output
+length **only through their product**, so those two inputs are the whole error
+budget — but *n* is not linear in the product, because per-user speed falls as
+the batch grows:
+
+| think time | n | v |     | output tokens | n | v |
+| ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| 15 s | 18.2 | 257 |     | 250 | 1.3 | 450 |
+| 30 s | 6.4 | 366 |     | 1,000 | 6.4 | 366 |
+| 43 s (measured) | 4.0 | 402 |     | 4,000 | 328 | 29 |
+| 60 s | 2.8 | 425 |     | 16,000 | — | saturated |
+
+4× the output length moves *n* 4.9×; the next 4× moves it 51×; the next
+saturates the configuration outright. **Output length is the one assumed input
+in this section** — the workload model is fitted on 1,850 real prompt *lengths*
+and has never fitted output lengths. The 1,000-token default is consistent with
+the traced 10.8 s served per request (`MEASURED_SERVICE_R_S`) at the observed
+50–90 tok/s, but that is a consistency check, not a fit, which is why the
+explorer exposes it as a slider rather than burying it as a constant.
+
+Three approximations travel with every figure here, and the explorer states all
+three on the tiles. **Mean field:** *v* is evaluated at the mean batch rather
+than averaged over the batch-size distribution; *v* is convex in *n*, so by
+Jensen E[v(N)] ≥ v(E[N]) and the reported speed is the conservative side.
+**Decode only:** prefill chunks sharing a forward pass are the ITL spike of
+§ 8, priced separately — this is the clean-decode speed *between* spikes.
+**It presumes service happens at all:** if prefill duty has reached 100% the
+queue is unbounded and nothing reaches a steady state to decode in, so the
+figure is undefined rather than optimistic.
+
+What this does **not** change: § 7's decision table and § 9's planner both keep
+the stress convention, deliberately. The `decode` ceiling answers "how many
+users could this bandwidth carry if they all decoded at once", which is the
+right question for a capacity ceiling and the wrong one for an expectation.
+Converting that ceiling to the steady-state convention would raise it by
+roughly the ratio column and is a separate change — it would move published
+verdicts, and it is not needed to state this section's finding.
+
 ## Why some knobs act non-linearly (or non-monotonically)
 
 Two separate causes; distinguishing them matters when reading sweeps.
@@ -1258,6 +1358,7 @@ so is the bandwidth they would share.
 | H6 invalidation ≈ linear, ceiling 1 − f | **Supported** (−1.5% at f = 1%, −14% at 10%) |
 | H7 cache binds before bandwidth | **Supported in all 6 configs — with MTP** (warm < mns@40; v@warm ≥ 41 tok/s). **Reversed in all 6 without it** (mns@40 falls 1.8–2.0×, e.g. 118 → 60 on the 27B / 1×H200) |
 | H8 spikes bind below f\*; MoE compounds | **Supported** (§ 9). f_sla is 0.35–0.93× f\* (tightest on Mistral-3.5/TP4) and duty still reads 76–93% there; B\* → 0 at f\*. MoE spike tolerance beats dense **8.8× (1×H200) / 7.2× (TP2)** against a 5.9× prefill-speed gap — and, as predicted, the advantage **shrinks to ~2.2–2.7× on a global flush**. Unpredicted corollary: under FCFS the miss tax lands on *hits* (74× their own service time at f = 20%). The § 9 planner adds a second: **which** constraint binds switches from cache to latency at f ≈ 5% on the 27B/TP2 (f ≈ 10% at the measured 43 s interval), and Mistral-3.5/TP4 turns out **decode**-bound at 36 users (it ships no MTP module) |
+| H9 steady state ≪ stress test | **Supported** (§ 10). At the reference load the batch holds 0.3–37 sequences against warm populations of 56–1,506, and per-user speed runs **2.7–228×** the all-warm figure. Predicted widening with decode headroom holds (largest on the MoE, smallest on GLM-5.2/TP8 at 1.0×), and the one config where decode already binds — Mistral-3.5/TP4 — has **no steady state at all** at this load, agreeing with § 9's independent `DECODE`-bound verdict |
 
 ## Extension (2026-07): B300 GPUs, NVFP4 weights, Mistral-Medium-3.5, GLM-5.2
 
@@ -1574,6 +1675,23 @@ Ordered roughly by how much each could move the numbers:
     `research/spike.md` #4 for latency). It reproduces § 7's published cache and
     decode columns exactly, which is evidence the arithmetic is right — not that
     the conversions are.
+21. **The steady-state decode point rests on an assumed output length** (§ 10;
+    added 2026-08-07). Little's law is exact and the flow balance it produces
+    needs no fitting, but it is driven by `λ × out`, and `out` — output tokens
+    per response — is **assumed at 1,000, never fitted**. The workload model's
+    log-normal is fitted on 1,850 real *prompt* lengths; no output-length trace
+    has been collected. The 1,000-token figure is only cross-checked for
+    consistency against the traced 10.8 s served per request at 50–90 tok/s.
+    The section is not merely linear in this input: 4× moves *n* 4.9×, the next
+    4× moves it 51×, and 16× saturates the 27B/TP2 outright — so an
+    order-of-magnitude error in `out` does not scale the answer, it changes
+    which regime the configuration is in. Three further approximations are
+    stated with every figure: the mean-field closure (*v* priced at the mean
+    batch; convex, so conservative by Jensen), decode-only accounting (the ITL
+    spike of § 8 is separate), and the presumption that prefill is not already
+    saturated. An output-length distribution — even a crude one — from the same
+    trace that produced the think-time anchor would retire most of this, and it
+    is the cheapest measurement outstanding in this study.
 
 ## Reproducibility
 
