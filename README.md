@@ -38,7 +38,3 @@ the real limits.
   dependency-free page mirroring the Python model.
 
 Method, calibration, and caveats are laid out in the docs above.
-
----
-
-By [Tom Vaucourt](https://www.tomvaucourt.com).
