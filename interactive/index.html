@@ -2794,10 +2794,21 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
                             q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
-    lastPlanner = { warmFn, decodeUsers, decodeCensored };
+    lastPlanner = { warmFn, decodeUsers, decodeCensored, fMax: fAxisMax() };
   } else {
     warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
     decodeCensored = lastPlanner.decodeCensored;
+  }
+  // a draft render reuses the cached curve, but warmUsersCurve's anchors only
+  // span the axis it was built for and it CLAMPS beyond its last anchor. So a
+  // drag across the 50% boundary would draw chart G's cache line flat from
+  // 0.5 to 1.0 until the 120 ms settle rebuilt it — a plausible-looking curve
+  // that is simply wrong. Rebuild immediately when the axis changed under it.
+  if (lastPlanner.fMax !== fAxisMax()){
+    seedFor('warmCurve');
+    warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
+                            q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
+    lastPlanner = { ...lastPlanner, warmFn, fMax: fAxisMax() };
   }
 
   const d = plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo);
@@ -3745,10 +3756,16 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     }
     return vs.map((v, i) => ({ v, ...at(v, i) }));
   };
-  // 1 · cache-miss rate — warmFn is the SAME sampled curve chart G uses
-  axes.push({ label: 'Cache-miss rate', cur: f0, lo: 0, hi: 0.5,
+  // 1 · cache-miss rate — warmFn is the SAME sampled curve chart G uses, so
+  //     this row has to sweep the SAME axis: at f0 > 0.5 a 0–0.5 sweep never
+  //     contains the current value (sweep() only injects `cur` when it falls
+  //     inside [lo,hi]), so the marker pins to the endpoint and the handover
+  //     and fits verdicts are read off a baseline that is not the live one.
+  //     Point count scales with the range to hold the 0.0125 stride.
+  const fMax = fAxisMax();
+  axes.push({ label: 'Cache-miss rate', cur: f0, lo: 0, hi: fMax,
     fmt: v => fmt(v * 100, v > 0 && v < 0.02 ? 1 : 0) + '%', approx: false,
-    pts: sweep(41, 0, 0.5, v =>
+    pts: sweep(Math.round(80*fMax) + 1, 0, fMax, v =>
       evalAt(mo, v, state.sla, state.think, warmFn(v) * reps, decodeNow), f0) });
   // 2 · think time — enters every rate linearly, closed form
   axes.push({ label: 'Think time', cur: state.think, lo: 5, hi: 180,
