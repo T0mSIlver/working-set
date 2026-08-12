@@ -2693,7 +2693,7 @@ function modelFor(key){
 
 function syncState(){ liveTurn = state.turn; liveThink = state.think; }
 
-function computeAndRender(draft){
+function computeAndRender(draft, deferFrontierDecode){
   syncState();
   const model=activeModel();
   const topo=currentTopo();
@@ -2771,7 +2771,7 @@ function computeAndRender(draft){
   renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
 
   renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS);
-  renderPlanner(model, topo, wl, lastCS, noFit, draft, q);
+  renderPlanner(model, topo, wl, lastCS, noFit, draft, q, deferFrontierDecode);
 }
 
 /* ---- the planner: tiles, charts F & G, the frontier table ------------------
@@ -2781,9 +2781,9 @@ function computeAndRender(draft){
    The closed-form halves (latency, saturation, B*, TTFT) are cheap and update
    live on every frame, so dragging the load or budget sliders is immediate.
    -------------------------------------------------------------------------- */
-let lastPlanner = null, lastFrontier = null, lastFrontierMo = null;
+let lastPlanner = null, lastFrontier = null, lastFrontierMo = null, lastFrontierDec = null;
 let pendingLoadTiles = [];   // act-2 tiles from renderTiles, painted by the planner
-function renderPlanner(model, topo, wl, cs, noFit, draft, q){
+function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode){
   if (noFit){
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
     renderBindingChart(null); renderSpikeChart(null); renderCeilingBars(null);
@@ -2802,12 +2802,13 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     // rebuild, leaving every row to sample its own moments off whatever the
     // RNG stream happened to be left at. That made non-decode columns
     // (latency, B*, ranking, €/mo) move when only the decode floor changed.
-    const fsigNow = frontierSig(wl);
+    const wsigNow = frontierWarmSig(wl);
     const needCs = !lastFrontier || !lastFrontierMo
-                || (!draft && (lastFrontier.sig !== fsigNow
-                               || lastFrontierMo.sig !== `${fsigNow}|${state.turn}`))
+                || (!draft && (lastFrontier.sig !== wsigNow
+                               || lastFrontierMo.sig !== `${wsigNow}|${state.turn}`))
                 || lastFrontier.base.some(r => !lastFrontierMo.mo[r.key]);
-    renderFrontierSection(wl, cs || (needCs ? contextStats(wl) : null), draft, q);
+    renderFrontierSection(wl, cs || (needCs ? contextStats(wl) : null), draft, q,
+                          deferFrontierDecode);
     lastPlanner = null;
     return;
   }
@@ -2890,7 +2891,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     others.push({ fs: d.fs, b: d.fs.map(x => bStar(m2, x, state.sla, r2)) });
   }
   renderSpikeChart(d, others);
-  renderFrontierSection(wl, cs, draft, q);
+  renderFrontierSection(wl, cs, draft, q, deferFrontierDecode);
 
   // the sensitivity panel re-sweeps every soft input, so like the other
   // sampled halves it runs on SETTLED renders only and drafts reuse the last
@@ -2910,55 +2911,82 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
    none of which change any other row's warm capacity or decode ceiling — so
    the two most common interactions (switching model, dragging load) never
    pay for it. The closed-form half is recomputed every render. */
-/* The frontier's Monte-Carlo signature. Hoisted out of renderFrontierSection
+/* The frontier's Monte-Carlo signatures, hoisted out of renderFrontierSection
    because the no-fit path has to know whether the table is ABOUT to be rebuilt
-   before it decides whether to draw context samples for it. */
-function frontierSig(wl){
+   before it decides whether to draw context samples for it.
+
+   TWO signatures, because the table's two sampled halves have different
+   dependencies and VERY different costs. The warm fill is the expensive one
+   (a Monte-Carlo fill per row) and does not depend on the decode floor at all;
+   the decode search is the cheap one (a doubling bisection per row) and is the
+   only thing the floor moves. Keying both on one signature — as a single
+   frontierSig including the floor did — made every floor step re-run the warm
+   fills for nothing, which measured ~1,000 ms per settle against ~190 ms for a
+   budget knob that touches neither. Splitting them puts the floor slider back
+   in the cheap class. */
+function frontierWarmSig(wl){
   return `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|`
        + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
        + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
-       + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`
-    // the decode floor is a load-budget knob, but unlike the others it DOES
-    // change every row's decode ceiling — omitting it would leave the whole
-    // frontier table pinned to the floor it was last built at, permanently
-       + `|${state.decode_floor}`;
+       + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;
 }
-function renderFrontierSection(wl, cs, draft, q){
+// the decode ceilings additionally move with the floor — and ONLY they do
+function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}`; }
+function renderFrontierSection(wl, cs, draft, q, deferDecode){
   const f = wl.invalidation;
-  const fsig = frontierSig(wl);
-  // like the sampled halves above, a DRAFT render never re-runs the
-  // Monte-Carlo half — fsig contains the very knobs a drag is changing,
-  // so checking it here would re-fill every row on every input event
-  if (!lastFrontier || (!draft && lastFrontier.sig !== fsig)){
-    seedFor('frontier');
+  const wsig = frontierWarmSig(wl), dsig = frontierDecSig(wl);
+  // like the sampled halves above, a DRAFT render never re-runs either
+  // Monte-Carlo half — the signatures contain the very knobs a drag is
+  // changing, so checking them here would re-sample on every input event
+  if (!lastFrontier || (!draft && lastFrontier.sig !== wsig)){
     const base = [];
     for (const mk of Object.keys(CONFIG.MODELS))
       for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
         if (dp*tp > 8) continue;
         const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu);
         if (kv_pool_tokens(m2, t2) <= 0) continue;
-        // Re-seed PER ROW. One stream shared across the whole table made every
-        // row's draws depend on how many the earlier rows happened to consume,
-        // and maxUsersDecode's probe count varies with the floor — so moving
-        // the decode-floor slider visibly jittered the CACHE column of every
-        // later row (~2%), which reads as the floor changing warm capacity.
-        // It cannot: warm capacity is sampled before the floor is ever used.
+        // Seed PER ROW, so a row's fill depends only on that row. One stream
+        // shared across the table made every row's draws depend on how many
+        // the earlier rows consumed — and once the decode search moved to its
+        // own cache it would no longer even run in between, which would have
+        // silently shifted every later row's warm number.
         seedFor(`frontier|${mk}|${dp}x${tp}`);
         const wc2 = warmCapacity(m2, t2, wl, ramPerCache(t2),
                                  Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
-        const du2 = maxUsersDecode(m2, t2, wl, decodeFloor(), 140);
         base.push({ key:`${mk}|${dp}x${tp}`, mk, dp, tp,
                     label:`${m2.name} · ${t2.name}`, reps:t2.replicas||1,
-                    warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1),
-                    decodeUsers: du2.n*(t2.replicas||1), censored: du2.censored });
+                    warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1) });
       }
-    lastFrontier = { sig: fsig, base };
+    lastFrontier = { sig: wsig, base };
   }
-  // service-time moments depend on the workload and the turn size only, so the
-  // load and budget sliders reuse them: dragging those is pure arithmetic
-  const msig = `${fsig}|${state.turn}`;
+  // the decode half: the only part the floor moves, and ~5x cheaper than the
+  // fills above. Keyed per row so it survives a warm-half rebuild unchanged.
+  // stale is allowed here for exactly one 500 ms tier, and only when a
+  // previous result exists to show meanwhile — never on the first paint, and
+  // never when the warm half has just added rows this cache has no entry for
+  const decMissing = !lastFrontierDec
+                  || lastFrontier.base.some(r => !lastFrontierDec.dec[r.key]);
+  const decStale = !draft && lastFrontierDec && lastFrontierDec.sig !== dsig;
+  if (decMissing || (decStale && !deferDecode)){
+    frontierDecodeDeferred = false;
+    const dec = {};
+    for (const r of lastFrontier.base){
+      const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
+      seedFor(`frontierDec|${r.key}`);
+      const du2 = maxUsersDecode(m2, t2, wl, decodeFloor(), 140);
+      dec[r.key] = { decodeUsers: du2.n*r.reps, censored: du2.censored };
+    }
+    lastFrontierDec = { sig: dsig, dec };
+  } else if (decStale){
+    frontierDecodeDeferred = true;   // the 500 ms tier will pick this up
+  }
+  // service-time moments depend on the workload and the turn size only — NOT
+  // on the decode floor, so keying them on the warm signature keeps a floor
+  // step from needlessly resampling every row's moments too
+  const msig = `${wsig}|${state.turn}`;
   if (!lastFrontierMo || (!draft && lastFrontierMo.sig !== msig)) lastFrontierMo = { sig: msig, mo: {} };
-  const rows = lastFrontier.base.map(r=>{
+  const rows = lastFrontier.base.map(r0=>{
+    const r = { ...r0, ...lastFrontierDec.dec[r0.key] };
     const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
     const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
     const mo2 = lastFrontierMo.mo[r.key]
@@ -4179,10 +4207,27 @@ function renderFrontierTable(rows, curKey){
 /* ============================================================================
    CONTROL WIRING
    ========================================================================== */
-let debTimer=null;
+let debTimer=null, frontierTimer=null;
+// The frontier's decode half re-runs a bisection per row (~25 rows). It is
+// MEASURED at ~520 ms on a floor change against ~130 ms for everything else on
+// the page combined, so folding it into the 120 ms settle made the decode-floor
+// slider feel laggy in a way no other slider does. It gets its own, longer
+// tier: the verdict, tiles and charts land at 120 ms as before, and the
+// "every alternative ranked" table — which is below the fold and is not what
+// you are watching while dragging — catches up at 500 ms.
+// Deliberately NOT a numeric shortcut: no probe count is reduced and no
+// published frontier number moves. Only WHEN it recomputes changes.
+const FRONTIER_SETTLE_MS = 500;
+let frontierDecodeDeferred = false;
 function scheduleFull(){
   clearTimeout(debTimer);
-  debTimer=setTimeout(()=>{ computeAndRender(false); }, 120);
+  debTimer=setTimeout(()=>{ computeAndRender(false, true); }, 120);
+  clearTimeout(frontierTimer);
+  // only arm the second tier if the first one actually deferred something —
+  // otherwise every keystroke schedules a redundant full re-render
+  frontierTimer=setTimeout(()=>{
+    if (frontierDecodeDeferred) computeAndRender(false);
+  }, FRONTIER_SETTLE_MS);
 }
 function onInput(){
   syncLabels();
