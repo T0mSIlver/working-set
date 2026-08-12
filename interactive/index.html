@@ -1227,7 +1227,17 @@ function serverRate(users, think, subR){
 // is monotone decreasing in n (every extra sequence adds KV bytes to the same
 // step), so ~11 evaluations replace a linear scan. Mirrors max_users_decode.
 function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
-  const F = floor || DECODE_FLOOR_TOKS, HI = hi || 4096;
+  const F = floor || DECODE_FLOOR_TOKS;
+  // The search cap was sized for the study's 40 tok/s floor. Per-user speed is
+  // aggregate/n, so the crossing sits at ~1/F — at a chat-shaped 5 tok/s floor
+  // it lands ~8x higher and the old fixed 4,096 censored routinely. Censoring
+  // is not just a display '≥': powerDraw prices decodeUsersGroup x floor as the
+  // aggregate capacity, so a censored ceiling silently UNDERSTATES capacity and
+  // overstates the energy bill. Scaling the cap by 40/F keeps HI at exactly
+  // 4,096 for the default floor — no published number moves — and the doubling
+  // search only pays for the extra probes it actually needs (iterations are
+  // scaled by 128/n, so each probe costs about the same).
+  const HI = hi || Math.max(4096, Math.round(4096 * DECODE_FLOOR_TOKS / F));
   // one probe costs O(n_iter x n) — decodeCurves builds a cumulative context
   // sum up to n — so the ORDER of probes dominates the cost. Doubling up from
   // 1 keeps the largest probe within 2x the answer; the old "probe HI first"
@@ -2786,7 +2796,16 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     // the no-fit path; the workload stats it needs are fit-independent).
     // cs is null here; only draw the 20k-sample context stats when some row's
     // moments cache is actually cold — otherwise the draw is discarded
+    // A signature change rebuilds the table and RESETS the moments cache
+    // inside renderFrontierSection — so testing only the caches that exist
+    // right now says "no samples needed" and then hands a null cs to a full
+    // rebuild, leaving every row to sample its own moments off whatever the
+    // RNG stream happened to be left at. That made non-decode columns
+    // (latency, B*, ranking, €/mo) move when only the decode floor changed.
+    const fsigNow = frontierSig(wl);
     const needCs = !lastFrontier || !lastFrontierMo
+                || (!draft && (lastFrontier.sig !== fsigNow
+                               || lastFrontierMo.sig !== `${fsigNow}|${state.turn}`))
                 || lastFrontier.base.some(r => !lastFrontierMo.mo[r.key]);
     renderFrontierSection(wl, cs || (needCs ? contextStats(wl) : null), draft, q);
     lastPlanner = null;
@@ -2891,17 +2910,22 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
    none of which change any other row's warm capacity or decode ceiling — so
    the two most common interactions (switching model, dragging load) never
    pay for it. The closed-form half is recomputed every render. */
+/* The frontier's Monte-Carlo signature. Hoisted out of renderFrontierSection
+   because the no-fit path has to know whether the table is ABOUT to be rebuilt
+   before it decides whether to draw context samples for it. */
+function frontierSig(wl){
+  return `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|`
+       + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
+       + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
+       + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`
+    // the decode floor is a load-budget knob, but unlike the others it DOES
+    // change every row's decode ceiling — omitting it would leave the whole
+    // frontier table pinned to the floor it was last built at, permanently
+       + `|${state.decode_floor}`;
+}
 function renderFrontierSection(wl, cs, draft, q){
   const f = wl.invalidation;
-  const fsig = `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|`
-             + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
-             + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
-             + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`
-  // the decode floor is a load-budget knob, but unlike the others it DOES
-  // change every row's decode ceiling — omitting it here would leave the whole
-  // frontier table pinned to the floor it was last built at, permanently
-  // (this is a settled-render signature, not the draft-render shortcut)
-             + `|${state.decode_floor}`;
+  const fsig = frontierSig(wl);
   // like the sampled halves above, a DRAFT render never re-runs the
   // Monte-Carlo half — fsig contains the very knobs a drag is changing,
   // so checking it here would re-fill every row on every input event
