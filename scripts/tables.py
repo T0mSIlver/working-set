@@ -822,8 +822,98 @@ def planner_tables():
               f"bound by {op['binding'].upper():10}  B* {b:5.1f}{dp_note}")
 
 
+def steady_tables():
+    """§ 10: the steady-state decode point — what the LOAD actually produces.
+
+    Every decode figure the study has published so far is a stress test: § 7's
+    mns@40 column and the explorer's v@warm both price every warm session
+    decoding at once. That is the right worst case and the wrong expectation,
+    and the gap between the two is large enough to change what someone buys.
+    """
+    w0 = wl()
+    THINK, OUT = M.THINK_TIME_S, M.OUT_TOKENS_DEFAULT
+    rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"),
+            ("35BA3B", 1, 1, "H200"), ("35BA3B", 1, 2, "H200"),
+            ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
+            ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
+
+    print("\n== THE STEADY-STATE DECODE POINT: the load's own batch (H9) ==")
+    print("  Arrivals are OPEN-LOOP: a user fires once every think-time seconds")
+    print("  and spends most of that interval waiting on a tool or a human. So")
+    print("  the number of sequences in the decode batch at any instant is set by")
+    print("  Little's law, not by the warm population:")
+    print("      E[n] = arrival rate x seconds spent decoding = lam x out / v(n)")
+    print("  which rearranges to a flow balance with no inversion in it:")
+    print("      n x v(n)  =  lam x out      (delivered = demanded output tok/s)")
+    print("  n x v(n) is the aggregate decode curve, strictly increasing, so the")
+    print("  crossing is unique. v@warm below is the stress figure the study has")
+    print("  published all along; v@load is the same curve read at the reference")
+    print(f"  load ({M.REF_USERS} users / {THINK:.0f} s, r={w0.sub_ratio:.2f}, "
+          f"{OUT:,} output tokens/response).")
+    print(f"\n  {'config':24} {'warm p5':>8} {'n@load':>7} {'v@load':>8} "
+          f"{'v@warm':>8} {'speedup':>8} {'% of mns@40 cap':>16}")
+    for mk, dp, tp, gk in rows:
+        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        if M.kv_pool_tokens(m, t) <= 0:
+            continue
+        rate_g = M.request_rate(M.REF_USERS, THINK, w0.sub_ratio) / t.replicas
+        sd = M.steady_decode_point(m, t, w0, rate_g, n_iter=600)
+        warm5 = M.warm_capacity(m, t, w0, n_iter=600)[0]
+        n_warm = max(1, int(round(warm5)))
+        v_warm = float(M.decode_curves(m, t, w0, [n_warm], n_iter=600)[1][0])
+        dec = M.max_users_decode(m, t, w0, n_iter=400)
+        cap = dec * M.DECODE_FLOOR_TOKS
+        if sd["saturated"]:
+            # no steady state exists: the demand outruns anything this cache
+            # can decode. Printing an n here would be inventing one.
+            print(f"  {mk + ' ' + t.name:24} {warm5:8.0f} {'--':>7} {'--':>8} "
+                  f"{v_warm:8.0f} {'--':>8} {100 * sd['demand_tok_s'] / cap:15.1f}%"
+                  f"   SATURATED: no steady state at this load")
+            continue
+        under = " (under one decoder: mostly idle between requests)" \
+            if sd["n"] < 1 else ""
+        print(f"  {mk + ' ' + t.name:24} {warm5:8.0f} {sd['n']:7.1f} "
+              f"{sd['per_user_tok_s']:8.0f} {v_warm:8.0f} "
+              f"{sd['per_user_tok_s'] / v_warm:7.1f}x "
+              f"{100 * sd['demand_tok_s'] / cap:15.1f}%{under}")
+    print("  Read the speedup column as the size of the reporting error, not as")
+    print("  a hardware result: the two numbers are the SAME curve at two batch")
+    print("  sizes. The stress figure stays the right worst case (a flush, or a")
+    print("  correlated burst, really does put the whole warm pool in the batch");
+    print("  at once) — it is simply not what a user experiences at this load.")
+
+    print("\n  Sensitivity. The point depends on the request rate and the output")
+    print("  length ONLY through their product, so these two rows are the whole")
+    print("  error budget. n is NOT linear in that product: per-user speed falls")
+    print("  as the batch grows, so n accelerates and then runs away entirely —")
+    print("  4x the output length moves n 4.9x here, the next 4x moves it 51x.")
+    m27, tp2 = MODELS["27B"], TOPOLOGIES["2xH200-TP2"]
+    for think in (15.0, THINK, M.MEASURED_CYCLE_S, 60.0):
+        rate_g = M.request_rate(M.REF_USERS, think, w0.sub_ratio) / tp2.replicas
+        sd = M.steady_decode_point(m27, tp2, w0, rate_g, n_iter=600)
+        mark = "  <-- measured interval" if think == M.MEASURED_CYCLE_S else ""
+        print(f"  think {think:5.0f} s   n {sd['n']:6.1f}   "
+              f"v {sd['per_user_tok_s']:6.0f} tok/s{mark}")
+    for out in (250, 1_000, 4_000, 16_000):
+        rate_g = M.request_rate(M.REF_USERS, THINK, w0.sub_ratio) / tp2.replicas
+        sd = M.steady_decode_point(m27, tp2, w0, rate_g, out_tokens=out,
+                                   n_iter=600)
+        if sd["saturated"]:
+            print(f"  out {out:6,} tok  SATURATED — no steady state")
+            continue
+        print(f"  out {out:6,} tok  n {sd['n']:6.1f}   "
+              f"v {sd['per_user_tok_s']:6.0f} tok/s")
+    print("  Output length is the one ASSUMED input: the workload model fits")
+    print("  prompt lengths on 1,850 real requests and has never fitted output")
+    print("  lengths. 1,000 is consistent with the traced 10.8 s served per")
+    print("  request (MEASURED_SERVICE_R_S) at the observed 50-90 tok/s, but it")
+    print("  is a consistency check, not a fit — a 16x error in it is a 16x")
+    print("  error in n, and the whole section scales with it.")
+
+
 if __name__ == "__main__":
     main()
     prefill_tables()
     spike_tables()
     planner_tables()
+    steady_tables()
