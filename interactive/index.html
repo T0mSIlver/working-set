@@ -1276,8 +1276,15 @@ function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
        n x v(n)  =  lambda_group x out
        ^ delivered output tok/s      ^ demanded output tok/s
 
-   n x v(n) is the aggregate decode curve, which is strictly INCREASING in n
-   (chart D), so the crossing is unique and a plain bisection finds it. If the
+   n x v(n) is the aggregate decode curve, INCREASING in n over the region
+   this page models (chart D), so a plain bisection finds the crossing. It is
+   increasing in EXPECTATION rather than strictly: adding sequence n+1 raises
+   the aggregate only while W/kv_bpt + S_n > n x L_{n+1}, so on a heavy-tailed
+   prompt distribution a longer-than-mean draw can lower it, and sampled curves
+   do show descending segments out on the plateau. Every reference-load point
+   sits far to the left of that, where the curve is steep and the inversion is
+   well conditioned; in the plateau the root is badly conditioned and the
+   bisection may return one of several. If the
    demand exceeds the aggregate at the sweep's widest n, no crossing exists
    INSIDE what this page models and the result is flagged `saturated` — the
    axis is sized to the GPU-resident warm band, so that says the load asks for
@@ -1305,14 +1312,15 @@ function steadyDecodePoint(dc, topo, rateGroup, outTok){
   const aggAt = n => interpAt(dc, 'agg', n) / reps;
   const out = { demand, nMax, saturated:false };
   if (!(demand > 0))                     // no load: nothing is decoding at all
-    return { ...out, n:0, pu:interpAt(dc,'p50',1,true), agg:0 };
+    return { ...out, n:0, pu:interpAt(dc,'p50',1,true), delivered:0, demanded:0 };
   if (demand >= aggAt(nMax))             // beyond the sampled axis — say so
-    return { ...out, n:nMax, pu:aggAt(nMax)/nMax, agg:aggAt(nMax)*reps,
-             saturated:true };
+    return { ...out, n:nMax, pu:aggAt(nMax)/nMax,
+             delivered:aggAt(nMax)*reps, demanded:demand*reps, saturated:true };
   // below n = 1 the batch is a single sequence whenever anyone is decoding, so
   // v stays v(1) and the fixed point is exact rather than interpolated
   if (demand <= aggAt(1))
-    return { ...out, n: demand/aggAt(1), pu: aggAt(1), agg: demand*reps };
+    return { ...out, n: demand/aggAt(1), pu: aggAt(1),
+             delivered: demand*reps, demanded: demand*reps };
   let lo = 1, hi = nMax;
   for (let i=0;i<60;i++){                 // 60 halvings: exact to ~1e-16 of nMax
     const mid = (lo+hi)/2;
@@ -1321,7 +1329,7 @@ function steadyDecodePoint(dc, topo, rateGroup, outTok){
   const n = (lo+hi)/2;
   // v = agg/n by construction: at the fixed point the batch delivers exactly
   // what the load demands, so per-user speed is the demand shared out
-  return { ...out, n, pu: demand/n, agg: demand*reps };
+  return { ...out, n, pu: demand/n, delivered: demand*reps, demanded: demand*reps };
 }
 
 // Users at which prefill duty reaches 100% — section 8's f*, in users. Each
@@ -2020,14 +2028,22 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   const hot = steadyDecodePoint(dc, tp2, 1e6, OUT);
   console.assert(hot.saturated && hot.n === dc.ns[dc.ns.length-1],
     "demand beyond the decode curve must flag saturated rather than invent a batch");
+  // the two aggregates are DIFFERENT quantities on the saturated path — that is
+  // the whole point of splitting them, and chart D must plot the demand
+  console.assert(hot.demanded > hot.delivered,
+    "a saturated point demands more than it delivers");
+  console.assert(Math.abs(sd.demanded - sd.delivered) < 1e-6,
+    "an unsaturated point delivers exactly what it demands");
   // 7. DP: the batch is PER GROUP, the aggregate is the system. A 2-group grid
   //    at the same per-group rate must report the same n and twice the tokens.
   // a bare {replicas} stub, not makeTopo: this block runs before `state`
   // exists, and steadyDecodePoint reads nothing else off the topology
   const sdDp = steadyDecodePoint({...dc, agg:dc.agg.map(v=>v*2)},
                                  {replicas:2}, rate, OUT);
-  console.assert(approx(sdDp.n, sd.n, 1e-9) && approx(sdDp.agg, 2*sd.agg, 1e-9),
-    "steady n is per replica group; only the aggregate carries the replica count");
+  console.assert(approx(sdDp.n, sd.n, 1e-9)
+              && approx(sdDp.demanded, 2*sd.demanded, 1e-9)
+              && approx(sdDp.delivered, 2*sd.delivered, 1e-9),
+    "steady n is per replica group; only the aggregates carry the replica count");
 })();
 
 /* ============================================================================
@@ -2457,7 +2473,7 @@ function renderChartC(dc, zone, stress, steady){
   // stress marker's honest counterpart, normally far to its left. Labelled
   // BELOW the dot — at small n the curve runs along the top of the axis, where
   // an above-the-dot label would leave the plot.
-  if(steady && steady.n>0){
+  if(steady && steady.real && steady.n>0){
     const s2=cssv('--s2'), n=Math.max(1, Math.min(steady.n, xmax));
     const X=sx(n), Y=sy(clip(steady.pu,ylo,yhi));
     g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${s2}" stroke-width="1.2" stroke-dasharray="1 3"/>`;
@@ -2522,14 +2538,14 @@ function renderChartD(dc, stress, kink, steady){
   // the chosen load's own point. On THIS chart it is a flow balance made
   // visible: the y value is the output-token demand the load generates, and
   // the x value is the batch size the curve needs to retire exactly that.
-  if(steady && steady.n>0){
+  if(steady && steady.real && steady.n>0){
     const s2=cssv('--s2'), n=Math.max(1, Math.min(steady.n, xmax));
-    const X=sx(n), Y=sy(clip(steady.agg,0,ymax));
+    const X=sx(n), Y=sy(clip(steady.demanded,0,ymax));
     g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${s2}" stroke-width="1.2" stroke-dasharray="1 3" opacity="0.85"/>`;
     g+=`<circle cx="${X}" cy="${Y}" r="4.5" fill="${s2}" stroke="${cssv('--surface')}" stroke-width="1.5"/>`;
     const flip = X > mL+pw*0.62;
     g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s2}">`
-      +`your load · ${steady.agg>=1000?fmt(steady.agg/1000,1)+' ktok/s':fmt(steady.agg,0)+' tok/s'}</text>`;
+      +`your load · ${steady.demanded>=1000?fmt(steady.demanded/1000,1)+' ktok/s':fmt(steady.demanded,0)+' tok/s'}</text>`;
   }
   document.getElementById('chartD').innerHTML = svgEl(g,W,H,'Aggregate throughput versus max_num_seqs, with the all-warm stress point and the chosen load\'s steady-state demand');
   chartDGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax,ymax, dc, sx:(x)=>sx(x), sy:(y)=>sy(y) };
@@ -2919,6 +2935,28 @@ function computeAndRender(draft){
                 state.out);
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
   const noFit = kv_pool_tokens(model,topo) <= 0;
+
+  // ONE context-length draw feeds chart E and every prefill readout on the
+  // tiles, so the two can never disagree within a render. Drawn BEFORE the
+  // charts because the steady point's validity predicate needs the prefill
+  // duty, which needs these samples — the draw is seeded, so its position in
+  // the render order does not change what it returns.
+  seedFor('context');
+  lastCS = noFit ? null : contextStats(wl);
+
+  // Whether the steady point EXISTS, decided once and stamped on the shared
+  // object. There is no steady state when prefill duty >= 1 (the queue is
+  // unbounded, so requests never reach the decode batch at all) or when the
+  // demand runs past the sampled axis. The tiles already refused to quote a
+  // figure in those cases; the charts and the deploy card each carried their
+  // own weaker `n > 0` test and published one anyway — the deploy card being
+  // the copy-paste artifact, which is the worst place to invent a number.
+  // One predicate, so the three cannot disagree again.
+  lastSteady.real = !noFit && !lastSteady.saturated
+    && (spikeMetrics(model, topo, wl, lastCS,
+                     serverRate(state.users, state.think, wl.sub_ratio)
+                       / (topo.replicas || 1), PREFILL_CHUNK).rho < 1);
+
   if (noFit){
     renderNoFit('chartC'); renderNoFit('chartD');
     chartCGeom=null; chartDGeom=null;
@@ -2928,10 +2966,6 @@ function computeAndRender(draft){
   }
   updateCsD(model);
 
-  // ONE context-length draw feeds chart E and every prefill readout on the
-  // tiles, so the two can never disagree within a render
-  seedFor('context');
-  lastCS = noFit ? null : contextStats(wl);
   renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
 
   renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS,lastSteady);
@@ -3229,7 +3263,9 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   // quoting a decode speed for them would be the most misleading number on the
   // page. sp.rho is exactly this product — reuse it rather than recompute.
   const dutyNow = sp ? sp.rho : 0;
-  const sdReal = !!sd && dutyNow < 1 && !sd.saturated;
+  // the shared predicate, computed once in computeAndRender; the local duty
+  // is still needed below to say WHICH way it failed
+  const sdReal = !!sd && (sd.real !== undefined ? sd.real : (dutyNow < 1 && !sd.saturated));
   const sdClass = !sd ? undefined : (!sdReal ? 'crit'
     : (sd.pu >= 50 ? 'good' : (sd.pu >= 40 ? 'warn' : 'crit')));
   // share of the machine's OWN decode ceiling this load asks for: its output
@@ -4219,7 +4255,7 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   ].map(([k,v])=>`<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
   const out = [
     ['Warm sessions (p5)', `${fmt(warmSys,0)} · ≈ ${fmt(userSys,0)} users`],
-    ['Per-user decode, at this load', lastSteady && lastSteady.n>0
+    ['Per-user decode, at this load', lastSteady && lastSteady.real && lastSteady.n>0
        ? `${fmt(lastSteady.pu,0)} tok/s · ${fmt(lastSteady.n, lastSteady.n<10?1:0)} decoding at once`
        : '—'],
     ['Per-user decode, all warm active', `${fmt(lastStress.pu,1)} tok/s`],

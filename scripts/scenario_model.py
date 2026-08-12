@@ -1912,8 +1912,13 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     interval; `rate_group` is the TOTAL req/s ONE replica group sees (main +
     subagent), the same unit every queue metric here uses.
 
-    Returns {"n", "per_user_tok_s", "demand_tok_s", "agg_tok_s", "saturated"},
-    with n and per_user_tok_s per replica group and agg_tok_s system-wide.
+    Returns {"n", "per_user_tok_s", "demand_tok_s", "delivered_tok_s",
+    "demanded_tok_s", "saturated"}, with n and per_user_tok_s per replica group
+    and both aggregates system-wide. delivered and demanded are equal at a real
+    fixed point and DIFFER when saturated — the batch cannot retire what the
+    load asks for, which is what "no steady state" means. They were one field;
+    the explorer's chart D read it as demand and so mislabelled the saturated
+    marker by up to 24x.
     `saturated` is True when the demand exceeds what `hi` concurrent decoders
     could retire: no steady state exists, so n is a floor, not an estimate.
 
@@ -1944,20 +1949,25 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
 
     out = {"demand_tok_s": demand, "saturated": False}
     if demand == 0:                        # no load: nothing is decoding
-        return {**out, "n": 0.0, "per_user_tok_s": v(1), "agg_tok_s": 0.0}
+        return {**out, "n": 0.0, "per_user_tok_s": v(1),
+                "delivered_tok_s": 0.0, "demanded_tok_s": 0.0}
     v1 = v(1)
     if demand <= v1:
         # below one decoder the batch holds a single sequence whenever anyone
         # is decoding at all, so v stays v(1) and the fixed point is exact
         return {**out, "n": demand / v1, "per_user_tok_s": v1,
-                "agg_tok_s": demand * reps}
+                "delivered_tok_s": demand * reps,
+                "demanded_tok_s": demand * reps}
     lo, up = 1, 2
     while up <= hi and up * v(up) < demand:
         lo, up = up, up * 2
     if up > hi:
         # the study does not do silent caps: say the demand ran off the end
+        # delivered != demanded here, which is exactly what saturated means:
+        # one field for both silently understated the demand by up to 24x
         return {**out, "n": float(hi), "per_user_tok_s": v(hi),
-                "agg_tok_s": hi * v(hi) * reps, "saturated": True}
+                "delivered_tok_s": hi * v(hi) * reps,
+                "demanded_tok_s": demand * reps, "saturated": True}
     while up - lo > 1:
         mid = (lo + up) // 2
         if mid * v(mid) < demand:
@@ -1972,7 +1982,8 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     # per-user speed is the demand shared out: at the fixed point the batch
     # delivers exactly what the load asks for, by construction
     return {**out, "n": n, "per_user_tok_s": demand / n,
-            "agg_tok_s": demand * reps}
+            "delivered_tok_s": demand * reps,
+            "demanded_tok_s": demand * reps}
 
 
 def _check_closed_args(closed_z_s: float, out_tokens: float,
@@ -3034,7 +3045,8 @@ def _selfcheck():
         "only the product rate x output tokens can move the steady point"
     # 5. no load, no decoders — and no division by zero on the way there
     z = steady_decode_point(m27, tp2, wl, 0.0, n_iter=100)
-    assert z["n"] == 0.0 and z["agg_tok_s"] == 0.0 and z["per_user_tok_s"] > 0
+    assert z["n"] == 0.0 and z["delivered_tok_s"] == 0.0 \
+        and z["demanded_tok_s"] == 0.0 and z["per_user_tok_s"] > 0
     # 6. a demand past what `hi` decoders could retire is CENSORED, not clamped
     hot = steady_decode_point(m27, tp2, wl, 1e6, n_iter=100, hi=64)
     assert hot["saturated"] and hot["n"] == 64.0, \
@@ -3042,7 +3054,7 @@ def _selfcheck():
     # 7. per-group vs system: n is what ONE cache decodes, agg is the estate
     dpg = topology_grid(dp=2, tp=1)
     sd_dp = steady_decode_point(m27, dpg, wl, rate_g, n_iter=200)
-    assert abs(sd_dp["agg_tok_s"] - 2 * rate_g * OUT_TOKENS_DEFAULT) < 1e-6, \
+    assert abs(sd_dp["demanded_tok_s"] - 2 * rate_g * OUT_TOKENS_DEFAULT) < 1e-6, \
         "the aggregate, and only the aggregate, carries the replica count"
     for bad in (dict(rate_group=-1.0), dict(out_tokens=-1.0), dict(hi=0)):
         try:
