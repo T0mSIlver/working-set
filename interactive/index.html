@@ -463,6 +463,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
         <span class="li"><span class="sw" style="background:var(--s1);opacity:.28"></span>p5–p95</span>
         <span class="li"><span class="sw" style="background:var(--s3);opacity:.4"></span>capacity zone</span>
         <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
+        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>your load (steady state)</span>
       </div>
       <div class="chartbox"><div id="chartC"></div><div class="tt" id="ttC"></div></div>
     </div>
@@ -473,6 +474,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s3)"></span>aggregate p50</span>
         <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
+        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>your load (steady state)</span>
       </div>
       <div class="chartbox"><div id="chartD"></div><div class="tt" id="ttD"></div></div>
     </div>
@@ -480,7 +482,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
   <div class="act-h" id="act2">
     <div class="act-t"><span class="act-n">2</span><h2>Can I serve them?</h2></div>
-    <p>Adds <b>work arriving</b>: the request rate, the latency budget, and what cold traffic — steady or in a spike — costs.</p>
+    <p>Adds <b>work arriving</b>: the request rate, the latency budget, and what cold traffic — steady or in a spike — costs. It also prices act 1's decode curve at the load you actually set — arrivals are open-loop, so far fewer sessions decode at any instant than sit warm, and each one runs much faster than the stress test above.</p>
   </div>
   <div class="panel controls">
     <div class="section-h">Load &amp; cold traffic</div>
@@ -499,6 +501,10 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Tokens a warm HIT still prefills — the new turn on top of cached context. A bigger lever than it looks: at low miss rates the hit leg dominates the duty cycle, so this sets the headroom a burst drains into (500 → 8,000 tokens moves B* ~3.5× on the 27B/TP2).">Warm turn size</span> <span class="val"><span id="v-turn">2,000</span> tok</span></label>
           <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Output tokens one response decodes — the assumption the steady-state readouts rest on, and the only unmeasured one in this group (the workload model fits prompt lengths, never output lengths). 1,000 is consistent with the traced 10.8 s served per request at 50–90 tok/s. It sets how long a request occupies the decode batch, so decoders in flight and the €/1M-token figure both scale with it.">Output per response</span> <span class="val"><span id="v-out">1,000</span> tok</span></label>
+          <input type="range" id="s-out" min="100" max="8000" step="100" value="1000">
         </div>
       </div>
       <div class="ctl-group">
@@ -524,7 +530,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
     </div>
   </div>
   <details class="assump glossary">
-    <summary>The five words this section needs — MFU, TTFT, prefill duty, f*, B*</summary>
+    <summary>The six words this section needs — MFU, TTFT, prefill duty, f*, B*, n@load</summary>
     <div class="body">
     <dl>
       <dt>MFU <span class="gt">Model FLOP Utilisation</span></dt>
@@ -537,6 +543,8 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
       <dd>The miss rate at which prefill duty reaches 100%. Not a target: burst tolerance hits zero there.</dd>
       <dt>B* <span class="gt">cold-spike tolerance</span></dt>
       <dd>How many misses can arrive <em>at the same instant</em> with the last still answered in budget — the correlated event the miss-rate slider cannot express.</dd>
+      <dt>n@load <span class="gt">the steady-state decode batch</span></dt>
+      <dd>Sequences decoding at any instant at <em>this</em> load — Little's law, not the warm population. An expected occupancy, not a <code>max_num_seqs</code> setting.</dd>
     </dl>
     <p style="margin:8px 0 0"><a href="method.html#glossary">Full definitions →</a></p>
     </div>
@@ -1212,6 +1220,13 @@ const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor — now th
 const DECODE_COMFORT_RATIO = 1.25;
 function decodeFloor(){ return state.decode_floor; }
 function decodeComfort(){ return state.decode_floor * DECODE_COMFORT_RATIO; }
+// Output tokens ONE REQUEST decodes (every request, subagents included) —
+// ASSUMED, unmeasured: the workload model fits prompt LENGTHS, never output
+// lengths. Consistent with the measured 10.8 s served per turn at 50-90 tok/s.
+// The reference value; the `out` slider starts here and STATE_DEFAULTS pins it,
+// so a default page still reproduces every published number. Drives the
+// steady-state decode point below and the power model's decode duty.
+const AVG_OUT_TOK = 1000;
 
 function requestRate(users, think){ return users / (think || liveThink); }
 
@@ -1262,6 +1277,82 @@ function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
   if (up > HI) return { n: HI, censored: true };
   while (up - lo > 1){ const mid = (lo+up)>>1; if (p50(mid) >= F) lo = mid; else up = mid; }
   return { n: lo, censored: false };
+}
+
+/* ---- the STEADY-STATE decode point -----------------------------------------
+   Every other decode readout on this page is a STRESS test: it asks what one
+   user gets when the whole warm population decodes at once. That is the right
+   worst case and the wrong expectation. Arrivals are open-loop — a user sends
+   one request every `think` seconds and then spends most of that interval
+   waiting on a tool or a human — so the number of sequences in the decode
+   batch at any instant is far below the warm population.
+
+   Little's law on the DECODE phase alone (a request queueing for prefill, or
+   being prefilled, is not yet decoding):
+
+       E[n_decode] = lambda_group x E[time spent decoding]
+                   = lambda_group x out / v(n_decode)
+
+   with v(n) the per-user p50 speed at batch n. Multiply through and the fixed
+   point reads as a flow balance that needs no inversion:
+
+       n x v(n)  =  lambda_group x out
+       ^ delivered output tok/s      ^ demanded output tok/s
+
+   n x v(n) is the aggregate decode curve, INCREASING in n over the region
+   this page models (chart D), so a plain bisection finds the crossing. It is
+   increasing in EXPECTATION rather than strictly: adding sequence n+1 raises
+   the aggregate only while W/kv_bpt + S_n > n x L_{n+1}, so on a heavy-tailed
+   prompt distribution a longer-than-mean draw can lower it, and sampled curves
+   do show descending segments out on the plateau. Every reference-load point
+   sits far to the left of that, where the curve is steep and the inversion is
+   well conditioned; in the plateau the root is badly conditioned and the
+   bisection may return one of several. If the
+   demand exceeds the aggregate at the sweep's widest n, no crossing exists
+   INSIDE what this page models and the result is flagged `saturated` — the
+   axis is sized to the GPU-resident warm band, so that says the load asks for
+   more output than this cache's whole resident population retires. (Aggregate
+   throughput does have a true asymptote, at bandwidth / mean-context bytes;
+   scenario_model.py searches to n = 4,096 and reaches the same verdict on the
+   one configuration where this bites, Mistral-3.5/TP4.)
+
+   Approximations, both stated on the tile:
+     - MEAN FIELD. v is evaluated at the MEAN batch, not averaged over the
+       batch-size distribution. v(n) is convex, so E[v(N)] >= v(E[N]): the
+       readout is the conservative side of Jensen.
+     - DECODE ONLY. Prefill chunks sharing a forward pass are priced separately
+       (the ITL spike); this is the clean-decode speed between those spikes.
+   Mirrors steady_decode_point() in scenario_model.py. */
+function steadyDecodePoint(dc, topo, rateGroup, outTok){
+  const reps = topo.replicas || 1;
+  const demand = Math.max(0, rateGroup) * Math.max(0, outTok);   // tok/s asked
+  const nMax = dc.ns[dc.ns.length-1];
+  // the AGGREGATE series, per replica group. dc.agg is already x replicas, and
+  // its samples are exactly ns[i] x p50[i] — so inverting the LINEARLY
+  // interpolated agg curve (increasing and concave between samples) is both
+  // monotone and exactly self-consistent, where inverting n x interp(p50) on a
+  // log axis is neither at the wide end of the sweep.
+  const aggAt = n => interpAt(dc, 'agg', n) / reps;
+  const out = { demand, nMax, saturated:false };
+  if (!(demand > 0))                     // no load: nothing is decoding at all
+    return { ...out, n:0, pu:interpAt(dc,'p50',1,true), delivered:0, demanded:0 };
+  if (demand >= aggAt(nMax))             // beyond the sampled axis — say so
+    return { ...out, n:nMax, pu:aggAt(nMax)/nMax,
+             delivered:aggAt(nMax)*reps, demanded:demand*reps, saturated:true };
+  // below n = 1 the batch is a single sequence whenever anyone is decoding, so
+  // v stays v(1) and the fixed point is exact rather than interpolated
+  if (demand <= aggAt(1))
+    return { ...out, n: demand/aggAt(1), pu: aggAt(1),
+             delivered: demand*reps, demanded: demand*reps };
+  let lo = 1, hi = nMax;
+  for (let i=0;i<60;i++){                 // 60 halvings: exact to ~1e-16 of nMax
+    const mid = (lo+hi)/2;
+    if (aggAt(mid) < demand) lo = mid; else hi = mid;
+  }
+  const n = (lo+hi)/2;
+  // v = agg/n by construction: at the fixed point the batch delivers exactly
+  // what the load demands, so per-user speed is the demand shared out
+  return { ...out, n, pu: demand/n, delivered: demand*reps, demanded: demand*reps };
 }
 
 // Users at which prefill duty reaches 100% — section 8's f*, in users. Each
@@ -1840,6 +1931,18 @@ function decodePlan(gpuP95, draft){
 function decodeCurves(model, topo, wl, nMax, step, n_iter){
   const bw = effective_bw(topo), scale = topo.replicas;
   const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);
+  // LOW-n anchors. Per-user speed is a hyperbola in n, so the first regular
+  // interval (1 -> 1+step) contains most of the curve's entire drop: at the
+  // widest axes that one segment spans 4,500 tok/s down to a few hundred, and
+  // both charts draw it as a single straight line. It is also exactly where
+  // the steady-state point lands at any sane load, so inverting the aggregate
+  // curve there inherits the whole error. A geometric ladder fixes both, and
+  // costs only O(n_iter) per point — the context pool is drawn once and read
+  // cumulatively, so extra sample POSITIONS are nearly free.
+  const firstGap = ns.length>1 ? ns[1] : nMax+1;
+  for (const a of [2,3,4,6,8,11,16,22,32,45,64,90])
+    if (a < Math.min(firstGap, nMax+1)) ns.push(a);
+  if (ns.length > 1) ns.sort((a,b)=>a-b);
   // The conservative expert union kinks HARD at n_sat = total/pertok (the
   // batch activates every expert; n_sat = 32 for both MoE models). A wide-
   // step sweep that straddles n_sat interpolates straight through the kink
@@ -1897,6 +2000,75 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   return { ns, p5, p50, p95, agg };
 }
 
+// Steady-state decode point checks. They live HERE, not with the other sampled
+// unit checks, because they need a real decode sweep — and the identities they
+// pin are exact, so a coarse 24-sample sweep is enough to catch a sign error,
+// a per-group/system unit slip, or a broken inversion.
+(function steadyChecks(){
+  const approx = (a,b,rt)=>Math.abs(a-b) <= Math.abs(b)*rt;
+  const wlRef = { user_median:31000, user_sigma:0.81, sub_median:8000, sub_sigma:0.9,
+                  sub_ratio:0.10, sys_user:15000, sys_sub:3000, sub_shares_prefix:false,
+                  invalidation:0.01, cap:180000 };
+  const m27 = CONFIG.MODELS["27B"], tp2 = CONFIG.TOPOLOGIES["2xH200-TP2"];
+  // seeded by hand, not seedFor: samplingSig() reads `state`, which does not
+  // exist this early. A fixed seed makes the pinned values below reproducible
+  // rather than a function of whatever drew from the stream before this ran.
+  _rngState = 20260807; _spare = null;
+  const dc = decodeCurves(m27, tp2, wlRef, 480, 20, 400);
+  const OUT = AVG_OUT_TOK;
+  // the reference load, as one replica group sees it (TP2 => replicas = 1)
+  const rate = serverRate(64, 30, wlRef.sub_ratio);
+  const sd = steadyDecodePoint(dc, tp2, rate, OUT);
+  // 1. THE identity: at the fixed point the batch delivers exactly what the
+  //    load demands. Everything else on the tile is a reading of this line.
+  console.assert(approx(sd.n * sd.pu, rate*OUT, 1e-9),
+    "steady point must balance: n x per-user speed = arrival rate x output tokens");
+  // 2. ...which is Little's law read the other way: n = lambda x time decoding
+  console.assert(approx(sd.n, rate * (OUT/sd.pu), 1e-9),
+    "steady n must equal arrival rate x seconds spent decoding");
+  // 3. the whole point of the tiles, PINNED: the 27B on TP2 at the published
+  //    reference load (64 users, 30 s, r = 0.10, 1,000 output tokens) decodes
+  //    ~6 sequences at a time at ~365 tok/s — against ~196 warm sessions at
+  //    ~46 tok/s if they all decoded at once. Stable to ~1% from step 1 to
+  //    step 40, so a 10% tolerance is MC jitter only; a units slip in the
+  //    arrival rate or the output length moves it by multiples.
+  console.assert(approx(sd.n, 6.4, 0.10) && approx(sd.pu, 365, 0.10),
+    "27B/TP2 at the reference load: ~6 sequences decoding, ~365 tok/s each");
+  console.assert(sd.n < 480/20 && sd.pu > 4*interpAt(dc,'p50',480,true),
+    "the steady batch must sit far left of the sweep, and far above its speed");
+  // 4. monotone and linear in the load, exactly (demand is linear, and the
+  //    inversion is of a fixed curve)
+  console.assert(steadyDecodePoint(dc, tp2, 2*rate, OUT).n > sd.n
+              && steadyDecodePoint(dc, tp2, rate, 2*OUT).n > sd.n,
+    "steady concurrency must rise with both arrival rate and output length");
+  console.assert(approx(steadyDecodePoint(dc, tp2, 2*rate, OUT).demand,
+                        steadyDecodePoint(dc, tp2, rate, 2*OUT).demand, 1e-12),
+    "only the PRODUCT rate x output tokens can move the demand");
+  // 5. no load, no decoders — and no division by zero on the way there
+  console.assert(steadyDecodePoint(dc, tp2, 0, OUT).n === 0,
+    "zero arrival rate must leave the decode batch empty");
+  // 6. a demand past the curve's top is CENSORED, not clamped silently
+  const hot = steadyDecodePoint(dc, tp2, 1e6, OUT);
+  console.assert(hot.saturated && hot.n === dc.ns[dc.ns.length-1],
+    "demand beyond the decode curve must flag saturated rather than invent a batch");
+  // the two aggregates are DIFFERENT quantities on the saturated path — that is
+  // the whole point of splitting them, and chart D must plot the demand
+  console.assert(hot.demanded > hot.delivered,
+    "a saturated point demands more than it delivers");
+  console.assert(Math.abs(sd.demanded - sd.delivered) < 1e-6,
+    "an unsaturated point delivers exactly what it demands");
+  // 7. DP: the batch is PER GROUP, the aggregate is the system. A 2-group grid
+  //    at the same per-group rate must report the same n and twice the tokens.
+  // a bare {replicas} stub, not makeTopo: this block runs before `state`
+  // exists, and steadyDecodePoint reads nothing else off the topology
+  const sdDp = steadyDecodePoint({...dc, agg:dc.agg.map(v=>v*2)},
+                                 {replicas:2}, rate, OUT);
+  console.assert(approx(sdDp.n, sd.n, 1e-9)
+              && approx(sdDp.demanded, 2*sd.demanded, 1e-9)
+              && approx(sdDp.delivered, 2*sd.delivered, 1e-9),
+    "steady n is per replica group; only the aggregates carry the replica count");
+})();
+
 /* ============================================================================
    STATE
    ========================================================================== */
@@ -1919,7 +2091,10 @@ const state = {
   // load & latency budget. The defaults ARE the study's reference load
   // (64 users x one turn / 30 s = 2.13 req/s, a 2,000-token warm turn), so at
   // slider defaults every readout reproduces the published tables exactly.
-  users: 64, think: 30, sla: 10, turn: 2000, burst: 32,
+  // `out` = output tokens one response decodes (AVG_OUT_TOK, the reference).
+  // It sets the steady-state decode point and the power model's decode duty;
+  // it is the ONE assumption those two readouts cannot be honest without.
+  users: 64, think: 30, sla: 10, turn: 2000, out: AVG_OUT_TOK, burst: 32,
   // per-user decode speed the DECODE ceiling is solved against. A workload
   // property, not a hardware one: the study's 40 is an agentic-coding comfort
   // standard, and a chat deployment judged at it can read as decode-bound
@@ -2252,7 +2427,7 @@ function renderNoFit(divId, what){
   document.getElementById(divId).innerHTML = svgEl(g,W,H,`Model weights do not fit this configuration; no ${curve}`);
 }
 let chartCGeom=null;
-function renderChartC(dc, zone, stress){
+function renderChartC(dc, zone, stress, steady){
   const W=560,H=300, mL=46,mR=16,mT=14,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
   // axis ends at the last SAMPLED n, so the curve reaches the right edge and
@@ -2324,7 +2499,20 @@ function renderChartC(dc, zone, stress){
     const flip = X > mL+pw*0.62;    // keep the label inside the plot
     g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s3}">all warm decoding · ${fmt(stress.pu,0)} tok/s</text>`;
   }
-  document.getElementById('chartC').innerHTML = svgEl(g,W,H,'Per-user decode speed versus max_num_seqs with capacity zone and stress point');
+  // ...and the point the CHOSEN LOAD actually sits at (steadyDecodePoint): the
+  // stress marker's honest counterpart, normally far to its left. Labelled
+  // BELOW the dot — at small n the curve runs along the top of the axis, where
+  // an above-the-dot label would leave the plot.
+  if(steady && steady.real && steady.n>0){
+    const s2=cssv('--s2'), n=Math.max(1, Math.min(steady.n, xmax));
+    const X=sx(n), Y=sy(clip(steady.pu,ylo,yhi));
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${s2}" stroke-width="1.2" stroke-dasharray="1 3"/>`;
+    g+=`<circle cx="${X}" cy="${Y}" r="4.5" fill="${s2}" stroke="${cssv('--surface')}" stroke-width="1.5"/>`;
+    const flip = X > mL+pw*0.62;
+    g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y+16}" text-anchor="${flip?'end':'start'}" fill="${s2}">`
+      +`your load · n ≈ ${fmt(steady.n, steady.n<10?1:0)} · ${fmt(steady.pu,0)} tok/s</text>`;
+  }
+  document.getElementById('chartC').innerHTML = svgEl(g,W,H,'Per-user decode speed versus max_num_seqs with capacity zone, the all-warm stress point and the steady-state point at the chosen load');
   // ylog tells the hover to interpolate GEOMETRICALLY between samples, matching
   // the straight segments actually drawn on a log axis (see interpAt)
   chartCGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax, ylo,yhi, ylog:true, sxDom:[1,xmax], dc,
@@ -2333,7 +2521,7 @@ function renderChartC(dc, zone, stress){
 
 /* ---- Chart D: aggregate ---- */
 let chartDGeom=null;
-function renderChartD(dc, stress, kink){
+function renderChartD(dc, stress, kink, steady){
   const W=560,H=300, mL=54,mR=16,mT=14,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
   const xmax=dc.ns[dc.ns.length-1];   // dynamic, same range as chart C
@@ -2377,7 +2565,19 @@ function renderChartD(dc, stress, kink){
     const flip = X > mL+pw*0.62;
     g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s3}">all warm decoding · ${fmt(stress.agg/1000,1)} ktok/s</text>`;
   }
-  document.getElementById('chartD').innerHTML = svgEl(g,W,H,'Aggregate throughput versus max_num_seqs');
+  // the chosen load's own point. On THIS chart it is a flow balance made
+  // visible: the y value is the output-token demand the load generates, and
+  // the x value is the batch size the curve needs to retire exactly that.
+  if(steady && steady.real && steady.n>0){
+    const s2=cssv('--s2'), n=Math.max(1, Math.min(steady.n, xmax));
+    const X=sx(n), Y=sy(clip(steady.demanded,0,ymax));
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${s2}" stroke-width="1.2" stroke-dasharray="1 3" opacity="0.85"/>`;
+    g+=`<circle cx="${X}" cy="${Y}" r="4.5" fill="${s2}" stroke="${cssv('--surface')}" stroke-width="1.5"/>`;
+    const flip = X > mL+pw*0.62;
+    g+=`<text class="dlabel" x="${X+(flip?-8:8)}" y="${Y-9}" text-anchor="${flip?'end':'start'}" fill="${s2}">`
+      +`your load · ${steady.demanded>=1000?fmt(steady.demanded/1000,1)+' ktok/s':fmt(steady.demanded,0)+' tok/s'}</text>`;
+  }
+  document.getElementById('chartD').innerHTML = svgEl(g,W,H,'Aggregate throughput versus max_num_seqs, with the all-warm stress point and the chosen load\'s steady-state demand');
   chartDGeom={ W,H,mL,mR,mT,mB,pw,ph,xmax,ymax, dc, sx:(x)=>sx(x), sy:(y)=>sy(y) };
 }
 
@@ -2632,6 +2832,8 @@ function removeCross(svg){ const e=svg.querySelector('.xcross'); if(e) e.remove(
    RENDER pipeline
    ========================================================================== */
 let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null, lastCS=null;
+// the chosen load's decode point — recomputed every frame from lastDC
+let lastSteady=null;
 
 // active model with the dtype, weight-overhead and MTP-speedup knobs applied.
 // FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py); fp32 doubles the
@@ -2753,24 +2955,50 @@ function computeAndRender(draft, deferFrontierDecode){
   // the stress point itself: shared by both charts and both tiles, so it is
   // computed once here rather than three times with three different draws
   lastStress=stressPoint(dc,topo,lastWarmCur);
+  // ...and the point the CHOSEN LOAD actually sits at. Pure interpolation over
+  // the curves already drawn, so it costs nothing and can be recomputed on
+  // every frame — including while the users / think / output sliders are being
+  // dragged, which are exactly the knobs that move it.
+  lastSteady=steadyDecodePoint(dc, topo,
+                serverRate(state.users, state.think, wl.sub_ratio)
+                  / (topo.replicas || 1),
+                state.out);
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
   const noFit = kv_pool_tokens(model,topo) <= 0;
+
+  // ONE context-length draw feeds chart E and every prefill readout on the
+  // tiles, so the two can never disagree within a render. Drawn BEFORE the
+  // charts because the steady point's validity predicate needs the prefill
+  // duty, which needs these samples — the draw is seeded, so its position in
+  // the render order does not change what it returns.
+  seedFor('context');
+  lastCS = noFit ? null : contextStats(wl);
+
+  // Whether the steady point EXISTS, decided once and stamped on the shared
+  // object. There is no steady state when prefill duty >= 1 (the queue is
+  // unbounded, so requests never reach the decode batch at all) or when the
+  // demand runs past the sampled axis. The tiles already refused to quote a
+  // figure in those cases; the charts and the deploy card each carried their
+  // own weaker `n > 0` test and published one anyway — the deploy card being
+  // the copy-paste artifact, which is the worst place to invent a number.
+  // One predicate, so the three cannot disagree again.
+  lastSteady.real = !noFit && !lastSteady.saturated
+    && (spikeMetrics(model, topo, wl, lastCS,
+                     serverRate(state.users, state.think, wl.sub_ratio)
+                       / (topo.replicas || 1), PREFILL_CHUNK).rho < 1);
+
   if (noFit){
     renderNoFit('chartC'); renderNoFit('chartD');
     chartCGeom=null; chartDGeom=null;
   } else {
-    renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress);
-    renderChartD(dc, lastStress, unionKink(model));
+    renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress, lastSteady);
+    renderChartD(dc, lastStress, unionKink(model), lastSteady);
   }
   updateCsD(model);
 
-  // ONE context-length draw feeds chart E and every prefill readout on the
-  // tiles, so the two can never disagree within a render
-  seedFor('context');
-  lastCS = noFit ? null : contextStats(wl);
   renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
 
-  renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS);
+  renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS,lastSteady);
   renderPlanner(model, topo, wl, lastCS, noFit, draft, q, deferFrontierDecode);
 }
 
@@ -3008,7 +3236,8 @@ function renderFrontierSection(wl, cs, draft, q, deferDecode){
 function updateCsD(model){
   const kink = unionKink(model);
   document.getElementById('cs-D').textContent =
-    "System p50 tok/s (×replicas for DP)." + (kink
+    "System p50 tok/s (×replicas for DP). Where the load's output-token demand"
+    + " crosses this curve is the steady-state batch size." + (kink
       ? ` Slope break at n = ${kink}: the expert-union kink — past it every routed expert is read each step.`
       : "");
 }
@@ -3046,7 +3275,7 @@ function stressPoint(dc, topo, warm){
   return { n, pu, agg:n*pu*topo.replicas };
 }
 
-function renderTiles(model,topo,wl,dc,warm,stress,cs){
+function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   const pool=kv_pool_tokens(model,topo);
   const ceiling=(1-wl.invalidation)*100;
   // Stress point (computed once in stressPoint(), marked on charts C and D):
@@ -3121,6 +3350,25 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs){
   // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
   // different draws and is not a count of anything.
   const offl = warm.o5;
+  // ---- the STEADY-STATE decode point (act 2's honest counterpart to act 1's
+  // stress test). Every quantity below is per replica GROUP, like groupRate.
+  const sd = noFit ? null : (steady || steadyDecodePoint(dc, topo, groupRate, state.out));
+  // prefill duty at this load. Above 1 the queue is unbounded, so there is no
+  // steady state to be in: requests never reach the decode batch at all, and
+  // quoting a decode speed for them would be the most misleading number on the
+  // page. sp.rho is exactly this product — reuse it rather than recompute.
+  const dutyNow = sp ? sp.rho : 0;
+  // the shared predicate, computed once in computeAndRender; the local duty
+  // is still needed below to say WHICH way it failed
+  const sdReal = !!sd && (sd.real !== undefined ? sd.real : (dutyNow < 1 && !sd.saturated));
+  const sdClass = !sd ? undefined : (!sdReal ? 'crit'
+    : (sd.pu >= 50 ? 'good' : (sd.pu >= 40 ? 'warn' : 'crit')));
+  // share of the machine's OWN decode ceiling this load asks for: its output
+  // demand against the aggregate the whole warm pool would deliver (chart D's
+  // stress point). The same ratio the power model bills decode watts on.
+  const stAggGroup = st.n * st.pu;
+  const sdUse = sd && stAggGroup > 0 ? sd.demand/stAggGroup : 0;
+  const sdN = sd ? fmt(sd.n, sd.n < 10 ? 1 : 0) : "—";
   // "distinct users" ≈ warm × (1−p_sub) — an expected-share approximation of
   // scenario_model.py's exact which="user" count; accurate near the reference
   // workload, drifts at extreme subagent ratios
@@ -3139,6 +3387,25 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs){
      tip:"Same metric, median (p50) and optimistic (p95) draws. Plan on p5; use p50 to compare configurations."},
     {act:1, k:"KV pool", v:fmt(pool/1e6,2), u:"M tok", sub:topo.name,
      tip:"KV-token capacity of one cache: what's left of VRAM after resident weights and the calibrated ~18 GiB activation reserve, divided by KV bytes/token. Every warm session and every active decode lives inside this pool."},
+    {act:2, k:"Per-user decode, at this load", v: sdReal ? fmt(sd.pu,0) : "—",
+     u: sdReal ? "tok/s" : "", cls:sdClass,
+     sub: noFit ? `model weights do not fit this configuration — ${fitHint}`
+        : dutyNow >= 1
+          ? `prefill duty ${fmt(dutyNow*100,0)}% — the queue is unbounded here, so nothing reaches a steady state to decode in`
+        : sd.saturated
+          ? `the load demands ${fmt(sd.demand,0)} output tok/s — more than this cache's whole GPU-resident population retires, so the decode batch has no steady size`
+        : sd.n < 1
+          ? `under one sequence decoding on average — the cache sits idle between requests, so a request that arrives has the machine to itself`
+        : `${sdN} sessions decoding at once${dp?" per replica":""}, not ${fmt(st.n,0)}`
+          + ` · the all-warm stress test says ${fmt(st.pu,0)} tok/s`,
+     tip:"What a user actually sees at the load you set — the counterpart to act 1's stress test. Requests are open-loop: a user waits out most of the think-time interval, so the decode batch holds far fewer sessions than the warm pool and each one runs much faster. Little's law on the decode phase fixes the batch size where the aggregate decode curve (chart D) delivers exactly the output tokens the load demands. Mean-field: the speed is priced at the MEAN batch, and per-user speed is convex in batch size, so this is the conservative side. Excludes the ITL spike from prefill chunks, which is priced separately."},
+    {act:2, k:"Decoders in flight", v: sdReal ? sdN : "—",
+     u: sdReal ? (dp?"per replica":"sessions") : "",
+     sub: !sdReal ? `no steady state at this load — see the tile to the left`
+        : `${fmt(sd.demand,0)} output tok/s demanded${dp?` × ${topo.replicas}`:""}`
+          + ` = ${fmt(sdUse*100, sdUse<0.1?2:1)}% of the all-warm decode aggregate`
+          + ` · at ${fmt(state.out,0)} output tok per response`,
+     tip:"Mean number of sequences in the decode batch at any instant — Little's law: arrival rate × seconds spent decoding. This is an EXPECTED occupancy, not a setting: max_num_seqs is a cap and the deploy card rightly leaves it at the ceiling, so the batch can absorb bursts. Scales linearly with the request rate (Concurrent users ÷ Think time) and with output length, and only weakly with anything else — which is why the percentage beside it, not the warm count, is the honest read on how loaded the decode side is. Output length is the one ASSUMED input here (the workload model fits prompt lengths, never output lengths)."},
     {act:2, k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
      tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
     {act:2, k:"Max cold req/s", v:noFit?"—":fmt(coldRate,2), u:noFit?"":"req/s",
@@ -3570,7 +3837,7 @@ function harnessScript(op, model, topo, wl){
       subagent_median_tokens: wl.sub_median,
       subagent_sigma: wl.sub_sigma,
       miss_rate: wl.invalidation,
-      max_output_tokens: AVG_OUT_TOK,
+      max_output_tokens: state.out,
       context_cap_tokens: wl.cap,
       subagent_prefix_tokens: wl.sys_sub,
       sub_shares_prefix: wl.sub_shares_prefix,
@@ -3675,14 +3942,12 @@ document.getElementById('testCard').addEventListener('click', e => {
    the load implies against the decode capacity at the 40 tok/s floor, capped
    at whatever prefill leaves. P_total = n_gpu x (P_gpu + host) x PUE.
    -------------------------------------------------------------------------- */
-// Output tokens ONE REQUEST decodes (applied to every request, subagents
-// included) — ASSUMED, unmeasured (the workload model never needed output
-// lengths before). Consistent with the measured 10.8 s served per turn at
-// 50–90 tok/s. Scales d_d linearly; the €/1M-token figure moves
-// hyperbolically (fixed idle/prefill watts amortise as outputs lengthen);
-// the €/month bill moves least (decode is one term of three).
-const AVG_OUT_TOK = 1000;
-
+// AVG_OUT_TOK (declared with the decode constants) is the REFERENCE output
+// length; the live figure is state.out, which the Output-per-response slider
+// sets. Scales d_d linearly; the €/1M-token figure moves hyperbolically (fixed
+// idle/prefill watts amortise as outputs lengthen); the €/month bill moves
+// least (decode is one term of three).
+//
 // Average draw of one GPU and the whole system, at the current load.
 // rateGroup = TOTAL req/s one replica group sees; decodeUsersGroup = the
 // per-group decode ceiling at the floor (its capacity proxy).
@@ -3690,7 +3955,7 @@ function powerDraw(topo, mo, f, rateGroup, decodeUsersGroup){
   const g = topo.gpu || CONFIG.GPUS["H200"];
   const eS = f * mo.miss + (1 - f) * mo.hit;
   const dP = Math.min(1, rateGroup * eS);
-  const demand = rateGroup * AVG_OUT_TOK;                       // tok/s asked
+  const demand = rateGroup * state.out;                         // tok/s asked
   const cap = decodeUsersGroup * decodeFloor();                 // tok/s at floor
   const dD = Math.min(Math.max(0, 1 - dP), cap > 0 ? demand / cap : 1);
   const perGpu = dP * g.p_prefill_w + dD * g.p_decode_w
@@ -3704,7 +3969,7 @@ function powerDraw(topo, mo, f, rateGroup, decodeUsersGroup){
 function energyCost(topo, mo, f, rateGroup, decodeUsersGroup){
   const p = powerDraw(topo, mo, f, rateGroup, decodeUsersGroup);
   const eurMonth = p.kw * 720 * state.ekwh;
-  const outTokS = rateGroup * (topo.replicas || 1) * AVG_OUT_TOK;
+  const outTokS = rateGroup * (topo.replicas || 1) * state.out;
   const eurMtok = outTokS > 0 ? (p.kw * state.ekwh / 3600) / outTokS * 1e6 : Infinity;
   return { ...p, eurMonth, eurUser: eurMonth / Math.max(1, state.users), eurMtok };
 }
@@ -3737,7 +4002,7 @@ function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
     + `<div><h4>Draw</h4><dl class="spec">${draw}</dl></div>`
     + `<div><h4>Bill</h4><dl class="spec">${bill}</dl></div>`
     + `<p class="verdictline" style="color:${cssv('--muted')};font-weight:400">`
-    + `Output assumed at ${fmt(AVG_OUT_TOK, 0)} tokens per request (unmeasured). `
+    + `Output assumed at ${fmt(state.out, 0)} tokens per request (unmeasured). `
     + `Two seemingly equal configurations rarely bill equally: idle watts scale with GPU count, decode watts with the load.</p>`
     + `</div>`;
 }
@@ -4127,6 +4392,9 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   ].map(([k,v])=>`<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
   const out = [
     ['Warm sessions (p5)', `${fmt(warmSys,0)} · ≈ ${fmt(userSys,0)} users`],
+    ['Per-user decode, at this load', lastSteady && lastSteady.real && lastSteady.n>0
+       ? `${fmt(lastSteady.pu,0)} tok/s · ${fmt(lastSteady.n, lastSteady.n<10?1:0)} decoding at once`
+       : '—'],
     ['Per-user decode, all warm active', `${fmt(lastStress.pu,1)} tok/s`],
     ['Max cold req/s', `${fmt(1/mo.miss,2)}${reps>1?' per group':''}`],
     ['Cold-spike tolerance B*', `${fmt(op.bstar,1)} misses at once${reps>1?' per group':''}`],
@@ -4384,6 +4652,7 @@ const sliderMap=[
   ['s-sla','sla',v=>parseInt(v,10)],
   ['s-decode_floor','decode_floor',v=>parseInt(v,10)],
   ['s-turn','turn',v=>parseInt(v,10)],
+  ['s-out','out',v=>parseInt(v,10)],
   ['s-burst','burst',v=>parseInt(v,10)],
   ['s-ekwh','ekwh',v=>parseFloat(v)],
 ];
@@ -4465,6 +4734,7 @@ function syncLabels(){
     + 'GPU-resident warm-capacity zone; dashed = the ' + fmt(decodeFloor(),0)
     + ' tok/s floor and ' + fmt(decodeComfort(),0) + ' tok/s comfortable mark.';
   document.getElementById('v-turn').textContent=fmt(state.turn,0);
+  document.getElementById('v-out').textContent=fmt(state.out,0);
   document.getElementById('v-burst').textContent=fmt(state.burst,0);
   // the derived quantity the whole planner runs on — shown next to the users
   // slider so the 64 / 30 s = 2.13 req/s reference is never a hidden constant
@@ -4620,11 +4890,11 @@ function redrawCharts(){
     renderNoFit('chartC'); renderNoFit('chartD');
     chartCGeom=null; chartDGeom=null;
   } else {
-    renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress);
-    renderChartD(lastDC,lastStress,unionKink(activeModel()));
+    renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress,lastSteady);
+    renderChartD(lastDC,lastStress,unionKink(activeModel()),lastSteady);
   }
   renderChartE(lastChartE);   // re-render from cached series, no new draws
-  renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress,lastCS);
+  renderTiles(activeModel(),currentTopo(),currentWL(),lastDC,lastWarmCur,lastStress,lastCS,lastSteady);
   // the frontier bakes chart-palette colors (PLANNER_COLORS -> cssv) into
   // inline styles, so a theme flip must repaint it; the deploy card only uses
   // var() colors but is repainted too so its copy-button state never goes stale
