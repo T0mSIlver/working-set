@@ -395,8 +395,8 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
       <div class="ctl-group">
         <div class="ctl-sec">Prompt-length distribution</div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Median of the user-prompt log-normal; 31k is the reference workload's fitted value. The range scales with the model's context window, and lengths above the max_seq_len cap truncate to it.">User prompt median</span> <span class="val"><span id="v-user_median">31</span>k</span></label>
-          <input type="range" id="s-user_median" min="5" max="120" step="1" value="31">
+          <label class="flabel"><span class="tip" data-tip="Median of the user-prompt log-normal; 31k is the reference workload's fitted value. Chat workloads sit an order of magnitude lower, so the range runs down to 1k in 0.1k steps. The upper range scales with the model's context window, and lengths above the max_seq_len cap truncate to it.">User prompt median</span> <span class="val"><span id="v-user_median">31</span>k</span></label>
+          <input type="range" id="s-user_median" min="1" max="120" step="0.1" value="31">
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Log-normal shape (std-dev of ln length), fitted at 0.81 on 1,850 real request lengths. The mean — not the median — drives warm capacity, so higher σ = fatter tail of pool-hogging sessions = fewer warm.">User prompt sigma</span> <span class="val" id="v-user_sigma">0.81</span></label>
@@ -457,7 +457,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">C · Per-user decode speed vs max_num_seqs</p>
-      <p class="cs">p50 line, p5–p95 band, <b>log</b> axis. Shaded = the GPU-resident warm-capacity zone; dashed = the 40 tok/s floor and 50 tok/s comfortable mark. Two points are marked: <b>all warm decoding</b> (the stress test) and <b>your load</b> (the steady state act 2 prices).</p>
+      <p class="cs" id="cs-C">p50 line, p5–p95 band, <b>log</b> axis. Shaded = the GPU-resident warm-capacity zone; dashed = the 40 tok/s floor and 50 tok/s comfortable mark.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>p50 per-user</span>
         <span class="li"><span class="sw" style="background:var(--s1);opacity:.28"></span>p5–p95</span>
@@ -514,8 +514,12 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
           <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
       </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt) — an i.i.d. per-request draw; 10% is the docs' adverse planning case. A correlated flush is worse than anything this slider can show, and is priced by the Cold-spike tolerance tile.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
-          <input type="range" id="s-inval" min="0" max="50" step="0.5" value="1">
+          <label class="flabel"><span class="tip" data-tip="Per-user decode speed a session must still get once every warm session decodes at once — the threshold the DECODE ceiling is solved against. 40 tok/s is the study's hard floor and every published figure uses it; 50 is its comfortable mark, and the comfortable line tracks this slider at 1.25×. The right value is a property of the WORKLOAD, not the hardware: an agent consuming tokens programmatically wants 40+, while a human reading chat output consumes maybe 5–8 tok/s, so a chat deployment judged at 40 can look decode-bound when it is not. Moves the decode ceiling steeply — it is the reciprocal of per-user speed, so halving the floor roughly doubles the ceiling. The energy model prices the same floor, so the cost card stays consistent.">Per-user decode floor</span> <span class="val"><span id="v-decode_floor">40</span> tok/s</span></label>
+          <input type="range" id="s-decode_floor" min="5" max="100" step="1" value="40">
+      </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt) — an i.i.d. per-request draw; 10% is the docs' adverse planning case. 100% is the no-reuse floor: nothing matches, not even the shared system prefix, so the prefix control stops buying anything. Above 50% charts F and G widen their axis to the full range. A correlated flush is worse than anything this slider can show, and is priced by the Cold-spike tolerance tile.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
+          <input type="range" id="s-inval" min="0" max="100" step="0.5" value="1">
       </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Cache misses arriving AT ONCE — the correlated event the i.i.d. miss-rate slider cannot express. The 'flush' preset sets it to one replica group's p5 warm population (capped at the slider's 512): a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
@@ -1206,7 +1210,16 @@ function spikeMetrics(m, topo, wl, cs, rate, chunk){
    Under those, all four ceilings become MAX CONCURRENT USERS and the binding
    one is simply the smallest. Mirrors operating_point() in scenario_model.py.
    -------------------------------------------------------------------------- */
-const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor
+const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor — now the
+                                   // DEFAULT of state.decode_floor, kept as a
+                                   // named constant because every published
+                                   // figure is quoted at it
+// the comfortable mark has always been 1.25x the hard floor (50 against 40);
+// keeping the ratio means the chart-C guide lines and the tile's green/amber
+// split still mean the same thing at any floor the slider is set to
+const DECODE_COMFORT_RATIO = 1.25;
+function decodeFloor(){ return state.decode_floor; }
+function decodeComfort(){ return state.decode_floor * DECODE_COMFORT_RATIO; }
 // Output tokens ONE REQUEST decodes (every request, subagents included) —
 // ASSUMED, unmeasured: the workload model fits prompt LENGTHS, never output
 // lengths. Consistent with the measured 10.8 s served per turn at 50-90 tok/s.
@@ -1229,7 +1242,17 @@ function serverRate(users, think, subR){
 // is monotone decreasing in n (every extra sequence adds KV bytes to the same
 // step), so ~11 evaluations replace a linear scan. Mirrors max_users_decode.
 function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
-  const F = floor || DECODE_FLOOR_TOKS, HI = hi || 4096;
+  const F = floor || DECODE_FLOOR_TOKS;
+  // The search cap was sized for the study's 40 tok/s floor. Per-user speed is
+  // aggregate/n, so the crossing sits at ~1/F — at a chat-shaped 5 tok/s floor
+  // it lands ~8x higher and the old fixed 4,096 censored routinely. Censoring
+  // is not just a display '≥': powerDraw prices decodeUsersGroup x floor as the
+  // aggregate capacity, so a censored ceiling silently UNDERSTATES capacity and
+  // overstates the energy bill. Scaling the cap by 40/F keeps HI at exactly
+  // 4,096 for the default floor — no published number moves — and the doubling
+  // search only pays for the extra probes it actually needs (iterations are
+  // scaled by 128/n, so each probe costs about the same).
+  const HI = hi || Math.max(4096, Math.round(4096 * DECODE_FLOOR_TOKS / F));
   // one probe costs O(n_iter x n) — decodeCurves builds a cumulative context
   // sum up to n — so the ORDER of probes dominates the cost. Doubling up from
   // 1 keeps the largest probe within 2x the answer; the old "probe HI first"
@@ -2072,6 +2095,11 @@ const state = {
   // It sets the steady-state decode point and the power model's decode duty;
   // it is the ONE assumption those two readouts cannot be honest without.
   users: 64, think: 30, sla: 10, turn: 2000, out: AVG_OUT_TOK, burst: 32,
+  // per-user decode speed the DECODE ceiling is solved against. A workload
+  // property, not a hardware one: the study's 40 is an agentic-coding comfort
+  // standard, and a chat deployment judged at it can read as decode-bound
+  // while every human reader is served comfortably.
+  decode_floor: DECODE_FLOOR_TOKS,
   // UI-only: whether the frontier table shows the four per-ceiling columns.
   // Not part of any compute signature — toggling re-renders from cached rows.
   showCeil: false,
@@ -2441,12 +2469,14 @@ function renderChartC(dc, zone, stress, steady){
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-5}" text-anchor="middle">max_num_seqs</text>`;
   g+=`<text class="axlbl" transform="translate(12,${mT+ph/2}) rotate(-90)" text-anchor="middle">per-user tok/s (log)</text>`;
-  // decode-speed thresholds: 40 tok/s is the study's hard floor, 50 the
-  // comfortable mark. Planning happens against 40.
-  [[40,'hard floor'],[50,'comfortable']].forEach(([f,what])=>{
+  // decode-speed thresholds: the hard floor is the slider (40 tok/s by
+  // default — the study's value, which every published figure uses), and the
+  // comfortable mark tracks it at 1.25x (50 against 40). Planning happens
+  // against the floor.
+  [[decodeFloor(),'hard floor'],[decodeComfort(),'comfortable']].forEach(([f,what])=>{
     if(f>=ylo && f<=yhi){ const Y=sy(f);
       g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${muted}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>`;
-      g+=`<text class="axtick" x="${mL+3}" y="${Y-3}" text-anchor="start" fill="${muted}">${f} tok/s — ${what}</text>`;
+      g+=`<text class="axtick" x="${mL+3}" y="${Y-3}" text-anchor="start" fill="${muted}">${fmt(f,0)} tok/s — ${what}</text>`;
     }
   });
   // band p5..p95
@@ -2865,7 +2895,7 @@ function modelFor(key){
 
 function syncState(){ liveTurn = state.turn; liveThink = state.think; }
 
-function computeAndRender(draft){
+function computeAndRender(draft, deferFrontierDecode){
   syncState();
   const model=activeModel();
   const topo=currentTopo();
@@ -2969,7 +2999,7 @@ function computeAndRender(draft){
   renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
 
   renderTiles(model,topo,wl,dc,lastWarmCur,lastStress,lastCS,lastSteady);
-  renderPlanner(model, topo, wl, lastCS, noFit, draft, q);
+  renderPlanner(model, topo, wl, lastCS, noFit, draft, q, deferFrontierDecode);
 }
 
 /* ---- the planner: tiles, charts F & G, the frontier table ------------------
@@ -2979,9 +3009,9 @@ function computeAndRender(draft){
    The closed-form halves (latency, saturation, B*, TTFT) are cheap and update
    live on every frame, so dragging the load or budget sliders is immediate.
    -------------------------------------------------------------------------- */
-let lastPlanner = null, lastFrontier = null, lastFrontierMo = null;
+let lastPlanner = null, lastFrontier = null, lastFrontierMo = null, lastFrontierDec = null;
 let pendingLoadTiles = [];   // act-2 tiles from renderTiles, painted by the planner
-function renderPlanner(model, topo, wl, cs, noFit, draft, q){
+function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode){
   if (noFit){
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
     renderBindingChart(null); renderSpikeChart(null); renderCeilingBars(null);
@@ -2994,9 +3024,19 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     // the no-fit path; the workload stats it needs are fit-independent).
     // cs is null here; only draw the 20k-sample context stats when some row's
     // moments cache is actually cold — otherwise the draw is discarded
+    // A signature change rebuilds the table and RESETS the moments cache
+    // inside renderFrontierSection — so testing only the caches that exist
+    // right now says "no samples needed" and then hands a null cs to a full
+    // rebuild, leaving every row to sample its own moments off whatever the
+    // RNG stream happened to be left at. That made non-decode columns
+    // (latency, B*, ranking, €/mo) move when only the decode floor changed.
+    const wsigNow = frontierWarmSig(wl);
     const needCs = !lastFrontier || !lastFrontierMo
+                || (!draft && (lastFrontier.sig !== wsigNow
+                               || lastFrontierMo.sig !== `${wsigNow}|${state.turn}`))
                 || lastFrontier.base.some(r => !lastFrontierMo.mo[r.key]);
-    renderFrontierSection(wl, cs || (needCs ? contextStats(wl) : null), draft, q);
+    renderFrontierSection(wl, cs || (needCs ? contextStats(wl) : null), draft, q,
+                          deferFrontierDecode);
     lastPlanner = null;
     return;
   }
@@ -3017,15 +3057,26 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
   let warmFn, decodeUsers, decodeCensored = false;
   if (!draft || !lastPlanner){
     seedFor('decodeCeil');
-    decodeUsers = maxUsersDecode(model, topo, wl, DECODE_FLOOR_TOKS, q.DECODE_ITER || 220);
+    decodeUsers = maxUsersDecode(model, topo, wl, decodeFloor(), q.DECODE_ITER || 220);
     decodeCensored = decodeUsers.censored; decodeUsers = decodeUsers.n;
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
                             q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
-    lastPlanner = { warmFn, decodeUsers, decodeCensored };
+    lastPlanner = { warmFn, decodeUsers, decodeCensored, fMax: fAxisMax() };
   } else {
     warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
     decodeCensored = lastPlanner.decodeCensored;
+  }
+  // a draft render reuses the cached curve, but warmUsersCurve's anchors only
+  // span the axis it was built for and it CLAMPS beyond its last anchor. So a
+  // drag across the 50% boundary would draw chart G's cache line flat from
+  // 0.5 to 1.0 until the 120 ms settle rebuilt it — a plausible-looking curve
+  // that is simply wrong. Rebuild immediately when the axis changed under it.
+  if (lastPlanner.fMax !== fAxisMax()){
+    seedFor('warmCurve');
+    warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
+                            q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
+    lastPlanner = { ...lastPlanner, warmFn, fMax: fAxisMax() };
   }
 
   const d = plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo);
@@ -3068,7 +3119,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
     others.push({ fs: d.fs, b: d.fs.map(x => bStar(m2, x, state.sla, r2)) });
   }
   renderSpikeChart(d, others);
-  renderFrontierSection(wl, cs, draft, q);
+  renderFrontierSection(wl, cs, draft, q, deferFrontierDecode);
 
   // the sensitivity panel re-sweeps every soft input, so like the other
   // sampled halves it runs on SETTLED renders only and drafts reuse the last
@@ -3088,38 +3139,82 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q){
    none of which change any other row's warm capacity or decode ceiling — so
    the two most common interactions (switching model, dragging load) never
    pay for it. The closed-form half is recomputed every render. */
-function renderFrontierSection(wl, cs, draft, q){
+/* The frontier's Monte-Carlo signatures, hoisted out of renderFrontierSection
+   because the no-fit path has to know whether the table is ABOUT to be rebuilt
+   before it decides whether to draw context samples for it.
+
+   TWO signatures, because the table's two sampled halves have different
+   dependencies and VERY different costs. The warm fill is the expensive one
+   (a Monte-Carlo fill per row) and does not depend on the decode floor at all;
+   the decode search is the cheap one (a doubling bisection per row) and is the
+   only thing the floor moves. Keying both on one signature — as a single
+   frontierSig including the floor did — made every floor step re-run the warm
+   fills for nothing, which measured ~1,000 ms per settle against ~190 ms for a
+   budget knob that touches neither. Splitting them puts the floor slider back
+   in the cheap class. */
+function frontierWarmSig(wl){
+  return `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|`
+       + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
+       + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
+       + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;
+}
+// the decode ceilings additionally move with the floor — and ONLY they do
+function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}`; }
+function renderFrontierSection(wl, cs, draft, q, deferDecode){
   const f = wl.invalidation;
-  const fsig = `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|`
-             + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
-             + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
-             + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;
-  // like the sampled halves above, a DRAFT render never re-runs the
-  // Monte-Carlo half — fsig contains the very knobs a drag is changing,
-  // so checking it here would re-fill every row on every input event
-  if (!lastFrontier || (!draft && lastFrontier.sig !== fsig)){
-    seedFor('frontier');
+  const wsig = frontierWarmSig(wl), dsig = frontierDecSig(wl);
+  // like the sampled halves above, a DRAFT render never re-runs either
+  // Monte-Carlo half — the signatures contain the very knobs a drag is
+  // changing, so checking them here would re-sample on every input event
+  if (!lastFrontier || (!draft && lastFrontier.sig !== wsig)){
     const base = [];
     for (const mk of Object.keys(CONFIG.MODELS))
       for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
         if (dp*tp > 8) continue;
         const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu);
         if (kv_pool_tokens(m2, t2) <= 0) continue;
+        // Seed PER ROW, so a row's fill depends only on that row. One stream
+        // shared across the table made every row's draws depend on how many
+        // the earlier rows consumed — and once the decode search moved to its
+        // own cache it would no longer even run in between, which would have
+        // silently shifted every later row's warm number.
+        seedFor(`frontier|${mk}|${dp}x${tp}`);
         const wc2 = warmCapacity(m2, t2, wl, ramPerCache(t2),
                                  Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
-        const du2 = maxUsersDecode(m2, t2, wl, DECODE_FLOOR_TOKS, 140);
         base.push({ key:`${mk}|${dp}x${tp}`, mk, dp, tp,
                     label:`${m2.name} · ${t2.name}`, reps:t2.replicas||1,
-                    warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1),
-                    decodeUsers: du2.n*(t2.replicas||1), censored: du2.censored });
+                    warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1) });
       }
-    lastFrontier = { sig: fsig, base };
+    lastFrontier = { sig: wsig, base };
   }
-  // service-time moments depend on the workload and the turn size only, so the
-  // load and budget sliders reuse them: dragging those is pure arithmetic
-  const msig = `${fsig}|${state.turn}`;
+  // the decode half: the only part the floor moves, and ~5x cheaper than the
+  // fills above. Keyed per row so it survives a warm-half rebuild unchanged.
+  // stale is allowed here for exactly one 500 ms tier, and only when a
+  // previous result exists to show meanwhile — never on the first paint, and
+  // never when the warm half has just added rows this cache has no entry for
+  const decMissing = !lastFrontierDec
+                  || lastFrontier.base.some(r => !lastFrontierDec.dec[r.key]);
+  const decStale = !draft && lastFrontierDec && lastFrontierDec.sig !== dsig;
+  if (decMissing || (decStale && !deferDecode)){
+    frontierDecodeDeferred = false;
+    const dec = {};
+    for (const r of lastFrontier.base){
+      const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
+      seedFor(`frontierDec|${r.key}`);
+      const du2 = maxUsersDecode(m2, t2, wl, decodeFloor(), 140);
+      dec[r.key] = { decodeUsers: du2.n*r.reps, censored: du2.censored };
+    }
+    lastFrontierDec = { sig: dsig, dec };
+  } else if (decStale){
+    frontierDecodeDeferred = true;   // the 500 ms tier will pick this up
+  }
+  // service-time moments depend on the workload and the turn size only — NOT
+  // on the decode floor, so keying them on the warm signature keeps a floor
+  // step from needlessly resampling every row's moments too
+  const msig = `${wsig}|${state.turn}`;
   if (!lastFrontierMo || (!draft && lastFrontierMo.sig !== msig)) lastFrontierMo = { sig: msig, mo: {} };
-  const rows = lastFrontier.base.map(r=>{
+  const rows = lastFrontier.base.map(r0=>{
+    const r = { ...r0, ...lastFrontierDec.dec[r0.key] };
     const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
     const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
     const mo2 = lastFrontierMo.mo[r.key]
@@ -3201,7 +3296,7 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
     ? `needs TP ≥ ${needTp} on ${topo.gpu.name}`
       + (needTp <= 8 ? ` (this node has 8)` : ` — more than one 8-GPU node`)
     : "";
-  const floorClass = noFit ? undefined : (puOp>=50?'good':(puOp>=40?'warn':'crit'));
+  const floorClass = noFit ? undefined : (puOp>=decodeComfort()?'good':(puOp>=decodeFloor()?'warn':'crit'));
   // true whenever the cache SPLITS across >1 replica group (pure DP or a DP×TP
   // grid) — that is what makes the headline a per-replica number
   const dp = topo.replicas>1;
@@ -3321,7 +3416,7 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
      tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group — set by FLOPs, so no KV pool, offload or warm headroom raises it. Priced on the heavy tail (E[L²]) at the 32,768-token chunk default and the calibrated 45% MFU; f* is the miss rate that saturates the group at the current load; colour: green f < f*/2, amber from f*/2, red at f* and beyond. Analytic and UNVALIDATED — details on the method page."},
     {act:1, k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
-     tip:"Stress test: every HBM-resident p5-warm session decoding at once — each user's median speed. Green ≥50 tok/s, amber ≥40 (the hard floor), red below; if green, the cache — not bandwidth — binds. CPU-offloaded sessions are excluded, so the offload slider does not move this. It is a WORST case, not an expectation: act 2 prices the same curve at the load you actually set, where far fewer sessions decode at once."},
+     tip:`Stress test: every HBM-resident p5-warm session decoding at once — each user's median speed. Green ≥${fmt(decodeComfort(),0)} tok/s, amber ≥${fmt(decodeFloor(),0)} (the hard floor), red below; if green, the cache — not bandwidth — binds. Both thresholds follow the decode-floor slider. CPU-offloaded sessions are excluded, so the offload slider does not move this.`},
     {act:1, k:"Aggregate, all GPU-resident p5 warm active", v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,
      tip:"System-wide token throughput at that same stress point — the GPU-resident p5-warm sessions all decoding at once, summed over DP replicas. A capacity ceiling for batch/offline work, not a latency promise."},
@@ -3367,6 +3462,22 @@ const PLANNER_DASH = { cache:'', decode:'7 3', latency:'2 3', saturation:'11 4' 
 const PLANNER_LABEL = { cache:'cache', decode:'decode', latency:'latency',
                         saturation:'saturation' };
 
+/* Right-hand end of the miss-rate axis charts F and G sweep and draw.
+   The study's planning range is 0–50% and every published figure uses it, so
+   that stays the default: widening the axis for everyone would compress the
+   0–20% region the decision actually turns on. A workload with NO prefix
+   reuse at all (each request a fresh conversation, or a per-request salt in
+   the system prompt) is a real configuration the slider now reaches, so the
+   axis extends to 100% only once the slider is actually past 50%. The 0.01
+   grid is preserved either way — renderSpikeChart indexes the sweep by
+   Math.round(f*100) and would read the wrong point off a rescaled grid. */
+function fAxisMax(){ return state.inval > 50 ? 1.0 : 0.5; }
+// six evenly spaced ticks — [0,10,...,50]% on the default axis, [0,20,...,100]%
+// on the widened one, so the labels stay round numbers in both
+function fAxisTicks(fMax){
+  return [0,1,2,3,4,5].map(i => i*fMax/5);
+}
+
 // Warm USER capacity as a function of f, from a few Monte-Carlo anchors.
 // Warm capacity falls smoothly and near-linearly with the miss rate (H6:
 // ~1.5 x f), so five fills plus the CURRENT f — included as an anchor so the
@@ -3374,7 +3485,8 @@ const PLANNER_LABEL = { cache:'cache', decode:'decode', latency:'latency',
 // any resolution this chart can show. Interpolation is stated in the caption
 // rather than hidden: this is the one series on the panel that is sampled.
 function warmUsersCurve(model, topo, ram, iter, budget, wl0, fNow, warmNow){
-  const anchors = [0, 0.125, 0.25, 0.375, 0.5];
+  const fMax = fAxisMax();
+  const anchors = [0, 0.25, 0.5, 0.75, 1.0].map(a => a*fMax);
   if (!anchors.includes(fNow)) anchors.push(fNow);
   anchors.sort((a,b)=>a-b);
   const pts = anchors.map(f => {
@@ -3397,7 +3509,9 @@ function warmUsersCurve(model, topo, ram, iter, budget, wl0, fNow, warmNow){
 // Everything charts F and G draw, for the CURRENT configuration.
 function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
   const fs = [];
-  for (let i=0;i<=50;i++) fs.push(i/100);
+  // 1-point-per-percent grid out to the current axis end — renderSpikeChart
+  // reads its marker back as fs[Math.round(f*100)], so the step must stay 0.01
+  for (let i=0;i<=Math.round(fAxisMax()*100);i++) fs.push(i/100);
   const think = state.think, sla = state.sla, reps = topo.replicas || 1;
   // the ceilings are per replica GROUP, so the load one group sees is the
   // system population divided by the replica count
@@ -3460,7 +3574,7 @@ function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
           + `(${fmt(sp.mo.miss,1)} s) — unachievable at any load`
           + ` · next: ${others}`,
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
-     tip:"All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the 40 tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands."},
+     tip:`All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
      sub:`MFU 30–60% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
@@ -3519,21 +3633,22 @@ function renderBindingChart(d, op){
                 .filter(v=>isFinite(v) && v>0);
   const yLo = Math.max(1, Math.min(...all, op.users)*0.6);
   const yHi = Math.max(...all)*1.25;
-  const sx = linScale(0, 0.5, mL, mL+pw), sy = logScale(yLo, yHi, mT+ph, mT);
+  const fMax = fAxisMax();
+  const sx = linScale(0, fMax, mL, mL+pw), sy = logScale(yLo, yHi, mT+ph, mT);
   let g='';
   for (const t of logTicks(yLo,yHi)){
     const Y=sy(t);
     g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
     g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${fmt(t,0)}</text>`;
   }
-  for (const t of [0,0.1,0.2,0.3,0.4,0.5]){
+  for (const t of fAxisTicks(fMax)){
     const X=sx(t);
     g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
     g+=`<text class="axtick" x="${X}" y="${mT+ph+16}" text-anchor="middle">${fmt(t*100,0)}%</text>`;
   }
   const path = arr => arr.map((v,i)=>`${i?'L':'M'} ${sx(d.fs[i])} ${sy(clip(v,yLo,yHi))}`).join(' ');
   // safe region: everything under the envelope
-  g+=`<path d="${path(d.env)} L ${sx(0.5)} ${mT+ph} L ${mL} ${mT+ph} Z" fill="${C.cache}" opacity="0.07"/>`;
+  g+=`<path d="${path(d.env)} L ${sx(fMax)} ${mT+ph} L ${mL} ${mT+ph} Z" fill="${C.cache}" opacity="0.07"/>`;
   // the envelope goes UNDERNEATH as a wide halo: drawn on top as an opaque
   // line it covered whichever series was binding — i.e. always hid the one
   // the reader came for
@@ -3559,7 +3674,7 @@ function renderBindingChart(d, op){
     }
   }
   // your load
-  const X0=sx(clip(state.inval/100,0,0.5)), Y0=sy(clip(op.users,yLo,yHi));
+  const X0=sx(clip(state.inval/100,0,fMax)), Y0=sy(clip(op.users,yLo,yHi));
   const col0=op.fits?cssv('--good'):cssv('--crit');
   g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${col0}" stroke="${surface}" stroke-width="1.5"/>`;
   // flip the label to the left near the right edge, and say when the load is
@@ -3588,14 +3703,15 @@ function renderSpikeChart(d, others){
   const surface=cssv('--surface'), s1=cssv('--s1'), crit=cssv('--crit');
   const ctx = (others||[]).flatMap(o=>o.b).filter(v=>isFinite(v)&&v>0);
   const yLo=0.1, yHi=Math.max(4, ...d.spike.hi.filter(isFinite), ...ctx)*1.3;
-  const sx=linScale(0,0.5,mL,mL+pw), sy=logScale(yLo,yHi,mT+ph,mT);
+  const fMax = fAxisMax();
+  const sx=linScale(0,fMax,mL,mL+pw), sy=logScale(yLo,yHi,mT+ph,mT);
   let g='';
   for (const t of logTicks(yLo,yHi)){
     const Y=sy(t);
     g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
     g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${t<1?t.toFixed(1):fmt(t,0)}</text>`;
   }
-  for (const t of [0,0.1,0.2,0.3,0.4,0.5]){
+  for (const t of fAxisTicks(fMax)){
     const X=sx(t);
     g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
     g+=`<text class="axtick" x="${X}" y="${mT+ph+16}" text-anchor="middle">${fmt(t*100,0)}%</text>`;
@@ -3615,7 +3731,7 @@ function renderSpikeChart(d, others){
   g+=`<line x1="${mL}" y1="${Y1}" x2="${mL+pw}" y2="${Y1}" stroke="${crit}" stroke-width="1.4" stroke-dasharray="4 3"/>`;
   g+=`<text class="dlabel" x="${mL+pw-4}" y="${Y1-6}" text-anchor="end" fill="${crit}">cannot absorb a single simultaneous miss</text>`;
   // your miss rate
-  const f0=clip(state.inval/100,0,0.5), i0=Math.round(f0*100);
+  const f0=clip(state.inval/100,0,fMax), i0=Math.round(f0*100);
   const X0=sx(f0), Y0=sy(clip(d.spike.mid[i0],yLo,yHi));
   g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${s1}" stroke="${surface}" stroke-width="1.5"/>`;
   g+=`<text class="dlabel" x="${X0+9}" y="${Y0+4}" text-anchor="start" fill="${s1}">B* ${fmt(d.spike.mid[i0],1)}</text>`;
@@ -3726,7 +3842,7 @@ function harnessScript(op, model, topo, wl){
       subagent_prefix_tokens: wl.sys_sub,
       sub_shares_prefix: wl.sub_shares_prefix,
     },
-    slo: { ttft_budget_s: state.sla, itl_floor_tok_s: DECODE_FLOOR_TOKS, percentile: 95 },
+    slo: { ttft_budget_s: state.sla, itl_floor_tok_s: decodeFloor(), percentile: 95 },
     predictions: P,
     hypotheses: harnessHypotheses(P, reps),
   };
@@ -3755,7 +3871,7 @@ function harnessHypotheses(P, reps){
   return [
     `H-cache: >= ${fmt(P.warm_capacity_p5, 0)} user sessions stay warm (p5)${grp}. `
       + `A run bounds this below unless load reaches eviction.`,
-    `H-decode: per-user p50 decode holds >= ${DECODE_FLOOR_TOKS} tok/s up to `
+    `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
       + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
     `H-latency: a cache miss's mean TTFT reaches the ${fmt(state.sla, 0)} s budget `
       + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
@@ -3840,7 +3956,7 @@ function powerDraw(topo, mo, f, rateGroup, decodeUsersGroup){
   const eS = f * mo.miss + (1 - f) * mo.hit;
   const dP = Math.min(1, rateGroup * eS);
   const demand = rateGroup * state.out;                         // tok/s asked
-  const cap = decodeUsersGroup * DECODE_FLOOR_TOKS;             // tok/s at floor
+  const cap = decodeUsersGroup * decodeFloor();                 // tok/s at floor
   const dD = Math.min(Math.max(0, 1 - dP), cap > 0 ? demand / cap : 1);
   const perGpu = dP * g.p_prefill_w + dD * g.p_decode_w
                + Math.max(0, 1 - dP - dD) * g.idle_w;
@@ -3936,7 +4052,11 @@ function warmUsersApprox(model, topo, wl, nSamp){
 // context instead of its own draw (the MC bisection prices the spread; the
 // calibration ratio absorbs the difference). Monotone, so plain bisection.
 function decodeUsersApprox(model, topo, samples, floor){
-  const F = floor || DECODE_FLOOR_TOKS, bw = effective_bw(topo);
+  // default to the LIVE floor, not the constant: every caller here omits the
+  // argument, and a fixed 40 would leave the sensitivity panel's stand-in on a
+  // different threshold from the MC ceiling it is calibrated against — calD
+  // would silently absorb the mismatch at the anchor and be wrong everywhere else
+  const F = floor || decodeFloor(), bw = effective_bw(topo);
   const tk = (model.kv_decode_const && model.kv_decode_topk) ? model.kv_decode_topk : 0;
   let mL = 0, mT = 0;
   for (let i = 0; i < samples.length; i++){
@@ -3989,10 +4109,16 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     }
     return vs.map((v, i) => ({ v, ...at(v, i) }));
   };
-  // 1 · cache-miss rate — warmFn is the SAME sampled curve chart G uses
-  axes.push({ label: 'Cache-miss rate', cur: f0, lo: 0, hi: 0.5,
+  // 1 · cache-miss rate — warmFn is the SAME sampled curve chart G uses, so
+  //     this row has to sweep the SAME axis: at f0 > 0.5 a 0–0.5 sweep never
+  //     contains the current value (sweep() only injects `cur` when it falls
+  //     inside [lo,hi]), so the marker pins to the endpoint and the handover
+  //     and fits verdicts are read off a baseline that is not the live one.
+  //     Point count scales with the range to hold the 0.0125 stride.
+  const fMax = fAxisMax();
+  axes.push({ label: 'Cache-miss rate', cur: f0, lo: 0, hi: fMax,
     fmt: v => fmt(v * 100, v > 0 && v < 0.02 ? 1 : 0) + '%', approx: false,
-    pts: sweep(41, 0, 0.5, v =>
+    pts: sweep(Math.round(80*fMax) + 1, 0, fMax, v =>
       evalAt(mo, v, state.sla, state.think, warmFn(v) * reps, decodeNow), f0) });
   // 2 · think time — enters every rate linearly, closed form
   axes.push({ label: 'Think time', cur: state.think, lo: 5, hi: 180,
@@ -4037,6 +4163,17 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       pts: sweep(21, 1.0, 3.0, v =>
         evalAt(mo, f0, state.sla, state.think, cacheNow,
                decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
+  // 6b · per-user decode floor — moves the DECODE ceiling only, and steeply
+  //      (the ceiling is the reciprocal of per-user speed). This is the row
+  //      that answers "is my deployment actually decode-bound, or just judged
+  //      against a floor fitted to a different workload?"
+  if (calD > 0)
+    axes.push({ label: 'Decode floor', cur: state.decode_floor, lo: 5, hi: 100,
+      fmt: v => fmt(v, 0) + ' tok/s', approx: true,
+      pts: sweep(20, 5, 100, v =>
+        evalAt(mo, f0, state.sla, state.think, cacheNow,
+               decodeUsersApprox(model, topo, cs.samples, v) * calD * reps),
+        state.decode_floor) });
   // 7 & 8 · the prompt-length distribution — median and shape. Both re-draw
   //     the context stats (4k samples: flip resolution, not tile precision)
   //     and move ALL FOUR ceilings through them.
@@ -4338,10 +4475,27 @@ function renderFrontierTable(rows, curKey){
 /* ============================================================================
    CONTROL WIRING
    ========================================================================== */
-let debTimer=null;
+let debTimer=null, frontierTimer=null;
+// The frontier's decode half re-runs a bisection per row (~25 rows). It is
+// MEASURED at ~520 ms on a floor change against ~130 ms for everything else on
+// the page combined, so folding it into the 120 ms settle made the decode-floor
+// slider feel laggy in a way no other slider does. It gets its own, longer
+// tier: the verdict, tiles and charts land at 120 ms as before, and the
+// "every alternative ranked" table — which is below the fold and is not what
+// you are watching while dragging — catches up at 500 ms.
+// Deliberately NOT a numeric shortcut: no probe count is reduced and no
+// published frontier number moves. Only WHEN it recomputes changes.
+const FRONTIER_SETTLE_MS = 500;
+let frontierDecodeDeferred = false;
 function scheduleFull(){
   clearTimeout(debTimer);
-  debTimer=setTimeout(()=>{ computeAndRender(false); }, 120);
+  debTimer=setTimeout(()=>{ computeAndRender(false, true); }, 120);
+  clearTimeout(frontierTimer);
+  // only arm the second tier if the first one actually deferred something —
+  // otherwise every keystroke schedules a redundant full re-render
+  frontierTimer=setTimeout(()=>{
+    if (frontierDecodeDeferred) computeAndRender(false);
+  }, FRONTIER_SETTLE_MS);
 }
 function onInput(){
   syncLabels();
@@ -4496,6 +4650,7 @@ const sliderMap=[
   ['s-users','users',v=>parseInt(v,10)],
   ['s-think','think',v=>parseInt(v,10)],
   ['s-sla','sla',v=>parseInt(v,10)],
+  ['s-decode_floor','decode_floor',v=>parseInt(v,10)],
   ['s-turn','turn',v=>parseInt(v,10)],
   ['s-out','out',v=>parseInt(v,10)],
   ['s-burst','burst',v=>parseInt(v,10)],
@@ -4571,6 +4726,13 @@ function syncLabels(){
   document.getElementById('v-users').textContent=fmt(state.users,0);
   document.getElementById('v-think').textContent=fmt(state.think,0);
   document.getElementById('v-sla').textContent=fmt(state.sla,0);
+  document.getElementById('v-decode_floor').textContent=fmt(state.decode_floor,0);
+  // chart C's dashed guide lines move with the slider, so its caption has to
+  // name the thresholds actually drawn rather than the study's 40/50
+  const csC = document.getElementById('cs-C');
+  if (csC) csC.innerHTML = 'p50 line, p5\u2013p95 band, <b>log</b> axis. Shaded = the '
+    + 'GPU-resident warm-capacity zone; dashed = the ' + fmt(decodeFloor(),0)
+    + ' tok/s floor and ' + fmt(decodeComfort(),0) + ' tok/s comfortable mark.';
   document.getElementById('v-turn').textContent=fmt(state.turn,0);
   document.getElementById('v-out').textContent=fmt(state.out,0);
   document.getElementById('v-burst').textContent=fmt(state.burst,0);
@@ -4596,7 +4758,10 @@ function syncLabels(){
     'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 1.7× ⇔ α ≈ 47% — the 27B\'s measured fit; switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
-  document.getElementById('v-user_median').textContent=fmt(state.user_median,0);
+  // the 0.1k step is only reachable at the chat end of the range, so show the
+  // decimal only when there is one — the reference 31k must not read "31.0k"
+  document.getElementById('v-user_median').textContent=
+    fmt(state.user_median, Number.isInteger(state.user_median) ? 0 : 1);
   document.getElementById('v-user_sigma').textContent=state.user_sigma.toFixed(2);
   document.getElementById('v-sub_median').textContent=fmt(state.sub_median,0);
   document.getElementById('v-sub_sigma').textContent=state.sub_sigma.toFixed(2);
