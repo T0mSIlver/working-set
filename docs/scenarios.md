@@ -675,8 +675,10 @@ saturates the machine on prefill alone. Neither axis alone describes that
 deployment; sizing it from warm capacity alone would miss the tighter of the
 two constraints.
 
-Duty vs miss rate for the 27B on TP2 — the curve behind the explorer's 0–50%
-cache-miss slider:
+Duty vs miss rate for the 27B on TP2 — the curve behind the explorer's
+cache-miss slider over its 0–50% planning range (the slider reaches 100% for
+workloads with no prefix reuse at all, well past the point this table
+saturates):
 
 | f | 0% | 1% | 5% | 10% | 25% | 50% |
 | --- | --- | --- | --- | --- | --- | --- |
