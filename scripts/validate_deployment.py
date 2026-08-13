@@ -127,16 +127,36 @@ CONFIG = {
         "sequences at ~756 tok/s each — NOT the whole warm pool at the stress "
         "figure. Read against the measured concurrent-decode count, not the "
         "population.",
-        "H-itl-spike: the normal inter-token gap is ~2.2 ms and the worst freeze "
-        "behind one chunk of a 180k cold re-prefill is ~171 ms at "
-        "max_num_batched_tokens=4096 (~1,289 ms at 32,768). This is the "
-        "chunk-size claim: the MEAN barely moves between the two settings, so "
-        "it must be read on the INTER-TOKEN GAPS table, never on decode p50.",
+        "H-itl-spike: the worst freeze behind one chunk of a 180k cold "
+        "re-prefill is ~171 ms [110-260] at max_num_batched_tokens=4096 vs "
+        "~1,289 ms [640-1,980] at 32,768. Brackets are the study's MFU range "
+        "(30-60% around 45%, research/prefill.md #1): the spike MAGNITUDE "
+        "scales ~inversely with MFU and is unvalidated, but the RATIO between "
+        "the two settings does not — quote the ratio, not the milliseconds. "
+        "Read it on the INTER-TOKEN GAPS table, never on decode p50 (a mean "
+        "over the stream is nearly blind to a freeze). NOTE the 4k bracket "
+        "straddles a 250 ms freeze threshold, which is why the default is 100 "
+        "and why the freeze ladder exists.",
+        "H-itl-mean: the normal inter-token gap (~2.2 ms) and total stall time "
+        "are ~unchanged between the two chunk settings — prefill FLOPs "
+        "telescope, so only the per-pass weight-stream overhead does not "
+        "(~+1.9% total machine time at 4k). CAVEAT: the exact invariance is a "
+        "property of the flat-MFU pricing; under the per-pass-overhead pricing "
+        "the explorer uses, the mean moves by that ~1.9%. Also note ~2.2 ms is "
+        "near the client-side timing floor — check the 'floor' column before "
+        "reading anything into this row.",
     ],
 }
 # --- END CONFIG ---
 
 DEFAULT_RUNGS = "0.25,0.5,0.75,1,1.25,1.5,2"
+
+# Freeze thresholds reported as a LADDER, not a single number. A lone
+# threshold is load-bearing in the worst way: set it at 250 ms and a
+# configuration whose worst freeze is 171 ms reads as "zero freezes", turning
+# a 7.5x quantitative win into a spurious qualitative one. The ladder shows
+# the distribution and lets the reader pick.
+FREEZE_LADDER_MS = (50.0, 100.0, 250.0, 500.0, 1000.0)
 
 
 # ============================================================================
@@ -216,10 +236,14 @@ class Turn:
     # report says how far apart those two are on this endpoint.
     itl_p50: float | None = None      # s, median gap within this response
     itl_max: float | None = None      # s, worst gap within this response
+    itl_min: float | None = None      # s, smallest gap — the CLIENT FLOOR probe
     n_gaps: int = 0
-    n_freeze: int = 0                 # gaps >= the freeze threshold
+    n_freeze: int = 0                 # gaps >= the headline freeze threshold
     stall_s: float = 0.0              # total time inside those gaps
+    n_freeze_at: tuple = ()           # counts, one per FREEZE_LADDER_MS entry
+    stall_at: tuple = ()              # summed seconds, same order
     span_s: float | None = None       # t_last - t_first
+    t_end: float | None = None        # monotonic end-of-stream (last chunk)
     n_chunks: int = 0
 
 
@@ -242,9 +266,14 @@ class RungResult:
     itl_p50_ms: float = float("nan")        # the normal inter-token gap
     itl_worst_p50_ms: float = float("nan")  # typical worst freeze, per response
     itl_worst_p95_ms: float = float("nan")  # unlucky response's worst freeze
-    itl_max_ms: float = float("nan")        # worst freeze seen anywhere
-    freeze_per_ktok: float = float("nan")   # gaps >= threshold per 1k tokens
-    stall_frac: float = float("nan")        # share of decode time inside them
+    # max-of-maxes: sample-size biased (the arm with more responses draws more
+    # from the same tail), so it is a footnote, never a headline comparison
+    itl_max_ms: float = float("nan")
+    itl_floor_ms: float = float("nan")      # smallest gap seen — CLIENT FLOOR
+    freeze_per_ktok: float = float("nan")   # freezes per 1k DECODED TOKENS
+    stall_frac: float = float("nan")        # share of stream wall-time stalled
+    stall_ms_per_ktok: float = float("nan")  # stalled ms per 1k decoded tokens
+    freeze_ladder: list = field(default_factory=list)  # per FREEZE_LADDER_MS
     chunk_tok_ratio: float = float("nan")   # tokens per SSE event (1.0 = per-token)
     achieved_rps: float = float("nan")
     offered_rps: float = float("nan")
@@ -321,18 +350,31 @@ async def send_turn(client, args, cfg, prompt: str, turn: Turn) -> str:
         turn.ptok_achieved = usage.get("prompt_tokens")
         turn.ctok = usage.get("completion_tokens")
     n_tok = turn.ctok if turn.ctok else n_chunks
-    if t_first is not None and t_last is not None and t_last > t_first and n_tok > 1:
-        turn.decode_tps = (n_tok - 1) / (t_last - t_first)
+    # span_s is set whenever the stream had >= 2 content chunks — the SAME
+    # condition that makes `gaps` non-empty. It used to also require
+    # n_tok > 1, which a server reporting completion_tokens=1 on a multi-chunk
+    # stream could fail: the turn then carried stall_s with no span, inflating
+    # any ratio built from the two. decode_tps keeps the n_tok gate (a rate
+    # needs a token count); span does not.
+    if t_first is not None and t_last is not None and t_last > t_first:
         turn.span_s = t_last - t_first
+        turn.t_end = t_last
+        if n_tok > 1:
+            turn.decode_tps = (n_tok - 1) / (t_last - t_first)
     turn.n_chunks = n_chunks
     if gaps:
         freeze_s = args.freeze_threshold_ms / 1e3
         big = [g for g in gaps if g >= freeze_s]
         turn.itl_p50 = pct(gaps, 50)
         turn.itl_max = max(gaps)
+        turn.itl_min = min(gaps)
         turn.n_gaps = len(gaps)
         turn.n_freeze = len(big)
         turn.stall_s = sum(big)
+        turn.n_freeze_at = tuple(
+            sum(1 for g in gaps if g >= t / 1e3) for t in FREEZE_LADDER_MS)
+        turn.stall_at = tuple(
+            sum(g for g in gaps if g >= t / 1e3) for t in FREEZE_LADDER_MS)
     return "".join(text)
 
 
@@ -429,23 +471,40 @@ def eval_rung(pop: int, n_sub: int, turns: list, measure_start: float,
     # ITL gap distribution. decode_p50 above answers "how fast on average";
     # these answer "what did it feel like" — the chunk-size hypothesis lives
     # entirely here, because chunking moves the tail and leaves the mean flat.
-    g = [t for t in ok if t.n_gaps > 0]
+    # Every turn here has span_s (send_turn sets it under the same condition
+    # that makes gaps non-empty), so numerator and denominator of any ratio
+    # below run over the SAME set.
+    g = [t for t in ok if t.n_gaps > 0 and t.span_s]
     if g:
         res.itl_p50_ms = pct([t.itl_p50 for t in g], 50) * 1e3
         worst = [t.itl_max for t in g]
         res.itl_worst_p50_ms = pct(worst, 50) * 1e3
         res.itl_worst_p95_ms = pct(worst, 95) * 1e3
         res.itl_max_ms = max(worst) * 1e3
-        n_gaps = sum(t.n_gaps for t in g)
-        if n_gaps:
-            res.freeze_per_ktok = 1e3 * sum(t.n_freeze for t in g) / n_gaps
-        span = sum(t.span_s for t in g if t.span_s)
+        # the client floor: the smallest gap the loop was able to resolve. If
+        # this is a material fraction of itl_p50_ms, the "normal gap" reading
+        # is client-side scheduling, not server behaviour.
+        res.itl_floor_ms = min(t.itl_min for t in g) * 1e3
+        span = sum(t.span_s for t in g)
         if span > 0:
             res.stall_frac = sum(t.stall_s for t in g) / span
-        chunks = sum(t.n_chunks for t in g)
-        ctoks = sum(t.ctok for t in g if t.ctok)
-        if chunks and ctoks:
-            res.chunk_tok_ratio = ctoks / chunks
+
+        # per-TOKEN rates need a token count, not a gap count: gaps are per
+        # SSE event and an event may carry several tokens. Turns without a
+        # usage report cannot be priced per token, so both sums run over the
+        # subset that has one.
+        g_tok = [t for t in g if t.ctok]
+        ctoks = sum(t.ctok for t in g_tok)
+        if ctoks:
+            res.freeze_per_ktok = 1e3 * sum(t.n_freeze for t in g_tok) / ctoks
+            res.stall_ms_per_ktok = 1e6 * sum(t.stall_s for t in g_tok) / ctoks
+            res.chunk_tok_ratio = ctoks / sum(t.n_chunks for t in g_tok)
+            res.freeze_ladder = [
+                {"threshold_ms": thr,
+                 "per_ktok": 1e3 * sum(t.n_freeze_at[i] for t in g_tok) / ctoks,
+                 "stall_ms_per_ktok":
+                     1e6 * sum(t.stall_at[i] for t in g_tok) / ctoks}
+                for i, thr in enumerate(FREEZE_LADDER_MS)]
 
     res.achieved_rps = len(measured) / args.measure_s
     res.offered_rps = (pop + n_sub) / wl["think_time_s"]
@@ -586,20 +645,31 @@ async def run_burst(client, args, cfg, state: dict):
 
     # What the STANDING load felt while the burst was draining. This is the
     # chunk-size hypothesis in its purest form: the burst is a controlled
-    # cold-prefill event, and these are the decoders it lands on. Only turns
-    # still streaming at fire time can have been hit by it.
+    # cold-prefill event, and these are the decoders it lands on. It is also
+    # the RELIABLE place to read a spike — the standing load is small (the
+    # steady-state decode batch, not a high ladder rung), so client event-loop
+    # contention cannot manufacture gaps the way it can under the ladder.
+    # The window is "request in flight at fire time": t_end is the real
+    # end-of-stream (turns that never got a first token have no t_end and are
+    # already excluded by the n_gaps > 0 filter).
     victims = [t for t in turns
-               if t.n_gaps > 0 and t.span_s
-               and t.t_start <= t_fire <= t.t_start + (t.ttft or 0) + t.span_s]
+               if t.n_gaps > 0 and t.t_end and t.t_start <= t_fire <= t.t_end]
     if victims:
         worst = [t.itl_max for t in victims]
         result["standing_n"] = len(victims)
         result["standing_itl_p50_ms"] = pct([t.itl_p50 for t in victims], 50) * 1e3
         result["standing_worst_p50_ms"] = pct(worst, 50) * 1e3
         result["standing_worst_max_ms"] = max(worst) * 1e3
-        n_gaps = sum(t.n_gaps for t in victims)
+        result["standing_floor_ms"] = min(t.itl_min for t in victims) * 1e3
+        # per DECODED TOKEN, not per gap — see eval_rung
+        v_tok = [t for t in victims if t.ctok]
+        ctoks = sum(t.ctok for t in v_tok)
         result["standing_freeze_per_ktok"] = (
-            1e3 * sum(t.n_freeze for t in victims) / n_gaps) if n_gaps else None
+            1e3 * sum(t.n_freeze for t in v_tok) / ctoks) if ctoks else None
+        result["standing_freeze_ladder"] = [
+            {"threshold_ms": thr,
+             "per_ktok": 1e3 * sum(t.n_freeze_at[i] for t in v_tok) / ctoks}
+            for i, thr in enumerate(FREEZE_LADDER_MS)] if ctoks else None
 
     state["burst"] = result
     print(f"  burst: {len(ok)}/{n} answered | TTFT p50 {fmt(result['ttft_p50_s'], 's')} "
@@ -609,7 +679,12 @@ async def run_burst(client, args, cfg, state: dict):
         print(f"  standing load hit by it: {len(victims)} responses in flight | "
               f"normal gap {fmt(result['standing_itl_p50_ms'], ' ms', 1)} | "
               f"worst gap p50 {fmt(result['standing_worst_p50_ms'], ' ms', 0)} | "
-              f"worst seen {fmt(result['standing_worst_max_ms'], ' ms', 0)}")
+              f"worst seen {fmt(result['standing_worst_max_ms'], ' ms', 0)} | "
+              f"client floor {fmt(result['standing_floor_ms'], ' ms', 2)}")
+        if result.get("standing_freeze_ladder"):
+            lad = " ".join(f"{e['threshold_ms']:g}ms:{e['per_ktok']:.2f}"
+                           for e in result["standing_freeze_ladder"])
+            print(f"  freezes per 1k tokens by threshold: {lad}")
 
 
 # ============================================================================
@@ -681,20 +756,63 @@ def print_report(state: dict, cfg, args, interrupted: bool = False):
             thr = args.freeze_threshold_ms
             print(f"\nINTER-TOKEN GAPS (freeze = a gap >= {thr:g} ms)")
             print(f"{'users':>6} {'normal p50':>11} {'worst/resp p50':>15} "
-                  f"{'worst/resp p95':>15} {'worst seen':>11} "
-                  f"{'freezes/ktok':>13} {'time stalled':>13}")
+                  f"{'worst/resp p95':>15} {'freezes/ktok':>13} "
+                  f"{'stall ms/ktok':>14} {'stalled':>8} {'tok/evt':>8} "
+                  f"{'floor':>8}")
             for r in rungs:
+                stalled = (r.stall_frac * 100 if math.isfinite(r.stall_frac)
+                           else float("nan"))
                 print(f"{r.pop:>6} {fmt(r.itl_p50_ms, ' ms', 1):>11} "
                       f"{fmt(r.itl_worst_p50_ms, ' ms', 0):>15} "
                       f"{fmt(r.itl_worst_p95_ms, ' ms', 0):>15} "
-                      f"{fmt(r.itl_max_ms, ' ms', 0):>11} "
                       f"{fmt(r.freeze_per_ktok, '', 1):>13} "
-                      f"{fmt(r.stall_frac * 100 if math.isfinite(r.stall_frac) else float('nan'), '%', 1):>13}")
-            cr = [r.chunk_tok_ratio for r in rungs
-                  if math.isfinite(r.chunk_tok_ratio)]
-            if cr and abs(pct(cr, 50) - 1.0) > 0.05:
-                print(f"  NOTE: {pct(cr, 50):.2f} tokens per SSE event — gaps are "
-                      "per event, so per-token gaps are finer than shown.")
+                      f"{fmt(r.stall_ms_per_ktok, '', 0):>14} "
+                      f"{fmt(stalled, '%', 1):>8} "
+                      f"{fmt(r.chunk_tok_ratio, '', 2):>8} "
+                      f"{fmt(r.itl_floor_ms, ' ms', 2):>8}")
+            print("  worst-seen (max of maxes, sample-size biased — footnote "
+                  "only): "
+                  + ", ".join(f"{r.pop}u {fmt(r.itl_max_ms, ' ms', 0)}"
+                              for r in rungs))
+
+            # --- comparability and validity guards, per rung ----------------
+            for r in rungs:
+                if (math.isfinite(r.chunk_tok_ratio)
+                        and abs(r.chunk_tok_ratio - 1.0) > 0.05):
+                    print(f"  WARNING [{r.pop}u]: {r.chunk_tok_ratio:.2f} tokens "
+                          "per SSE event. Gap columns are per EVENT: this rung "
+                          "is NOT directly comparable with a run whose ratio "
+                          "differs. Compare freezes/ktok and stall ms/ktok "
+                          "(per-token, ratio-free) instead.")
+                if (math.isfinite(r.itl_floor_ms) and math.isfinite(r.itl_p50_ms)
+                        and r.itl_p50_ms > 0
+                        and r.itl_floor_ms > 0.10 * r.itl_p50_ms):
+                    print(f"  WARNING [{r.pop}u]: client floor "
+                          f"{r.itl_floor_ms:.2f} ms is >10% of the normal gap "
+                          f"{r.itl_p50_ms:.2f} ms — the event loop, not the "
+                          "server, may be setting these gaps. Prefer the burst "
+                          "probe at the operating point for spike claims.")
+
+            # the headline threshold must sit BELOW the freeze it is meant to
+            # catch, or the arm being advocated for reads as 'zero freezes'
+            pw = pred.get("itl_worst_freeze_ms")
+            if pw and thr > pw:
+                print(f"  WARNING: --freeze-threshold-ms {thr:g} exceeds this "
+                      f"config's PREDICTED worst freeze ({pw:g} ms). "
+                      "freezes/ktok and stalled% will read ~0 whatever the "
+                      "truth. Use the ladder below, or lower the threshold.")
+
+            if any(r.freeze_ladder for r in rungs):
+                print("\n  FREEZE LADDER — freezes per 1k tokens at each "
+                      "threshold (no single threshold is load-bearing)")
+                head = "".join(f"{t:g} ms".rjust(11) for t in FREEZE_LADDER_MS)
+                print(f"  {'users':>6}{head}")
+                for r in rungs:
+                    if not r.freeze_ladder:
+                        continue
+                    row = "".join(fmt(e["per_ktok"], '', 2).rjust(11)
+                                  for e in r.freeze_ladder)
+                    print(f"  {r.pop:>6}{row}")
 
         ratios = [r.ptok_ratio for r in rungs if math.isfinite(r.ptok_ratio)]
         if ratios:
@@ -1045,11 +1163,14 @@ def parse_args(argv=None):
     ap.add_argument("--request-timeout-s", type=float, default=300.0,
                     help="per-request read timeout; keep well above the TTFT "
                          "budget so breaches are measured, not dropped (default 300)")
-    ap.add_argument("--freeze-threshold-ms", type=float, default=250.0,
+    ap.add_argument("--freeze-threshold-ms", type=float, default=100.0,
                     metavar="MS",
                     help="an inter-token gap at or above this counts as a "
-                         "FREEZE (default 250). Absolute on purpose: it must "
-                         "mean the same thing in both arms of an A/B.")
+                         "FREEZE (default 100). Absolute on purpose: it must "
+                         "mean the same thing in both arms of an A/B. Keep it "
+                         "BELOW the smaller predicted freeze, or the better "
+                         "arm reads as zero freezes; the report warns when it "
+                         "does not, and the freeze ladder is threshold-free.")
     ap.add_argument("--seed", type=int, default=0, help="RNG seed (default 0)")
     ap.add_argument("--no-ignore-eos", action="store_true",
                     help="drop the vLLM ignore_eos extension (strict OpenAI "
