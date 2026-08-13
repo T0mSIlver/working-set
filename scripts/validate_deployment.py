@@ -583,10 +583,33 @@ async def run_burst(client, args, cfg, state: dict):
         "last_ttft_s": max((t.ttft for t in ok), default=None),
         "ttft_p50_s": pct([t.ttft for t in ok], 50),
     }
+
+    # What the STANDING load felt while the burst was draining. This is the
+    # chunk-size hypothesis in its purest form: the burst is a controlled
+    # cold-prefill event, and these are the decoders it lands on. Only turns
+    # still streaming at fire time can have been hit by it.
+    victims = [t for t in turns
+               if t.n_gaps > 0 and t.span_s
+               and t.t_start <= t_fire <= t.t_start + (t.ttft or 0) + t.span_s]
+    if victims:
+        worst = [t.itl_max for t in victims]
+        result["standing_n"] = len(victims)
+        result["standing_itl_p50_ms"] = pct([t.itl_p50 for t in victims], 50) * 1e3
+        result["standing_worst_p50_ms"] = pct(worst, 50) * 1e3
+        result["standing_worst_max_ms"] = max(worst) * 1e3
+        n_gaps = sum(t.n_gaps for t in victims)
+        result["standing_freeze_per_ktok"] = (
+            1e3 * sum(t.n_freeze for t in victims) / n_gaps) if n_gaps else None
+
     state["burst"] = result
     print(f"  burst: {len(ok)}/{n} answered | TTFT p50 {fmt(result['ttft_p50_s'], 's')} "
           f"| last first-token {fmt(result['last_ttft_s'], 's')} "
           f"| drain {fmt(result['drain_s'], 's')}")
+    if victims:
+        print(f"  standing load hit by it: {len(victims)} responses in flight | "
+              f"normal gap {fmt(result['standing_itl_p50_ms'], ' ms', 1)} | "
+              f"worst gap p50 {fmt(result['standing_worst_p50_ms'], ' ms', 0)} | "
+              f"worst seen {fmt(result['standing_worst_max_ms'], ' ms', 0)}")
 
 
 # ============================================================================
