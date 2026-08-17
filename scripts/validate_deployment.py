@@ -72,6 +72,17 @@ CONFIG = {
         "model": "Qwen/Qwen3.6-27B-FP8",
         "api_key_env": "VLLM_API_KEY",       # env var NAME, not the key itself
     },
+    # what the server under test was started with. Informational: nothing is
+    # measured off it, but every prediction below is priced at THIS chunk and
+    # the --json dump carries the block, so an A/B run (e.g. 4,096 vs 32,768)
+    # is self-labeling.
+    "deployment": {
+        "gpus": "4xH200",
+        "tensor_parallel": 4,
+        "replicas": 1,
+        "max_num_batched_tokens": 4_096,
+        "max_model_len": 180_000,
+    },
     "workload": {
         "system_prefix_tokens": 15_000,      # shared prefix, identical bytes for all sessions
         "user_prompt_median_tokens": 31_000, # log-normal median of a user session's context
