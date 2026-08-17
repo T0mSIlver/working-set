@@ -2616,9 +2616,12 @@ function chartEData(model, topo, wl, cs, stress){
     mfu.push(mfuEff(model, topo, C));
     cold.push(1/coldRequestSeconds(model, topo, wl, cs, C));
     // the spike prices the chunk's MARGINAL FLOPs (its host pass streams the
-    // weights for the decode batch anyway), mid-re-prefill (prior = E[L]/2)
+    // weights for the decode batch anyway), mid-re-prefill (prior = E[L]/2);
+    // past C = E[L] the "chunk" is one whole-context pass — same clamp as the
+    // tile and itlSpikeRatio, so the dot and the tile cannot disagree
+    const step = Math.min(C, cs.mean), prior = step < C ? 0 : cs.mean/2;
     spike.push(stepS > 0
-      ? (stepS + prefillSeconds(model, topo, C, cs.mean/2)) / stepS : 0);
+      ? (stepS + prefillSeconds(model, topo, step, prior)) / stepS : 0);
   }
   return {Cs, mfu, cold, spike, hasSpike: stepS > 0};
 }
@@ -3285,8 +3288,11 @@ function itlSpikeRatio(model, topo, wl, cs){
   if (!(pu > 0)) return { decodeS: 0, mixedS: 0, ratio: 0 };
   const decodeS = model.mtp / pu;
   // priced mid-re-prefill: prior = E[L]/2, the average cache a chunk attends
-  // over during a full cold re-prefill
-  const mixedS = decodeS + prefillSeconds(model, topo, prefillChunk(), cs.mean/2);
+  // over during a full cold re-prefill. A chunk larger than the mean context
+  // is a single whole-context pass with no cache behind it.
+  const C = prefillChunk();
+  const step = Math.min(C, cs.mean), prior = step < C ? 0 : cs.mean/2;
+  const mixedS = decodeS + prefillSeconds(model, topo, step, prior);
   return { decodeS, mixedS, ratio: mixedS/decodeS };
 }
 
@@ -3358,9 +3364,12 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   // tokens, so step-time = mtp / per-user speed)
   const stepS = (noFit || !(puOp > 0)) ? 0 : model.mtp / puOp;
   // the chunk is priced mid-re-prefill (prior = E[L]/2, the average cache it
-  // attends over); the LAST chunk of a mean context carries ~2x this cross term
+  // attends over); the LAST chunk of a mean context carries ~2x this cross
+  // term. A chunk larger than the mean context is one whole-context pass.
+  const spikeStep = stepS > 0 ? Math.min(CH, cs.mean) : 0;
   const spike = stepS > 0
-    ? (stepS + prefillSeconds(model, topo, CH, cs.mean/2)) / stepS : 0;
+    ? (stepS + prefillSeconds(model, topo, spikeStep,
+                              spikeStep < CH ? 0 : cs.mean/2)) / stepS : 0;
   // cold-SPIKE tolerance (research/spike.md): the duty cycle above is a mean
   // rate against a mean service time, and misses arrive in clumps
   const sp = noFit ? null : spikeMetrics(model, topo, wl, cs, groupRate, CH);
@@ -3827,7 +3836,10 @@ const HARNESS_TEMPLATE = "#!/usr/bin/env -S uv run --script\n# /// script\n# req
 // chunk-time. MARGINAL pricing (the host pass streams the weights anyway),
 // prior = cap - C — mirrors itl_spike / the reference CONFIG's H-itl-spike.
 function freezeMs(model, topo, wl, C, pu, mfu){
-  return 1000 * (model.mtp / pu + prefillSeconds(model, topo, C, wl.cap - C, mfu));
+  // a chunk larger than the whole context is one cap-sized pass with no
+  // cache behind it — never a full C with a negative prior
+  const step = Math.min(C, wl.cap);
+  return 1000 * (model.mtp / pu + prefillSeconds(model, topo, step, wl.cap - step, mfu));
 }
 function harnessPredictions(op, model, wl, topo){
   const reps = topo.replicas || 1, perG = x => Math.round(x / reps);
