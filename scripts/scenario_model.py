@@ -447,6 +447,36 @@ MODELS = {
         # AGAINST the thrash hypothesis (research/model_dsv4flash.md #6).
         params_prefill=12.70e9, attn_layers=41, attn_d=26_624 / 41,
     ),
+    # MoE 125B-A6B (180B on disk incl. the 51B FP8 n-gram table, 2.7B MTP and
+    # a never-executed vision tower), open weights (2026-08). Qwen3.6-style
+    # hybrid: 36 DeltaNet + 12 QSA sparse-attention layers (GQA 24/2 x 256
+    # with a ratio-4 compressed fp8 indexer, budget 2048). Only the routed
+    # experts and the n-gram table are FP8 in the serving checkpoint — the
+    # always-active blocks stay BF16, so the shared per-step read is heavy
+    # (8.6 GB) while the cache is light (12.4 KiB/token). Deepest expert-union
+    # kink in the study: n = 512/10 = 51.2. research/model_qwen38flashnext.md.
+    "Q38FN": Model(
+        name="Qwen3.8-Flash-Next (MoE 125B-A6B, QSA+n-gram)",
+        kv_bpt=12_672,                   # 12 attn x 2 KV x 256 x 2(K,V) x 1B + 12 x 128/4 indexer
+        deltanet_state=59_572_224,       # 36 DN layers x 48 vheads x 128x128 bf16 + conv (10,240 x 4)
+        w_resident=185_502_232_570,      # FP8 ckpt metadata.total_size, shard-header-verified
+        w_decode_shared=8.624e9,         # BF16 always-active: attn 1.23 + DN 4.17 + shared exp
+                                         # 0.47 + routers 0.13 + hyper-conns 1.28 + PLE 0.07
+                                         # + lm_head 1.27 (n-gram/embed lookups excluded)
+        w_route_pertok=2_359_584_000,    # 10 experts x 4,915,800 B (FP8 + block scales) x 48
+        w_route_total=120_810_700_800,   # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
+        mtp=1.7,                         # MTP module (1 hybrid layer); transplanted fit, unmeasured
+        nvfp4_w=None,                    # no official NVFP4 (community only); experts already FP8
+        kv_decode_bpt=384,               # QSA indexer scan: 12 layers x 128 B / ratio 4 per ctx tok
+        kv_decode_const=25_165_824,      # 12 layers x top-2048 x 1,024 B full-KV reads per seq
+        kv_decode_topk=2_048,            # indexer_budget, read in token space (research note #6)
+        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision, as the Qwens)
+        # prefill: MoE active GEMM params excl embed/lm_head/n-gram lookups
+        # (6.04e9 from the shard-header ledger — the published "6B activated").
+        # Quadratic term priced as DENSE attention on the 12 QSA layers: an
+        # upper bound, QSA prefill sparsity uncharacterised (note #6).
+        params_prefill=6.04e9, attn_layers=12, attn_d=24 * 256,
+    ),
 }
 
 # ---- MTP speedup <-> per-draft acceptance ------------------------------------
@@ -2453,7 +2483,8 @@ def _selfcheck():
     # ---- the grid is what makes DP expressible for the 2026-07 models -------
     # MM35, GLM-5.2 and DSv4-Flash fit no single H200, so pure DP is a 0 pool
     # at every N -- the study's existing "does not fit" sentinel, and it stands.
-    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"]):
+    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"],
+                MODELS["Q38FN"]):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
     # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
@@ -2463,12 +2494,15 @@ def _selfcheck():
     assert min_tp_for(MODELS["GLM52"], "B300") == 3
     assert min_tp_for(MODELS["DSV4F"], "H200") == 2
     assert min_tp_for(MODELS["DSV4F"], "B300") == 1
+    assert min_tp_for(MODELS["Q38FN"], "H200") == 2
+    assert min_tp_for(MODELS["Q38FN"], "B300") == 1
     assert kv_pool_tokens(MODELS["MM35"], topology_grid(4, 2)) > 0    # DP4xTP2
     assert kv_pool_tokens(MODELS["GLM52"], topology_grid(2, 4, "B300")) > 0
     # min_tp is exactly the boundary: one GPU less holds nothing
     for mk, gk in (("MM35", "H200"), ("MM35", "B300"),
                    ("GLM52", "H200"), ("GLM52", "B300"),
-                   ("DSV4F", "H200"), ("DSV4F", "B300")):
+                   ("DSV4F", "H200"), ("DSV4F", "B300"),
+                   ("Q38FN", "H200"), ("Q38FN", "B300")):
         need = min_tp_for(MODELS[mk], gk)
         assert kv_pool_tokens(MODELS[mk], topology_grid(1, need, gk)) > 0
         if need > 1:
@@ -2479,7 +2513,9 @@ def _selfcheck():
                          ("GLM52", "H200", [(1, 8)]),
                          ("GLM52", "B300", [(2, 4), (1, 8)]),
                          ("DSV4F", "H200", [(4, 2), (2, 4), (1, 8)]),
-                         ("DSV4F", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)])):
+                         ("DSV4F", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
+                         ("Q38FN", "H200", [(4, 2), (2, 4), (1, 8)]),
+                         ("Q38FN", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)])):
         got = [(t.dp, t.tp) for t in node_splits(MODELS[mk], gk, node=8)]
         assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
         for t in node_splits(MODELS[mk], gk, node=8):
@@ -2606,6 +2642,29 @@ def _selfcheck():
     except ValueError:
         pass
 
+    # Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md)
+    q38 = MODELS["Q38FN"]
+    assert q38.kv_bpt == 12 * 2 * 256 * 2 + 12 * 128 / 4        # KV + compressed indexer
+    assert q38.deltanet_state == 36 * 48 * 128 * 128 * 2 + 36 * 10_240 * 4 * 2
+    assert q38.w_route_pertok == 10 * 4_915_800 * 48            # FP8 experts + block scales
+    assert q38.w_route_total == 512 * 4_915_800 * 48
+    assert abs(q38.w_route_total / q38.w_route_pertok - 51.2) < 1e-9  # deepest kink
+    assert q38.kv_decode_bpt == 12 * 128 / 4                    # indexer scan
+    assert q38.kv_decode_const == 12 * 2_048 * 1_024            # top-budget full-KV reads
+    assert q38.kv_decode_topk == 2_048
+    # the FP8 ckpt quantizes ONLY experts + n-gram table: the always-active
+    # read is BF16-heavy (~2 B/param on 4.3e9 params) and the resident total
+    # (n-gram table, embed, vision, MTP) far exceeds what a step can touch
+    assert 8.5e9 < q38.w_decode_shared < 8.75e9
+    assert q38.w_resident > q38.w_route_total + q38.w_decode_shared + 50e9
+    assert q38.nvfp4_w is None                                  # no official NVFP4 (note #4)
+    try:
+        with_weight_dtype(q38, "nvfp4"); raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+    assert q38.state_fp32_ok and q38.kv_fp16_ok                 # bf16 DN state; no fp8-KV assert
+    assert with_kv_dtype(q38, "fp16").kv_bpt == 2 * q38.kv_bpt
+
     # KV dtype: Mistral doubles like the Qwens; GLM's DSA path and DSv4-Flash's
     # CSA path must refuse FP16 (both serve only with a quantized main KV)
     assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
@@ -2619,7 +2678,8 @@ def _selfcheck():
     # context caps (owner decision 2026-07): Qwens + GLM allow up to 1M
     # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144;
     # DSv4-Flash is natively 1M (YaRN x16 baked into its config)
-    assert m27.max_ctx == m35.max_ctx == glm.max_ctx == dsf.max_ctx == 1_048_576
+    assert (m27.max_ctx == m35.max_ctx == glm.max_ctx == dsf.max_ctx
+            == q38.max_ctx == 1_048_576)
     assert mm.max_ctx == 262_144
     wl_1m = replace(wl, cap=1_048_576)
     assert warm_capacity(m35, t1, wl_1m, n_iter=40)[1] > 0     # 1M cap runs
@@ -2648,8 +2708,12 @@ def _selfcheck():
     _, p_csa, _, _ = decode_curves(dsf, tp2, wl, [64], n_iter=300)
     _, p_full, _, _ = decode_curves(dsf_dense_read, tp2, wl, [64], n_iter=300)
     assert p_csa[0] > p_full[0], "CSA decode must out-speed full-cache reads"
+    q38_dense_read = replace(q38, kv_decode_bpt=None, kv_decode_const=0.0)
+    _, p_qsa, _, _ = decode_curves(q38, tp2, wl, [64], n_iter=300)
+    _, p_qfull, _, _ = decode_curves(q38_dense_read, tp2, wl, [64], n_iter=300)
+    assert p_qsa[0] > p_qfull[0], "QSA decode must out-speed full-cache reads"
     # decode monotonicity holds for the new models on hardware they fit
-    for mdl, topo_fit in ((mm, tp2), (glm, t8), (dsf, tp2),
+    for mdl, topo_fit in ((mm, tp2), (glm, t8), (dsf, tp2), (q38, tp2),
                           (with_weight_dtype(glm, "nvfp4"), b4)):
         _, p50n, _, aggn = decode_curves(mdl, topo_fit, wl, [1, 8, 64], n_iter=300)
         assert p50n[0] > p50n[1] > p50n[2] > 0

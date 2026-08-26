@@ -25,7 +25,7 @@ out = lambda name: os.path.join(OUT_DIR, name)
 
 # validated palette (light surface)
 BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
-RED, GREEN, MUTED = "#d03b3b", "#0ca30c", "#898781"
+RED, GREEN, MUTED, PURPLE = "#d03b3b", "#0ca30c", "#898781", "#8a5bd6"
 plt.rcParams.update({"figure.dpi": 120, "font.size": 9, "axes.grid": True,
                      "grid.alpha": .28, "axes.spines.top": False,
                      "axes.spines.right": False})
@@ -277,7 +277,8 @@ def fig_prefill_thrash():
                ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
                ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
                ("GLM52", 1, 8, "H200", AQUA, "GLM-5.2 TP8"),
-               ("DSV4F", 1, 2, "H200", YELLOW, "DSv4-Flash TP2")]
+               ("DSV4F", 1, 2, "H200", YELLOW, "DSv4-Flash TP2"),
+               ("Q38FN", 1, 2, "H200", PURPLE, "Q3.8-Flash TP2")]
     fs = np.linspace(0, 0.5, 101)
 
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
