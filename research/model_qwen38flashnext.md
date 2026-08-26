@@ -170,15 +170,19 @@ the option out. Revisit if NVIDIA ships an official recipe.
 ## 5. Serving notes
 
 - **Frameworks:** vLLM, SGLang, TokenSpeed per the model card. The official
-  vLLM recipe (recipes.vllm.ai) confirms the FP8 checkpoint at **172.78 GiB**
-  — the same figure as this note's measured `w_resident` — and serves it
-  `--tensor-parallel-size 8 --enable-expert-parallel --moe-backend triton`
-  on H-class parts: **plain TP8 is incompatible with the FP8 checkpoint
-  (TEP8 required)** — the explorer's TP8 recipe emits both flags. The
-  recipe's validated floor is **TP2** (TP1 hit a compilation OOM on GB300);
-  a single B300 passes this study's pool arithmetic only — same two-tier
-  phrasing as GLM-5.2's floor. Min TP 2 on H200 (2×141 GB) holds on both
-  bases. Contexts past 262,144 need YaRN `rope_parameters` +
+  vLLM recipe (recipes.vllm.ai) states the FP8 checkpoint at **172.78 GiB**
+  — the on-disk file total (185,523,317,458 B); net of the **21.08 MB of
+  safetensors headers** across the 131 shards it reproduces this note's
+  measured `w_resident` (185,502,232,570 B = 172.7624 GiB) **to the byte**.
+  It serves `--tensor-parallel-size 8 --enable-expert-parallel
+  --moe-backend triton` on Hopper: **plain TP8 is incompatible with the FP8
+  checkpoint (TEP8 required)** — the explorer's TP8 recipe emits both flags
+  (the triton backend on H200 only; the recipe's Blackwell rows never
+  mention it). The recipe's validated floor is **TP2** (TP1 hit a
+  compilation OOM on GB300); it validates no H200 configuration below TEP8,
+  so 2×H200 — the study's headline Q38FN config — rests on this study's
+  pool arithmetic, like 1×B300 (same two-tier phrasing as GLM-5.2's floor).
+  Contexts past 262,144 need YaRN `rope_parameters` +
   `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`.
 - **n-gram table residency:** charged fully GPU-resident (default serving;
   the recipe's opt-in host offload needs ≥51 GB of host RAM plus headroom).

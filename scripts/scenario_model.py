@@ -466,7 +466,8 @@ MODELS = {
                                          # (n-gram/embed lookups excluded)
         w_route_pertok=2_359_584_000,    # 10 experts x 4,915,800 B (FP8 + block scales) x 48
         w_route_total=120_810_700_800,   # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
-        mtp=1.7,                         # MTP module (1 hybrid layer); transplanted fit, unmeasured
+        mtp=1.7,                         # MTP module (1 hybrid layer, 3 drafts per the vLLM
+                                         # recipe); transplanted fit, unmeasured
         nvfp4_w=None,                    # no official NVFP4 (community only); experts already FP8
         kv_decode_bpt=384,               # QSA indexer scan: 12 layers x 128 B / ratio 4 per ctx tok
         kv_decode_const=25_165_824,      # 12 layers x top-2048 x 1,024 B full-KV reads per seq
