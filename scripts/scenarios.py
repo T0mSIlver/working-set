@@ -25,7 +25,10 @@ out = lambda name: os.path.join(OUT_DIR, name)
 
 # validated palette (light surface)
 BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
-RED, GREEN, MUTED, PURPLE = "#d03b3b", "#0ca30c", "#898781", "#8a5bd6"
+RED, GREEN, MUTED = "#d03b3b", "#0ca30c", "#898781"
+# 2026-08 extension hue (Qwen3.8-Flash-Next) — not part of the validated
+# palette above; picked for contrast against all six on white, unaudited
+PURPLE = "#8a5bd6"
 plt.rcParams.update({"figure.dpi": 120, "font.size": 9, "axes.grid": True,
                      "grid.alpha": .28, "axes.spines.top": False,
                      "axes.spines.right": False})

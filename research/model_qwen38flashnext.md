@@ -1,8 +1,9 @@
 # Qwen3.8-Flash-Next (125B-A6B, QSA + n-gram embeddings) — parameterization note
 
 **Purpose:** defensible KV-cache / decode-bandwidth constants for
-**Qwen3.8-Flash-Next** (`Qwen/Qwen3.8-Flash-Next`, Apache-2.0 weights,
-released 2026-08) as used by `scripts/scenario_model.py` and the explorer.
+**Qwen3.8-Flash-Next** (`Qwen/Qwen3.8-Flash-Next`, Qwen community license —
+HF `license: other`, released 2026-08) as used by `scripts/scenario_model.py`
+and the explorer.
 
 > **Provenance (2026-08-26):** all primary artifacts were read directly from
 > huggingface.co: `config.json` of the base repo, the **FP8 serving
@@ -25,19 +26,23 @@ released 2026-08) as used by `scripts/scenario_model.py` and the explorer.
 | Gated DeltaNet | 16 QK heads × 128, **48 V heads × 128**, conv kernel 4 (conv dim 10,240) |
 | MoE | **512 routed experts / 10 per token + 1 shared**, `moe_intermediate_size` 640 — every one of the 48 layers is MoE |
 | Hyper-connections | gated residual, `hc_count` 4 branches × low-rank 320, on both the attn and mlp sub-blocks of every layer (+ a top-level mixer) |
-| n-gram embeddings (PLE) | layer 2 only: 20M-base bigram/trigram table (`ngram_size` 3, 8 heads/ngram, 128 shards) = **51.2e9 params**, FP8 in the serving checkpoint |
+| n-gram embeddings (PLE) | one layer (`ple_layer_ids: [2]`; the tensors sit under `layers.1`): 20M-base bigram/trigram table (`ngram_size` 3, 8 heads/ngram, 128 shards) = **51.2e9 params**, FP8 in the serving checkpoint |
 | MTP | in-checkpoint module, **1 hybrid full-attention layer** + its own 512-expert MoE (~2.6e9 params on disk) |
 | `max_position_embeddings` | **262,144** native; 1M via YaRN rope-scaling per the model card |
 | Total / active params | **125B with 6B activated** (card) **+ 51B n-gram embedding + 4B MTP**; the FP8 checkpoint's param total is 180.0e9 (HF API histogram) |
 | Vision tower | 27-block ViT, ~0.45e9 params — an encoder, never executed on these text workloads |
 | Checkpoint dtype (FP8 repo) | routed experts + n-gram table **FP8** (fine-grained block 128); **everything else BF16** (attention, DeltaNet, shared experts, routers, hyper-connections, embed, lm_head, MTP) |
 
-Param arithmetic (shard-header sums; reconciles the published counts): routed
-experts 48 × 512 × 3 × 2560 × 640 = 120.80e9; active per step excl. embed and
-lm_head = attn 0.617 + DeltaNet 2.087 + shared expert 0.236 + router 0.063 +
-hyper-conn 0.641 + PLE projections 0.033 + routed 10-expert read 2.359 =
-**6.04e9 ✓ "6B activated"**. 125B total = 180.0e9 on disk − 51.2e9 n-gram −
-2.6e9 MTP − 0.45e9 vision − (FP8-vs-param rounding) ✓.
+Param arithmetic (shard-header sums, PARAMS not bytes; reconciles the
+published counts): routed experts 48 × 512 × 3 × 2560 × 640 = 120.80e9;
+active per step excl. embed and lm_head = attn 0.617 + DeltaNet 2.087 +
+shared expert 0.236 + router 0.063 + hyper-conn 0.641 + PLE projections
+0.033 + routed 10-expert read 2.359 = **6.04e9 ✓ "6B activated"**. Main
+count: 180.00e9 on disk − 51.20e9 n-gram − 2.61e9 MTP − 0.45e9 vision =
+**125.7e9 ✓ "125B"**. The card's "4B MTP" does not match the checkpoint's
+2.607e9 MTP params (a card-vs-weight-map discrepancy, logged like
+DSv4-Flash's `num_nextn_predict_layers`; no constant depends on it — MTP
+reads are never priced).
 
 ## 2. KV bytes per token — 12 QSA layers + a compressed indexer axis
 
@@ -62,16 +67,22 @@ deltanet_state (fixed per session, bf16 recurrent state):
 
 The conv-dim arithmetic (10,240 = 2×16×128 QK + 48×128 V) follows the exact
 convention that reproduces the 35B-A3B's 33,423,360 B and the 27B baseline's
-measured 75 MiB. The state is a genuine bf16 DeltaNet state, so the fp32-state
-toggle stays enabled (`state_fp32_ok=True`) — doubling is exactly what fp32
-would do.
+measured 75 MiB. On the state dtype: `config.json` declares
+`mamba_ssm_dtype: "float32"` — but so do the Qwen3.6-27B and 35B-A3B configs,
+and the 27B's **measured** 75 MiB matches bf16 arithmetic, which is why the
+study prices bf16 as the central case everywhere ("inferred, not measured" —
+method page). The fp32 toggle stays enabled (`state_fp32_ok=True`) and covers
+exactly this uncertainty.
 
 A 262k-token session holds 3.09 GiB — between the 35B-A3B (2.5 GiB) and the
-27B (8 GiB), ~15× below GLM-5.2. **FP16-KV toggle enabled**
+27B (8 GiB), ~3.8× below GLM-5.2 at equal context. **FP16-KV toggle enabled**
 (`kv_fp16_ok=True`): no vLLM assertion requiring a quantized KV cache on the
 QSA path was found (unlike GLM-5.2's DSA and DSv4-Flash's V4 paths, which
 carry documented asserts); the base checkpoint itself ships BF16. Flagged in
-§ 6 — if vLLM's QSA path turns out to assert fp8 KV, flip the flag.
+§ 6 — if vLLM's QSA path turns out to assert fp8 KV, flip the flag. Under
+the FP16 switch the top-2048 main-KV gathers double alongside `kv_bpt`
+(`with_kv_dtype` scales `kv_decode_const`); the compressed indexer keys
+keep their own quantized width, so `kv_decode_bpt` stays.
 
 ## 3. Decode-bandwidth model — QSA sparse reads
 
@@ -103,7 +114,7 @@ Reconstructed per-module bytes from all 131 shard headers; the sum equals
 ```
 routed experts  48 x 512 x 3 x (640x2560 FP8 + 200 B BF16 block scales)
                                                  = 120,810,700,800
-n-gram table    51.2e9 params, FP8 (+1 B scale)  =  51,200,245,762
+n-gram table    51.2e9 params FP8 + 2 B BF16 scale = 51,200,245,762
 DeltaNet        36 layers, BF16                  =   4,173,020,928
 MTP module      1 layer + 512 experts, mixed     =   2,698,026,496
 hyper-conns     48 x 2 + mixer, BF16             =   1,281,249,280
@@ -138,7 +149,7 @@ read weighs 2 B/param:
 ```
 attention 1.235 + DeltaNet 4.173 + shared experts 0.472 + routers 0.126
   + hyper-conns 1.281 + PLE projections 0.066 + lm_head 1.271
-w_decode_shared = 8.624e9 B
+w_decode_shared = 8,623,999,000 B   (exact per-tensor sum, charged as-is)
 ```
 
 Exclusions from the per-step read: embed_tokens and the n-gram table
@@ -158,23 +169,30 @@ the option out. Revisit if NVIDIA ships an official recipe.
 
 ## 5. Serving notes
 
-- **Frameworks:** vLLM, SGLang, TokenSpeed per the model card (`vllm serve
-  Qwen/Qwen3.8-Flash-Next`); no published flag-level recipe yet. Contexts
-  past 262,144 need YaRN `rope_parameters` + `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`.
-  The card publishes no VRAM floor; the pool arithmetic gives **min TP 2 on
-  H200** (2×141 GB) and a **single B300** (288 GB) for the 172.8-GiB FP8
-  checkpoint.
-- **n-gram table residency:** charged fully GPU-resident (it is part of the
-  serving checkpoint and its rows are latency-critical lookups at layer 2).
-  If a serving stack offloads it to host RAM, `w_resident` drops by 51.2e9 B
-  (≈ 28%) and the H200 min-TP story does not change (134.3e9 still exceeds
-  one GPU's 121.7e9 budget); a B300 gains ~6.4M pool tokens. Conservative
+- **Frameworks:** vLLM, SGLang, TokenSpeed per the model card. The official
+  vLLM recipe (recipes.vllm.ai) confirms the FP8 checkpoint at **172.78 GiB**
+  — the same figure as this note's measured `w_resident` — and serves it
+  `--tensor-parallel-size 8 --enable-expert-parallel --moe-backend triton`
+  on H-class parts: **plain TP8 is incompatible with the FP8 checkpoint
+  (TEP8 required)** — the explorer's TP8 recipe emits both flags. The
+  recipe's validated floor is **TP2** (TP1 hit a compilation OOM on GB300);
+  a single B300 passes this study's pool arithmetic only — same two-tier
+  phrasing as GLM-5.2's floor. Min TP 2 on H200 (2×141 GB) holds on both
+  bases. Contexts past 262,144 need YaRN `rope_parameters` +
+  `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`.
+- **n-gram table residency:** charged fully GPU-resident (default serving;
+  the recipe's opt-in host offload needs ≥51 GB of host RAM plus headroom).
+  Offloaded, `w_resident` drops by 51.2e9 B (≈ 28%) and the H200 min-TP
+  story does not change (134.3e9 still exceeds one GPU's 121.7e9 budget); a
+  B300 gains ~4.0M pool tokens (51,200,245,762 / 12,672). Conservative
   direction: resident (biases capacity DOWN). § 6.
 - **Speculative decoding:** in-checkpoint MTP (1 hybrid layer, "trained with
-  multi-steps"; draft count unpublished). The study keeps its 1.7×
-  **transplanted** fit and the family's MTP-2 (2-draft) recipe line — same
-  treatment as GLM-5.2/DSv4-Flash: module present, acceptance unmeasured on
-  this workload; the slider covers the range.
+  multi-steps"); the vLLM recipe runs `{"method":"mtp",
+  "num_speculative_tokens":3}` — **3 drafts**, so the explorer's 2-draft α
+  inversion is indicative only on this model (noted in its tooltip). The
+  study keeps its 1.7× **transplanted** fit — same treatment as
+  GLM-5.2/DSv4-Flash: module present, acceptance unmeasured on this
+  workload; the slider covers the range.
 - **Thinking mode** is on by default (`enable_thinking: False` to disable) —
   affects output length, not any constant here.
 - Positioning: the "Flash" sibling of the Qwen3.8 family — the n-gram
@@ -197,11 +215,17 @@ the option out. Revisit if NVIDIA ships an official recipe.
   397 MB/seq dense read. Optimistic-side choice; flagged.
 - **FP16 KV modelled as servable** (`kv_fp16_ok=True`): no documented vLLM
   assert on the QSA path was found (the GLM/DSv4 flags each rest on a cited
-  issue). If one exists, flip to False; nothing else changes.
+  issue), and the recipe gives no `--kv-cache-dtype` guidance. If an assert
+  surfaces, flip to False. The switch doubles `kv_bpt` wholesale — the 384-B
+  indexer share inside it over-doubles (≤3%, conservative) — and doubles
+  `kv_decode_const` (main-KV top-k gathers); `kv_decode_bpt` stays fp8.
+- **Indexer cache dtype fp8**: modelled on the DSv4-Flash analogue; if
+  vLLM's QSA indexer cache instead defaults to BF16, the constants become
+  13,056 B/token stored and 768 B/ctx-token scanned (+3% / +100% on two
+  small terms; capacity moves < 3%). Neither the recipe nor the card states
+  the dtype — re-verify when the serving path is documented.
 - **n-gram table charged GPU-resident** (§ 5); its per-token lookup rows
   (~5 KB) excluded from the decode read like all embedding lookups.
-- **MTP draft count assumed 2** (family convention; unpublished for this
-  model) — affects only the recipe line and the α readout, not any constant.
 - Prefill quadratic term priced as **dense** attention on the 12 QSA layers
   (`attn_layers=12, attn_d=24×256`): an upper bound — QSA's prefill-side
   sparsity is uncharacterised, same flagged treatment as GLM-5.2's MLA.
@@ -233,6 +257,9 @@ Primary (read directly, exact bytes):
   SGLang/TokenSpeed support)
 - NVFP4 absence: https://huggingface.co/api/models?search=Qwen3.8-Flash-Next
   (community conversions only, no `nvidia/` or `Qwen/` NVFP4 repo, 2026-08-26)
+- Official vLLM recipe (TEP8 requirement, TP2 validated floor / GB300 TP1
+  compilation OOM, MTP num_speculative_tokens 3, 172.78 GiB FP8 floor,
+  n-gram host-offload ≥51 GB): https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next
 
 Secondary:
 - research/model_dsv4flash.md (compressed-indexer precedent, top-k scaling

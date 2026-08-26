@@ -460,9 +460,10 @@ MODELS = {
         kv_bpt=12_672,                   # 12 attn x 2 KV x 256 x 2(K,V) x 1B + 12 x 128/4 indexer
         deltanet_state=59_572_224,       # 36 DN layers x 48 vheads x 128x128 bf16 + conv (10,240 x 4)
         w_resident=185_502_232_570,      # FP8 ckpt metadata.total_size, shard-header-verified
-        w_decode_shared=8.624e9,         # BF16 always-active: attn 1.23 + DN 4.17 + shared exp
-                                         # 0.47 + routers 0.13 + hyper-conns 1.28 + PLE 0.07
-                                         # + lm_head 1.27 (n-gram/embed lookups excluded)
+        w_decode_shared=8_623_999_000,   # exact per-tensor ledger sum — BF16 always-active:
+                                         # attn 1.23 + DN 4.17 + shared exp 0.47 + routers 0.13
+                                         # + hyper-conns 1.28 + PLE 0.07 + lm_head 1.27
+                                         # (n-gram/embed lookups excluded)
         w_route_pertok=2_359_584_000,    # 10 experts x 4,915,800 B (FP8 + block scales) x 48
         w_route_total=120_810_700_800,   # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
         mtp=1.7,                         # MTP module (1 hybrid layer); transplanted fit, unmeasured
@@ -515,7 +516,13 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
             f"{model.name}: FP16 KV is not servable (vLLM requires a quantized "
             "KV cache on this model's sparse-attention path — GLM-5.2's DSA, "
             "DSv4-Flash's CSA; see the model's research note)")
-    return replace(model, kv_bpt=model.kv_bpt * 2, name=model.name + " [FP16 KV]")
+    # On a sparse-decode model the top-k gathers read MAIN-KV bytes and double
+    # with the cache dtype; the indexer scan (kv_decode_bpt) keeps its own
+    # quantized width. kv_bpt doubles wholesale — the indexer share inside it
+    # (≤3%) over-doubles, a conservative slack flagged in the model's note.
+    return replace(model, kv_bpt=model.kv_bpt * 2,
+                   kv_decode_const=model.kv_decode_const * 2,
+                   name=model.name + " [FP16 KV]")
 
 
 # ---- weight-dtype switch ----------------------------------------------------
@@ -2480,9 +2487,10 @@ def _selfcheck():
     except ValueError:
         pass
 
-    # ---- the grid is what makes DP expressible for the 2026-07 models -------
-    # MM35, GLM-5.2 and DSv4-Flash fit no single H200, so pure DP is a 0 pool
-    # at every N -- the study's existing "does not fit" sentinel, and it stands.
+    # ---- the grid is what makes DP expressible for the 2026-07+ models ------
+    # MM35, GLM-5.2, DSv4-Flash and Qwen3.8-Flash-Next fit no single H200, so
+    # pure DP is a 0 pool at every N -- the study's existing "does not fit"
+    # sentinel, and it stands.
     for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"],
                 MODELS["Q38FN"]):
         for n in (1, 2, 4, 8):
@@ -2655,7 +2663,7 @@ def _selfcheck():
     # the FP8 ckpt quantizes ONLY experts + n-gram table: the always-active
     # read is BF16-heavy (~2 B/param on 4.3e9 params) and the resident total
     # (n-gram table, embed, vision, MTP) far exceeds what a step can touch
-    assert 8.5e9 < q38.w_decode_shared < 8.75e9
+    assert q38.w_decode_shared == 8_623_999_000                 # exact ledger sum (note #4)
     assert q38.w_resident > q38.w_route_total + q38.w_decode_shared + 50e9
     assert q38.nvfp4_w is None                                  # no official NVFP4 (note #4)
     try:
@@ -2663,7 +2671,12 @@ def _selfcheck():
     except ValueError:
         pass
     assert q38.state_fp32_ok and q38.kv_fp16_ok                 # bf16 DN state; no fp8-KV assert
-    assert with_kv_dtype(q38, "fp16").kv_bpt == 2 * q38.kv_bpt
+    # FP16 KV on the sparse path: pool bytes double AND the top-k main-KV
+    # gathers double; the fp8 indexer scan does not
+    q38_16 = with_kv_dtype(q38, "fp16")
+    assert q38_16.kv_bpt == 2 * q38.kv_bpt
+    assert q38_16.kv_decode_const == 2 * q38.kv_decode_const
+    assert q38_16.kv_decode_bpt == q38.kv_decode_bpt
 
     # KV dtype: Mistral doubles like the Qwens; GLM's DSA path and DSv4-Flash's
     # CSA path must refuse FP16 (both serve only with a quantized main KV)
@@ -2712,6 +2725,11 @@ def _selfcheck():
     _, p_qsa, _, _ = decode_curves(q38, tp2, wl, [64], n_iter=300)
     _, p_qfull, _, _ = decode_curves(q38_dense_read, tp2, wl, [64], n_iter=300)
     assert p_qsa[0] > p_qfull[0], "QSA decode must out-speed full-cache reads"
+    # ...and the FP16-KV arm must actually decode slower (the doubled top-k
+    # read) — the property with_kv_dtype's kv_decode_const scaling exists for
+    _, p_q16, _, _ = decode_curves(with_kv_dtype(q38, "fp16"), tp2, wl, [64],
+                                   n_iter=300)
+    assert p_q16[0] < p_qsa[0], "FP16 KV must decode slower on the QSA path too"
     # decode monotonicity holds for the new models on hardware they fit
     for mdl, topo_fit in ((mm, tp2), (glm, t8), (dsf, tp2), (q38, tp2),
                           (with_weight_dtype(glm, "nvfp4"), b4)):
