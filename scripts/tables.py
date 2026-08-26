@@ -14,7 +14,7 @@ from scenario_model import GIB, Workload, MODELS, TOPOLOGIES
 MODELS_K = ["27B", "35BA3B"]
 TOPOS_K = ["1xH200", "2xH200-TP2", "2xH200-DP2"]
 # the 2026-07+ models, which fit no single H200 — the DP x TP node-split table
-MODELS_EXT_K = ["MM35", "GLM52", "DSV4F", "Q38FN"]
+MODELS_EXT_K = ["MM35", "GLM52", "DSV4F", "Q38FN", "GLM53F"]
 
 
 def wl(**kw):
@@ -287,6 +287,7 @@ def main():
         ("GLM52",  [("tp", 4, "B300"), ("tp", 8, "B300")]),
         ("DSV4F",  [("tp", 1, "B300"), ("tp", 2, "B300")]),
         ("Q38FN",  [("tp", 1, "B300"), ("tp", 2, "B300")]),
+        ("GLM53F", [("tp", 2, "B300"), ("tp", 4, "B300")]),
     ]
     for mk, topos in ext_configs:
         for kind, n, gpu in topos:
@@ -308,7 +309,8 @@ def main():
     print("  v@warm-p5 = per-user p50 tok/s with all P5 GPU-resident warm sessions")
     print("  decoding at once — the explorer's stress point (the planning percentile)")
     for mk, kind, n in [("MM35", "tp", 2), ("MM35", "tp", 4), ("GLM52", "tp", 8),
-                        ("DSV4F", "tp", 2), ("Q38FN", "tp", 2)]:
+                        ("DSV4F", "tp", 2), ("Q38FN", "tp", 2),
+                        ("GLM53F", "tp", 4)]:
         t = M.topology(kind, n)
         mdl = MODELS[mk]
         pool = M.kv_pool_tokens(mdl, t)
@@ -363,6 +365,18 @@ def main():
         _, b, _, _ = M.decode_curves(q38_dense, t_h2, w0, [n], n_iter=1500)
         print(f"  2xH200 mns={n:3d}  QSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
 
+    print("\n== GLM-5.3-Flash sparse decode: DSA pricing vs dense-read ==")
+    print("  the indexer scans kpool-4 compressed keys (363 B/ctx token) and")
+    print("  attention gathers the top-2048 nope-only 512-B latents; the")
+    print("  dense-read row streams the whole 5.9 KiB/token cache instead.")
+    t_h4 = M.topology("tp", 4)
+    g53_dense = dataclasses.replace(MODELS["GLM53F"], kv_decode_bpt=None,
+                                    kv_decode_const=0.0)
+    for n in (16, 64, 120):
+        _, a, _, _ = M.decode_curves(MODELS["GLM53F"], t_h4, w0, [n], n_iter=1500)
+        _, b, _, _ = M.decode_curves(g53_dense, t_h4, w0, [n], n_iter=1500)
+        print(f"  4xH200 mns={n:3d}  DSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
+
     print("\n== max_seq_len cap sweep to 1M (35B-A3B, TP2, warm p5/p50) ==")
     print("  the allowed cap now extends to 1,048,576 for the Qwens (YaRN) and")
     print("  GLM-5.2; Mistral-Medium-3.5's hard model max stays 262,144 and the")
@@ -405,7 +419,7 @@ def main():
     print("     exactly when the weight charge W is positive and material (a")
     print("     weightless model is flat). On 8 GPUs, TP8 beats the widest DP by:")
     for mk, gpu in (("35BA3B", "H200"), ("MM35", "H200"), ("GLM52", "B300"),
-                    ("DSV4F", "H200"), ("Q38FN", "H200")):
+                    ("DSV4F", "H200"), ("Q38FN", "H200"), ("GLM53F", "H200")):
         mdl = MODELS[mk]
         tots = [t.replicas * M.kv_pool_tokens(mdl, t)
                 for t in M.node_splits(mdl, gpu, node=8)]
@@ -462,6 +476,7 @@ def prefill_tables():
     rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"), ("35BA3B", 1, 1, "H200"),
             ("35BA3B", 1, 2, "H200"), ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
             ("DSV4F", 1, 2, "H200"), ("Q38FN", 1, 2, "H200"),
+            ("GLM53F", 1, 4, "H200"),
             ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
     for mk, dp, tp, gk in rows:
         m, t = MODELS[mk], M.topology_grid(dp, tp, gk)

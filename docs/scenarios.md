@@ -34,7 +34,7 @@ math with live sliders.
 | GPU part *(2026-07)* | H200 only | + **B300** (Blackwell Ultra, 288 GB / 8 TB/s) — [§ Extension](#extension-2026-07-b300-gpus-nvfp4-weights-mistral-medium-35-glm-52) |
 | Weight dtype *(2026-07)* | FP8 | + **NVFP4** (B300-only; weights, never KV) |
 | Models *(2026-07)* | — | + **Mistral-Medium-3.5-128B** (dense GQA) and **GLM-5.2** (744B-A40B, MLA+DSA) |
-| Models *(2026-08)* | — | + **DeepSeek-V4-Flash-0731** (284B-A13B, CSA) and **Qwen3.8-Flash-Next** (125B-A6B, QSA + n-gram) — in the explorer and `tables.py`; the § tables below predate them ([`research/model_dsv4flash.md`](../research/model_dsv4flash.md), [`research/model_qwen38flashnext.md`](../research/model_qwen38flashnext.md)) |
+| Models *(2026-08)* | — | + **DeepSeek-V4-Flash-0731** (284B-A13B, CSA), **Qwen3.8-Flash-Next** (125B-A6B, QSA + n-gram) and **GLM-5.3-Flash** (320B-A18B, KDA + NoPE-MLA) — in the explorer and `tables.py`; the § tables below predate them ([`research/model_dsv4flash.md`](../research/model_dsv4flash.md), [`research/model_qwen38flashnext.md`](../research/model_qwen38flashnext.md), [`research/model_glm53flash.md`](../research/model_glm53flash.md)) |
 
 Model refinements over the first draft of this study (each moves numbers by 10–20%):
 
@@ -1372,10 +1372,12 @@ Added 2026-07-27; regenerate every number via the extension sections of
 [`research/model_mistral_medium35.md`](../research/model_mistral_medium35.md),
 [`research/model_glm52.md`](../research/model_glm52.md).
 
-Two models joined after this section was written — **DeepSeek-V4-Flash-0731**
-(2026-08-03, [`research/model_dsv4flash.md`](../research/model_dsv4flash.md))
-and **Qwen3.8-Flash-Next** (2026-08-26,
-[`research/model_qwen38flashnext.md`](../research/model_qwen38flashnext.md)).
+Three models joined after this section was written — **DeepSeek-V4-Flash-0731**
+(2026-08-03, [`research/model_dsv4flash.md`](../research/model_dsv4flash.md)),
+**Qwen3.8-Flash-Next** (2026-08-26,
+[`research/model_qwen38flashnext.md`](../research/model_qwen38flashnext.md))
+and **GLM-5.3-Flash** (2026-08-26,
+[`research/model_glm53flash.md`](../research/model_glm53flash.md)).
 Their numbers regenerate via the same `tables.py` sections and appear in the
 explorer; the hand-written tables below predate them.
 

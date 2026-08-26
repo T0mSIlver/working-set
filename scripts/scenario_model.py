@@ -479,6 +479,38 @@ MODELS = {
         # upper bound, QSA prefill sparsity uncharacterised (note #6).
         params_prefill=6.04e9, attn_layers=12, attn_d=24 * 256,
     ),
+    # MoE 320B-A18B (321B on disk incl. a 7.4B MTP draft layer and a vision
+    # tower), open weights (2026-08-25, MIT). GLM-5.2's DSA married to a
+    # Qwen-style linear backbone: 34 KDA linear-attention + 11 NoPE
+    # sparse-MLA layers (512-B latents, NO rope bytes) with a kpool-4
+    # COMPRESSED indexer cache — 5.85 KiB/token, 8.1x below GLM-5.2 —
+    # plus the study's second-heaviest recurrent state (74.4 MiB bf16).
+    # 288 experts / 8 routed (kink n = 36). KV dtype is GPU-COUPLED: the
+    # fp8-KV base arm is Blackwell-only — "Hopper ... must run BF16 KV"
+    # (vLLM recipe), i.e. on H200 the FP16-KV toggle is the only servable
+    # arm. research/model_glm53flash.md.
+    "GLM53F": Model(
+        name="GLM-5.3-Flash (MoE 320B-A18B, KDA+NoPE-MLA)",
+        kv_bpt=5_995,                    # 11 x 512 nope-only MLA latent + 11 x 132/4 indexer keys
+        deltanet_state=77_987_840,       # 34 KDA layers x 64 heads x 128x128 bf16 + q/k/v conv
+        w_resident=328_326_771_576,      # FP8 ckpt metadata.total_size, shard-header-verified
+        w_decode_shared=13_957_216_504,  # exact ledger sum — KDA 9.37 (BF16!) + DSA attn 1.64
+                                         # + shared exp 1.06 + dense MLPs 0.45 + routers 0.10
+                                         # + hyper-conns 0.07 + lm_head 1.27 + norms
+        w_route_pertok=8_457_781_248,    # 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
+        w_route_total=304_480_124_928,   # 288 experts (kink at n = 288/8 = 36)
+        mtp=1.7,                         # MTP draft layer (recipe runs 5 drafts); transplanted fit
+        nvfp4_w=None,                    # no official NVFP4 (community only)
+        kv_decode_bpt=363,               # compressed indexer scan: 11 x 132 B / kpool 4 per ctx tok
+        kv_decode_const=11_534_336,      # 11 layers x top-2048 x 512-B latent reads per seq
+        kv_decode_topk=2_048,            # index_topk, read in token space (research note #6)
+        max_ctx=1_048_576,               # native 1M context
+        # prefill: MoE active GEMM params excl embed/lm_head (16.11e9 ledger;
+        # card "18B active" incl. embed+lm_head = 17.38e9 ✓). Quadratic term
+        # priced as DENSE attention on the 11 DSA layers: an upper bound,
+        # DSA prefill sparsity uncharacterised (note #6).
+        params_prefill=16.11e9, attn_layers=11, attn_d=64 * 256,
+    ),
 }
 
 # ---- MTP speedup <-> per-draft acceptance ------------------------------------
@@ -2489,11 +2521,11 @@ def _selfcheck():
         pass
 
     # ---- the grid is what makes DP expressible for the 2026-07+ models ------
-    # MM35, GLM-5.2, DSv4-Flash and Qwen3.8-Flash-Next fit no single H200, so
-    # pure DP is a 0 pool at every N -- the study's existing "does not fit"
-    # sentinel, and it stands.
+    # MM35, GLM-5.2, DSv4-Flash, Qwen3.8-Flash-Next and GLM-5.3-Flash fit no
+    # single H200, so pure DP is a 0 pool at every N -- the study's existing
+    # "does not fit" sentinel, and it stands.
     for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"],
-                MODELS["Q38FN"]):
+                MODELS["Q38FN"], MODELS["GLM53F"]):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
     # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
@@ -2505,13 +2537,16 @@ def _selfcheck():
     assert min_tp_for(MODELS["DSV4F"], "B300") == 1
     assert min_tp_for(MODELS["Q38FN"], "H200") == 2
     assert min_tp_for(MODELS["Q38FN"], "B300") == 1
+    assert min_tp_for(MODELS["GLM53F"], "H200") == 3
+    assert min_tp_for(MODELS["GLM53F"], "B300") == 2
     assert kv_pool_tokens(MODELS["MM35"], topology_grid(4, 2)) > 0    # DP4xTP2
     assert kv_pool_tokens(MODELS["GLM52"], topology_grid(2, 4, "B300")) > 0
     # min_tp is exactly the boundary: one GPU less holds nothing
     for mk, gk in (("MM35", "H200"), ("MM35", "B300"),
                    ("GLM52", "H200"), ("GLM52", "B300"),
                    ("DSV4F", "H200"), ("DSV4F", "B300"),
-                   ("Q38FN", "H200"), ("Q38FN", "B300")):
+                   ("Q38FN", "H200"), ("Q38FN", "B300"),
+                   ("GLM53F", "H200"), ("GLM53F", "B300")):
         need = min_tp_for(MODELS[mk], gk)
         assert kv_pool_tokens(MODELS[mk], topology_grid(1, need, gk)) > 0
         if need > 1:
@@ -2524,7 +2559,9 @@ def _selfcheck():
                          ("DSV4F", "H200", [(4, 2), (2, 4), (1, 8)]),
                          ("DSV4F", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
                          ("Q38FN", "H200", [(4, 2), (2, 4), (1, 8)]),
-                         ("Q38FN", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)])):
+                         ("Q38FN", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
+                         ("GLM53F", "H200", [(2, 4), (1, 8)]),
+                         ("GLM53F", "B300", [(4, 2), (2, 4), (1, 8)])):
         got = [(t.dp, t.tp) for t in node_splits(MODELS[mk], gk, node=8)]
         assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
         for t in node_splits(MODELS[mk], gk, node=8):
@@ -2679,6 +2716,35 @@ def _selfcheck():
     assert q38_16.kv_decode_const == 2 * q38.kv_decode_const
     assert q38_16.kv_decode_bpt == q38.kv_decode_bpt
 
+    # GLM-5.3-Flash identities (research/model_glm53flash.md)
+    g53 = MODELS["GLM53F"]
+    assert g53.kv_bpt == 11 * 512 + 11 * 132 / 4                # nope MLA + compressed indexer
+    assert g53.deltanet_state == 34 * 64 * 128 * 128 * 2 + 34 * 3 * 8_192 * 4 * 2
+    assert g53.w_route_pertok == 8 * 25_171_968 * 42            # FP8 experts + F32 block scales
+    assert g53.w_route_total == 288 * 25_171_968 * 42
+    assert abs(g53.w_route_total / g53.w_route_pertok - 36) < 1e-9  # kink at 288/8
+    assert g53.kv_decode_bpt == 11 * 132 / 4                    # compressed indexer scan
+    assert g53.kv_decode_const == 11 * 2_048 * 512              # top-2048 latent reads
+    assert g53.kv_decode_topk == 2_048
+    assert g53.w_decode_shared == 13_957_216_504                # exact ledger sum (note #4)
+    # the note's closing identity, to the byte: shared per-step read + all
+    # routed experts + embed + MTP layer + vision tower = the checkpoint
+    assert (g53.w_decode_shared + g53.w_route_total
+            + 1_268_776_960 + 7_493_399_168 + 1_127_254_016) == g53.w_resident
+    assert g53.nvfp4_w is None                                  # no official NVFP4 (note #4)
+    try:
+        with_weight_dtype(g53, "nvfp4"); raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+    # bf16 KDA state; BF16 KV is not merely allowed but REQUIRED on Hopper
+    # (fp8 KV is Blackwell-only — vLLM recipe, note #2), so the FP16 toggle
+    # must stay live and scale the sparse constants like Q38FN's
+    assert g53.state_fp32_ok and g53.kv_fp16_ok
+    g53_16 = with_kv_dtype(g53, "fp16")
+    assert g53_16.kv_bpt == 2 * g53.kv_bpt
+    assert g53_16.kv_decode_const == 2 * g53.kv_decode_const
+    assert g53_16.kv_decode_bpt == g53.kv_decode_bpt
+
     # KV dtype: Mistral doubles like the Qwens; GLM's DSA path and DSv4-Flash's
     # CSA path must refuse FP16 (both serve only with a quantized main KV)
     assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
@@ -2693,7 +2759,7 @@ def _selfcheck():
     # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144;
     # DSv4-Flash is natively 1M (YaRN x16 baked into its config)
     assert (m27.max_ctx == m35.max_ctx == glm.max_ctx == dsf.max_ctx
-            == q38.max_ctx == 1_048_576)
+            == q38.max_ctx == g53.max_ctx == 1_048_576)
     assert mm.max_ctx == 262_144
     wl_1m = replace(wl, cap=1_048_576)
     assert warm_capacity(m35, t1, wl_1m, n_iter=40)[1] > 0     # 1M cap runs
@@ -2731,9 +2797,18 @@ def _selfcheck():
     _, p_q16, _, _ = decode_curves(with_kv_dtype(q38, "fp16"), tp2, wl, [64],
                                    n_iter=300)
     assert p_q16[0] < p_qsa[0], "FP16 KV must decode slower on the QSA path too"
+    t4 = topology("tp", 4)
+    g53_dense_read = replace(g53, kv_decode_bpt=None, kv_decode_const=0.0)
+    _, p_g53, _, _ = decode_curves(g53, t4, wl, [64], n_iter=300)
+    _, p_g53d, _, _ = decode_curves(g53_dense_read, t4, wl, [64], n_iter=300)
+    assert p_g53[0] > p_g53d[0], "GLM-5.3-Flash DSA must out-speed full-cache reads"
+    _, p_g53_16d, _, _ = decode_curves(with_kv_dtype(g53, "fp16"), t4, wl, [64],
+                                       n_iter=300)
+    assert p_g53_16d[0] < p_g53[0], \
+        "BF16 KV (the Hopper-required arm) must decode slower than fp8 KV"
     # decode monotonicity holds for the new models on hardware they fit
     for mdl, topo_fit in ((mm, tp2), (glm, t8), (dsf, tp2), (q38, tp2),
-                          (with_weight_dtype(glm, "nvfp4"), b4)):
+                          (g53, t4), (with_weight_dtype(glm, "nvfp4"), b4)):
         _, p50n, _, aggn = decode_curves(mdl, topo_fit, wl, [1, 8, 64], n_iter=300)
         assert p50n[0] > p50n[1] > p50n[2] > 0
         assert aggn[2] > aggn[0]

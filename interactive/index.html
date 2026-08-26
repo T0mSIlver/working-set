@@ -324,6 +324,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
             <button data-v="GLM52" aria-pressed="false">GLM-5.2</button>
             <button data-v="DSV4F" aria-pressed="false">DSv4-Flash</button>
             <button data-v="Q38FN" aria-pressed="false">Q3.8-Flash</button>
+            <button data-v="GLM53F" aria-pressed="false">G5.3-Flash</button>
           </div>
         </div>
         <div class="field">
@@ -843,6 +844,26 @@ const CONFIG = {
       params_prefill: 6.04e9,      // MoE: active GEMM params excl embed/lm_head/n-gram lookups
       attn_layers: 12, attn_d: 24*256,  // dense upper bound; QSA prefill sparsity uncharacterised
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision, as the Qwens)
+    },
+    "GLM53F": {                    // research/model_glm53flash.md
+      name: "GLM-5.3-Flash (MoE 320B-A18B, KDA+NoPE-MLA)",
+      kv_bpt: 5995,                // 11 x 512 nope-only MLA latent + 11 x 132/4 compressed indexer
+      deltanet_state: 77987840,    // 34 KDA layers x 64 heads x 128x128 bf16 + q/k/v conv state
+      w_resident: 328326771576,    // FP8 ckpt metadata.total_size, shard-header-verified
+      w_decode_shared: 13957216504,// exact ledger sum — KDA 9.37 (BF16) + DSA 1.64 + shared exp
+                                   // 1.06 + dense 0.45 + routers 0.10 + hc 0.07 + lm_head 1.27
+      w_route_pertok: 8457781248,  // 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
+      w_route_total: 304480124928, // 288 experts (kink at n = 288/8 = 36)
+      mtp: 1.7,                    // MTP draft layer (recipe runs 5 drafts); transplanted fit
+      // no nvfp4_w: no official NVFP4 checkpoint exists (community only)
+      kv_decode_bpt: 363,          // compressed indexer scan: 11 x 132 B / kpool 4 per ctx token
+      kv_decode_const: 11534336,   // 11 layers x top-2048 x 512-B latent reads per active seq
+      kv_decode_topk: 2048,        // index_topk, read in token space (research note #6)
+      kv_fp16_ok: true,            // BF16 KV is REQUIRED on Hopper — fp8 KV is Blackwell-only
+      state_fp32_ok: true,         // bf16-priced (inferred) KDA state — the fp32 knob applies
+      params_prefill: 16.11e9,     // MoE: active GEMM params excl embed/lm_head (card "18B" incl.)
+      attn_layers: 11, attn_d: 64*256,  // dense upper bound; DSA prefill sparsity uncharacterised
+      max_ctx: 1048576,            // native 1M context
     },
   },
 
@@ -1534,8 +1555,10 @@ function operatingPoint(model, topo, wl, cs, opts){
                  minTpFor(CONFIG.MODELS["DSV4F"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"H200")===2 &&
-                 minTpFor(CONFIG.MODELS["Q38FN"],"B300")===1, "min TP per model/part");
-  for (const mk of ["MM35","GLM52","DSV4F","Q38FN"])
+                 minTpFor(CONFIG.MODELS["Q38FN"],"B300")===1 &&
+                 minTpFor(CONFIG.MODELS["GLM53F"],"H200")===3 &&
+                 minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2, "min TP per model/part");
+  for (const mk of ["MM35","GLM52","DSV4F","Q38FN","GLM53F"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(CONFIG.MODELS[mk], makeTopo("dp",n))===0,
         mk+": pure DP of single H200s must stay a 0 pool");
@@ -1601,6 +1624,11 @@ function operatingPoint(model, topo, wl, cs, opts){
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",2,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",1,"B300")) > 0,
     "Qwen3.8-Flash-Next must fit from 2xH200 and a single B300");
+  console.assert(kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",2,"H200")) === 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",3,"H200")) > 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",1,"B300")) === 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",2,"B300")) > 0,
+    "GLM-5.3-Flash must fit from 3xH200 and 2xB300");
   // NVFP4 swap identities (mirror _selfcheck): checkpoint shrinks, but the
   // BF16-kept blocks make the SHARED per-step read heavier on the MoE models
   console.assert(m35.nvfp4_w[0] < m35.w_resident && m35.nvfp4_w[1] > m35.w_decode_shared,
@@ -1660,6 +1688,32 @@ function operatingPoint(model, topo, wl, cs, opts){
     "Q38FN FP16-KV: kv_bpt and kv_decode_const double, indexer scan unchanged");
   console.assert(withKvDtype(glm, "fp16") === glm && withKvDtype(q38, "fp8") === q38,
     "withKvDtype: identity on refused-FP16 models and on fp8");
+  // GLM-5.3-Flash identities (research/model_glm53flash.md; mirror _selfcheck)
+  const g53 = CONFIG.MODELS["GLM53F"];
+  console.assert(g53.kv_bpt === 11*512 + 11*132/4,
+    "GLM53F kv_bpt = nope-only MLA latents + kpool-4 compressed indexer keys");
+  console.assert(g53.deltanet_state === 34*64*128*128*2 + 34*3*8192*4*2,
+    "GLM53F per-session state = bf16 KDA SSM + q/k/v conv state");
+  console.assert(g53.w_route_pertok === 8*25171968*42 &&
+                 g53.w_route_total === 288*25171968*42 &&
+                 Math.abs(g53.w_route_total/g53.w_route_pertok - 36) < 1e-9,
+    "GLM53F expert bytes (FP8 + F32 block scales); kink at n = 288/8 = 36");
+  console.assert(g53.kv_decode_bpt === 11*132/4 &&
+                 g53.kv_decode_const === 11*2048*512 &&
+                 g53.kv_decode_topk === 2048, "GLM53F DSA sparse-decode pricing");
+  console.assert(g53.w_decode_shared === 13957216504,
+    "GLM53F shared per-step read = the exact ledger sum");
+  console.assert(g53.w_decode_shared + g53.w_route_total
+                 + 1268776960 + 7493399168 + 1127254016 === g53.w_resident,
+    "GLM53F closing identity: shared + routed + embed + MTP + vision = total_size");
+  console.assert(!g53.nvfp4_w, "GLM53F must not be NVFP4-selectable (no official ckpt)");
+  console.assert(g53.kv_fp16_ok === true && g53.state_fp32_ok === true,
+    "GLM53F: FP16-KV live (REQUIRED on Hopper) and fp32-state live");
+  const g53fp16 = withKvDtype(g53, "fp16");
+  console.assert(g53fp16.kv_bpt === 2*g53.kv_bpt &&
+                 g53fp16.kv_decode_const === 2*g53.kv_decode_const &&
+                 g53fp16.kv_decode_bpt === g53.kv_decode_bpt,
+    "GLM53F FP16-KV: kv_bpt and kv_decode_const double, indexer scan unchanged");
   // zero-pool honesty: weights that don't fit report ZERO warm even with a
   // large CPU-offload buffer (the guard fires before the workload is touched)
   const zr = warmCapacity(glm, makeTopo("tp",1,"H200"), null, 512, 3, 1000);
@@ -4524,7 +4578,7 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const sug = Math.max(1, Math.round(Math.min(decodeUsers, lastWarmCur.g5)));
   // draft counts mirror the research notes; a model missing here must not
   // emit num_speculative_tokens:undefined, so it gates specOn too
-  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "Q38FN":3}[state.model];
+  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "Q38FN":3, "GLM53F":5}[state.model];
   const specOn = state.mtp>1 && m0.mtp>1 && specDrafts !== undefined;
   const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
   const ramGrp = ramPerCache(topo);
@@ -4559,6 +4613,8 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     cmts.push(`# TEP8: plain TP8 is incompatible with this FP8 checkpoint (vLLM recipe)`);
   if (state.model==="Q38FN" && topo.tp===1 && state.gpu==="B300")
     cmts.push(`# 1×B300 passes the pool arithmetic; the recipe's validated floor is TP2 (TP1 hit compilation OOM on GB300)`);
+  if (state.model==="GLM53F" && state.kv==="fp8" && state.gpu==="H200")
+    cmts.push(`# NOT SERVABLE as shown: Hopper does not support FP8 KV for this model — switch the KV toggle to FP16 (BF16) or use a Blackwell part (vLLM recipe)`);
   if (state.kv==='fp16') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
   if (specOn) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${state.model==='DSV4F'?' (DSpark drafts)':''}`);
   if (eagle) cmts.push(`# the modelled ${state.mtp.toFixed(2)}× speedup assumes an EXTERNAL EAGLE-style draft (no MTP module; unmeasured)`);
@@ -4755,7 +4811,9 @@ function enforceConstraints(){
   // control explanations live in the label tooltips, not under the knobs;
   // the state-dependent ones are re-stamped here on every constraint pass
   document.getElementById('kv-tip').setAttribute('data-tip', fp16Ok
-    ? "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
+    ? (state.model === "GLM53F"
+      ? "GLM-5.3-Flash inverts the usual constraint: fp8 KV is BLACKWELL-ONLY — vLLM's recipe says Hopper must run BF16 KV, so on H200 the FP16 setting is the only servable arm (double bytes/token AND doubled top-k reads; the compressed indexer scan stays fp8)."
+      : "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected.")
     : (state.model === "DSV4F"
       ? "DeepSeek-V4-Flash: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled."
       : "GLM-5.2: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable, so the toggle is disabled."));
@@ -4774,6 +4832,7 @@ function enforceConstraints(){
     "GLM52": "GLM-5.2 — 744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context.",
     "DSV4F": "DeepSeek-V4-Flash-0731 — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's KV-lightest big model: fits from 2×H200 / 1×B300 (native FP4 experts; no NVFP4 variant). 1M native context.",
     "Q38FN": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 12.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). No NVFP4 variant. 262k native context, 1M via YaRN.",
+    "GLM53F": "GLM-5.3-Flash — MoE 320B-A18B hybrid (34 KDA linear + 11 NoPE sparse-MLA layers): 5.9 KiB/token stored — 8.1× below GLM-5.2 — plus a 74.4 MiB bf16 KDA state per session; decode reads top-2048 latents + a kpool-4 compressed indexer scan. 288 experts / 8 routed (kink n = 36). Fits from 3×H200 / 2×B300 (pool arithmetic; no recipe floor published). CAUTION: fp8 KV is Blackwell-only — Hopper must serve BF16 KV (the FP16 toggle). No NVFP4 variant. 1M native context.",
   };
   document.getElementById('model-tip').setAttribute('data-tip', modelTips[state.model]);
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
@@ -4939,6 +4998,7 @@ function syncLabels(){
   const aNote = state.model==="GLM52" ? ' GLM-5.2 drafts 5 tokens — α is indicative only.'
               : state.model==="DSV4F" ? ' DSv4-Flash drafts 7 tokens (DSpark) — α is indicative only.'
               : state.model==="Q38FN" ? ' Q3.8-Flash-Next drafts 3 tokens (vLLM recipe) — α is indicative only.'
+              : state.model==="GLM53F" ? ' GLM-5.3-Flash drafts 5 tokens (vLLM recipe) — α is indicative only.'
               : state.model==="MM35" ? ' Mistral has no MTP module — the slider models an EAGLE-style speedup; α does not apply.' : '';
   const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
     : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;

@@ -87,6 +87,7 @@ conservative accounting.
 | GLM-5.2 | 37.4e9 | 78 | 64 × 256 = 16384 | `model_glm52.md`'s derivation: **39.3e9 active excluding embeddings** (vLLM "39B") − lm_head 1.903e9 = 37.4e9. 78 layers, 64 heads, qk_nope 192 + rope 64, v_head_dim 256. |
 | DeepSeek-V4-Flash-0731 *(added 2026-08-03)* | 12.70e9 | 41 | 26,624 / 41 ≈ 649 | `model_dsv4flash.md` #6: active GEMM params excl. embed/lm_head (12.703e9 ledger). Quadratic term = indexer over the compressed axis (1024-equiv × 21 CSA layers) + dense HCA (256-equiv × 20); the CSA top-512 and window reads are linear and left out — priced *cheaper*, biased against the thrash hypothesis. |
 | Qwen3.8-Flash-Next *(added 2026-08-26)* | 6.04e9 | 12 | 24 × 256 = 6144 | `model_qwen38flashnext.md` §1: active GEMM params excl. embed/lm_head/n-gram lookups (shard-header ledger sum 6.036e9 ✓ the published "6B activated"). 48 layers (36 DeltaNet + 12 QSA full-attention); Q/KV 24/2, head_dim 256; dense upper bound on the 12 QSA layers (weakness 3). |
+| GLM-5.3-Flash *(added 2026-08-26)* | 16.11e9 | 11 | 64 × 256 = 16384 | `model_glm53flash.md` §4: active GEMM params excl. embed/lm_head (exact shard-header ledger; the card's "18B active" is 17.38e9 incl. both). 45 layers (34 KDA + 11 NoPE sparse-MLA); 64 Q heads × 256 nope; dense upper bound on the 11 DSA layers (weaknesses 2–3 apply identically). |
 
 ### Known weaknesses in this table
 
