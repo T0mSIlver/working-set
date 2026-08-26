@@ -29,6 +29,17 @@ RED, GREEN, MUTED = "#d03b3b", "#0ca30c", "#898781"
 # 2026-08 extension hues (Qwen3.8-Flash-Next, GLM-5.3-Flash) — not part of
 # the validated palette above; picked for contrast on white, unaudited
 PURPLE, MAGENTA = "#8a5bd6", "#d0489c"
+
+
+def servable(mk, gk):
+    """The KV arm servable on this GPU: GLM-5.3-Flash's fp8 KV is
+    Blackwell-only, so its H200 curves price the BF16-KV arm (the model
+    itself raises otherwise). research/model_glm53flash.md #2."""
+    m = MODELS[mk]
+    return (M.with_kv_dtype(m, "fp16")
+            if m.kv_fp8_blackwell_only and gk == "H200" else m)
+
+
 plt.rcParams.update({"figure.dpi": 120, "font.size": 9, "axes.grid": True,
                      "grid.alpha": .28, "axes.spines.top": False,
                      "axes.spines.right": False})
@@ -282,14 +293,14 @@ def fig_prefill_thrash():
                ("GLM52", 1, 8, "H200", AQUA, "GLM-5.2 TP8"),
                ("DSV4F", 1, 2, "H200", YELLOW, "DSv4-Flash TP2"),
                ("Q38FN", 1, 2, "H200", PURPLE, "Q3.8-Flash TP2"),
-               ("GLM53F", 1, 4, "H200", MAGENTA, "GLM-5.3-Flash TP4")]
+               ("GLM53F", 1, 4, "H200", MAGENTA, "G5.3-Flash TP4 (BF16 KV)")]
     fs = np.linspace(0, 0.5, 101)
 
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
 
     # -- left: duty cycle vs miss rate ------------------------------------
     for mk, dp, tp, gk, col, lab in configs:
-        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
         duty = [M.prefill_duty(m, t, base_workload(invalidation=f), RATE, CH, TURN)
                 for f in fs]
         axL.plot(fs * 100, np.array(duty) * 100, color=col, lw=2, label=lab)
@@ -321,7 +332,7 @@ def fig_prefill_thrash():
     # -- right: what a miss costs everyone else ---------------------------
     labels, ratios, cols = [], [], []
     for mk, dp, tp, gk, col, lab in configs:
-        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
         _, _, r = M.itl_spike(m, t, wl, 64, CH, n_iter=800)
         labels.append(lab); ratios.append(r); cols.append(col)
     y = np.arange(len(labels))
@@ -343,7 +354,8 @@ def fig_prefill_thrash():
     fig.tight_layout()
     fig.savefig(out("scenario_prefill_thrash.png"), bbox_inches="tight")
     plt.close(fig)
-    return {lab: M.breakeven_miss_rate(MODELS[mk], M.topology_grid(dp, tp, gk),
+    return {lab: M.breakeven_miss_rate(servable(mk, gk),
+                                       M.topology_grid(dp, tp, gk),
                                        wl, RATE, CH, TURN)
             for mk, dp, tp, gk, _, lab in configs}
 

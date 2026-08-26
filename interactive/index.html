@@ -847,7 +847,9 @@ const CONFIG = {
     },
     "GLM53F": {                    // research/model_glm53flash.md
       name: "GLM-5.3-Flash (MoE 320B-A18B, KDA+NoPE-MLA)",
-      kv_bpt: 5995,                // 11 x 512 nope-only MLA latent + 11 x 132/4 compressed indexer
+      kv_bpt: 6540,                // 12 x 512 nope-only MLA latent + 12 x 132/4 compressed indexer
+                                   // (12 = 11 main + the MTP draft layer — GLM-5.2's convention:
+                                   // storage incl. MTP, decode excl.)
       deltanet_state: 77987840,    // 34 KDA layers x 64 heads x 128x128 bf16 + q/k/v conv state
       w_resident: 328326771576,    // FP8 ckpt metadata.total_size, shard-header-verified
       w_decode_shared: 13957216504,// exact ledger sum — KDA 9.37 (BF16) + DSA 1.64 + shared exp
@@ -860,6 +862,8 @@ const CONFIG = {
       kv_decode_const: 11534336,   // 11 layers x top-2048 x 512-B latent reads per active seq
       kv_decode_topk: 2048,        // index_topk, read in token space (research note #6)
       kv_fp16_ok: true,            // BF16 KV is REQUIRED on Hopper — fp8 KV is Blackwell-only
+      kv_fp8_blackwell_only: true, // ...so modelFor auto-prices BF16 KV on H200 and the fp8
+                                   // toggle locks (servableKv; mirrors check_dtype_supported)
       state_fp32_ok: true,         // bf16-priced (inferred) KDA state — the fp32 knob applies
       params_prefill: 16.11e9,     // MoE: active GEMM params excl embed/lm_head (card "18B" incl.)
       attn_layers: 11, attn_d: 64*256,  // dense upper bound; DSA prefill sparsity uncharacterised
@@ -924,7 +928,16 @@ function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_perto
 function withKvDtype(m, kv){
   if (kv !== "fp16" || m.kv_fp16_ok === false) return m;
   return { ...m, kv_bpt: m.kv_bpt*2, kv_decode_const: (m.kv_decode_const||0)*2,
-           name: m.name + " [FP16 KV]" };
+           kv_dtype: "fp16", name: m.name + " [FP16 KV]" };
+}
+// The KV dtype actually SERVABLE for this model on this GPU (mirrors
+// check_dtype_supported): GLM-5.3-Flash's fp8 KV cache is Blackwell-only —
+// "Hopper ... must run BF16 KV" (vLLM recipe) — so on H200 the fp8 request
+// resolves to fp16. Keeps the frontier table and tiles from ever pricing an
+// unservable arm, whatever the global toggle says.
+function servableKv(m, kv, gpuKey){
+  return (kv === "fp8" && m.kv_fp8_blackwell_only === true
+          && !CONFIG.GPUS[gpuKey].supports_nvfp4) ? "fp16" : kv;
 }
 
 /* ---- derived: activation reserve solved from the anchor ---- */
@@ -945,6 +958,12 @@ function checkDtypeSupported(m, topo){
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
   if (m.weight_dtype === "nvfp4" && !gpu.supports_nvfp4)
     throw new Error(`NVFP4 weights require native FP4; ${gpu.name} has none`);
+  // GPU-coupled KV dtype (GLM-5.3-Flash): fp8 KV is Blackwell-only — the
+  // BF16-KV arm (withKvDtype "fp16", which stamps kv_dtype) must be priced
+  // on Hopper instead (mirrors Python's check_dtype_supported)
+  if (m.kv_fp8_blackwell_only === true && m.kv_dtype !== "fp16"
+      && !gpu.supports_nvfp4)
+    throw new Error(`${m.name}: FP8 KV is Blackwell-only — price the BF16-KV arm on ${gpu.name}`);
 }
 
 // KV pool of ONE replica group. A group owns topo.tp GPUs: the weights are
@@ -1556,11 +1575,15 @@ function operatingPoint(model, topo, wl, cs, opts){
                  minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"B300")===1 &&
-                 minTpFor(CONFIG.MODELS["GLM53F"],"H200")===3 &&
+                 minTpFor(withKvDtype(CONFIG.MODELS["GLM53F"],"fp16"),"H200")===3 &&
                  minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2, "min TP per model/part");
+  // (GLM-5.3-Flash prices as its BF16-KV arm on any H200 topology — the fp8
+  // arm THROWS there, asserted below with the rest of its identities)
   for (const mk of ["MM35","GLM52","DSV4F","Q38FN","GLM53F"])
     for (const n of [1,2,4,8])
-      console.assert(kv_pool_tokens(CONFIG.MODELS[mk], makeTopo("dp",n))===0,
+      console.assert(kv_pool_tokens(
+          mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk],
+          makeTopo("dp",n))===0,
         mk+": pure DP of single H200s must stay a 0 pool");
   console.assert(kv_pool_tokens(CONFIG.MODELS["MM35"], makeGrid(4,2)) > 0,
     "MM35 DP4xTP2 on H200 must hold a real pool");
@@ -1624,11 +1647,22 @@ function operatingPoint(model, topo, wl, cs, opts){
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",2,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",1,"B300")) > 0,
     "Qwen3.8-Flash-Next must fit from 2xH200 and a single B300");
-  console.assert(kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",2,"H200")) === 0 &&
-                 kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",3,"H200")) > 0 &&
+  const g53bf16 = withKvDtype(CONFIG.MODELS["GLM53F"], "fp16");
+  console.assert(kv_pool_tokens(g53bf16, makeTopo("tp",2,"H200")) === 0 &&
+                 kv_pool_tokens(g53bf16, makeTopo("tp",3,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",1,"B300")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",2,"B300")) > 0,
-    "GLM-5.3-Flash must fit from 3xH200 and 2xB300");
+    "GLM-5.3-Flash must fit from 3xH200 (BF16-KV arm) and 2xB300");
+  // the GPU-coupled KV gate (mirrors check_dtype_supported): the fp8-KV arm
+  // must THROW on H200, price on B300, and servableKv must resolve it
+  let g53Threw = false;
+  try { kv_pool_tokens(CONFIG.MODELS["GLM53F"], makeTopo("tp",4,"H200")); }
+  catch(e){ g53Threw = true; }
+  console.assert(g53Threw, "GLM53F fp8 KV on H200 must throw (Blackwell-only)");
+  console.assert(servableKv(CONFIG.MODELS["GLM53F"], "fp8", "H200") === "fp16" &&
+                 servableKv(CONFIG.MODELS["GLM53F"], "fp8", "B300") === "fp8" &&
+                 servableKv(CONFIG.MODELS["Q38FN"], "fp8", "H200") === "fp8",
+    "servableKv: GLM53F fp8->fp16 on Hopper only; other models untouched");
   // NVFP4 swap identities (mirror _selfcheck): checkpoint shrinks, but the
   // BF16-kept blocks make the SHARED per-step read heavier on the MoE models
   console.assert(m35.nvfp4_w[0] < m35.w_resident && m35.nvfp4_w[1] > m35.w_decode_shared,
@@ -1690,8 +1724,9 @@ function operatingPoint(model, topo, wl, cs, opts){
     "withKvDtype: identity on refused-FP16 models and on fp8");
   // GLM-5.3-Flash identities (research/model_glm53flash.md; mirror _selfcheck)
   const g53 = CONFIG.MODELS["GLM53F"];
-  console.assert(g53.kv_bpt === 11*512 + 11*132/4,
-    "GLM53F kv_bpt = nope-only MLA latents + kpool-4 compressed indexer keys");
+  console.assert(g53.kv_bpt === 12*512 + 12*132/4,
+    "GLM53F kv_bpt = 12 DSA stacks (11 main + MTP layer, the GLM-5.2 storage "
+    + "convention) of nope-only latents + kpool-4 compressed indexer keys");
   console.assert(g53.deltanet_state === 34*64*128*128*2 + 34*3*8192*4*2,
     "GLM53F per-session state = bf16 KDA SSM + q/k/v conv state");
   console.assert(g53.w_route_pertok === 8*25171968*42 &&
@@ -3022,8 +3057,10 @@ function modelFor(key){
   }
   // FP16 KV is not servable for GLM-5.2 (DSA asserts a quantized cache);
   // the UI disables the toggle — withKvDtype's guard keeps the math honest
-  // anyway (and prices the sparse-decode doubling on Q38FN).
-  m = withKvDtype(m, state.kv);
+  // anyway (and prices the sparse-decode doubling on Q38FN). servableKv
+  // first resolves GPU-coupled dtypes (GLM-5.3-Flash: BF16 forced on H200),
+  // so no code path — the frontier included — ever prices an unservable arm.
+  m = withKvDtype(m, servableKv(m, state.kv, state.gpu));
   // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.2
   // carry no state at all) and on DSv4-Flash (its per-session state is a
   // fixed mixed-precision buffer, state_fp32_ok) — the UI disables both.
@@ -4613,8 +4650,10 @@ function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     cmts.push(`# TEP8: plain TP8 is incompatible with this FP8 checkpoint (vLLM recipe)`);
   if (state.model==="Q38FN" && topo.tp===1 && state.gpu==="B300")
     cmts.push(`# 1×B300 passes the pool arithmetic; the recipe's validated floor is TP2 (TP1 hit compilation OOM on GB300)`);
-  if (state.model==="GLM53F" && state.kv==="fp8" && state.gpu==="H200")
-    cmts.push(`# NOT SERVABLE as shown: Hopper does not support FP8 KV for this model — switch the KV toggle to FP16 (BF16) or use a Blackwell part (vLLM recipe)`);
+  if (state.model==="GLM53F" && state.gpu==="H200")
+    cmts.push(`# BF16 KV is REQUIRED on Hopper for this model — fp8 KV is Blackwell-only (vLLM recipe); the KV toggle locks accordingly`);
+  if (state.model==="GLM53F" && topo.tp<4)
+    cmts.push(`# TP<4 is this study's pool arithmetic; the vLLM recipe only demonstrates TP4 (one GB200 tray)`);
   if (state.kv==='fp16') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
   if (specOn) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${state.model==='DSV4F'?' (DSpark drafts)':''}`);
   if (eagle) cmts.push(`# the modelled ${state.mtp.toFixed(2)}× speedup assumes an EXTERNAL EAGLE-style draft (no MTP module; unmeasured)`);
@@ -4795,6 +4834,13 @@ function enforceConstraints(){
   if (!nvOk && state.wdt === "nvfp4") state.wdt = "fp8";
   const fp16Ok = m.kv_fp16_ok !== false;
   if (!fp16Ok && state.kv === "fp16") state.kv = "fp8";
+  // GLM-5.3-Flash on Hopper: fp8 KV is not servable (Blackwell-only), so
+  // the selection snaps to FP16/BF16 and the fp8 button locks — the same
+  // "illegal selections snap back rather than silently mis-pricing" policy
+  // as NVFP4-on-Hopper
+  const fp8Ok = !(m.kv_fp8_blackwell_only === true
+                  && !CONFIG.GPUS[state.gpu].supports_nvfp4);
+  if (!fp8Ok && state.kv === "fp8") state.kv = "fp16";
   const stateOk = m.deltanet_state > 0 && m.state_fp32_ok !== false;
   if (!stateOk && state.state_dt === "fp32") state.state_dt = "bf16";
   const woverOk = state.model !== "27B";
@@ -4806,13 +4852,14 @@ function enforceConstraints(){
   sync('seg-state', state.state_dt); sync('seg-wover', state.wover);
   document.querySelector('#seg-wdt button[data-v="nvfp4"]').disabled = !nvOk;
   document.querySelector('#seg-kv button[data-v="fp16"]').disabled = !fp16Ok;
+  document.querySelector('#seg-kv button[data-v="fp8"]').disabled = !fp8Ok;
   document.querySelector('#seg-state button[data-v="fp32"]').disabled = !stateOk;
   document.querySelector('#seg-wover button[data-v="p15"]').disabled = !woverOk;
   // control explanations live in the label tooltips, not under the knobs;
   // the state-dependent ones are re-stamped here on every constraint pass
   document.getElementById('kv-tip').setAttribute('data-tip', fp16Ok
     ? (state.model === "GLM53F"
-      ? "GLM-5.3-Flash inverts the usual constraint: fp8 KV is BLACKWELL-ONLY — vLLM's recipe says Hopper must run BF16 KV, so on H200 the FP16 setting is the only servable arm (double bytes/token AND doubled top-k reads; the compressed indexer scan stays fp8)."
+      ? "GLM-5.3-Flash inverts the usual constraint: fp8 KV is BLACKWELL-ONLY — vLLM's recipe says Hopper must run BF16 KV, so on H200 the toggle LOCKS to FP16 (double bytes/token AND doubled top-k reads; the compressed indexer scan stays fp8). On B300 both arms are selectable."
       : "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected.")
     : (state.model === "DSV4F"
       ? "DeepSeek-V4-Flash: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled."
@@ -4832,7 +4879,7 @@ function enforceConstraints(){
     "GLM52": "GLM-5.2 — 744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context.",
     "DSV4F": "DeepSeek-V4-Flash-0731 — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's KV-lightest big model: fits from 2×H200 / 1×B300 (native FP4 experts; no NVFP4 variant). 1M native context.",
     "Q38FN": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 12.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). No NVFP4 variant. 262k native context, 1M via YaRN.",
-    "GLM53F": "GLM-5.3-Flash — MoE 320B-A18B hybrid (34 KDA linear + 11 NoPE sparse-MLA layers): 5.9 KiB/token stored — 8.1× below GLM-5.2 — plus a 74.4 MiB bf16 KDA state per session; decode reads top-2048 latents + a kpool-4 compressed indexer scan. 288 experts / 8 routed (kink n = 36). Fits from 3×H200 / 2×B300 (pool arithmetic; no recipe floor published). CAUTION: fp8 KV is Blackwell-only — Hopper must serve BF16 KV (the FP16 toggle). No NVFP4 variant. 1M native context.",
+    "GLM53F": "GLM-5.3-Flash — MoE 320B-A18B hybrid (34 KDA linear + 11 NoPE sparse-MLA layers, +1 MTP DSA layer whose cache is charged): 6.4 KiB/token stored — 7.4× below GLM-5.2 — plus a 74.4 MiB bf16 KDA state per session; decode reads top-2048 latents + a kpool-4 compressed indexer scan. 288 experts / 8 routed (kink n = 36). Fits from 3×H200 / 2×B300 (pool arithmetic; no recipe floor published). fp8 KV is Blackwell-only, so on H200 the KV toggle locks to BF16. No NVFP4 variant. 1M native context.",
   };
   document.getElementById('model-tip').setAttribute('data-tip', modelTips[state.model]);
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;

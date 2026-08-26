@@ -21,6 +21,18 @@ def wl(**kw):
     return Workload(**kw)
 
 
+def servable(mk, gpu="H200"):
+    """The KV arm servable on this GPU. GLM-5.3-Flash's fp8 KV cache is
+    Blackwell-only ("Hopper ... must run BF16 KV" — vLLM recipe), so its
+    H200 rows price the BF16-KV arm; kv_pool_tokens RAISES otherwise
+    (check_dtype_supported), so a missed site crashes rather than
+    mis-printing. research/model_glm53flash.md #2."""
+    m = MODELS[mk]
+    if m.kv_fp8_blackwell_only and gpu == "H200":
+        return M.with_kv_dtype(m, "fp16")
+    return m
+
+
 def mean_context(w: Workload, n=400_000, seed=1):
     full, _, _, _ = w.sample(np.random.default_rng(seed), n)
     return full.mean()
@@ -308,11 +320,13 @@ def main():
     print("\n== New models on H200 (where FP8 weights fit) ==")
     print("  v@warm-p5 = per-user p50 tok/s with all P5 GPU-resident warm sessions")
     print("  decoding at once — the explorer's stress point (the planning percentile)")
+    print("  GLM-5.3-Flash rows are its BF16-KV arm — the ONLY servable Hopper")
+    print("  arm (fp8 KV is Blackwell-only; research/model_glm53flash.md #2)")
     for mk, kind, n in [("MM35", "tp", 2), ("MM35", "tp", 4), ("GLM52", "tp", 8),
                         ("DSV4F", "tp", 2), ("Q38FN", "tp", 2),
                         ("GLM53F", "tp", 4)]:
         t = M.topology(kind, n)
-        mdl = MODELS[mk]
+        mdl = servable(mk)
         pool = M.kv_pool_tokens(mdl, t)
         p5, p50, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000)
         g5, _, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000, which="gpu")
@@ -366,14 +380,17 @@ def main():
         print(f"  2xH200 mns={n:3d}  QSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
 
     print("\n== GLM-5.3-Flash sparse decode: DSA pricing vs dense-read ==")
-    print("  the indexer scans kpool-4 compressed keys (363 B/ctx token) and")
-    print("  attention gathers the top-2048 nope-only 512-B latents; the")
-    print("  dense-read row streams the whole 5.9 KiB/token cache instead.")
+    print("  BF16-KV arm — the only servable Hopper arm (fp8 KV is Blackwell-")
+    print("  only). The indexer scans kpool-4 compressed keys (363 B/ctx token,")
+    print("  its own fp8 width) and attention gathers the top-2048 nope-only")
+    print("  latents (1,024 B each at BF16); the dense-read row streams the")
+    print("  whole 12.8 KiB/token BF16 cache instead.")
     t_h4 = M.topology("tp", 4)
-    g53_dense = dataclasses.replace(MODELS["GLM53F"], kv_decode_bpt=None,
+    g53_h200 = servable("GLM53F")
+    g53_dense = dataclasses.replace(g53_h200, kv_decode_bpt=None,
                                     kv_decode_const=0.0)
     for n in (16, 64, 120):
-        _, a, _, _ = M.decode_curves(MODELS["GLM53F"], t_h4, w0, [n], n_iter=1500)
+        _, a, _, _ = M.decode_curves(g53_h200, t_h4, w0, [n], n_iter=1500)
         _, b, _, _ = M.decode_curves(g53_dense, t_h4, w0, [n], n_iter=1500)
         print(f"  4xH200 mns={n:3d}  DSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
 
@@ -400,7 +417,7 @@ def main():
     print("  system = replicas x per-group pool (needs session-sticky routing)")
     for mk in MODELS_EXT_K:
         for gpu in ("H200", "B300"):
-            mdl = MODELS[mk]
+            mdl = servable(mk, gpu)
             need = M.min_tp_for(mdl, gpu)
             splits = M.node_splits(mdl, gpu, node=8)
             if not splits:
@@ -420,7 +437,7 @@ def main():
     print("     weightless model is flat). On 8 GPUs, TP8 beats the widest DP by:")
     for mk, gpu in (("35BA3B", "H200"), ("MM35", "H200"), ("GLM52", "B300"),
                     ("DSV4F", "H200"), ("Q38FN", "H200"), ("GLM53F", "H200")):
-        mdl = MODELS[mk]
+        mdl = servable(mk, gpu)
         tots = [t.replicas * M.kv_pool_tokens(mdl, t)
                 for t in M.node_splits(mdl, gpu, node=8)]
         print(f"       {mk:7} {gpu} ({mdl.w_resident / 1e9:5.1f} GB weights): "
@@ -479,7 +496,7 @@ def prefill_tables():
             ("GLM53F", 1, 4, "H200"),
             ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
     for mk, dp, tp, gk in rows:
-        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
         if M.kv_pool_tokens(m, t) <= 0:
             continue
         _, a, tot = M.prefill_flops(m, CH)
@@ -506,7 +523,7 @@ def prefill_tables():
     print("  ITLx   = what the OTHER users see: a chunk lands in their batch and")
     print("           every one of them waits a prefill instead of a decode step.")
     for mk, dp, tp, gk in rows:
-        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
         if M.kv_pool_tokens(m, t) <= 0:
             continue
         cold = M.cold_request_seconds(m, t, w0, CH)
@@ -526,7 +543,7 @@ def prefill_tables():
     print("  (sessions held vs work rate), and warm p5 < 64 flags rows where the")
     print("  cache is ALSO short of the 64-user reference load before any miss.")
     for mk, dp, tp, gk in rows:
-        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
         if M.kv_pool_tokens(m, t) <= 0:
             continue
         fstar = M.breakeven_miss_rate(m, t, w0, RATE, CH, TURN)
@@ -582,7 +599,7 @@ def spike_tables():
 
     def cfgs():
         for mk, dp, tp, gk in rows:
-            m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+            m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
             if M.kv_pool_tokens(m, t) > 0:
                 yield mk, m, t
 
@@ -734,7 +751,7 @@ def planner_tables():
 
     def cfgs():
         for mk, dp, tp, gk in rows:
-            m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+            m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
             if M.kv_pool_tokens(m, t) > 0:
                 yield mk, m, t
 
@@ -882,7 +899,7 @@ def steady_tables():
     print(f"\n  {'config':24} {'warm p5':>8} {'n@load':>7} {'v@load':>8} "
           f"{'v@warm':>8} {'speedup':>8} {'% of mns@40 cap':>16}")
     for mk, dp, tp, gk in rows:
-        m, t = MODELS[mk], M.topology_grid(dp, tp, gk)
+        m, t = servable(mk, gk), M.topology_grid(dp, tp, gk)
         if M.kv_pool_tokens(m, t) <= 0:
             continue
         rate_g = M.request_rate(M.REF_USERS, THINK, w0.sub_ratio) / t.replicas

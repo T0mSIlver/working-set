@@ -33,22 +33,25 @@ as used by `scripts/scenario_model.py` and the explorer.
 | Vision tower | 24-block ViT, 0.564e9 params — an encoder, never executed on these text workloads |
 | Checkpoint dtype (main repo) | MLA q/kv/o projections, all experts and dense MLPs **FP8** (block scales F32); `kv_b_proj`, the indexer, all of KDA, embed, lm_head, hc **BF16** |
 
-## 2. KV bytes per token — 11 NoPE-MLA latents + a compressed indexer axis
+## 2. KV bytes per token — 12 NoPE-MLA latents + a compressed indexer axis
 
-Only the 11 DSA layers cache anything per token; the 34 KDA layers hold a
-fixed recurrent state. The NoPE design removes GLM-5.2's per-entry rope
-bytes: the cached entry is the bare 512-dim latent. The indexer caches its
-128-dim keys on a **kpool-4 compressed axis** (one pooled entry per 4
-tokens — the same construction as DSv4-Flash's CSA and Qwen3.8's QSA
-indexers; GLM-5.2's own indexer was uncompressed):
+The DSA layers cache per token; the 34 KDA layers hold a fixed recurrent
+state. **Storage charges 12 DSA stacks — the 11 main layers plus the MTP
+draft layer's own** (layer 45 carries a full `kv_a/kv_b/indexer` stack and
+`index_share_for_mtp_iteration: true`): the GLM-5.2 convention, whose note
+prices "79 × 576" and "22 × 132" *incl. MTP layer*. The NoPE design removes
+GLM-5.2's per-entry rope bytes: the cached entry is the bare 512-dim latent.
+The indexer caches its 128-dim keys on a **kpool-4 compressed axis** (one
+pooled entry per 4 tokens — the same construction as DSv4-Flash's CSA and
+Qwen3.8's QSA indexers; GLM-5.2's own indexer was uncompressed):
 
 ```
-kv_bpt (fp8 KV arm, per token):
-  MLA latent    11 layers x 512 B (nope-only, fp8)     = 5,632
-  indexer keys  11 layers x 132 B (128 fp8 + 4 scale,
-                GLM-5.2 convention) / kpool 4          =   363
+kv_bpt (fp8 KV arm, per token; 12 = 11 main + 1 MTP DSA layers):
+  MLA latent    12 layers x 512 B (nope-only, fp8)     = 6,144
+  indexer keys  12 layers x 132 B (128 fp8 + 4 scale,
+                GLM-5.2 convention) / kpool 4          =   396
   ----------------------------------------------------------------
-  TOTAL                                                = 5,995 B/token (5.85 KiB)
+  TOTAL                                                = 6,540 B/token (6.39 KiB)
 
 deltanet_state (fixed per session, bf16 KDA state):
   SSM state   34 layers x 64 heads x 128 x 128 x 2 B   = 71,303,168
@@ -57,21 +60,23 @@ deltanet_state (fixed per session, bf16 KDA state):
   TOTAL                                                = 77,987,840 B ≈ 74.4 MiB/session
 ```
 
-A 262k-token session holds **1.46 GiB** — 8.1× below GLM-5.2's 11.8 GiB
-(48,408 / 5,995), still 1.7× above DSv4-Flash. The per-session state is the
+A 262k-token session holds **1.60 GiB** — 7.4× below GLM-5.2's 11.8 GiB
+(48,408 / 6,540), still 1.9× above DSv4-Flash. The per-session state is the
 study's second-heaviest, a hair under the 27B's 75 MiB; it is a genuine
 recurrent state priced bf16 by the repo's calibrated convention
 (`state_fp32_ok=True`; no `mamba_ssm_dtype` field in this config).
 
-**KV dtype is GPU-coupled — the study's first such model.** The vLLM recipe:
-"On Blackwell you can add `--kv-cache-dtype fp8` to both pools; **Hopper
-does not support FP8 KV cache for this model and must run BF16 KV**." So
-the FP8-KV base constants above are the *Blackwell* serving arm; on H200
-the FP16-KV toggle (×2 on `kv_bpt` and the top-k reads) is the **only**
-servable configuration (`kv_fp16_ok=True`, obviously). The explorer's
-tooltip and deploy recipe both say so; the pool/decode math itself has no
-GPU×dtype coupling mechanism, so an H200 + fp8-KV selection is a
-modelled-but-not-servable arm, flagged in the recipe comment (§ 6).
+**KV dtype is GPU-coupled — the study's first such model, and it is
+ENFORCED.** The vLLM recipe: "On Blackwell you can add `--kv-cache-dtype
+fp8` to both pools; **Hopper does not support FP8 KV cache for this model
+and must run BF16 KV**." So the FP8-KV base constants above are the
+*Blackwell* serving arm; on H200 the FP16-KV toggle (×2 on `kv_bpt` and the
+top-k reads) is the **only** servable configuration. `check_dtype_supported`
+(and its JS mirror) now **raises** when the fp8-KV arm is priced on a
+non-Blackwell part — every published H200 figure is the
+`with_kv_dtype("fp16")` arm, labelled as such in `tables.py` and the
+figure, and the explorer locks the fp8 toggle on H200 (a missed site
+crashes rather than mis-printing).
 
 ## 3. Decode-bandwidth model — compressed scan + top-2048 latent gathers
 
@@ -88,11 +93,15 @@ kv_decode_topk  = 2,048 tokens (index_topk); sequences shorter than the
 ```
 
 At the reference 31k-median workload the scan is ~11 MB/seq and the top-k
-read 11.5 MB/seq — versus ~188 MB/seq streaming the full cache at `kv_bpt`.
-`index_kpool_always_select_tail` (the recent-token tail is always selected)
-is inside the top-2048 budget, not additional. Under the FP16/BF16-KV arm
-`kv_decode_const` doubles with `kv_bpt` (main-KV bytes); the compressed
-indexer scan keeps its own width — the exact machinery added for Qwen3.8.
+read 11.5 MB/seq — versus ~200 MB/seq streaming the full cache at `kv_bpt`.
+**Decode charges the 11 main layers only** — the MTP layer's cache is
+stored (§ 2) but its reads are folded into the MTP speedup, exactly
+GLM-5.2's convention (its decode constants are 78-of-79 layers and 21-of-22
+indexers). `index_kpool_always_select_tail` (the recent-token tail is
+always selected) is inside the top-2048 budget, not additional. Under the
+FP16/BF16-KV arm `kv_decode_const` doubles with `kv_bpt` (main-KV bytes);
+the compressed indexer scan keeps its own width — the exact machinery added
+for Qwen3.8.
 
 ## 4. Weight bytes
 
@@ -100,11 +109,11 @@ indexer scan keeps its own width — the exact machinery added for Qwen3.8.
 
 Reconstructed per-module bytes from all 62 shard headers; the sum equals
 `metadata.total_size` **exactly**, and the vLLM recipe's "about 306 GiB"
-matches (305.79 GiB):
+matches (305.78 GiB):
 
 ```
 routed experts  42 layers x 288 x (3 x 8,388,608 FP8
-                + 6,144 F32 block scales)            = 304,480,124,928
+                + 6,144 B F32 block scales)          = 304,480,124,928
 KDA             34 layers, BF16                      =   9,366,356,992
 MTP layer       layer 45: DSA + 288 experts + heads  =   7,493,399,168
 attention (DSA) 11 layers, FP8 MLA + BF16 kv_b_proj
@@ -118,11 +127,11 @@ routers         42 x (288x4096 + bias)               =      99,138,816
 hyper-conns     45 layers (mHC)                      =      70,788,600
 norms           input/post-attn/final                =         745,472
 ------------------------------------------------------------------------
-w_resident      (= metadata.total_size)              = 328,326,771,576 B  (305.79 GiB)
+w_resident      (= metadata.total_size)              = 328,326,771,576 B  (305.78 GiB)
 ```
 
-Per-routed-expert bytes: 3 × 8,388,608 FP8 + 6,144 F32 scales =
-**25,171,968 B** (0.024% scale overhead, charged):
+Per-routed-expert bytes: 3 × 8,388,608 FP8 + 6,144 B of F32 block scales
+(1,536 values) = **25,171,968 B** (0.024% scale overhead, charged):
 
 ```
 w_route_pertok  = 8   x 25,171,968 x 42 =   8,457,781,248 B
@@ -157,8 +166,12 @@ official recipe.
 
 ## 5. Serving notes
 
-- **vLLM ≥ 0.27.0, Hopper and newer only**; FlashInfer ≥ 0.6.18 for the
-  NoPE sparse-MLA path. Recipe launch (GB200 TP4): `--tensor-parallel-size
+- **vLLM ≥ 0.27.0, Hopper and newer only** — and, per the recipe's
+  Prerequisites, **via the recipe's docker image until the integration
+  lands in public vLLM**. FlashInfer for the NoPE sparse-MLA path:
+  Prerequisites say ≥ 0.6.17, Troubleshooting says ≥ 0.6.18 — the recipe is
+  internally inconsistent; the stricter 0.6.18 is safe. Recipe launch
+  (GB200 TP4): `--tensor-parallel-size
   4 --kv-cache-dtype fp8 --speculative-config '{"method":"mtp",
   "num_speculative_tokens":5}' --tool-call-parser glm47 --reasoning-parser
   glm45 --enable-auto-tool-choice`. PD-disaggregation notes:
@@ -167,7 +180,7 @@ official recipe.
 - **KV dtype:** fp8 KV **Blackwell-only**; "Hopper … must run BF16 KV"
   (recipe, quoted § 2). The recipe states no GPU-count floor and no OOM
   notes; the pool arithmetic gives **min TP 3 on H200** (3×141 GB) and
-  **min TP 2 on B300** for the 305.79-GiB checkpoint — both are this
+  **min TP 2 on B300** for the 305.78-GiB checkpoint — both are this
   study's arithmetic only, no recipe validation either way.
 - **Speculative decoding:** one in-checkpoint MTP draft layer
   (`num_nextn_predict_layers: 1`); the recipe runs **5 draft tokens** — the
@@ -186,16 +199,23 @@ official recipe.
   block scales are stored).
 - **Indexer entry = 132 B (128 fp8 + 4 scale) per kpool-4 pooled position**,
   by the GLM-5.2 convention + the DSv4/Q38FN compressed-axis precedent. An
-  uncompressed cache would be 5,632 + 1,452 = 7,084 B/token (+18%); a
-  BF16 indexer cache would add ~+5%. Neither the config nor the recipe
-  states the dtype; re-verify when the serving path is documented.
+  uncompressed cache would be 6,144 + 1,584 = 7,728 B/token (+18%); a BF16
+  indexer cache would add ~+6% (792 vs 396). Neither the config nor the
+  recipe states the dtype; re-verify when the serving path is documented.
+- **MTP-layer cache: charged in STORAGE (12th DSA stack, § 2), excluded
+  from DECODE (§ 3)** — both halves are GLM-5.2's own convention (79/22
+  stored, 78/21 read). Excluding it from storage too would be −9.1% on
+  `kv_bpt` (the arm this PR originally shipped, corrected on review).
 - **`index_topk` = 2,048 read in TOKEN space** (GLM-5.2's own convention;
   DSv4-Flash counts compressed entries). If it counts pooled entries, the
   top-k read is 4× (46.1 MB/seq) — still 4× below the dense stream.
-- **KV dtype × GPU coupling is not enforced in the math** (§ 2): the
-  fp8-KV constants are servable on Blackwell only; on H200 use the FP16-KV
-  toggle. The deploy recipe emits a warning comment on the unservable
-  combination; the pool model itself will happily price it.
+- **KV dtype × GPU coupling is ENFORCED** (§ 2): `check_dtype_supported`
+  and its JS mirror raise when the fp8-KV arm is priced on a non-Blackwell
+  part (`kv_fp8_blackwell_only` + the `kv_dtype` stamp `with_kv_dtype`
+  leaves). Published H200 rows are the BF16 arm, labelled. Under that arm
+  `kv_bpt` doubles wholesale — the 396-B indexer share over-doubles
+  (13,080 charged vs 12,684 exact, −3.0% pool, pessimistic — the same
+  flagged slack as Q38FN, here on the arm Hopper must actually run).
 - **KDA state priced bf16** (71.3 MB SSM + 6.7 MB conv): the config carries
   no state-dtype field; bf16 is the repo's calibrated convention (the 27B's
   measured 75 MiB) and the fp32 toggle covers the alternative. The
@@ -205,8 +225,9 @@ official recipe.
   uncharacterised — identical flagged treatment to GLM-5.2 and Qwen3.8
   (research/prefill.md weaknesses 2–3). `params_prefill=16.11e9` = the
   active-GEMM ledger excl. embed/lm_head (cheap-side bias, per convention).
-- MTP layer (7.49e9 B) and vision tower (1.13e9 B) charged in `w_resident`,
-  never in per-step reads.
+- MTP-layer weights (7.49e9 B) and the vision tower (1.13e9 B) charged in
+  `w_resident`, never in per-step reads (the MTP layer's *cache* is the
+  separate storage/decode split above).
 - The BF16 sibling checkpoint (`-BF16`, ~2× weight bytes) is not modelled;
   the study models the FP8 serving checkpoint, as for every other model.
 
