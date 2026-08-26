@@ -428,7 +428,8 @@ def main():
                 pool = M.kv_pool_tokens(mdl, t)
                 row.append(f"DP{t.dp}xTP{t.tp}: {pool / 1e6:6.2f}M x{t.replicas} "
                            f"= {t.replicas * pool / 1e6:6.2f}M")
-            print(f"  {mk:7} {gpu} (min TP {need})  " + " | ".join(row))
+            flag = " [BF16 KV]" if mdl.kv_dtype == "fp16" else ""
+            print(f"  {mk:7} {gpu}{flag} (min TP {need})  " + " | ".join(row))
     print("  -> widening TP RAISES the system total: every DP group re-pays for")
     print("     its own full copy of the weights. Closed form on N GPUs:")
     print("       system(tp) = [N*(V-R) - N*W/tp] / kv_bpt")
@@ -440,7 +441,8 @@ def main():
         mdl = servable(mk, gpu)
         tots = [t.replicas * M.kv_pool_tokens(mdl, t)
                 for t in M.node_splits(mdl, gpu, node=8)]
-        print(f"       {mk:7} {gpu} ({mdl.w_resident / 1e9:5.1f} GB weights): "
+        flag = " [BF16 KV]" if mdl.kv_dtype == "fp16" else ""
+        print(f"       {mk:7} {gpu}{flag} ({mdl.w_resident / 1e9:5.1f} GB weights): "
               f"{tots[-1] / tots[0]:.2f}x")
 
     print("\n== B300 reserve transfer: measured correction (now CENTRAL) ==")
@@ -490,6 +492,8 @@ def prefill_tables():
     print("  attn% = share of a FIRST (cache-empty) chunk spent on the quadratic")
     print("  term; later chunks pay cross-attention over the cache on top, so the")
     print("  chunk size trades the per-pass spike, NOT the total machine time")
+    print("  GLM-5.3-Flash H200 rows here and in the miss/hit and ceiling tables")
+    print("  below are its BF16-KV arm (fp8 KV is Blackwell-only)")
     rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"), ("35BA3B", 1, 1, "H200"),
             ("35BA3B", 1, 2, "H200"), ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
             ("DSV4F", 1, 2, "H200"), ("Q38FN", 1, 2, "H200"),

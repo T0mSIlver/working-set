@@ -204,8 +204,9 @@ official recipe.
   recipe states the dtype; re-verify when the serving path is documented.
 - **MTP-layer cache: charged in STORAGE (12th DSA stack, § 2), excluded
   from DECODE (§ 3)** — both halves are GLM-5.2's own convention (79/22
-  stored, 78/21 read). Excluding it from storage too would be −9.1% on
-  `kv_bpt` (the arm this PR originally shipped, corrected on review).
+  stored, 78/21 read). Excluding it from storage too would be −8.3% on
+  `kv_bpt` (the +9.1% this correction added — the arm this PR originally
+  shipped, corrected on review).
 - **`index_topk` = 2,048 read in TOKEN space** (GLM-5.2's own convention;
   DSv4-Flash counts compressed entries). If it counts pooled entries, the
   top-k read is 4× (46.1 MB/seq) — still 4× below the dense stream.
@@ -215,7 +216,11 @@ official recipe.
   leaves). Published H200 rows are the BF16 arm, labelled. Under that arm
   `kv_bpt` doubles wholesale — the 396-B indexer share over-doubles
   (13,080 charged vs 12,684 exact, −3.0% pool, pessimistic — the same
-  flagged slack as Q38FN, here on the arm Hopper must actually run).
+  flagged slack as Q38FN, here on the arm Hopper must actually run). The
+  slack is in fact the more robust default: if the BF16-KV serving path
+  also keeps the indexer cache BF16 (plausible on exactly this arm), the
+  true figure is 12,288 + 780 = 13,068 B/token — within 0.09% of the
+  13,080 charged.
 - **KDA state priced bf16** (71.3 MB SSM + 6.7 MB conv): the config carries
   no state-dtype field; bf16 is the repo's calibrated convention (the 27B's
   measured 75 MiB) and the fp32 toggle covers the alternative. The

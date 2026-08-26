@@ -926,6 +926,10 @@ function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_perto
 // fp8 and for models whose FP16 arm is not servable (kv_fp16_ok false).
 // ONE implementation, called by modelFor and by the load-time unit checks.
 function withKvDtype(m, kv){
+  // one-way door (mirrors with_kv_dtype): an fp16 arm must not be converted
+  // again or "back" — a round-trip would double-double and un-stamp kv_dtype
+  if (m.kv_dtype === "fp16")
+    throw new Error("withKvDtype expects a base (fp8) model");
   if (kv !== "fp16" || m.kv_fp16_ok === false) return m;
   return { ...m, kv_bpt: m.kv_bpt*2, kv_decode_const: (m.kv_decode_const||0)*2,
            kv_dtype: "fp16", name: m.name + " [FP16 KV]" };

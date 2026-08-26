@@ -13,12 +13,11 @@ GLM-5.3-Flash), GPU (H200 / B300), weight & KV dtypes, and DP × TP
 topology. It answers as a decision tool: a binding-constraint verdict, a
 deploy recipe (vLLM flags), the **electricity bill** (€/kWh slider,
 duty-cycle power model), a **sensitivity panel** showing which assumption
-would flip the
-decision, the **steady-state decode point** (how many sessions are actually
-decoding at your load, and how fast each one runs — Little's law, not the
-all-warm stress test), **shareable links** that encode the whole configuration,
-and a
-**"Test these hypotheses" button** that generates a standalone load-test script
+would flip the decision, the **steady-state decode point** (how many
+sessions are actually decoding at your load, and how fast each one runs —
+Little's law, not the all-warm stress test), **shareable links** that
+encode the whole configuration, and a **"Test these hypotheses" button**
+that generates a standalone load-test script
 ([`scripts/validate_deployment.py`](scripts/validate_deployment.py)) preloaded
 with the on-screen predictions — run it against a live vLLM endpoint to find
 the real limits.

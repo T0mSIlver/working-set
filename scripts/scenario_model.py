@@ -493,7 +493,7 @@ MODELS = {
     # tower), open weights (2026-08-25, MIT). GLM-5.2's DSA married to a
     # Qwen-style linear backbone: 34 KDA linear-attention + 11 NoPE
     # sparse-MLA layers (512-B latents, NO rope bytes) with a kpool-4
-    # COMPRESSED indexer cache — 5.85 KiB/token, 8.1x below GLM-5.2 —
+    # COMPRESSED indexer cache — 6.39 KiB/token, 7.4x below GLM-5.2 —
     # plus the study's second-heaviest recurrent state (74.4 MiB bf16).
     # 288 experts / 8 routed (kink n = 36). KV dtype is GPU-COUPLED: the
     # fp8-KV base arm is Blackwell-only — "Hopper ... must run BF16 KV"
@@ -556,6 +556,12 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
     """Return `model` configured for the given KV-cache dtype."""
     if kv_dtype not in KV_DTYPES:
         raise ValueError(f"kv_dtype must be one of {KV_DTYPES}, got {kv_dtype!r}")
+    # one-way door, like with_weight_dtype: an fp16 arm cannot be converted
+    # again (double-doubling) or "back" (no fp8 constants are kept) — and a
+    # round-trip would un-stamp kv_dtype and slip past check_dtype_supported
+    if model.kv_dtype != "fp8":
+        raise ValueError(f"{model.name}: with_kv_dtype expects the base "
+                         "(fp8) model; start from the MODELS[...] entry")
     if kv_dtype == "fp8":
         return model
     if not model.kv_fp16_ok:
@@ -3376,7 +3382,7 @@ def _selfcheck():
             if dtype == "fp8" and MODELS[mk].kv_fp8_blackwell_only:
                 continue   # GLM-5.3-Flash: fp8 KV is Blackwell-only and these
                            # legacy topologies are all H200 — its H200 arm is
-                           # the fp16 row above
+                           # the fp16 row below
             for tk in TOPOLOGIES:
                 p = kv_pool_tokens(with_kv_dtype(MODELS[mk], dtype), TOPOLOGIES[tk])
                 print(f"  pool {mk:7} {tk:12} {dtype:5} = {p / 1e6:6.2f} M tokens")
