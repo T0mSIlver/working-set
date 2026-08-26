@@ -85,6 +85,8 @@ conservative accounting.
 | Qwen3.6-35B-A3B | 2.44e9 | 10 | 16 × 256 = 4096 | From `model_35ba3b.md`'s **component ledger**, not the marketing round: per-step shared read 1.940e9 − lm_head 0.509e9 (fires once per prefill, not per token) + 8 routed experts 1.007e9 = 2.438e9. (The published "~3B active" includes embed + lm_head; using it overcharged the GEMM ~19%.) 40 layers (30 DeltaNet + 10 full-attention); Q/KV 16/2, head_dim 256. |
 | Mistral-Medium-3.5-128B | 121.8e9 | 88 | 96 × 128 = 12288 | `model_mistral_medium35.md`'s shard ledger: **decoder layers exactly 121.8e9**. Embeddings/lm_head (3.22e9) are outside the layers, and the ~2.7e9-param vision tower is an encoder — never executed on these text re-prefills. (Subtracting embed+lm_head from the 128B *multimodal* total, as a first revision did, left the tower inside the GEMM.) **All 88 layers** are full GQA. |
 | GLM-5.2 | 37.4e9 | 78 | 64 × 256 = 16384 | `model_glm52.md`'s derivation: **39.3e9 active excluding embeddings** (vLLM "39B") − lm_head 1.903e9 = 37.4e9. 78 layers, 64 heads, qk_nope 192 + rope 64, v_head_dim 256. |
+| DeepSeek-V4-Flash-0731 *(added 2026-08-03)* | 12.70e9 | 41 | 26,624 / 41 ≈ 649 | `model_dsv4flash.md` #6: active GEMM params excl. embed/lm_head (12.703e9 ledger). Quadratic term = indexer over the compressed axis (1024-equiv × 21 CSA layers) + dense HCA (256-equiv × 20); the CSA top-512 and window reads are linear and left out — priced *cheaper*, biased against the thrash hypothesis. |
+| Qwen3.8-Flash-Next *(added 2026-08-26)* | 6.04e9 | 12 | 24 × 256 = 6144 | `model_qwen38flashnext.md` §1: active GEMM params excl. embed/lm_head/n-gram lookups (shard-header ledger sum 6.036e9 ✓ the published "6B activated"). 48 layers (36 DeltaNet + 12 QSA full-attention); Q/KV 24/2, head_dim 256; dense upper bound on the 12 QSA layers (weakness 3). |
 
 ### Known weaknesses in this table
 
@@ -99,10 +101,14 @@ conservative accounting.
    `kv_decode_topk` in `model_glm52.md` #3) but its **prefill** behaviour is
    not, so the sparse path is deliberately not claimed. Real GLM-5.2 prefill
    is somewhere at or below what this model reports.
-3. **Mistral-Medium-3.5's MTP absence does not help it here.** Prefill has no
+3. **Qwen3.8-Flash-Next's quadratic term is an UPPER BOUND too**, for the
+   same reason as GLM-5.2's: QSA's top-2048 sparsity is characterised for
+   *decode* only (`model_qwen38flashnext.md` #3); its prefill behaviour is
+   not, so all 12 QSA layers are priced as dense attention.
+4. **Mistral-Medium-3.5's MTP absence does not help it here.** Prefill has no
    speculative path to lose; the model's prefill fragility (see below) is
    purely its dense 88-layer GQA geometry.
-4. **~~Cross-chunk attention is not charged.~~ RESOLVED 2026-08-01 (cross
+5. **~~Cross-chunk attention is not charged.~~ RESOLVED 2026-08-01 (cross
    review):** every chunk is now charged its attention over the tokens
    already cached (§3), warm hits included. Two consequences worth naming:
    a context's **total** prefill *FLOPs* became chunk-size *invariant* (the
