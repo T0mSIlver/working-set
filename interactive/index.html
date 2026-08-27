@@ -1849,7 +1849,11 @@ function samplingSig(){
 // _spare must be dropped too: a half-used Box-Muller pair carried across a
 // reseed makes the section's draws depend on whatever sampled BEFORE it, so
 // "deterministic given the state" silently wasn't
-function seedFor(purpose){ _rngState = _hash(samplingSig() + '#' + purpose) || 1; _spare = null; }
+// `sig` pins the sampling signature to a caller-chosen snapshot: the sliced
+// frontier rebuild passes the one it captured at job start, so a seed-only
+// knob (model, MTP, ngpu/tp — none of which change what the rows contain)
+// moved mid-rebuild cannot shift the draws of the rows still queued
+function seedFor(purpose, sig){ _rngState = _hash((sig || samplingSig()) + '#' + purpose) || 1; _spare = null; }
 
 function randn(){                        // standard normal (Box-Muller)
   if (_spare !== null){ const v=_spare; _spare=null; return v; }
@@ -3346,59 +3350,136 @@ function frontierWarmSig(wl){
 }
 // the decode ceilings additionally move with the floor — and ONLY they do
 function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}`; }
+/* Chunked rebuild: a settle used to recompute every stale row in ONE task —
+   measured at 500–900 ms of main-thread block once the table reached 27 rows
+   (7 models) — so the page froze after each drag. The rebuild now walks the
+   rows in ~40 ms time slices on the macrotask queue: the longest block is one
+   slice, the table repaints when the last row lands, and a knob moved
+   mid-rebuild abandons the run (the next settle starts a fresh one).
+   Deliberately NOT a numeric shortcut: the per-row seeding is unchanged, so
+   slicing cannot move a draw and every published number is bit-identical to
+   the one-task rebuild's. Only HOW LONG the main thread blocks changes. */
+const FRONTIER_SLICE_MS = 40;
+let frontierGen = 0;        // bumping this abandons any in-flight rebuild
+let frontierJobSig = null;  // signature of the in-flight rebuild, if any
+
 function renderFrontierSection(wl, cs, draft, q, deferDecode){
-  const f = wl.invalidation;
   const wsig = frontierWarmSig(wl), dsig = frontierDecSig(wl);
+  const msig = `${wsig}|${state.turn}`, jobSig = `${dsig}|${state.turn}`;
+  const cachesComplete = () =>
+    lastFrontier && lastFrontierDec && lastFrontierMo &&
+    !lastFrontier.base.some(r => !lastFrontierDec.dec[r.key]
+                              || !lastFrontierMo.mo[r.key]);
   // like the sampled halves above, a DRAFT render never re-runs either
   // Monte-Carlo half — the signatures contain the very knobs a drag is
-  // changing, so checking them here would re-sample on every input event
-  if (!lastFrontier || (!draft && lastFrontier.sig !== wsig)){
-    const base = [];
-    for (const mk of Object.keys(CONFIG.MODELS))
-      for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
-        if (dp*tp > 8) continue;
-        const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu);
-        if (kv_pool_tokens(m2, t2) <= 0) continue;
-        // Seed PER ROW, so a row's fill depends only on that row. One stream
-        // shared across the table made every row's draws depend on how many
-        // the earlier rows consumed — and once the decode search moved to its
-        // own cache it would no longer even run in between, which would have
-        // silently shifted every later row's warm number.
-        seedFor(`frontier|${mk}|${dp}x${tp}`);
+  // changing, so checking them here would re-sample on every input event.
+  // It re-ranks from the settled caches when they are complete, leaves the
+  // last painted table alone mid-rebuild (the finishing job repaints), and
+  // abandons a rebuild the drag has already invalidated.
+  if (draft){
+    if (frontierJobSig && frontierJobSig !== jobSig){ frontierGen++; frontierJobSig = null; }
+    if (cachesComplete()) assembleFrontier(wl, cs);
+    return;
+  }
+  const warmStale = !lastFrontier    || lastFrontier.sig    !== wsig;
+  const moStale   = !lastFrontierMo  || lastFrontierMo.sig  !== msig
+                 || (!warmStale && lastFrontier.base.some(r => !lastFrontierMo.mo[r.key]));
+  const decStale  = !lastFrontierDec || lastFrontierDec.sig !== dsig
+                 || (!warmStale && lastFrontier.base.some(r => !lastFrontierDec.dec[r.key]));
+  if (!warmStale && !moStale && !decStale){
+    // sigs can revert mid-rebuild (a drag back to the exact starting values):
+    // the caches are already right, so the leftover job must not commit
+    if (frontierJobSig){ frontierGen++; frontierJobSig = null; }
+    assembleFrontier(wl, cs);
+    return;
+  }
+  // the decode half is the only thing the floor moves. Stale is allowed for
+  // exactly one 500 ms tier, and only when a previous result exists to show
+  // meanwhile — never on the first paint, and never when the warm half is
+  // itself stale (then the whole rebuild runs now and includes it)
+  if (!warmStale && !moStale && deferDecode && lastFrontierDec){
+    frontierDecodeDeferred = true;   // the 500 ms tier will pick this up
+    assembleFrontier(wl, cs);        // fresh warm + stale-by-one-tier decode
+    return;
+  }
+  if (frontierJobSig === jobSig){
+    // this exact rebuild is already in flight — keep showing the last settled
+    // table, re-ranked for whichever cheap knob (model highlight, users) moved
+    if (cachesComplete()) assembleFrontier(wl, cs);
+    return;
+  }
+  startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig);
+}
+
+function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
+  frontierJobSig = jobSig;
+  frontierDecodeDeferred = false;
+  const gen = ++frontierGen;
+  // the row plan is pool arithmetic only — the Monte-Carlo work is in the slices
+  const plan = [];
+  for (const mk of Object.keys(CONFIG.MODELS))
+    for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
+      if (dp*tp > 8) continue;
+      if (kv_pool_tokens(modelForCompare(mk), makeGrid(dp, tp, state.gpu)) <= 0) continue;
+      plan.push({ mk, dp, tp, key: `${mk}|${dp}x${tp}` });
+    }
+  // per-key reuse of whichever caches are still valid for their own signature:
+  // a floor step keeps warm + moments and re-searches decode; a turn step
+  // keeps warm + decode and re-derives moments (they depend on the workload
+  // and the turn size only — NOT on the decode floor)
+  const warmOld = (lastFrontier && lastFrontier.sig === wsig)
+    ? Object.fromEntries(lastFrontier.base.map(r => [r.key, r])) : {};
+  const decOld = (lastFrontierDec && lastFrontierDec.sig === dsig) ? lastFrontierDec.dec : {};
+  const moOld  = (lastFrontierMo  && lastFrontierMo.sig  === msig) ? lastFrontierMo.mo  : {};
+  const base = [], dec = {}, mo = {};
+  // snapshot the sampling signature: rows sampled in later slices must draw
+  // exactly what a one-task rebuild at job start would have drawn, even if a
+  // seed-only knob (model, MTP, ngpu/tp) moves while slices are queued
+  const ssig = samplingSig();
+  let i = 0;
+  const slice = () => {
+    if (gen !== frontierGen) return;         // superseded or abandoned
+    const t0 = performance.now();
+    // elapsed is checked BETWEEN rows, so a slice is FRONTIER_SLICE_MS plus at
+    // most one row's overshoot — the block never approaches whole-table cost
+    while (i < plan.length && performance.now() - t0 < FRONTIER_SLICE_MS){
+      const p = plan[i++];
+      const m2 = modelForCompare(p.mk), t2 = makeGrid(p.dp, p.tp, state.gpu);
+      const reps = t2.replicas || 1;
+      if (warmOld[p.key]){ base.push(warmOld[p.key]); }
+      else {
+        // Seed PER ROW, so a row's fill depends only on that row (and slicing
+        // cannot move a draw). One stream shared across the table made every
+        // row's draws depend on how many the earlier rows consumed.
+        seedFor(`frontier|${p.mk}|${p.dp}x${p.tp}`, ssig);
         const wc2 = warmCapacity(m2, t2, wl, ramPerCache(t2),
                                  Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
-        base.push({ key:`${mk}|${dp}x${tp}`, mk, dp, tp,
-                    label:`${m2.name} · ${t2.name}`, reps:t2.replicas||1,
-                    warmUsers: wc2.all[0]*(1-p_sub(wl))*(t2.replicas||1) });
+        base.push({ key: p.key, mk: p.mk, dp: p.dp, tp: p.tp,
+                    label: `${m2.name} · ${t2.name}`, reps,
+                    warmUsers: wc2.all[0]*(1-p_sub(wl))*reps });
       }
-    lastFrontier = { sig: wsig, base };
-  }
-  // the decode half: the only part the floor moves, and ~5x cheaper than the
-  // fills above. Keyed per row so it survives a warm-half rebuild unchanged.
-  // stale is allowed here for exactly one 500 ms tier, and only when a
-  // previous result exists to show meanwhile — never on the first paint, and
-  // never when the warm half has just added rows this cache has no entry for
-  const decMissing = !lastFrontierDec
-                  || lastFrontier.base.some(r => !lastFrontierDec.dec[r.key]);
-  const decStale = !draft && lastFrontierDec && lastFrontierDec.sig !== dsig;
-  if (decMissing || (decStale && !deferDecode)){
-    frontierDecodeDeferred = false;
-    const dec = {};
-    for (const r of lastFrontier.base){
-      const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
-      seedFor(`frontierDec|${r.key}`);
-      const du2 = maxUsersDecode(m2, t2, wl, decodeFloor(), 140);
-      dec[r.key] = { decodeUsers: du2.n*r.reps, censored: du2.censored };
+      if (decOld[p.key]){ dec[p.key] = decOld[p.key]; }
+      else {
+        seedFor(`frontierDec|${p.key}`, ssig);
+        const du2 = maxUsersDecode(m2, t2, wl, decodeFloor(), 140);
+        dec[p.key] = { decodeUsers: du2.n*reps, censored: du2.censored };
+      }
+      mo[p.key] = moOld[p.key] || prefillServiceMoments(m2, t2, wl, cs);
     }
+    if (i < plan.length){ setTimeout(slice, 0); return; }
+    // commit all three caches together — a draft assembling mid-rebuild must
+    // never see a fresh warm half spliced onto a stale decode half
+    lastFrontier    = { sig: wsig, base };
     lastFrontierDec = { sig: dsig, dec };
-  } else if (decStale){
-    frontierDecodeDeferred = true;   // the 500 ms tier will pick this up
-  }
-  // service-time moments depend on the workload and the turn size only — NOT
-  // on the decode floor, so keying them on the warm signature keeps a floor
-  // step from needlessly resampling every row's moments too
-  const msig = `${wsig}|${state.turn}`;
-  if (!lastFrontierMo || (!draft && lastFrontierMo.sig !== msig)) lastFrontierMo = { sig: msig, mo: {} };
+    lastFrontierMo  = { sig: msig, mo };
+    frontierJobSig = null;
+    assembleFrontier(wl, cs);
+  };
+  slice();   // first slice runs inside the settle render, the rest queue behind it
+}
+
+function assembleFrontier(wl, cs){
+  const f = wl.invalidation;
   const rows = lastFrontier.base.map(r0=>{
     const r = { ...r0, ...lastFrontierDec.dec[r0.key] };
     const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
@@ -4761,13 +4842,14 @@ function renderFrontierTable(rows, curKey){
    CONTROL WIRING
    ========================================================================== */
 let debTimer=null, frontierTimer=null;
-// The frontier's decode half re-runs a bisection per row (~25 rows). It is
-// MEASURED at ~520 ms on a floor change against ~130 ms for everything else on
-// the page combined, so folding it into the 120 ms settle made the decode-floor
-// slider feel laggy in a way no other slider does. It gets its own, longer
-// tier: the verdict, tiles and charts land at 120 ms as before, and the
-// "every alternative ranked" table — which is below the fold and is not what
-// you are watching while dragging — catches up at 500 ms.
+// The frontier's decode half re-runs a bisection per row (~27 rows). Folding
+// it into the 120 ms settle made the decode-floor slider feel laggy in a way
+// no other slider does, so it gets its own, longer tier: the verdict, tiles
+// and charts land at 120 ms as before, and the "every alternative ranked"
+// table — which is below the fold and is not what you are watching while
+// dragging — catches up at 500 ms. The rebuild itself is time-sliced (see
+// renderFrontierSection), so what either tier costs the main thread in one
+// task is ~one slice, not the whole table.
 // Deliberately NOT a numeric shortcut: no probe count is reduced and no
 // published frontier number moves. Only WHEN it recomputes changes.
 const FRONTIER_SETTLE_MS = 500;
