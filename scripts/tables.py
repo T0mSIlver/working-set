@@ -813,9 +813,11 @@ def planner_tables():
         lat = M.max_users_latency(m27, tp2, w0, CH, sla, TURN)
         b = M.spike_tolerance(m27, tp2, w0, sla, SEC8_RATE, CH, TURN)
         print(f"  budget {sla:5.0f} s  latency ceiling {lat:6.0f} users   B* {b:5.1f}")
-    print("  MFU is the soft input, not a decision — the [30-60%] bracket is an")
+    print(f"  MFU is the soft input, not a decision — the "
+          f"[{M.MFU_LOW:.0%}-{M.MFU_HIGH:.0%}] bracket is an")
     print("  ERROR BAR on every prefill-derived ceiling, and it is wide:")
-    for mfu, lab in ((M.MFU_LOW, "30%"), (M.MFU_DEFAULT, "45%"), (M.MFU_HIGH, "60%")):
+    for mfu in (M.MFU_LOW, M.MFU_DEFAULT, M.MFU_HIGH):
+        lab = f"{mfu:.0%}"
         lat = M.max_users_latency(m27, tp2, w0, CH, SLA, TURN, mfu=mfu)
         sat = M.max_users_saturation(m27, tp2, w0, CH, TURN, mfu=mfu)
         b = M.spike_tolerance(m27, tp2, w0, SLA, SEC8_RATE, CH, TURN, mfu=mfu)

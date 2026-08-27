@@ -33,8 +33,9 @@ with open(out, "a", buffering=1) as f:
         human = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
         f.write(f"===== {now:.3f} {human:%Y-%m-%d %H:%M:%S} UTC\n")
         try:
-            text = requests.get(args.url, headers=hdr, timeout=5).text
-            f.writelines(l + "\n" for l in text.splitlines() if l.startswith("vllm:"))
+            r = requests.get(args.url, headers=hdr, timeout=5)
+            r.raise_for_status()
+            f.writelines(l + "\n" for l in r.text.splitlines() if l.startswith("vllm:"))
         except Exception as e:
             f.write(f"# SCRAPE FAILED {now:.3f} : {e}\n")
         time.sleep(args.interval)

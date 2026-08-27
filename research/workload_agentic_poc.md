@@ -23,13 +23,17 @@ assumed, (2) a capacity placement of the instance against the four ceilings.
 | Request rate | 0.065/s (24/7) · ~0.22/s (office hours) · ~0.47/s (15-min peak) | bursty, office-hours profile |
 | TTFT p99 (mean of) | 2.68 s | queue p99 ~1 s, occasional spikes |
 | TPOT p99 | 12.9 ms (~78 tok/s/stream) | above the 40 tok/s floor with ~2× margin |
-| Mean prefill time / request | 159 ms | the MFU cross-check input (prefill.md #1, second calibration point) |
+| Mean prefill time / request | 159 ms | the MFU cross-check input (prefill.md #1, second calibration point: 40.0% of raw advertised peak = 49.4% model-convention — state the convention when quoting) |
 | Speculative decoding | acceptance 78.9%, mean accepted length 2.57 (busy periods; 27% / 1.54 incl. idle) | |
 
 ## 2. Capacity placement (scenario_model, measured workload)
 
-`Workload(user_median=47_400)` (fits the 57.4k mean), out_tokens 404,
-chunk 32,768, MFU 0.45:
+`operating_point(MODELS["27B"], topology_grid(1, 4, "H200"),
+Workload(user_median=47_400), users, out_tokens=404, closed=True)` — the
+closed-loop conversion (`z_think_s=32.5`, the measured waiting time); the
+lognormal median fits the 57.4k mean. Chunk 32,768, MFU 0.45. Open-loop
+(think 30 s) reads: latency 420, saturation 434 — the cache and decode
+columns don't move.
 
 | Ceiling | Max concurrent users |
 |---|---|
@@ -44,8 +48,10 @@ before bandwidth before compute) holds on this workload. The measured load
 4–8% of the binding ceiling: **~25× headroom, and the first wall is KV,
 not FLOPs.**
 
-Cold-side at the measured workload: E[cold request] 1.34 s vs 34 ms for a
-2k warm turn (thrash ratio 39×); all-miss ceiling 0.745 req/s; below
+Cold-side at the measured workload: E[cold request] 1.34 s vs ~50 ms for a
+2k warm turn priced over its cached context (`thrash_ratio()`: **26.9×** —
+an earlier draft quoted 39× by pricing the warm turn at `prior=0`, the
+§8-resolved mistake); all-miss ceiling 0.745 req/s; below
 ~0.7 req/s **no miss rate can saturate the group** (f* > 100%); B* ≈ 7
 simultaneous full-context misses inside a 10 s TTFT budget. Model cold
 TTFT at the office-hours rate: 1.35 s — consistent with the measured

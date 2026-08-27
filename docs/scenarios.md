@@ -595,7 +595,7 @@ B300's FP8 rate, three of the four `params_prefill` constants, cross-chunk
 attention and the E[L²] tail pricing were all corrected — see
 `research/prefill.md` for what changed and why.)*
 
-#### One first chunk (32,768 tokens = `max_num_batched_tokens`), MFU 45% [30–60%]
+#### One first chunk (32,768 tokens = `max_num_batched_tokens`), MFU 45% [30–60% when generated; bracket tightened to 35–55% on 2026-08-27, research/prefill.md #1]
 
 Attn share is the *cache-empty* first chunk's; later chunks of the same
 context pay their cross-attention over the cache on top.
@@ -708,9 +708,11 @@ within the explorer's miss-rate range; three more do so under stress
 (f* = 12–26%).
 
 It is **analytic and unvalidated**. The baseline collected prefill speeds but
-kept only the `ttft < 0.4 × cold` heuristic, so there is no measured prefill
-number in this repository to check against. MFU is the soft input — the 30–60%
-bracket moves every absolute millisecond figure by 2×, though not the ratios.
+kept only the `ttft < 0.4 × cold` heuristic. *(Update 2026-08-27: MFU now
+carries two production calibration points and the bracket tightened to
+35–55%, moving absolute figures ~1.6× — research/prefill.md #1; the rest of
+this section still predates any prefill measurement.)* MFU is the soft
+input, though not the ratios.
 The model omits queueing, preemption/recompute and PCIe restore contention,
 **all of which make the real machine worse than this**; cross-chunk attention,
 formerly on that list, is now charged. The thrash finding is a lower bound —
@@ -988,7 +990,8 @@ the direct anchor as the default.
 **The closed loop.** R measured on a fast API backend is exactly the part that
 does not transfer to an on-prem box, so `operating_point(closed=True)` drops it:
 Z becomes the knob and the deployment supplies its own response time (queue wait
-+ prefill + decoding 1,000 tokens at the 40 tok/s floor). A session cannot fire
++ prefill + decoding 1,000 tokens at the 40 tok/s floor — the then-default
+output length; measured at ~400 as of 2026-08-27). A session cannot fire
 while it is being served, so a slower deployment stretches its users' cycles and
 lightens its own arrival rate — the open model's divergence becomes a
 **throughput knee** (past it, users buy latency, not throughput), and the open
@@ -1064,7 +1067,10 @@ delivered      demanded      (output tok/s, one replica group)
 crossing is unique, and it is what `steady_decode_point()` bisects.
 
 At the reference load (64 users / 30 s, r = 0.10, 1,000 output tokens per
-response):
+response — the assumed default when this table was generated; measured
+production output is ~400 tokens/response as of 2026-08-27, which shrinks
+n@load ~2.9× and raises v@load — see research/workload_agentic_poc.md; the
+table below still quotes the 1,000-token reference):
 
 | config | warm p5 | n@load | v@load | v@warm | ratio | % of `mns@40` capacity |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -1092,6 +1098,10 @@ Sensitivity (27B / TP2). The point depends on the request rate and the output
 length **only through their product**, so those two inputs are the whole error
 budget — but *n* is not linear in the product, because per-user speed falls as
 the batch grows:
+
+*(Table generated at the 1,000-token output default. The default became 400
+— measured — on 2026-08-27, putting the reference point at n ≈ 2.2, v ≈ 430;
+the rows remain valid as a sweep. research/workload_agentic_poc.md.)*
 
 | think time | n | v |     | output tokens | n | v |
 | ---: | ---: | ---: | --- | ---: | ---: | ---: |
@@ -1688,7 +1698,9 @@ Ordered roughly by how much each could move the numbers:
 21. **The steady-state decode point rests on an assumed output length** (§ 10;
     added 2026-08-07). Little's law is exact and the flow balance it produces
     needs no fitting, but it is driven by `λ × out`, and `out` — output tokens
-    per response — is **assumed at 1,000, never fitted**. The workload model's
+    per response — was **assumed at 1,000, never fitted** (measured at ~400
+    on 2026-08-27, now the default — research/workload_agentic_poc.md; the
+    figures in this section predate that). The workload model's
     log-normal is fitted on 1,850 real *prompt* lengths; no output-length trace
     has been collected. The 1,000-token figure is only cross-checked for
     consistency against the traced 10.8 s served per request at 50–90 tok/s.

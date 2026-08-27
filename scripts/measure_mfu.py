@@ -100,18 +100,29 @@ def main():
     lengths = [int(x) for x in args.lengths.split(",")]
     print(f"model={model}  targets={lengths}  runs/length={args.runs}")
 
+    if args.runs < 1 or args.gpus < 1 or args.pause < 0 \
+            or (args.peak_tflops is not None and args.peak_tflops <= 0) \
+            or (args.params_b is not None and args.params_b <= 0):
+        sys.exit("invalid args: need runs>=1, gpus>=1, pause>=0, "
+                 "positive --peak-tflops/--params-b when given")
+    if args.params_b and not (args.attn_layers and args.attn_d):
+        print("WARNING: --attn-layers/--attn-d not set — the quadratic "
+              "attention term is omitted from every FLOP/MFU figure "
+              "(~10%+ of a long prefill)", file=sys.stderr)
+
     if len(lengths) == 1 and args.runs == 1:  # single-shot: one request, no
         L = lengths[0]                        # warmup/probe/fit — pair with
         t_start = time.time()                 # before/after /metrics scrapes
         t, ptoks, _ = probe(api, hdr, model, L)
+        est = "" if ptoks else "  (ESTIMATED: no usage in stream, token count is the TARGET)"
         print(f"window {t_start:.2f} -> {time.time():.2f} (unix)  "
-              f"ttft {t:.3f}s  prompt_tokens={ptoks}")
+              f"ttft {t:.3f}s  prompt_tokens={ptoks}{est}")
         n = ptoks or L
-        print(f"client-side bound (incl. proxy overhead): {n / t:,.0f} tok/s")
+        print(f"client-side bound (incl. proxy overhead): {n / t:,.0f} tok/s{est}")
         if args.params_b and args.peak_tflops:
             flops = 2 * args.params_b * 1e9 * n + 2 * n * n * args.attn_d * args.attn_layers
             print(f"model FLOPs: {flops:.4e}  "
-                  f"client-side MFU >= {flops / (t * args.peak_tflops * 1e12 * args.gpus):.1%}  "
+                  f"client-side MFU >= {flops / (t * args.peak_tflops * 1e12 * args.gpus):.1%}{est}  "
                   f"(true MFU = FLOPs / (delta_prefill_time_sum x peak x gpus))")
         return
 
@@ -155,7 +166,7 @@ def run_sweep(api, hdr, model, lengths, args):
         print(f"  target={L:>6}: min {t:.3f}s @ {n} tok  "
               f"median {statistics.median(r[0] for r in runs):.3f}s")
 
-    if len(best) >= 3:
+    if len({n for n, _ in best}) >= 3:
         c0, _c1, _c2 = fit_quadratic(best)
         print(f"fit: TTFT = {c0 * 1e3:.0f} ms + {_c1 * 1e6:.2f} us/tok"
               f" + {_c2 * 1e12:.3f} ps/tok^2   (overhead c0 stripped below)")

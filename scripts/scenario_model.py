@@ -823,13 +823,17 @@ def effective_bw(topo: Topology) -> float:
 #                          rate — the curve that decides whether KV capacity
 #                          or prefill throughput is the binding constraint
 #
-# STATUS: analytic, CALIBRATED 2026-08-27 (was: unvalidated). Two production
-# measurements now anchor MFU (research/prefill.md #1): 39.6% ± 0.4% (n=9,
-# engine-side counter deltas, 27B-class BF16-on-Ampere, chunk 4096) and ~49%
-# implied on Hopper FP8 from a 7-day production mean prefill time
-# (research/workload_agentic_poc.md). The bracket tightened [0.30,0.60] →
-# [0.35,0.55]: the plausible range now moves every figure here by ~1.6x
-# (was 2x). Still bounds that rank configurations, not latency commitments.
+# STATUS: analytic, MFU CALIBRATED 2026-08-27 (was: unvalidated). Two
+# production measurements anchor MFU (research/prefill.md #1), agreeing at
+# ~40% of the raw ADVERTISED peak on both BF16-Ampere (39.6% ± 0.4%, n=9,
+# engine-side counter deltas) and Hopper FP8 (40.0% implied from a 7-day
+# production mean prefill time, research/workload_agentic_poc.md). In THIS
+# module's convention — mfu divides peak_flops(topo), which already carries
+# the tp_efficiency haircut — those same points read 44.4% (TP2) and 49.4%
+# (TP4) against the 45% central. State the convention when quoting. The
+# bracket tightened [0.30,0.60] → [0.35,0.55]: the plausible range now moves
+# every figure here by ~1.6x (was 2x). Still bounds that rank
+# configurations, not latency commitments.
 # ============================================================================
 
 # Model FLOP Utilisation: achieved FLOPs / dense peak on a large prefill GEMM.
