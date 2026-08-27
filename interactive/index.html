@@ -2119,7 +2119,8 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   //    step 40, so the tolerance is MC jitter only; a units slip in the
   //    arrival rate or the output length moves it by multiples.
   //    (Re-pinned 2026-08-27 with AVG_OUT_TOK 1000 -> 400, measured: fewer
-  //    decode-seconds per request, smaller faster batch. Was ~6.4 at ~365.)
+  //    decode-seconds per request, smaller faster batch. Was ~6.4 at ~365 —
+  //    the JS pin; the Python mirror's historical pin was 370.)
   console.assert(approx(sd.n, 2.2, 0.12) && approx(sd.pu, 430, 0.10),
     "27B/TP2 at the reference load: ~2 sequences decoding, ~430 tok/s each");
   console.assert(sd.n < 480/20 && sd.pu > 4*interpAt(dc,'p50',480,true),
@@ -4329,7 +4330,7 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       fmt: v => fmt(v / 1000, v < 1000 ? 2 : 1) + 'k tok', approx: false, pts });
   }
   // 5 · prefill MFU — the study's softest input; not a slider, a structural
-  //     unknown, so the sweep runs over the whole stated [30%, 60%] bracket
+  //     unknown, so the sweep runs over the whole stated [35%, 55%] bracket
   axes.push({ label: 'Prefill MFU', cur: PREFILL_MFU, lo: PREFILL_MFU_LO, hi: PREFILL_MFU_HI,
     fmt: v => fmt(v * 100, 0) + '%', approx: false,
     pts: sweep(16, PREFILL_MFU_LO, PREFILL_MFU_HI, v => {

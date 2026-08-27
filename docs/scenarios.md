@@ -712,7 +712,7 @@ kept only the `ttft < 0.4 × cold` heuristic. *(Update 2026-08-27: MFU now
 carries two production calibration points and the bracket tightened to
 35–55%, moving absolute figures ~1.6× — research/prefill.md #1; the rest of
 this section still predates any prefill measurement.)* MFU is the soft
-input, though not the ratios.
+input — it moves every absolute millisecond figure, though not the ratios.
 The model omits queueing, preemption/recompute and PCIe restore contention,
 **all of which make the real machine worse than this**; cross-chunk attention,
 formerly on that list, is now charged. The thrash finding is a lower bound —
@@ -1113,9 +1113,11 @@ the rows remain valid as a sweep. research/workload_agentic_poc.md.)*
 4× the output length moves *n* 4.9×; the next 4× moves it 51×; the next
 saturates the configuration outright. **Output length is the one assumed input
 in this section** — the workload model is fitted on 1,850 real prompt *lengths*
-and has never fitted output lengths. The 1,000-token default is consistent with
-the traced 10.8 s served per request (`MEASURED_SERVICE_R_S`) at the observed
-50–90 tok/s, but that is a consistency check, not a fit, which is why the
+and has never fitted output lengths. The 1,000-token default *(measured at
+~400 and replaced on 2026-08-27 — research/workload_agentic_poc.md)* was
+consistent with the traced 10.8 s served per request (`MEASURED_SERVICE_R_S`)
+at the observed 50–90 tok/s, but that was a consistency check, not a fit,
+which is why the
 explorer exposes it as a slider rather than burying it as a constant.
 
 Three approximations travel with every figure here, and the explorer states all
@@ -1585,8 +1587,10 @@ Ordered roughly by how much each could move the numbers:
    TTFT *percentile* (§ 9 solves against the mean, so its f_sla figures are
    upper bounds); every one of those makes the real machine worse
    (`research/prefill.md` #5, `research/spike.md` #7). The prefill numbers are
-   analytic and **unvalidated** — no measured prefill figure exists in this
-   repo.
+   analytic and **unvalidated** — no measured prefill figure existed in this
+   repo when written *(update 2026-08-27: the MFU input now carries two
+   production calibration points — research/prefill.md #1; the queueing and
+   chunking machinery around it remains unvalidated)*.
 3. **35B-A3B is modelled, not measured.** Constants come from the published config,
    but FP8-KV support, hybrid-model prefix caching, and MTP acceptance (~1.7× is the
    *27B's* fitted speedup) on vLLM for this exact model are unverified. The whole

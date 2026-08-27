@@ -838,8 +838,9 @@ def effective_bw(topo: Topology) -> float:
 
 # Model FLOP Utilisation: achieved FLOPs / dense peak on a large prefill GEMM.
 # 45% is a mid-range figure for FP8 attention+MLP prefill on Hopper-class
-# parts with TP collectives in the loop, now bracketed by the two calibration
-# points above rather than by published-benchmark spread alone. Every prefill
+# parts with TP collectives in the loop, now bracketed (in the model
+# convention only: 44.4% / 49.4%) by the two calibration points above rather
+# than by published-benchmark spread alone. Every prefill
 # number in this study should be read with the bracket, not the point.
 MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.35, 0.45, 0.55
 
