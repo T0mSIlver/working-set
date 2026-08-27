@@ -95,7 +95,8 @@ CONFIG = {
         "subagent_prefix_tokens": 3_000,     # subagents' own lean shared prefix
         "sub_shares_prefix": False,          # True = subagents reuse the user prefix
         "miss_rate": 0.01,                   # per-turn probability of a forced full re-prefill
-        "max_output_tokens": 1_000,          # decoded tokens per turn (OUT_TOKENS_DEFAULT)
+        "max_output_tokens": 400,            # decoded tokens per turn (OUT_TOKENS_DEFAULT,
+                                             # measured 2026-08-27; was 1,000 assumed)
     },
     "slo": {
         "ttft_budget_s": 10.0,
@@ -115,8 +116,10 @@ CONFIG = {
         # H9 (PR #37): the decode batch the LOAD produces, not the all-warm
         # stress point. Arrivals are open-loop, so most of the warm pool is
         # idle between turns and the batch is far smaller / far faster.
-        "steady_decode_seqs": 3.11,          # sequences decoding at the operating point
-        "steady_decode_tok_s": 756,          # per-user decode at THAT batch size
+        "steady_decode_seqs": 1.15,          # sequences decoding at the operating point
+                                             # (re-derived 2026-08-27 at 400 out
+                                             # tokens; was 3.11 at the assumed 1,000)
+        "steady_decode_tok_s": 817,          # per-user decode at THAT batch size (was 756)
         # the chunk-size hypothesis. Both are per-SSE-event gaps, ms.
         "itl_normal_ms": 2.2,                # gap with no prefill in the pass
         "itl_worst_freeze_ms": 171,          # last chunk of a 180k cold re-prefill
@@ -134,14 +137,17 @@ CONFIG = {
         "H-burst (needs --burst): a simultaneous flush of <= 9 misses (B* = 9.8) "
         "drains inside the TTFT budget; a larger one does not.",
         # --- the two the reference CONFIG never carried ----------------------
-        "H-steady (H9): at the operating point the decode batch holds ~3.1 "
-        "sequences at ~756 tok/s each — NOT the whole warm pool at the stress "
+        "H-steady (H9): at the operating point the decode batch holds ~1.2 "
+        "sequences at ~817 tok/s each — NOT the whole warm pool at the stress "
         "figure. Read against the measured concurrent-decode count, not the "
-        "population.",
+        "population. (Re-derived 2026-08-27 at the measured 400 output "
+        "tokens; the pre-measurement reference was ~3.1 at ~756.)",
         "H-itl-spike: the worst freeze behind one chunk of a 180k cold "
         "re-prefill is ~171 ms [110-260] at max_num_batched_tokens=4096 vs "
         "~1,289 ms [640-1,980] at 32,768. Brackets are the study's MFU range "
-        "(30-60% around 45%, research/prefill.md #1): the spike MAGNITUDE "
+        "([30-60] around 45% when these figures were generated; the bracket "
+        "tightened to [35-55] on 2026-08-27, research/prefill.md #1 — the ms "
+        "ranges here still quote the wider band): the spike MAGNITUDE "
         "scales ~inversely with MFU and is unvalidated, but the RATIO between "
         "the two settings does not — quote the ratio, not the milliseconds. "
         "Read it on the INTER-TOKEN GAPS table, never on decode p50 (a mean "

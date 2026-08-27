@@ -505,8 +505,8 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
           <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Output tokens one response decodes — the assumption the steady-state readouts rest on, and the only unmeasured one in this group (the workload model fits prompt lengths, never output lengths). 1,000 is consistent with the traced 10.8 s served per request at 50–90 tok/s. It sets how long a request occupies the decode batch, so decoders in flight and the €/1M-token figure both scale with it.">Output per response</span> <span class="val"><span id="v-out">1,000</span> tok</span></label>
-          <input type="range" id="s-out" min="100" max="8000" step="100" value="1000">
+          <label class="flabel"><span class="tip" data-tip="Output tokens one response decodes — the assumption the steady-state readouts rest on. Measured (2026-08-27): ~400 mean over a 7-day production agentic trace, replacing the earlier 1,000 assumption; at the traced 50–90 tok/s that decodes in ~5–8 s of the 10.8 s served per request. It sets how long a request occupies the decode batch, so decoders in flight and the €/1M-token figure both scale with it.">Output per response</span> <span class="val"><span id="v-out">400</span> tok</span></label>
+          <input type="range" id="s-out" min="100" max="8000" step="100" value="400">
         </div>
       </div>
       <div class="ctl-group">
@@ -536,7 +536,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
     <div class="body">
     <dl>
       <dt>MFU <span class="gt">Model FLOP Utilisation</span></dt>
-      <dd>Achieved ÷ advertised FLOP throughput. Assumed <b>45%</b> [30–60%] — the softest input here: it scales every prefill figure, hence the bands.</dd>
+      <dd>Achieved ÷ advertised FLOP throughput. <b>45%</b> [35–55%] — calibrated against two production measurements (2026-08-27; previously assumed [30–60%]). Still the softest input here: it scales every prefill figure, hence the bands.</dd>
       <dt>TTFT <span class="gt">time to first token</span></dt>
       <dd>Queueing plus the request's own prefill. A miss re-prefills its whole context; a hit prefills only the new turn but queues behind misses.</dd>
       <dt>Prefill duty <span class="gt">fraction of the machine spent prefilling</span></dt>
@@ -571,10 +571,10 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">F · Cold-spike tolerance</p>
-      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses still answered in budget — vs the standing miss rate. Band = the MFU 30–60% bracket; each curve reaches zero at its own f*.</p>
+      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses still answered in budget — vs the standing miss rate. Band = the MFU 35–55% bracket; each curve reaches zero at its own f*.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>this configuration</span>
-        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 30–60%</span>
+        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 35–55%</span>
         <span class="li"><span class="sw" style="background:var(--muted)"></span>other topologies</span>
         <span class="li"><span class="sw dash2" style="background:var(--crit)"></span>absorbs &lt; 1 miss</span>
       </div>
@@ -702,7 +702,7 @@ const CONFIG = {
   // of TDP); p_decode_w the measured bandwidth-bound token-phase draw (0.55 x
   // TDP central, band 0.45-0.75); p_prefill_w the power-cap-limited prefill
   // draw (0.90 x TDP — the cap binds before the FLOP peak, so it is FLAT
-  // across the MFU 30-60% band); host_w the DGX chassis adder per GPU (spec
+  // across the MFU 35-55% band); host_w the DGX chassis adder per GPU (spec
   // ceiling, conservative). B300 rows are ENTIRELY extrapolated — no
   // published Blackwell Ultra power-state measurements exist.
   GPUS: {
@@ -1008,8 +1008,8 @@ function effective_bw(topo){
    PREFILL — the compute roofline (mirrors scenario_model.py's prefill section;
    research/prefill.md). Everything else on this page prices HBM bytes; a cache
    MISS prices FLOPs: it reads the weights once and does 2 x params x tokens on
-   them. ANALYTIC AND UNVALIDATED — MFU is the soft input (the 30–60% bracket
-   moves every absolute figure by 2x, though not the ratios).
+   them. ANALYTIC, MFU CALIBRATED 2026-08-27 — MFU is the soft input (the 35–55%
+   bracket moves every absolute figure by ~1.6x, though not the ratios).
    ========================================================================== */
 // 0.45 is now a CALIBRATION POINT, not a flat rate: it is the effective MFU
 // of a first chunk at the study's 32,768-token default. Away from that point
@@ -1023,8 +1023,10 @@ function effective_bw(topo){
 // Deliberate exception: a context SHORTER than the chunk is one small pass
 // below the anchor's efficiency, so short (p5-ish) misses now read ~10%
 // dearer on the MoEs — that is the model's content, not drift.
-const PREFILL_MFU   = 0.45;    // mid of the plausible [0.30, 0.60] FP8 bracket
-const PREFILL_MFU_LO = 0.30, PREFILL_MFU_HI = 0.60;  // the bracket itself:
+const PREFILL_MFU   = 0.45;    // mid of the plausible [0.35, 0.55] FP8 bracket
+                               // (tightened from [0.30, 0.60] 2026-08-27 on two
+                               // production calibration points — prefill.md #1)
+const PREFILL_MFU_LO = 0.35, PREFILL_MFU_HI = 0.55;  // the bracket itself:
 // an ERROR BAR on every prefill-derived figure, not a knob anyone chooses
 const PREFILL_CHUNK = 32768;   // vLLM max_num_batched_tokens (the study default)
 const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn).
@@ -1312,12 +1314,13 @@ function decodeFloor(){ return state.decode_floor; }
 function prefillChunk(){ return parseInt(state.chunk, 10); }
 function decodeComfort(){ return state.decode_floor * DECODE_COMFORT_RATIO; }
 // Output tokens ONE REQUEST decodes (every request, subagents included) —
-// ASSUMED, unmeasured: the workload model fits prompt LENGTHS, never output
-// lengths. Consistent with the measured 10.8 s served per turn at 50-90 tok/s.
+// MEASURED 2026-08-27: ~400 mean over a 7-day production agentic trace
+// (research/workload_agentic_poc.md; was assumed 1,000). At the observed
+// 50-90 tok/s this decodes in ~5-8 s of the measured 10.8 s served per turn.
 // The reference value; the `out` slider starts here and STATE_DEFAULTS pins it,
 // so a default page still reproduces every published number. Drives the
 // steady-state decode point below and the power model's decode duty.
-const AVG_OUT_TOK = 1000;
+const AVG_OUT_TOK = 400;
 
 function requestRate(users, think){ return users / (think || liveThink); }
 
@@ -2207,13 +2210,16 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   console.assert(approx(sd.n, rate * (OUT/sd.pu), 1e-9),
     "steady n must equal arrival rate x seconds spent decoding");
   // 3. the whole point of the tiles, PINNED: the 27B on TP2 at the published
-  //    reference load (64 users, 30 s, r = 0.10, 1,000 output tokens) decodes
-  //    ~6 sequences at a time at ~365 tok/s — against ~196 warm sessions at
+  //    reference load (64 users, 30 s, r = 0.10, 400 output tokens) decodes
+  //    ~2 sequences at a time at ~430 tok/s — against ~196 warm sessions at
   //    ~46 tok/s if they all decoded at once. Stable to ~1% from step 1 to
-  //    step 40, so a 10% tolerance is MC jitter only; a units slip in the
+  //    step 40, so the tolerance is MC jitter only; a units slip in the
   //    arrival rate or the output length moves it by multiples.
-  console.assert(approx(sd.n, 6.4, 0.10) && approx(sd.pu, 365, 0.10),
-    "27B/TP2 at the reference load: ~6 sequences decoding, ~365 tok/s each");
+  //    (Re-pinned 2026-08-27 with AVG_OUT_TOK 1000 -> 400, measured: fewer
+  //    decode-seconds per request, smaller faster batch. Was ~6.4 at ~365 —
+  //    the JS pin; the Python mirror's historical pin was 370.)
+  console.assert(approx(sd.n, 2.2, 0.12) && approx(sd.pu, 430, 0.10),
+    "27B/TP2 at the reference load: ~2 sequences decoding, ~430 tok/s each");
   console.assert(sd.n < 480/20 && sd.pu > 4*interpAt(dc,'p50',480,true),
     "the steady batch must sit far left of the sweep, and far above its speed");
   // 4. monotone and linear in the load, exactly (demand is linear, and the
@@ -3598,7 +3604,8 @@ function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   // true whenever the cache SPLITS across >1 replica group (pure DP or a DP×TP
   // grid) — that is what makes the headline a per-replica number
   const dp = topo.replicas>1;
-  // Prefill ceiling (analytic, unvalidated — research/prefill.md). ONE
+  // Prefill ceiling (analytic; MFU calibrated 2026-08-27, remainder
+  // unvalidated — research/prefill.md). ONE
   // context-length draw (shared with chart E via computeAndRender) feeds the
   // ceiling, the p5/p95 miss costs and f*, so they stay consistent within a
   // render; the colour compares the invalidation slider f to f*. The tile is
@@ -3877,11 +3884,11 @@ function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
      tip:`All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
-     sub:`MFU 30–60% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
+     sub:`MFU 35–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
         + ` · latency ceiling f_sla ${op.fsla>=1?'> 100':fmt(op.fsla*100,0)}%`,
      cls: op.bstar<1?'crit':(op.bstar<5?'warn':'good'),
-     tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside the TTFT budget — linear in that budget. The band is the MFU [30–60%] bracket; B* reaches zero exactly at f*, and f_sla (mean TTFT = budget) binds earlier still."},
+     tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside the TTFT budget — linear in that budget. The band is the MFU [35–55%] bracket; B* reaches zero exactly at f*, and f_sla (mean TTFT = budget) binds earlier still."},
     {k:`A burst of ${fmt(state.burst,0)} at once`,
      v: !isFinite(drain) ? 'never' : (drain>=90? fmt(drain/60,1) : fmt(drain,1)),
      u: !isFinite(drain) ? 'clears at this load' : (drain>=90?'min to clear':'s to clear'),
@@ -4249,7 +4256,7 @@ function harnessHypotheses(P, model, topo, wl, reps){
         + `not the population.`,
       `H-itl-spike: the worst freeze behind one chunk of a `
         + `${fmt(wl.cap / 1000, 0)}k cold re-prefill is ~${fmt(P.itl_worst_freeze_ms, 0)} ms `
-        + `[${fmt(brLo, 0)}-${fmt(brHi, 0)}, the MFU 30-60% bracket] at `
+        + `[${fmt(brLo, 0)}-${fmt(brHi, 0)}, the MFU 35-55% bracket] at `
         + `max_num_batched_tokens=${fmt(C, 0)} ${vsRef}`
         + `Read it on the INTER-TOKEN GAPS table, never on decode p50 (a mean `
         + `over the stream is nearly blind to a freeze); make sure `
@@ -4527,7 +4534,7 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       fmt: v => fmt(v / 1000, v < 1000 ? 2 : 1) + 'k tok', approx: false, pts });
   }
   // 5 · prefill MFU — the study's softest input; not a slider, a structural
-  //     unknown, so the sweep runs over the whole stated [30%, 60%] bracket
+  //     unknown, so the sweep runs over the whole stated [35%, 55%] bracket
   axes.push({ label: 'Prefill MFU', cur: PREFILL_MFU, lo: PREFILL_MFU_LO, hi: PREFILL_MFU_HI,
     fmt: v => fmt(v * 100, 0) + '%', approx: false,
     pts: sweep(16, PREFILL_MFU_LO, PREFILL_MFU_HI, v => {

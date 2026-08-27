@@ -9,11 +9,13 @@ there; FLOPs are the budget.
 This note carries the constants that made `scenario_model.py`'s prefill
 section possible, and — more importantly — the confidence tier of each.
 
-> **Status: analytic, UNVALIDATED.** The baseline experiment collected prefill
-> speeds (`docs/writeup.md`, "Collect prefill and decoding speeds") but the
-> repository kept only the `ttft < 0.4 × cold` warm/cold classification
-> heuristic. **There is no measured prefill number in this repo to check
-> against.** Every figure below is a projection. The single measurement that
+> **Status: analytic, partially calibrated (2026-08-27; was: unvalidated).**
+> The baseline experiment collected prefill speeds (`docs/writeup.md`,
+> "Collect prefill and decoding speeds") but the repository kept only the
+> `ttft < 0.4 × cold` warm/cold classification heuristic. Since 2026-08-27,
+> §1 carries two measured MFU calibration points (one controlled, one
+> implied); every other figure below remains a projection. The single
+> measurement that
 > would move it most: one `vllm bench` prefill run at
 > `max_num_batched_tokens=32768` on the 27B, TP2 — a few minutes of work on
 > hardware that already exists.
@@ -53,10 +55,72 @@ correction, for prefill only. No capacity or decode figure reads
 
 ### Model FLOP Utilisation (MFU)
 
-`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.30 / 0.45 / 0.60`. **Not measured.**
+`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.35 / 0.45 / 0.55` — *tightened from
+0.30/0.60 on 2026-08-27, on the two calibration points below*. **Not
+measured** ~~at all~~ — *see below*.
 45% is a mid-range figure for FP8 prefill on Hopper-class parts with TP
 collectives in the loop. This is the softest input in the section — the
-plausible bracket moves every absolute time by **2×**.
+plausible bracket moves every absolute time by **~1.6×** (was 2× before the
+tightening).
+
+**First measured calibration point (2026-08-27).** A production vLLM
+deployment of a Qwen3.8-27B FP8-weight checkpoint — the 3.8-generation
+*dense* 27B refresh, architecturally identical to the modelled Qwen3.6-27B
+per the deployment's operator (NOT related to Qwen3.8-Flash-Next, this
+study's hybrid-QSA model of the same generation) — (FP8 weight-only on
+Ampere ⇒ BF16 compute, peak 2×312
+TFLOP/s dense) on **2×A100, TP2, `max_num_batched_tokens=4096`**. Nine cold
+single-chunk requests of 3,300–3,436 random-id tokens, each isolated via
+`/metrics` counter deltas (Δcount=1, Δqueue≈0): `request_prefill_time`
+0.666–0.700 s ⇒ effective MFU **0.396 ± 0.004 of the raw advertised dense
+peak** (2×312 TF BF16; sample SD over n=9 runs on ONE deployment, SEM
+±0.0013; range 38.9–40.1%) by this section's FLOP formula. **Convention
+note (cross-review 2026-08-27):** the model's `mfu` parameter divides by
+`peak_flops(topo)` = advertised × `tp_efficiency` (0.90 at TP2, 0.81 at
+TP4), so the model-convention reading of this same measurement is
+**44.4%**. State the convention whenever quoting either figure. Cross-check: vLLM's own `estimated_flops_per_gpu_total`
+counter agrees with the formula within **3.5–3.6%** on every reconciled
+window (the counter flushes mid-request, so reconcile over whole windows,
+not per scrape step) — the FLOP accounting in §3 is validated against the
+engine's bookkeeping, independent of timing. Reading: on this small model a
+3.4k chunk already amortises the weight stream (overhead ≈1% of the pass),
+so this deployment's anchor is chunk-size-robust, not a small-chunk
+artifact. (An earlier draft read it as "~12% below the 0.45 central" — that
+compared the advertised-convention measurement against the
+model-convention central; retracted, see the convention note above.)
+`MFU_DEFAULT` stays 0.45: the measurement is BF16-on-Ampere with
+weight-dequant overhead, and the BF16→FP8, Ampere→Hopper transfer is
+exactly the uncharacterised step. Do not cite the deployment's identity in
+public-facing material (employer infrastructure); the numbers above are
+anonymised.
+
+**Second calibration point (2026-08-27, Hopper FP8, implied).** A 7-day
+production dashboard of the 27B in FP8 on 4×H200 TP4
+(`research/workload_agentic_poc.md`) reports a mean per-request prefill
+time of 159 ms at 87.5% prefix-cache savings on a 57.4k-token mean prompt —
+i.e. a mean warm pass of ~7.2k new tokens over ~50k cached context. Priced
+with §3's formula, that implies an effective MFU of **40.0% of the raw
+advertised peak** (4×1,979 TF; spread 32–48% across the plausible savings
+reading), i.e. **49.4%** [40–59%] in the model convention (÷
+`tp_efficiency(4)` = 0.81). Weaker than the A100 point (aggregate-mean
+arithmetic — E[X]/E[Y], not E[X/Y] — over uncontrolled traffic), but it is
+Hopper FP8, the anchor's own regime.
+
+**The convention-consistent reading (corrected on cross-review — the
+first draft's "the two points bracket 0.45 from both sides" mixed the
+conventions and is retracted):** on the advertised-peak convention the two
+deployments agree to under 1% — **39.6% and 40.0%** — across different
+silicon (Ampere/Hopper), precision (BF16/FP8-native), TP width and chunk
+size. In the model convention they read **44.4% (TP2) and 49.4% (TP4)**
+against the 45% central: the central is ~1% high for TP2 and ~10%
+conservative for TP4. Both readings support 0.45 as the central and
+motivated tightening the bracket to [0.35, 0.55] — a **PROVISIONAL**
+tightening, flagged as such: two deployments only, and the implied point's
+own reading spread (40–59% model-convention) exceeds the new bracket's
+top. A controlled Hopper-FP8 measurement (the
+same `measure_mfu.py` protocol against an H200 backend) would settle it;
+until then the wider [0.30, 0.60] remains defensible for cross-model,
+cross-topology projections.
 
 What MFU does *not* affect: the cold/warm cost ratio (`thrash_ratio`), which
 cancels MFU and the GPU part entirely. That is why the ratio, not the
