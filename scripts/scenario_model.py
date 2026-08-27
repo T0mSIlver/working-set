@@ -93,7 +93,7 @@ class GPU:
     #   tolerant of a 700->350 W cap; mixed vLLM serving measured 229-477 W
     #   on H200-class parts. B300 transfers the FRACTION, not the watts.
     # p_prefill_w: compute-bound prefill is POWER-CAP-limited, 0.90 x TDP
-    #   central (band 0.80-1.00) — FLAT across the study's MFU 30-60% bracket,
+    #   central (band 0.80-1.00) — FLAT across the study's MFU 35-55% bracket,
     #   because the cap binds before the FLOP peak does. MEASURED anchor:
     #   saturated vLLM inference at ~0.85-0.89 of summed GPU TDP (NLR).
     # host_w: flat per-GPU chassis adder (CPUs/NVSwitch/NICs/fans/PSU loss),
@@ -823,20 +823,21 @@ def effective_bw(topo: Topology) -> float:
 #                          rate — the curve that decides whether KV capacity
 #                          or prefill throughput is the binding constraint
 #
-# STATUS: analytic, UNVALIDATED. The baseline collected prefill speeds but
-# recorded only the ttft < 0.4 x cold warm/cold heuristic, so there is no
-# measured prefill number in this repo to check against. MFU is the soft spot
-# (see MFU_* below): the plausible range moves every figure here by 2x. Treat
-# these as order-of-magnitude bounds that rank configurations, exactly as the
-# rest of the study does — not as latency commitments.
+# STATUS: analytic, CALIBRATED 2026-08-27 (was: unvalidated). Two production
+# measurements now anchor MFU (research/prefill.md #1): 39.6% ± 0.4% (n=9,
+# engine-side counter deltas, 27B-class BF16-on-Ampere, chunk 4096) and ~49%
+# implied on Hopper FP8 from a 7-day production mean prefill time
+# (research/workload_agentic_poc.md). The bracket tightened [0.30,0.60] →
+# [0.35,0.55]: the plausible range now moves every figure here by ~1.6x
+# (was 2x). Still bounds that rank configurations, not latency commitments.
 # ============================================================================
 
 # Model FLOP Utilisation: achieved FLOPs / dense peak on a large prefill GEMM.
-# Not measured here. 45% is a mid-range figure for FP8 attention+MLP prefill on
-# Hopper-class parts with TP2 collectives in the loop; the bracket is what
-# published vLLM/TensorRT-LLM prefill benchmarks generally span. Every prefill
+# 45% is a mid-range figure for FP8 attention+MLP prefill on Hopper-class
+# parts with TP collectives in the loop, now bracketed by the two calibration
+# points above rather than by published-benchmark spread alone. Every prefill
 # number in this study should be read with the bracket, not the point.
-MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.30, 0.45, 0.60
+MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.35, 0.45, 0.55
 
 
 def prefill_flops(model: Model, tokens: float, prior: float = 0.0) -> tuple:
@@ -1823,8 +1824,11 @@ DECODE_FLOOR_TOKS = 40.0    # the study's hard per-user floor (50 is comfortable
 THINK_TIME_S = 30.0         # reference: one main-agent request every 30 s
 REF_USERS = 64              # reference population -> 64/30 = 2.13 req/s (main
                             # requests; the prefill server sees 1 + sub_ratio x)
-OUT_TOKENS_DEFAULT = 1_000  # decoded share of the 2,000-token turn increment
-                            # (the rest arrives as tool results / user text)
+OUT_TOKENS_DEFAULT = 400    # MEASURED 2026-08-27: 404.1 mean output tokens
+                            # per request over ~39k requests / 7 days on a
+                            # production agentic deployment (research/
+                            # workload_agentic_poc.md). Was ASSUMED 1,000
+                            # ("decoded share of the 2,000-token turn").
 
 # Measured think-time anchors — role-tagged pi-agent trace, 2026-08-04:
 # 8 sessions, 306 main-agent requests, 39 human turns. Regenerate with
@@ -2280,9 +2284,10 @@ EUR_PER_KWH_DEFAULT = 0.19   # Eurostat non-household EU average €0.1902/kWh
 HOURS_PER_MONTH = 720.0      # the explorer's flat billing month (30 x 24 h)
 
 # Output tokens ONE REQUEST decodes (applied to every request, subagents
-# included) — ASSUMED, unmeasured (the workload model never needed output
-# lengths before). Consistent with the measured 10.8 s served per turn
-# (MEASURED_SERVICE_R_S) at the observed 50-90 tok/s. Scales d_d linearly;
+# included) — MEASURED 2026-08-27 (research/workload_agentic_poc.md): 404.1
+# mean over ~39k production requests; was assumed 1,000. At the observed
+# 50-90 tok/s this decodes in ~5-8 s of the measured 10.8 s served per turn
+# (MEASURED_SERVICE_R_S) — the remainder is prefill + queue. Scales d_d linearly;
 # the €/1M-token figure moves hyperbolically (fixed idle/prefill watts
 # amortise as outputs lengthen); the €/month bill moves least (decode is one
 # term of three). Mirrors the explorer's AVG_OUT_TOK.
@@ -3107,13 +3112,16 @@ def _selfcheck():
                                     / sdp["per_user_tok_s"])) < 1e-9, \
         "steady n must equal arrival rate x seconds spent decoding"
     # 3. the headline, PINNED: the 27B on TP2 at the published reference load
-    #    decodes ~6 sequences at a time at ~370 tok/s, against the 228-decoder
+    #    decodes ~2 sequences at a time at ~430 tok/s, against the 228-decoder
     #    / 40 tok/s ceiling the planner's decode column reports. The gap IS the
     #    finding; if it closes, the load conversion has broken somewhere.
-    assert abs(sdp["n"] - 6.4) <= 0.8, \
-        f"27B/TP2 reference load: ~6 decoders expected, got {sdp['n']:.2f}"
-    assert abs(sdp["per_user_tok_s"] - 370) <= 40, \
-        f"27B/TP2 reference load: ~370 tok/s expected, " \
+    #    (Re-pinned 2026-08-27 when OUT_TOKENS_DEFAULT moved 1,000 -> 400,
+    #    the measured value: fewer decode-seconds per request means a smaller
+    #    steady batch running faster. Old pin: ~6.4 at ~370 tok/s.)
+    assert abs(sdp["n"] - 2.2) <= 0.4, \
+        f"27B/TP2 reference load: ~2 decoders expected, got {sdp['n']:.2f}"
+    assert abs(sdp["per_user_tok_s"] - 430) <= 40, \
+        f"27B/TP2 reference load: ~430 tok/s expected, " \
         f"got {sdp['per_user_tok_s']:.0f}"
     assert sdp["n"] < max_users_decode(m27, tp2, wl, n_iter=200) / 20, \
         "the steady batch must sit far inside the decode ceiling at this load"

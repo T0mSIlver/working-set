@@ -53,11 +53,13 @@ correction, for prefill only. No capacity or decode figure reads
 
 ### Model FLOP Utilisation (MFU)
 
-`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.30 / 0.45 / 0.60`. **Not measured**
-~~at all~~ — *first calibration point 2026-08-27, see below*.
+`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.35 / 0.45 / 0.55` — *tightened from
+0.30/0.60 on 2026-08-27, on the two calibration points below*. **Not
+measured** ~~at all~~ — *see below*.
 45% is a mid-range figure for FP8 prefill on Hopper-class parts with TP
 collectives in the loop. This is the softest input in the section — the
-plausible bracket moves every absolute time by **2×**.
+plausible bracket moves every absolute time by **~1.6×** (was 2× before the
+tightening).
 
 **First measured calibration point (2026-08-27).** A production vLLM
 deployment of a Qwen3.8-27B FP8-weight checkpoint (same architecture as the
@@ -80,6 +82,18 @@ weight-dequant overhead, and the BF16→FP8, Ampere→Hopper transfer is
 exactly the uncharacterised step. Do not cite the deployment's identity in
 public-facing material (employer infrastructure); the numbers above are
 anonymised.
+
+**Second calibration point (2026-08-27, Hopper FP8, implied).** A 7-day
+production dashboard of the 27B in FP8 on 4×H200 TP4
+(`research/workload_agentic_poc.md`) reports a mean per-request prefill
+time of 159 ms at 87.5% prefix-cache savings on a 57.4k-token mean prompt —
+i.e. a mean warm pass of ~7.2k new tokens over ~50k cached context. Priced
+with §3's formula, that implies an effective MFU of **~49%** (40–59% across
+the plausible savings reading). Weaker than the A100 point (aggregate-mean
+arithmetic — E[X]/E[Y], not E[X/Y] — over uncontrolled traffic), but it is
+Hopper FP8, the anchor's own regime, and it brackets 0.45 from above while
+the A100 point brackets it from below. Together they motivated tightening
+the bracket to [0.35, 0.55].
 
 What MFU does *not* affect: the cold/warm cost ratio (`thrash_ratio`), which
 cancels MFU and the GPU part entirely. That is why the ratio, not the
