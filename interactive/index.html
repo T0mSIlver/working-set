@@ -3378,7 +3378,12 @@ function renderFrontierSection(wl, cs, draft, q, deferDecode){
   // abandons a rebuild the drag has already invalidated.
   if (draft){
     if (frontierJobSig && frontierJobSig !== jobSig){ frontierGen++; frontierJobSig = null; }
-    if (cachesComplete()) assembleFrontier(wl, cs);
+    // stale-while-DRAGGING re-ranks are the page's design (the settle
+    // corrects them); but while a settled change's rebuild is in flight the
+    // warm half is a whole epoch behind — repainting would mix old-GPU row
+    // labels with new-GPU prices, so hold the last paint until the commit
+    if (cachesComplete() && (!frontierJobSig || lastFrontier.sig === wsig))
+      assembleFrontier(wl, cs);
     return;
   }
   const warmStale = !lastFrontier    || lastFrontier.sig    !== wsig;
@@ -3388,9 +3393,24 @@ function renderFrontierSection(wl, cs, draft, q, deferDecode){
                  || (!warmStale && lastFrontier.base.some(r => !lastFrontierDec.dec[r.key]));
   if (!warmStale && !moStale && !decStale){
     // sigs can revert mid-rebuild (a drag back to the exact starting values):
-    // the caches are already right, so the leftover job must not commit
+    // the caches are already right, so the leftover job must not commit —
+    // and a deferral pending for the reverted floor is moot, so drop it or
+    // the 500 ms tier fires one pointless full render
     if (frontierJobSig){ frontierGen++; frontierJobSig = null; }
+    frontierDecodeDeferred = false;
     assembleFrontier(wl, cs);
+    return;
+  }
+  if (frontierJobSig === jobSig){
+    // this exact rebuild is already in flight — keep showing the last settled
+    // table, re-ranked for whichever cheap knob (model highlight, users)
+    // moved. Checked BEFORE the deferral branch: a settle while the deferred
+    // decode rebuild is already running must not re-arm the flag it cannot
+    // clear, or every later settle drags a spurious 500 ms full render.
+    // Same epoch guard as the draft path: only re-rank when the warm half
+    // still matches the live signature (decode/moments staleness is the
+    // accepted stale-by-one-tier case; a stale warm half is a mixed table)
+    if (cachesComplete() && lastFrontier.sig === wsig) assembleFrontier(wl, cs);
     return;
   }
   // the decode half is the only thing the floor moves. Stale is allowed for
@@ -3402,12 +3422,6 @@ function renderFrontierSection(wl, cs, draft, q, deferDecode){
     assembleFrontier(wl, cs);        // fresh warm + stale-by-one-tier decode
     return;
   }
-  if (frontierJobSig === jobSig){
-    // this exact rebuild is already in flight — keep showing the last settled
-    // table, re-ranked for whichever cheap knob (model highlight, users) moved
-    if (cachesComplete()) assembleFrontier(wl, cs);
-    return;
-  }
   startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig);
 }
 
@@ -3415,13 +3429,20 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   frontierJobSig = jobSig;
   frontierDecodeDeferred = false;
   const gen = ++frontierGen;
-  // the row plan is pool arithmetic only — the Monte-Carlo work is in the slices
+  // the row plan is pool arithmetic only — the Monte-Carlo work is in the
+  // slices. Each entry FREEZES its model arm, grid, RAM share and the floor
+  // at job start: today every state mutation renders synchronously
+  // (abandoning this job before the next slice can run), but a future
+  // programmatic write with no render must not commit rows mixed across two
+  // knob values under one signature
   const plan = [];
+  const floor0 = decodeFloor();
   for (const mk of Object.keys(CONFIG.MODELS))
     for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
       if (dp*tp > 8) continue;
-      if (kv_pool_tokens(modelForCompare(mk), makeGrid(dp, tp, state.gpu)) <= 0) continue;
-      plan.push({ mk, dp, tp, key: `${mk}|${dp}x${tp}` });
+      const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu);
+      if (kv_pool_tokens(m2, t2) <= 0) continue;
+      plan.push({ mk, dp, tp, key: `${mk}|${dp}x${tp}`, m2, t2, ram: ramPerCache(t2) });
     }
   // per-key reuse of whichever caches are still valid for their own signature:
   // a floor step keeps warm + moments and re-searches decode; a turn step
@@ -3440,19 +3461,19 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   const slice = () => {
     if (gen !== frontierGen) return;         // superseded or abandoned
     const t0 = performance.now();
+    try {
     // elapsed is checked BETWEEN rows, so a slice is FRONTIER_SLICE_MS plus at
     // most one row's overshoot — the block never approaches whole-table cost
     while (i < plan.length && performance.now() - t0 < FRONTIER_SLICE_MS){
       const p = plan[i++];
-      const m2 = modelForCompare(p.mk), t2 = makeGrid(p.dp, p.tp, state.gpu);
-      const reps = t2.replicas || 1;
+      const m2 = p.m2, t2 = p.t2, reps = t2.replicas || 1;
       if (warmOld[p.key]){ base.push(warmOld[p.key]); }
       else {
         // Seed PER ROW, so a row's fill depends only on that row (and slicing
         // cannot move a draw). One stream shared across the table made every
         // row's draws depend on how many the earlier rows consumed.
         seedFor(`frontier|${p.mk}|${p.dp}x${p.tp}`, ssig);
-        const wc2 = warmCapacity(m2, t2, wl, ramPerCache(t2),
+        const wc2 = warmCapacity(m2, t2, wl, p.ram,
                                  Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
         base.push({ key: p.key, mk: p.mk, dp: p.dp, tp: p.tp,
                     label: `${m2.name} · ${t2.name}`, reps,
@@ -3461,10 +3482,17 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
       if (decOld[p.key]){ dec[p.key] = decOld[p.key]; }
       else {
         seedFor(`frontierDec|${p.key}`, ssig);
-        const du2 = maxUsersDecode(m2, t2, wl, decodeFloor(), 140);
+        const du2 = maxUsersDecode(m2, t2, wl, floor0, 140);
         dec[p.key] = { decodeUsers: du2.n*reps, censored: du2.censored };
       }
       mo[p.key] = moOld[p.key] || prefillServiceMoments(m2, t2, wl, cs);
+    }
+    } catch (e) {
+      // the one-task rebuild re-threw on every render — noisy but it never
+      // latched. Match that: unlatch so the next settle retries, then rethrow
+      // (a latched frontierJobSig would freeze the table for the session)
+      frontierGen++; frontierJobSig = null;
+      throw e;
     }
     if (i < plan.length){ setTimeout(slice, 0); return; }
     // commit all three caches together — a draft assembling mid-rebuild must
