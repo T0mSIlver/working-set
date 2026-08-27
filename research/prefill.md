@@ -53,10 +53,33 @@ correction, for prefill only. No capacity or decode figure reads
 
 ### Model FLOP Utilisation (MFU)
 
-`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.30 / 0.45 / 0.60`. **Not measured.**
+`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.30 / 0.45 / 0.60`. **Not measured**
+~~at all~~ — *first calibration point 2026-08-27, see below*.
 45% is a mid-range figure for FP8 prefill on Hopper-class parts with TP
 collectives in the loop. This is the softest input in the section — the
 plausible bracket moves every absolute time by **2×**.
+
+**First measured calibration point (2026-08-27).** A production vLLM
+deployment of a Qwen3.8-27B FP8-weight checkpoint (same architecture as the
+27B modelled here; FP8 weight-only on Ampere ⇒ BF16 compute, peak 2×312
+TFLOP/s dense) on **2×A100, TP2, `max_num_batched_tokens=4096`**. Nine cold
+single-chunk requests of 3,300–3,436 random-id tokens, each isolated via
+`/metrics` counter deltas (Δcount=1, Δqueue≈0): `request_prefill_time`
+0.666–0.700 s ⇒ effective MFU **median 39.6%, stdev 0.4%** (range
+38.9–40.1%) by this section's FLOP formula — i.e. **0.395 ± 0.005** for
+this deployment. Cross-check: vLLM's own `estimated_flops_per_gpu_total`
+counter agrees with the formula within **3.5–3.6%** on every reconciled
+window (the counter flushes mid-request, so reconcile over whole windows,
+not per scrape step) — the FLOP accounting in §3 is validated against the
+engine's bookkeeping, independent of timing. Reading: inside the [30, 60]
+bracket, ~12% below the central 0.45; on this small model a 3.4k chunk
+already amortises the weight stream (overhead ≈1% of the pass), so ~0.40 is
+this deployment's anchor at any chunk size, not a small-chunk artifact.
+`MFU_DEFAULT` stays 0.45: the measurement is BF16-on-Ampere with
+weight-dequant overhead, and the BF16→FP8, Ampere→Hopper transfer is
+exactly the uncharacterised step. Do not cite the deployment's identity in
+public-facing material (employer infrastructure); the numbers above are
+anonymised.
 
 What MFU does *not* affect: the cold/warm cost ratio (`thrash_ratio`), which
 cancels MFU and the GPU part entirely. That is why the ratio, not the
