@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vLLM /metrics scraper — companion to measure_mfu.py (research/prefill.md #1).
+"""vLLM /metrics scraper — feeds measure_mfu.py and decode_mbu.py.
 
 Run this next to the vLLM backend while measure_mfu.py fires requests through
 whatever proxy sits in front. One timestamped snapshot block per interval;
@@ -8,8 +8,13 @@ blocks can be deltaed afterwards. Counter deltas around an isolated request
 give the engine-side prefill time and FLOP count (client TTFT includes the
 proxy tax and can only bound MFU from below).
 
-  python scrape_metrics.py http://backend:8000/metrics
+  python scrape_metrics.py http://backend:8000/metrics --interval 0.5
   python scrape_metrics.py http://backend:8000/metrics --interval 2 --api-key KEY
+
+Each block header carries the time the request was SENT plus the round trip
+it took, because the counters are as-of some instant inside that interval:
+decode_mbu.py divides wall time by step counts, so a window's endpoints are
+only as sharp as the scrape that bounded them.
 
 Ctrl-C to stop. Analysis gotcha (2026-08-27): vllm:estimated_flops_per_gpu_total
 flushes MID-request — reconcile FLOPs over whole windows, not per scrape step.
@@ -31,11 +36,14 @@ with open(out, "a", buffering=1) as f:
     while True:
         now = time.time()
         human = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
-        f.write(f"===== {now:.3f} {human:%Y-%m-%d %H:%M:%S} UTC\n")
         try:
             r = requests.get(args.url, headers=hdr, timeout=5)
             r.raise_for_status()
-            f.writelines(l + "\n" for l in r.text.splitlines() if l.startswith("vllm:"))
+            lines = [l for l in r.text.splitlines() if l.startswith("vllm:")]
+            f.write(f"===== {now:.3f} {human:%Y-%m-%d %H:%M:%S} UTC "
+                    f"rtt={time.time()-now:.4f}\n")
+            f.writelines(l + "\n" for l in lines)
         except Exception as e:
+            f.write(f"===== {now:.3f} {human:%Y-%m-%d %H:%M:%S} UTC rtt=nan\n")
             f.write(f"# SCRAPE FAILED {now:.3f} : {e}\n")
         time.sleep(args.interval)
