@@ -71,6 +71,7 @@ import math
 import re
 import sys
 from collections import Counter, defaultdict
+from glob import glob
 from pathlib import Path
 
 import numpy as np
@@ -592,6 +593,25 @@ def main():
                      args.ca_bundle or (not args.insecure))
     if not args.logs:
         ap.error("give scrape logs, or --probe URL")
+
+    # PowerShell does not expand wildcards for the program the way a POSIX
+    # shell does, so a Windows caller hands us the literal "mfu_scrape_*.log".
+    # Expand here: harmless where the shell already did it (a plain filename
+    # globs to itself), and the difference between working and Errno 22 where
+    # it did not.
+    expanded = []
+    for pat in args.logs:
+        hits = sorted(glob(pat))
+        if hits:
+            expanded += hits
+        elif Path(pat).exists():
+            expanded.append(pat)
+        else:
+            ap.error(f"no log matches {pat!r}")
+    args.logs = expanded
+    print(f"reading {len(args.logs)} log(s): "
+          + ", ".join(Path(x).name for x in args.logs[:4])
+          + (" ..." if len(args.logs) > 4 else ""))
 
     model = S.MODELS[args.model]
     topo = S.topology_grid(1, args.tp, args.gpu)
