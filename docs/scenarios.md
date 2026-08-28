@@ -1655,12 +1655,17 @@ Ordered roughly by how much each could move the numbers:
     size and per-sequence prefix reads are all confirmed — so the error is
     entirely in the time side. **This inverts § 7's ordering on that row**:
     the decode ceiling falls from 309 to ~150 users against a cache ceiling of
-    234, so bandwidth binds before cache, not after. Prefill has an MFU anchor;
-    decode still has no calibrated counterpart in the model, and every hybrid
-    row (35B-A3B, Q38FN, GLM53F, DSV4F — 30 to 48 linear-attention layers each)
-    carries the same unpriced assumption. What the note does NOT establish is
-    the mechanism: `t0` and the efficiency term are not separable at one TP
-    width, and one deployment is not a bracket.
+    234, so bandwidth binds before cache, not after. **The mechanism is now
+    known, and it is not a hardware shortfall.** A Gated-DeltaNet state update
+    is a sequential recurrence, so verifying `1 + k` speculated positions costs
+    `1 + k` passes over the linear-attention layers where attention verifies
+    all of them in one kernel — a **2.5× multiplier on weight bytes** at this
+    model's 48-of-64 layer split and `num_speculative_tokens=2`. Priced that
+    way the deployment runs at 41–48% MBU, a healthy figure on a correctly
+    configured engine. So `mtp` must stop being a free multiplier on every
+    hybrid row (35B-A3B, Q38FN, GLM53F, DSV4F): measured net value of
+    speculation on this deployment is **~16%, not 2.9×**. A dense row is
+    unaffected.
 12. **N > 2 GPUs is a projection.** The TP haircut (0.90 per GPU-count doubling) is
     an extrapolated assumption — real large-N TP depends on interconnect and
     kernel overlap, and pipeline parallelism is not modelled at all. The node
