@@ -137,11 +137,19 @@ async def read_metrics(client, url, key):
     return out
 
 
-async def watchdog(client, args, stop, events):
+async def watchdog(client, args, stop, events, armed_in=0.0):
     """Politeness: three consecutive bad samples (~3 s) end the plateau. One
-    bad sample is a scheduling blip; three is somebody waiting on us."""
+    bad sample is a scheduling blip; three is somebody waiting on us.
+
+    Not armed until the ramp is over. Launching k streams at once queues our
+    OWN requests by construction -- at k=8 that reads as "somebody is
+    waiting" and aborts the plateau before it starts, which is what killed
+    arm A's k=8 rung and both arm C rungs on the first production run. After
+    the ramp, a queue means a co-tenant and the abort is real."""
     if not args.metrics:
         return
+    if armed_in:
+        await asyncio.sleep(armed_in)
     strikes = 0
     while not stop.is_set():
         m = await read_metrics(client, args.metrics, args.metrics_key)
@@ -173,7 +181,8 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
                else ("Continue this text.\n\n" + filler(ctx, rnd)) for _ in range(k)]
 
     stop, stats, events = asyncio.Event(), {}, []
-    watch = asyncio.create_task(watchdog(client, args, stop, events))
+    ramp = args.settle + (args.lead if (shared and k > 1) else 0.0)
+    watch = asyncio.create_task(watchdog(client, args, stop, events, ramp))
     # the shared rung's first stream pays the prefill alone, so the rest hit a
     # warm prefix instead of k cold prefills racing each other
     lead = None
