@@ -1644,9 +1644,23 @@ Ordered roughly by how much each could move the numbers:
     workload that keeps hitting the offloaded tier pays restore bandwidth that
     competes with decode, so real per-user speed under heavy offload would be
     *worse* than the flat line here, never better.
-11. **Decode is a pure HBM roofline.** Expert-dispatch overhead, attention/DeltaNet
-    compute, TP collectives, and scheduler overhead are not priced, so all tok/s
-    figures are upper bounds pending calibration against the real 35B-A3B.
+11. **Decode is a pure HBM roofline — and the bound is now MEASURED, not just
+    flagged.** Expert-dispatch overhead, attention/DeltaNet compute, TP
+    collectives and scheduler overhead are not priced, so all tok/s figures are
+    upper bounds. On a production 27B/4×H200 the bound is **3.3× loose**: the
+    measured effective decode bandwidth is 4.71 TB/s against the 15.55 TB/s
+    this model prices, and per-user decode is 250–330 tok/s where the model
+    says 812 ([`research/decode_mbu.md`](../research/decode_mbu.md), 2026-08-28).
+    The byte ledger survived the measurement intact — weights, `kv_bpt`, pool
+    size and per-sequence prefix reads are all confirmed — so the error is
+    entirely in the time side. **This inverts § 7's ordering on that row**:
+    the decode ceiling falls from 309 to ~150 users against a cache ceiling of
+    234, so bandwidth binds before cache, not after. Prefill has an MFU anchor;
+    decode still has no calibrated counterpart in the model, and every hybrid
+    row (35B-A3B, Q38FN, GLM53F, DSV4F — 30 to 48 linear-attention layers each)
+    carries the same unpriced assumption. What the note does NOT establish is
+    the mechanism: `t0` and the efficiency term are not separable at one TP
+    width, and one deployment is not a bracket.
 12. **N > 2 GPUs is a projection.** The TP haircut (0.90 per GPU-count doubling) is
     an extrapolated assumption — real large-N TP depends on interconnect and
     kernel overlap, and pipeline parallelism is not modelled at all. The node
