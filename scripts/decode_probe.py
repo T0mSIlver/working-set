@@ -128,7 +128,10 @@ async def stream_one(client, args, prompt, stop, stats):
             async with client.stream("POST", "/chat/completions", json=body,
                                      timeout=httpx.Timeout(1800.0, connect=30.0)) as r:
                 if r.status_code != 200:
-                    txt = (await r.aread())[:200].decode(errors="replace")
+                    # keep the whole body: vLLM's 400 names the actual prompt
+                    # token count and max_model_len, which is exactly the
+                    # calibration the filler got wrong
+                    txt = (await r.aread())[:1200].decode(errors="replace")
                     if attempt == 0:
                         body.pop("min_tokens", None)
                         body.pop("ignore_eos", None)
@@ -246,12 +249,42 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
            "measured_prompt_tokens": (sum(pt) / len(pt)) if pt else None,
            "start": start, "end": end, "held_s": end - start,
            "aborted": aborted, "events": events,
-           "errors": stats.get("errors", [])[:3]}
+           "errors": stats.get("errors", [])[:3],
+           "n_errors": len(stats.get("errors", []))}
     out.append(rec)
     print(f"held {end-start:4.0f}s"
           + (f"  ptok~{sum(pt)/len(pt):,.0f}" if pt else "")
           + ("  [ABORTED]" if aborted else "")
           + (f"  [{len(stats.get('errors', []))} errors]" if stats.get("errors") else ""))
+
+
+async def calibrate(client, args, rnd):
+    """Measure chars-per-token against the real tokenizer.
+
+    The filler is random lowercase text, which tokenizes far worse than
+    prose -- the 3.6 assumed here overshot enough that every 158k rung came
+    back HTTP 400 for exceeding max_model_len, losing half a run. One
+    NON-streaming request reports usage.prompt_tokens even on endpoints that
+    omit usage from the stream, which is the case on at least one gateway.
+    """
+    global CHARS_PER_TOKEN
+    probe = filler(2_000, rnd)
+    try:
+        r = await client.post("/chat/completions", timeout=120.0, json={
+            "model": args.model, "messages": [{"role": "user", "content": probe}],
+            "max_tokens": 1, "temperature": 0.0, "stream": False})
+        n = r.json().get("usage", {}).get("prompt_tokens")
+    except Exception as e:
+        print(f"  calibration failed ({type(e).__name__}); keeping "
+              f"{CHARS_PER_TOKEN} chars/token -- long rungs may be rejected")
+        return
+    if not n:
+        print("  no usage in response; keeping the assumed chars/token")
+        return
+    was = CHARS_PER_TOKEN
+    CHARS_PER_TOKEN = len(probe) / n
+    print(f"  tokenizer: {len(probe):,} chars -> {n:,} tokens "
+          f"({CHARS_PER_TOKEN:.2f} chars/token, assumed {was})")
 
 
 async def run(args):
@@ -262,6 +295,7 @@ async def run(args):
     # /metrics URL, so the TLS setting covers both
     async with httpx.AsyncClient(base_url=args.url.rstrip("/"), headers=hdr,
                                  limits=limits, verify=args.verify) as c:
+        await calibrate(c, args, rnd)
         for arm, k, ctx, shared in rungs_for(args):
             m = await read_metrics(c, args.metrics, args.metrics_key)
             w = m.get("vllm:num_requests_waiting")
