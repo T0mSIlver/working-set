@@ -16,16 +16,20 @@ measures the tightness on the study's own reference row.
 **Headline: the explorer's per-user decode figure is 3.3-4x high on this
 deployment, and the cause is that the study prices speculative decoding as
 free.** It is not free on a hybrid. A Gated DeltaNet state update is a
-sequential recurrence, so verifying `1 + k` speculated positions costs
-`1 + k` passes over the DeltaNet layers where attention verifies all of them
-in one kernel. On this model — 48 GDN layers, 16 attention — that is a
-**2.5x multiplier on the weight bytes of every decode step**, which the model
-does not carry. Priced correctly the deployment runs at **41-48% MBU**: a
-normal, healthy decode efficiency on correctly configured hardware.
+sequential recurrence, so verifying `1 + k` speculated positions cannot be
+batched across positions in the DeltaNet layers the way attention batches
+them. On this model -- 48 GDN layers, 16 attention -- that serialisation is
+the leading explanation for a pass that takes 10.5 ms where the byte
+ledger says 2.1.
 
-The byte ledger the study already had is confirmed exactly right (§ 2). The
-error is that the study counts the weights once per step and credits `mtp`
-tokens for free. The engine reads them 2.5 times.
+**Whether it costs BYTES or LATENCY is not established** (§ 4.3). Both
+readings fit the timing identically and neither is reachable from outside
+the pod. The correction in § 5 does not depend on which is true, which is
+the point of an efficiency constant.
+
+The byte ledger the study already had is confirmed exactly right (§ 2) --
+weights, KV per token, pool size, per-sequence prefix reads. The error is
+entirely on the time side.
 
 Net effect: **MTP is worth ~16% on this architecture, not 2.9x** (§ 4.3).
 
@@ -67,7 +71,7 @@ reported intervals an order of magnitude too tight).
 |---|---|---|---|
 | Forward pass @ n=1 | **10-11.3 ms** | 2.11 ms | 4.75-5.0x slower |
 | Per-user decode, n=1..4 | **250-330 tok/s** | 812 | reproduced in 4 sessions |
-| Effective aggregate bandwidth | **4.71 TB/s** | 15.55 TB/s | 3.3x — but see § 4: this is at the study's byte ledger. Price the verify cost and it is 7.8-9.2 TB/s, i.e. **41-48% MBU** |
+| Effective aggregate bandwidth | **4.92 TB/s** | 15.55 TB/s | 3.3x — but see § 4: this is at the study's byte ledger. Price the verify cost and it is 7.8-9.2 TB/s, i.e. **41-48% MBU** |
 | Weights read per pass | **~37 GB** at the study's ledger | 30.9 GB (FP8) | FP8 confirmed by the log: `Checkpoint size: 28.75 GiB`, sharded 7.3 GiB/rank |
 | KV bytes per context token | **32 KiB** | 32 KiB | confirmed |
 | Shared prefix read | **per sequence** | per sequence | confirmed; no cascade attention |
@@ -110,13 +114,13 @@ depends on. Per-user tok/s, the decode ceiling and the binding-constraint
 verdict are all functions of `bytes/bandwidth`, so they stand regardless of
 how the factor divides.
 
-## 4. Root cause: resolved by the startup log
+## 4. Root cause: localised by the startup log, not fully resolved
 
 ### 4.1 Every deployment hypothesis is dead
 
 Four sessions of black-box probing narrowed this to "the decode path is
-slow" and stalled. The engine's startup log closed it in one reading, and
-every configuration hypothesis the probing had left alive died at once:
+slow" and stalled. The engine's startup log killed every configuration
+hypothesis the probing had left alive, in one reading:
 
 | Suspected | Log says |
 |---|---|
@@ -137,26 +141,42 @@ for four days.
     WARNING vllm.config.speculative : Enabling num_speculative_tokens > 1
     will run multiple times of forward on same MTP layer
 
-A GDN state update is `S_new = alpha * S_old + beta * (k (x) v)` — sequential
+A GDN state update is `S_new = alpha * S_old + beta * (k (x) v)` -- sequential
 in position. The layer cannot verify `1 + k` proposed tokens in one batched
-pass the way an attention layer can, so the verify cost grows close to
-linearly in the number of proposed positions on the GDN portion of the
-network. With `num_speculative_tokens = 2`:
+pass the way an attention layer can. Three quarters of this model's layers
+are GDN, and decode is the regime where that bites: PREFILL uses the chunked
+form of the same recurrence (thousands of tokens become matmuls, fully
+parallel), which is why prefill measures a healthy 40% MFU on the same GPUs
+while decode does not.
 
-    weight multiplier = (48 layers x 3 + 16 layers x 1) / 64 = 2.50x
-    step bytes        = 30.9 GB x 2.50 + ~3 GB (two MTP draft forwards) + KV
-                      ~ 82 GB, against the 33 GB the study counts
+### 4.3 Two readings of the same 10.5 ms, and no way to separate them
 
-At that ledger the measured passes price out at **7.8 TB/s (41% of
-advertised) at n=1 and 9.2 TB/s (48%) in the arm B plateau** — squarely in
-the range a healthy decode should hit, and the same range prefill's measured
-MFU sits in on this hardware.
+    A  bytes:   the GDN weights are re-read once per verified position,
+                (48x3 + 16x1)/64 = 2.50x, so a step moves ~82 GB not ~33 GB,
+                and the machine streams at ~41-48% of advertised
+    B  latency: the weights are read ONCE (the q/k/v/gate and output
+                projections are GEMMs over all 3 positions at once), the
+                machine streams at ~25%, and the residual ~3.5 ms is
+                144 dependent state updates that move almost no data
 
-This also retires the structural degeneracy of § 3 from the outside: the
-"bytes x 2.5" branch is the true one, and it was never resolvable from
-timing alone.
+**B is the more parsimonious**, and the direct measurement leans that way:
+the arm B slope prices the KV read path, where the count is unambiguous
+(FlashAttention reads the KV once for all 3 query positions), at 4.9 TB/s.
+Reading A needs the weights to stream at 7.8 TB/s while the KV streams at
+4.9 simultaneously -- possible (contiguous versus gathered) but it needs two
+efficiencies where B needs one.
 
-### 4.3 Speculation is nearly a wash on this architecture
+An earlier draft of this note asserted A as settled. It is not: it rests on
+a mechanism inferred from a log warning about the DRAFT head, and § 3's
+structural degeneracy says plainly that timing alone cannot choose. Settling
+it needs a profiler on the pod, or a spec-off / k-sweep A/B -- and those
+predict OPPOSITE outcomes, which makes the k-sweep the cheap experiment:
+under B, raising `num_speculative_tokens` from 2 to 5 gains ~33%; under A it
+LOSES ~6%.
+
+Neither reading changes § 5. That is what an efficiency constant is for.
+
+### 4.4 Speculation is nearly a wash under reading A -- and a big win under B
 
 The study models `mtp` as a free multiplier on decode speed. Pricing the
 verify cost against the acceptance actually measured (alpha = 0.971):
@@ -186,9 +206,13 @@ Proposed, not yet applied:
 
       weight_mult = (n_linear x (1 + k) + n_attn) / (n_linear + n_attn)
 
-  For the 27B at k=2 that is 2.50x. Every model in the study with DeltaNet /
-  KDA / linear-attention layers needs it: 35B-A3B (30 of 40), Q38FN (36 of
-  48), GLM53F (34 of 45), DSV4F. A dense row is unaffected.
+  For the 27B at k=2 that is 2.50x -- IF reading A holds (§ 4.3). Under
+  reading B the same serialisation costs latency instead, and the right form
+  is a per-position term rather than a byte multiplier. Until an A/B settles
+  it, `MBU_DEFAULT` absorbs whichever it is, which is why that constant is
+  documented as travelling with `mtp`. Every model in the study with
+  DeltaNet / KDA / linear-attention layers is affected either way: 35B-A3B
+  (30 of 40), Q38FN (36 of 48), GLM53F (34 of 45), DSV4F. A dense row is not.
 - **A decode MBU constant**, the counterpart to `MFU_DEFAULT`. With the
   verify cost priced, this deployment sits at **eta = 0.41-0.48** of
   advertised — close enough to prefill's 0.40 that one shared efficiency

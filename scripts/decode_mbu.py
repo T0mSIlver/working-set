@@ -119,6 +119,11 @@ SERIES = {
     "fwd_count": (["vllm:model_forward_time_milliseconds_count"], False, ""),
 }
 
+# The byte-range ratio below which t0 and eta are not separately identified.
+# The guard used to test 1.5 while its own message demanded ">= 2, want >= 3";
+# the message was the honest number, so it wins.
+LEVERAGE_MIN = 2.0
+
 LINE = re.compile(r'^([a-zA-Z_:][\w:]*)(\{[^}]*\})?\s+([-+0-9.eENaninf]+)\s*$')
 LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 
@@ -200,6 +205,30 @@ def get(block, names, key, default=None):
 # ---------------------------------------------------------------------------
 # window extraction
 # ---------------------------------------------------------------------------
+def busy_between(blocks, i, j, names):
+    """Every scrape strictly inside (i, j) shows a busy engine.
+
+    The endpoint predicates -- equal concurrency, no completions, token
+    accounting -- do NOT exclude an idle gap in the middle: if the engine
+    stalls, `steps` and `generation_tokens` stall together, so the
+    consistency check still balances while `dt` quietly absorbs the gap and
+    biases t_pass high (and MBU low). An earlier docstring here claimed that
+    filter caught idle gaps. It does not; it catches batch churn.
+
+    We hold every scrape in memory anyway, so check them: steps must advance
+    across every consecutive pair inside the window, and the batch must never
+    empty. Cheap, and it closes the hole directly rather than by argument.
+    """
+    st, run = names.get("steps"), names.get("running")
+    for k in range(i, j):
+        a, b = blocks[k][1], blocks[k + 1][1]
+        if (b.get(st, 0.0) - a.get(st, 0.0)) <= 0:
+            return False
+        if (a.get(run) or 0) < 1:
+            return False
+    return True
+
+
 def harvest(blocks, names, args):
     """Every scrape pair in [min_s, max_s] that survives the decode-only
     predicates. Pairs, not consecutive samples: a long window amortises
@@ -217,6 +246,9 @@ def harvest(blocks, names, args):
                 continue
             if dt > args.max_window:
                 break
+            if not busy_between(blocks, i, j, names):
+                rej["engine idle inside window"] += 1
+                continue
             w = window(t0, b0, t1, b1, names, args, rej)
             if w:
                 out.append(w)
@@ -251,9 +283,10 @@ def window(t0, b0, t1, b1, names, args, rej):
     else:
         accepted_len, k_draft = 1.0, 0.0
 
-    # the filter that earns its keep: delivered tokens must equal
-    # steps x batch x accepted_len. An idle gap inflates dt without steps;
-    # a batch that dipped and recovered passes the gauge check but not this.
+    # delivered tokens must equal steps x batch x accepted_len. This catches
+    # BATCH CHURN -- a batch that dipped and recovered between the endpoint
+    # samples. It does NOT catch an idle gap (steps and tokens stall
+    # together, so the identity still balances); busy_between() does that.
     gen = d("gen")
     predicted = steps * n * accepted_len
     if gen <= 0 or abs(gen - predicted) > args.tol * max(gen, predicted):
@@ -336,13 +369,25 @@ def fit(points, bw_adv):
     return t0, (1.0 / slope if slope > 0 else float("nan"))
 
 
-def cluster(points, gap):
+def cluster(points, gap, by_arm=False):
     """Group windows into plateaus. Every scrape PAIR inside one plateau is a
     window, so windows overlap heavily and are anything but independent --
     resampling them individually would report a confidence interval an order
     of magnitude too tight. The plateau is the independent unit: one batch
     size, one stretch of wall clock, one set of thermal and neighbour
     conditions."""
+    # Prefer the probe's OWN plateau identity when arms.jsonl gave us one.
+    # Clustering on (equal n, time gap) alone merges distinct arm-B rungs:
+    # arm B deliberately holds n fixed and varies CONTEXT, and its
+    # settle-to-settle spacing is under the default 20 s gap -- so the
+    # rungs carrying the slope variation collapsed into a single block and
+    # the bootstrap resampled them as one, fixing the very variation the fit
+    # depends on. Arm labels are attached before this runs for that reason.
+    if by_arm and all(p.get("arm_plateau") is not None for p in points):
+        ids = {}
+        for p in points:
+            p["cluster"] = ids.setdefault(p["arm_plateau"], len(ids))
+        return len(ids)
     order = sorted(range(len(points)), key=lambda i: points[i]["t0"])
     cid, last_t, last_n = 0, None, None
     for i in order:
@@ -649,10 +694,12 @@ def main():
               ", ".join(f"{k} {v:,}" for k, v in rej.most_common()))
         return 1
 
-    n_clusters = cluster(pts, args.max_window)
     if args.arms:
         hit = label_arms(pts, args.arms)
         print(f"arms: {hit:,}/{len(pts):,} windows fell inside a probe plateau")
+    # by_arm AFTER labelling: a probe plateau is the independent unit, and
+    # only arms.jsonl knows where one rung ended and the next began
+    n_clusters = cluster(pts, args.max_window, by_arm=bool(args.arms))
     apply_shared_prefix(pts, args)
     for p in pts:
         p["bytes"] = step_bytes(model, p["n"], p["sum_L"])
@@ -692,6 +739,10 @@ def label_arms(pts, path):
                   if a.get("start", 0) <= p["t0"] and p["t1"] <= a.get("end", 0)), None)
         p["arm"] = a.get("arm") if a else None
         p["arm_k"] = a.get("k") if a else None
+        # identity of the plateau this window came from: arm + rung + start.
+        # Distinct rungs of one arm are DIFFERENT plateaus even at equal n.
+        p["arm_plateau"] = (f"{a.get('arm')}/{a.get('k')}/"
+                            f"{a.get('target_prompt_tokens')}/{a.get('start')}") if a else None
         p["arm_shared_prefix"] = a.get("shared_prefix_tokens", 0) if a else None
         hit += a is not None
     return hit
@@ -747,7 +798,7 @@ def report(pts, rej, model, topo, args, bw_adv, bw_model):
     tp_eff = S.tp_efficiency(args.tp, S.GPUS[args.gpu].nvlink_domain)
 
     print("\n-- fit  t_pass = t0 + bytes / (eta x bw_advertised) --")
-    if lev < 1.5:
+    if lev < LEVERAGE_MIN:
         print(f"!! LEVERAGE {lev:.2f}x IS TOO LOW TO IDENTIFY BOTH TERMS.")
         print("   Every (t0, eta) on a line through these points fits equally "
               "well; the split below is arbitrary, not measured.")

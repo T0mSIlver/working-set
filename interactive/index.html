@@ -2171,7 +2171,7 @@ function prefillMfu(){
 
 function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // MEASURED efficiency, not a roofline: see DECODE_MBU.
-  const bw = effective_bw(topo) * decodeMbu(), scale = topo.replicas;
+  const bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU), scale = topo.replicas;
   const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);
   // LOW-n anchors. Per-user speed is a hyperbola in n, so the first regular
   // interval (1 -> 1+step) contains most of the curve's entire drop: at the
@@ -3126,9 +3126,11 @@ function activeModel(){ return modelFor(state.model); }
 // what its own tooltip says it is.
 function modelForCompare(key){
   const own = CONFIG.MODELS[key].mtp;
-  const saved = state.mtp;
-  state.mtp = own;
-  try { return modelFor(key); } finally { state.mtp = saved; }
+  const ownMbu = CONFIG.MODELS[key].decode_mbu || DECODE_MBU;
+  const saved = state.mtp, savedMbu = state.mbu;
+  state.mtp = own; state.mbu = ownMbu;
+  try { return modelFor(key); }
+  finally { state.mtp = saved; state.mbu = savedMbu; }
 }
 function modelFor(key){
   let m = CONFIG.MODELS[key];
@@ -3156,6 +3158,13 @@ function modelFor(key){
   if (state.wover === "p15" && state.model !== "27B")
     m = { ...m, w_resident: m.w_resident*1.15, name: m.name + " [+15% weights]" };
   m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
+  // ...and the decode-efficiency knob, BAKED ONTO THE MODEL for the same
+  // reason mtp is: the frontier prices every row at its OWN capability via
+  // modelForCompare, and a decode efficiency read from global state at call
+  // time would hand every row the SELECTED model's value -- pricing MM35 and
+  // GLM52 (0.75, no recurrence) at a hybrid's 0.22 and vice versa. Baking it
+  // is also what keeps frontierWarmSig correct in omitting the slider.
+  m = { ...m, decode_mbu: decodeMbu() };
   return m;
 }
 
@@ -4512,7 +4521,7 @@ function decodeUsersApprox(model, topo, samples, floor){
   // argument, and a fixed 40 would leave the sensitivity panel's stand-in on a
   // different threshold from the MC ceiling it is calibrated against — calD
   // would silently absorb the mismatch at the anchor and be wrong everywhere else
-  const F = floor || decodeFloor(), bw = effective_bw(topo) * decodeMbu();
+  const F = floor || decodeFloor(), bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU);
   const tk = (model.kv_decode_const && model.kv_decode_topk) ? model.kv_decode_topk : 0;
   let mL = 0, mT = 0;
   for (let i = 0; i < samples.length; i++){
