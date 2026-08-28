@@ -204,6 +204,39 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 # 256 experts / 8 routed + 1 shared, vocab 248,320). Full derivations and
 # the assumption ledger: research/model_35ba3b.md.
 # ============================================================================
+# ---- DECODE efficiency: MFU's counterpart, and the study's newest constant ----
+# Decode was priced as a PURE roofline until 2026-08-28: bytes / effective_bw,
+# with no efficiency term at all, while prefill had carried an MFU anchor for
+# weeks. research/decode_mbu.md measures the gap on the reference row
+# (27B / 4xH200 TP4, production, five sessions): the model ran **4.1x
+# optimistic**, and ONE multiplicative constant brings it to a median 13%
+# (worst 20%) across batch sizes 1-25 and step bytes 35-90 GB.
+#
+# CONVENTION, as in prefill.md: this is the MODEL-convention figure, i.e.
+# already divided by tp_efficiency, so it multiplies effective_bw() directly.
+# The measurement reads 0.179 of the RAW advertised aggregate; 0.179/0.81 =
+# 0.221 here. Quote the convention whenever quoting the number.
+#
+# WHAT IT ABSORBS, and why that matters: the constant is fitted on a HYBRID
+# model (48 Gated-DeltaNet layers of 64) running speculative decoding at
+# num_speculative_tokens=2. It therefore absorbs both the streaming
+# inefficiency and whatever the speculative verify costs on a sequential
+# recurrence -- decode_mbu.md could not separate those from outside the pod.
+# Two consequences:
+#   * MBU and the model's `mtp` TRAVEL TOGETHER. The 27B's mtp is the measured
+#     accepted length at k=2; changing one without the other breaks the fit.
+#   * It is NOT a hardware constant. A dense model has no recurrence to
+#     serialise and should sit higher; nothing in this study measures one.
+# ONE deployment, ONE model, ONE spec config -- an anchor, not a bracket. The
+# LOW/HIGH pair spans the residual spread, not independent measurements.
+MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
+# UNMEASURED default for models with no recurrent state to serialise (dense
+# attention, MLA). Nothing in this study measures one, so it is a placeholder
+# near the top of what a well-served decode reaches, not a fit. Mirrors
+# DECODE_MBU_NONRECURRENT in the explorer, where it is a slider.
+MBU_NONRECURRENT = 0.75
+
+
 @dataclass
 class Model:
     name: str
@@ -214,6 +247,11 @@ class Model:
     w_route_pertok: float
     w_route_total: float
     mtp: float = 1.7
+    # Decode efficiency for THIS model (see MBU_DEFAULT). Per-model because it
+    # is an architectural property: a recurrent stack serialises where a dense
+    # one does not. Measured on the 27B, transplanted to the other recurrent
+    # rows, and overridden upward on the rows with no recurrence at all.
+    decode_mbu: float = MBU_DEFAULT
     weight_dtype: str = "fp8"   # set via with_weight_dtype(); gates GPU choice
     # NVFP4-checkpoint weight bytes (w_resident, w_decode_shared,
     # w_route_pertok, w_route_total), or None if no NVFP4 variant exists.
@@ -373,6 +411,7 @@ MODELS = {
         w_route_pertok=0.0,
         w_route_total=0.0,
         mtp=1.0,                         # no MTP module (EAGLE draft is external)
+        decode_mbu=MBU_NONRECURRENT,     # dense GQA: no recurrence. UNMEASURED
         # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
         # edge MLP + all attention FP8, lm_head BF16 (research note #3).
         # Resident = the MEASURED safetensors total (95,224,812,960 B,
@@ -404,6 +443,7 @@ MODELS = {
         w_route_pertok=22_649_241_600,   # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
         w_route_total=724_775_731_200,   # 256 experts (saturates at n=32, like 35BA3B)
         mtp=1.7,                         # MTP module (5 drafts); transplanted fit, unmeasured
+        decode_mbu=MBU_NONRECURRENT,     # MLA+DSA, no recurrent state. UNMEASURED
         # nvidia/GLM-5.2-NVFP4: ONLY routed experts NVFP4; attn/shared/dense/
         # embeddings/lm_head/MTP stay BF16. Derived 464.8e9 B matches the vLLM
         # recipe's "~465 GB" within 0.05% (research/model_glm52.md #4).
@@ -914,32 +954,6 @@ def effective_bw(topo: Topology) -> float:
 # number in this study should be read with the bracket, not the point.
 MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.35, 0.45, 0.55
 
-# ---- DECODE efficiency: MFU's counterpart, and the study's newest constant ----
-# Decode was priced as a PURE roofline until 2026-08-28: bytes / effective_bw,
-# with no efficiency term at all, while prefill had carried an MFU anchor for
-# weeks. research/decode_mbu.md measures the gap on the reference row
-# (27B / 4xH200 TP4, production, five sessions): the model ran **4.1x
-# optimistic**, and ONE multiplicative constant brings it to a median 13%
-# (worst 20%) across batch sizes 1-25 and step bytes 35-90 GB.
-#
-# CONVENTION, as in prefill.md: this is the MODEL-convention figure, i.e.
-# already divided by tp_efficiency, so it multiplies effective_bw() directly.
-# The measurement reads 0.179 of the RAW advertised aggregate; 0.179/0.81 =
-# 0.221 here. Quote the convention whenever quoting the number.
-#
-# WHAT IT ABSORBS, and why that matters: the constant is fitted on a HYBRID
-# model (48 Gated-DeltaNet layers of 64) running speculative decoding at
-# num_speculative_tokens=2. It therefore absorbs both the streaming
-# inefficiency and whatever the speculative verify costs on a sequential
-# recurrence -- decode_mbu.md could not separate those from outside the pod.
-# Two consequences:
-#   * MBU and the model's `mtp` TRAVEL TOGETHER. The 27B's mtp is the measured
-#     accepted length at k=2; changing one without the other breaks the fit.
-#   * It is NOT a hardware constant. A dense model has no recurrence to
-#     serialise and should sit higher; nothing in this study measures one.
-# ONE deployment, ONE model, ONE spec config -- an anchor, not a bracket. The
-# LOW/HIGH pair spans the residual spread, not independent measurements.
-MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
 
 
 def prefill_flops(model: Model, tokens: float, prior: float = 0.0) -> tuple:
@@ -1841,7 +1855,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     # MEASURED decode efficiency (research/decode_mbu.md). Before 2026-08-28
     # this line read `bw = effective_bw(topo)` -- a pure roofline, 4.1x
     # optimistic against production. Pass mbu=1.0 to recover that reading.
-    bw = effective_bw(topo) * (MBU_DEFAULT if mbu is None else mbu)
+    bw = effective_bw(topo) * (model.decode_mbu if mbu is None else mbu)
     # dense-attention models read every cached token per step (kv_bpt); a
     # sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
     # token (indexer scan) plus a top-k read per active sequence, capped at
