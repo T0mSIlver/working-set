@@ -708,10 +708,19 @@ def apply_shared_prefix(pts, args):
         if p["L_src"] != "metrics":
             continue
         prefix = p.get("arm_shared_prefix")
+        # How many sequences in the batch share that prefix. During a probe
+        # plateau it is OUR k streams, not the whole batch: a co-tenant's
+        # sequence carries its own context, already counted once in storage
+        # and read once per step, so charging it a copy of our prefix would
+        # invent bytes. Capped at n, since some of ours may not have started.
         if prefix is None:
-            prefix = args.shared_prefix
+            prefix, sharers = args.shared_prefix, p["n"]
+        else:
+            sharers = min(p.get("arm_k") or p["n"], p["n"])
         p["shared_prefix_used"] = 0.0 if args.cascade else float(prefix or 0.0)
-        p["sum_L"] = p["L_stored"] + (p["n"] - 1) * p["shared_prefix_used"]
+        p["sharers"] = sharers
+        p["foreign"] = p["n"] - sharers
+        p["sum_L"] = p["L_stored"] + (sharers - 1) * p["shared_prefix_used"]
 
 
 def report(pts, rej, model, topo, args, bw_adv, bw_model):
@@ -836,6 +845,14 @@ def report(pts, rej, model, topo, args, bw_adv, bw_model):
                      if worst < 0.15 else
                      "the slider's alpha readout is a fiction -- quote the "
                      "measured speedup, not an implied acceptance"))
+
+    foreign = [p["foreign"] for p in pts if p.get("foreign")]
+    if foreign:
+        print(f"\n-- co-tenant traffic --")
+        print(f"   {len(foreign):,}/{len(pts):,} windows had sequences that were "
+              f"not ours (median {np.median(foreign):.0f} extra)")
+        print("   their contexts are in the measured batch and the measured KV "
+              "occupancy, so they widen the byte axis rather than biasing it.")
 
     arms = {p.get("arm") for p in pts if p.get("arm")}
     if "C" in arms:
