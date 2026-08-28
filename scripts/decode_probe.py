@@ -217,8 +217,10 @@ async def run(args):
     out, rnd = [], random.Random(args.seed)
     hdr = {"Authorization": f"Bearer {args.api_key}"} if args.api_key else {}
     limits = httpx.Limits(max_connections=args.max_k + 8)
+    # one client serves both the endpoint and the watchdog's absolute
+    # /metrics URL, so the TLS setting covers both
     async with httpx.AsyncClient(base_url=args.url.rstrip("/"), headers=hdr,
-                                 limits=limits) as c:
+                                 limits=limits, verify=args.verify) as c:
         for arm, k, ctx, shared in rungs_for(args):
             m = await read_metrics(c, args.metrics, args.metrics_key)
             w = m.get("vllm:num_requests_waiting")
@@ -286,12 +288,18 @@ def main():
                     help="abort if this many requests queue")
     ap.add_argument("--max-kv", type=float, default=0.80,
                     help="abort if KV pool usage passes this fraction")
+    ap.add_argument("--ca-bundle", help="CA bundle to verify against")
+    ap.add_argument("--insecure", action="store_true",
+                    help="skip TLS verification (internal endpoints only)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--arms-file", default="arms.jsonl")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan and what it costs, contact nothing")
     args = ap.parse_args()
     args.arm = args.arm or ["A", "C"]
+    args.verify = args.ca_bundle or (False if args.insecure else True)
+    if args.insecure:
+        print("TLS verification DISABLED")
     if not args.model and args.url:
         args.model = args.url.rstrip("/").rsplit("/", 1)[-1]
 

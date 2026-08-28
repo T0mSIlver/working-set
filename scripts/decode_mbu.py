@@ -491,10 +491,10 @@ def self_test(args):
 # ---------------------------------------------------------------------------
 # --probe: does this deployment export what the plan needs?
 # ---------------------------------------------------------------------------
-def probe(url, api_key):
+def probe(url, api_key, verify=True):
     import httpx
     hdr = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    r = httpx.get(url, headers=hdr, timeout=10.0)
+    r = httpx.get(url, headers=hdr, timeout=10.0, verify=verify)
     r.raise_for_status()
     sample, engines = defaultdict(float), set()
     for line in r.text.splitlines():
@@ -546,6 +546,9 @@ def main():
     ap.add_argument("logs", nargs="*", help="scrape logs from scrape_metrics.py")
     ap.add_argument("--probe", metavar="URL", help="capability check, then exit")
     ap.add_argument("--api-key")
+    ap.add_argument("--ca-bundle", help="CA bundle for --probe over TLS")
+    ap.add_argument("--insecure", action="store_true",
+                    help="skip TLS verification on --probe")
     ap.add_argument("--model", default="27B", choices=sorted(S.MODELS))
     ap.add_argument("--tp", type=int, default=4)
     ap.add_argument("--gpu", default="H200", choices=sorted(S.GPUS))
@@ -585,7 +588,8 @@ def main():
     if args.self_test:
         return self_test(args)
     if args.probe:
-        return probe(args.probe, args.api_key)
+        return probe(args.probe, args.api_key,
+                     args.ca_bundle or (not args.insecure))
     if not args.logs:
         ap.error("give scrape logs, or --probe URL")
 

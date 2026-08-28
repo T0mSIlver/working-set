@@ -26,7 +26,19 @@ ap = argparse.ArgumentParser()
 ap.add_argument("url")
 ap.add_argument("--interval", type=float, default=1.0)
 ap.add_argument("--api-key")
+# TLS: a corporate interception proxy presents its own certificate, so the
+# system trust store is not enough. --ca-bundle keeps verification and is the
+# right fix; --insecure turns it off for a scrape of an internal endpoint.
+ap.add_argument("--ca-bundle", help="path to the CA bundle to verify against")
+ap.add_argument("--insecure", action="store_true",
+                help="skip TLS verification (internal endpoints only)")
 args = ap.parse_args()
+
+verify = args.ca_bundle or (False if args.insecure else True)
+if args.insecure:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    print("TLS verification DISABLED")
 
 hdr = {"Authorization": f"Bearer {args.api_key}"} if args.api_key else {}
 out = f"mfu_scrape_{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.log"
@@ -37,7 +49,7 @@ with open(out, "a", buffering=1) as f:
         now = time.time()
         human = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
         try:
-            r = requests.get(args.url, headers=hdr, timeout=5)
+            r = requests.get(args.url, headers=hdr, timeout=5, verify=verify)
             r.raise_for_status()
             lines = [l for l in r.text.splitlines() if l.startswith("vllm:")]
             f.write(f"===== {now:.3f} {human:%Y-%m-%d %H:%M:%S} UTC "
