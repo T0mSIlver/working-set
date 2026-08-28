@@ -292,7 +292,16 @@ def window(t0, b0, t1, b1, names, args, rej):
             if key.startswith(base + "@"):
                 pos[key.split("@", 1)[1]] = v1 - b0.get(key, 0.0)
 
+    # tokens scheduled per pass. With speculative decoding a decode-only pass
+    # schedules n x (1 + k) tokens -- the token and its k drafts, all verified
+    # in the same forward. Comparing that against the batch is the check that
+    # `steps` really counts forward passes: everything downstream divides wall
+    # time by it, so if this series meant anything else the headline factor
+    # would be wrong by exactly that amount.
+    iter_tok = d("iter_sum") / steps if names.get("iter_sum") else None
+
     return dict(t0=t0, t1=t1, dt=dt, steps=steps, n=n, t_pass=t_pass,
+                iter_tok=iter_tok,
                 t_src=t_src, sum_L=sum_L, L_stored=sum_L, L_src=L_src,
                 accepted_len=accepted_len, k_draft=k_draft, drafts=drafts,
                 pos_accepted=pos, gen=gen, waiting=get(b1, names, "waiting"))
@@ -754,9 +763,29 @@ def report(pts, rej, model, topo, args, bw_adv, bw_model):
               f"{t0/(t0 + by.max()/(eta*bw_adv)):.0%} / "
               f"{1-t0/(t0 + by.max()/(eta*bw_adv)):.0%}")
 
+    it = [p["iter_tok"] for p in pts if p.get("iter_tok") is not None]
+    if it:
+        obs = float(np.median(it))
+        k = np.nanmedian([p["k_draft"] for p in pts])
+        exp = float(np.median([p["n"] for p in pts])) * (1 + (0 if math.isnan(k) else k))
+        ok = abs(obs - exp) <= 0.15 * max(exp, 1e-9)
+        print(f"\n-- is a 'step' a forward pass? --")
+        print(f"   tokens scheduled per step: {obs:.2f}   "
+              f"expected n x (1+k) = {exp:.2f}   {'OK' if ok else 'MISMATCH'}")
+        if not ok:
+            print("   !! every figure below divides wall time by this step "
+                  "count. Until this reconciles, treat the slowdown factor as "
+                  "unverified -- the counter may not mean one forward pass.")
+
     # residuals against the UNCALIBRATED model -- the headline the user came for
     ratio = np.array([p["roofline_s"] / p["t_pass"] for p in pts])
+    v_meas = np.array([p["accepted_len"] / p["t_pass"] for p in pts])
     print(f"\n-- what the study currently predicts --")
+    print(f"   MEASURED per-user speed: {np.median(v_meas):.0f} tok/s "
+          f"[p5 {np.percentile(v_meas,5):.0f}, p95 {np.percentile(v_meas,95):.0f}] "
+          f"at n = {int(np.median([p['n'] for p in pts]))}")
+    print(f"   measured pass time     : {np.median([p['t_pass'] for p in pts])*1e3:.2f} ms "
+          f"vs roofline {np.median([p['roofline_s'] for p in pts])*1e3:.2f} ms")
     print(f"   measured pass / roofline pass: {1/np.median(ratio):.2f}x slower "
           f"(p5 {1/np.percentile(ratio,95):.2f}x, p95 {1/np.percentile(ratio,5):.2f}x)")
     print(f"   so every per-user tok/s figure at these batch sizes is that "
