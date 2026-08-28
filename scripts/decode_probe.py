@@ -66,6 +66,29 @@ import httpx
 CHARS_PER_TOKEN = 3.6      # random lowercase text; refined from usage at runtime
 
 
+def size_output(args):
+    """Pick --out-tokens so the batch cannot drain mid-plateau.
+
+    A stream that finishes early takes its sequence out of the batch, and the
+    plateau silently becomes whatever the co-tenants are doing -- which is
+    what happened to the first arm D run (4,000 tokens at ~300 tok/s = 13 s
+    of a 40 s hold; every rung reported the same batch size regardless of k).
+    The output must outlast the hold at the SLOWEST rate we might see, so
+    size it from the hold and clamp it to whatever context budget is left.
+    """
+    need = int(args.hold * args.slowest_tok_s * 1.5)   # 1.5x margin on the rate
+    out = max(args.out_tokens, need)
+    if args.max_model_len:
+        room = args.max_model_len - args.long_tokens
+        if room < out:
+            # prefer shortening the prompt to shortening the plateau: context
+            # length is a knob, a drained plateau is a lost measurement
+            args.long_tokens = max(8_000, args.max_model_len - out - 2_000)
+            print(f"  long rung shortened to {args.long_tokens:,} tokens so "
+                  f"{out:,} output tokens fit in max_model_len {args.max_model_len:,}")
+    return out
+
+
 def rungs_for(args):
     """(arm, k, prompt_tokens, shared) plateaus, in run order."""
     P = args.prefix_tokens
@@ -279,6 +302,8 @@ def plan_table(args):
           f"~{gen:.0f}k more tokens over a {args.hold:.0f}s plateau.")
     print(f"leverage across the plan: {hi/lo:.2f}x  "
           f"({'OK, >=2x identifies both terms' if hi/lo >= 2 else 'TOO LOW -- raise --max-k or --prefix-tokens'})")
+    print(f"output per stream: {args.out_tokens:,} tokens -- outlasts a "
+          f"{args.hold:.0f}s hold down to {args.out_tokens/args.hold:.0f} tok/s")
     print(f"wall clock: ~{len(rows)*(args.hold+2*args.settle)/60:.1f} min")
 
 
@@ -303,7 +328,12 @@ def main():
                     help="ramp before a plateau, and idle after it")
     ap.add_argument("--lead", type=float, default=6,
                     help="head start for the prefix-warming stream on shared rungs")
-    ap.add_argument("--out-tokens", type=int, default=16_000)
+    ap.add_argument("--out-tokens", type=int, default=16_000,
+                    help="floor; raised automatically so streams outlast --hold")
+    ap.add_argument("--slowest-tok-s", type=float, default=400,
+                    help="pessimistic per-stream decode rate, for sizing the output")
+    ap.add_argument("--max-model-len", type=int, default=0,
+                    help="server max_model_len; the long rung is shortened to fit")
     ap.add_argument("--max-k", type=int, default=16, help="hard cap on streams")
     ap.add_argument("--max-waiting", type=float, default=0.0,
                     help="abort if this many requests queue")
@@ -318,6 +348,7 @@ def main():
                     help="print the plan and what it costs, contact nothing")
     args = ap.parse_args()
     args.arm = args.arm or ["A", "C"]
+    args.out_tokens = size_output(args)
     args.verify = args.ca_bundle or (False if args.insecure else True)
     if args.insecure:
         print("TLS verification DISABLED")
