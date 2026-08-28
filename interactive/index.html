@@ -696,6 +696,12 @@ const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 // absorbs both streaming inefficiency and whatever the speculative verify
 // costs on a sequential recurrence. It therefore travels WITH the model's
 // mtp: change one and the fit breaks. Mirrors MBU_DEFAULT in scenario_model.py.
+// EXTRAPOLATION BIAS: fitted over n = 1-25, where weights are 80-95% of the
+// step. The decode ceiling lives at n ~ 100-250, where KV dominates and a
+// whole-ledger multiplier over-charges. The 27B/TP4 ceiling reads 108 here,
+// 238 under decode_mbu.md's reading A and 154 under reading B -- against a
+// cache ceiling of 249, so the BINDING ORDER is not identified. Per-user
+// speed near the fitted mix is; the ceiling is not. See MBU_DEFAULT.
 // Per-model default lives in MODELS[].decode_mbu; this is the fallback and the
 // value every recurrent model carries. Non-recurrent rows override it upward.
 const DECODE_MBU    = 0.22;
@@ -2281,8 +2287,8 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // decode holds each request in the batch longer, so the steady batch GROWS
   // and each member runs slower. 2.2 at 430 -> ~6.5 at ~135. Mirrors the
   // same re-pin in scenario_model.py's _selfcheck.
-  console.assert(approx(sd.n, 6.5, 0.18) && approx(sd.pu, 135, 0.20),
-    "27B/TP2 at the reference load: ~2 sequences decoding, ~430 tok/s each");
+  console.assert(approx(sd.n, 6.8, 0.08) && approx(sd.pu, 138, 0.09),
+    "27B/TP2 at the reference load: ~6.8 sequences decoding, ~138 tok/s each");
   console.assert(sd.n < 480/5 && sd.pu > 4*interpAt(dc,'p50',480,true),
     "the steady batch must sit far left of the sweep, and far above its speed");
   // 4. monotone and linear in the load, exactly (demand is linear, and the

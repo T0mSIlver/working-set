@@ -109,10 +109,31 @@ Only the ratio is identified. `vllm:estimated_read_bytes_per_gpu_total` would
 settle it outright — the series exists on this deployment but reads 0.0 in
 every one of 433 scrapes, so it is not populated.
 
-What the degeneracy does NOT threaten: the *ratio* is what every study figure
-depends on. Per-user tok/s, the decode ceiling and the binding-constraint
-verdict are all functions of `bytes/bandwidth`, so they stand regardless of
-how the factor divides.
+What the degeneracy threatens, and what it does not -- **corrected on
+cross-review (opencode glm-5.3); the first draft of this paragraph was
+wrong.** The ratio argument holds only if the missing factor multiplies the
+WHOLE step ledger. Reading A multiplies the linear-attention WEIGHT bytes and
+leaves KV alone, so folding it into a single efficiency mis-prices any
+weights:KV mix away from the fitted one -- and the fit region (n = 1-25,
+weights 80-95% of the step) is the opposite regime from where the decode
+ceiling lives (n ~ 100-250, KV-dominated).
+
+Anchoring all three to the same n=1 measurement, the 27B / 4xH200 decode
+ceiling at the 40 tok/s floor reads:
+
+| priced as | decode ceiling | vs cache 249 |
+|---|---|---|
+| a single whole-ledger constant (what this PR ships) | **108** | inverts |
+| reading A, weights x(1+k) | **238** | H7 SURVIVES |
+| reading B, serial latency | **154** | inverts |
+
+So **the decode ceiling is not identified by this measurement, and neither is
+the binding order.** What IS identified is per-user speed near the fitted mix,
+where all three agree within ~10%. Every ceiling quoted in this note is
+therefore a range, and the H7 result below is conditional on the mechanism.
+
+This raises the value of the k-sweep in sec 4.3 considerably: it settles A
+versus B, and A versus B settles H7.
 
 ## 4. Root cause: localised by the startup log, not fully resolved
 
@@ -230,12 +251,15 @@ Consequence for the study's central claim, at the measured workload:
 | Ceiling | Study | Calibrated |
 |---|---|---|
 | Cache (binding, p5 warm) | 249 | 234 |
-| Decode (40 tok/s floor) | 309 | **~150** |
+| Decode (40 tok/s floor) | 309 | **108-238**, mechanism-dependent |
 
-**Decode binds before cache.** The thesis "cache binds before bandwidth
-before compute" is inverted on this row. Note the mechanism: not because
-bandwidth is scarcer than the study thought, but because each decode step
-moves 2.5x the bytes the study counts. Every hybrid model in the study —
+**Decode PROBABLY binds before cache, and the study should stop claiming
+otherwise -- but "overturned" is stronger than this measurement supports.**
+Two of the three pricings invert the order and one does not, and they differ
+only in a mechanism no black-box measurement here could resolve (sec 3). What
+the measurement does establish unconditionally is that the decode ceiling
+falls a long way from 309 and that per-user speed near production batch sizes
+is a third of what the study predicted. Every hybrid model in the study —
 `35B-A3B` (30 DeltaNet layers), `Q38FN` (36), `GLM53F` (34 KDA), `DSV4F` —
 is priced on the same dense-transformer roofline and carries the same
 unpriced assumption.

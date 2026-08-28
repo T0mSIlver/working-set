@@ -229,6 +229,23 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 #     serialise and should sit higher; nothing in this study measures one.
 # ONE deployment, ONE model, ONE spec config -- an anchor, not a bracket. The
 # LOW/HIGH pair spans the residual spread, not independent measurements.
+#
+# EXTRAPOLATION BIAS -- the sharpest limitation, and it bites where the study
+# cares most. The constant was fitted over n = 1-25, where WEIGHTS are 80-95%
+# of the step. Folding a weight-side inefficiency into a multiplier on the
+# WHOLE ledger then over-charges the KV term, and the decode ceiling lives at
+# n ~ 100-250 where KV dominates instead. Against the two candidate mechanisms
+# in decode_mbu.md sec 4.3, both anchored to the same n=1 measurement, the
+# 27B / 4xH200 decode ceiling reads:
+#     this single-constant fold      108 users
+#     reading A (weights x(1+k))     238 users
+#     reading B (serial latency)     154 users
+# against a cache ceiling of 249. So the CEILING IS NOT IDENTIFIED by this
+# measurement, and neither is the binding order: A leaves H7 standing, B and
+# the fold overturn it. What IS identified is the per-user speed near the
+# fitted mix (n = 1-25), where all three agree to ~10%.
+# Quote decode ceilings from this model as a range, not a point, until a
+# spec-off / k-sweep A/B settles which mechanism holds.
 MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
 # UNMEASURED default for models with no recurrent state to serialise (dense
 # attention, MLA). Nothing in this study measures one, so it is a placeholder
@@ -3335,17 +3352,19 @@ def _selfcheck():
     #    steady batch running faster. Old pin: ~6.4 at ~370 tok/s.
     #    Re-pinned again 2026-08-28 for MBU_DEFAULT + the 27B's measured mtp:
     #    slower decode keeps each request in the batch longer, so the steady
-    #    batch GROWS and each member runs slower. 2.2 at 430 -> ~6.5 at ~135;
-    #    the band is wider than the old pin because the fixed point now sits
-    #    on a steeper part of the curve, so MC noise in v(n) moves n more.)
-    assert abs(sdp["n"] - 6.5) <= 1.0, \
-        f"27B/TP2 reference load: ~6.5 decoders expected, got {sdp['n']:.2f}"
-    assert abs(sdp["per_user_tok_s"] - 135) <= 25, \
-        f"27B/TP2 reference load: ~135 tok/s expected, " \
+    #    batch GROWS and each member runs slower. 2.2 at 430 -> 6.8 at 138.
+    #    The band is tight: cross-seed spread is ~0.1 in n and ~2 in tok/s,
+    #    so an earlier +/-1.0 / +/-25 pin -- justified by hand-waving about a
+    #    steeper curve -- would have let real drift through. Measured, not
+    #    reasoned.)
+    assert abs(sdp["n"] - 6.8) <= 0.4, \
+        f"27B/TP2 reference load: ~6.8 decoders expected, got {sdp['n']:.2f}"
+    assert abs(sdp["per_user_tok_s"] - 138) <= 10, \
+        f"27B/TP2 reference load: ~138 tok/s expected, " \
         f"got {sdp['per_user_tok_s']:.0f}"
     #    The stress-vs-steady gap SURVIVES calibration but narrows sharply:
     #    the ceiling fell 228 -> 74 while the steady batch rose 2.2 -> 6.1, so
-    #    the ratio went ~100x -> ~12x. Still a real distinction, no longer a
+    #    the ratio went ~100x -> ~11x. Still a real distinction, no longer a
     #    spectacular one -- and the reason the decode ceiling now binds.
     assert sdp["n"] < max_users_decode(m27, tp2, wl, n_iter=200) / 5, \
         "the steady batch must still sit inside the decode ceiling at this load"
