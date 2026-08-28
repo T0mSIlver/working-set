@@ -106,7 +106,19 @@ def rungs_for(args):
         "C": [("C", 8, P, True), ("C", 8, P, False)],
         "D": [("D", k, c, True) for c in (8_000, LONG) for k in (1, 2, 4, 8)],
     }
-    return [r for a in args.arm for r in plan[a] if r[1] <= args.max_k]
+    out = [r for a in args.arm for r in plan[a] if r[1] <= args.max_k]
+    # Clamp every rung to the server's context window, not just arm D's long
+    # one: a prompt over max_model_len is an HTTP 400 and a lost plateau, and
+    # arm B's 128k rung is over the limit on any 64k-context deployment.
+    if args.max_model_len:
+        room = args.max_model_len - args.out_tokens - 2_000
+        clamped = [(a, k, min(c, room), sh) for a, k, c, sh in out]
+        for (a, k, c, _), (_, _, c2, _) in zip(out, clamped):
+            if c2 < c:
+                print(f"  arm {a} k={k}: context {c:,} -> {c2:,} "
+                      f"(max_model_len {args.max_model_len:,})")
+        out = clamped
+    return out
 
 
 def filler(tokens, rnd):
