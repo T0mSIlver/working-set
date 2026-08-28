@@ -69,10 +69,19 @@ CHARS_PER_TOKEN = 3.6      # random lowercase text; refined from usage at runtim
 def rungs_for(args):
     """(arm, k, prompt_tokens, shared) plateaus, in run order."""
     P = args.prefix_tokens
+    # Arm D: a GRID, not a line. Arm B varied context at one batch size and
+    # arm A varied batch at one context, so each confounds the terms the
+    # other holds fixed -- and on a dense model whose weights are a constant
+    # 31 GB, neither reaches the regime where KV dominates the step. The
+    # grid's long rung (k=8 x 180k) puts 47 GB of KV against 31 GB of
+    # weights, so per-token bytes, per-sequence bytes and fixed cost are all
+    # separately identified from one run.
+    LONG = args.long_tokens
     plan = {
         "A": [("A", k, P, True) for k in (1, 2, 4, 8, 16, 32)],
         "B": [("B", 4, c, False) for c in (8_000, 32_000, 128_000)],
         "C": [("C", 8, P, True), ("C", 8, P, False)],
+        "D": [("D", k, c, True) for c in (8_000, LONG) for k in (1, 2, 4, 8)],
     }
     return [r for a in args.arm for r in plan[a] if r[1] <= args.max_k]
 
@@ -279,11 +288,14 @@ def main():
     ap.add_argument("--api-key", default=os.environ.get("VLLM_API_KEY"))
     ap.add_argument("--model", default="", help="model name in the JSON body")
     ap.add_argument("--model-key", default="27B", help="scenario_model key, for --dry-run pricing")
-    ap.add_argument("--arm", action="append", choices=["A", "B", "C"],
+    ap.add_argument("--arm", action="append", choices=["A", "B", "C", "D"],
                     help="repeatable; default A then C")
     ap.add_argument("--metrics", help="/metrics URL for the watchdog "
                                       "(strongly recommended on a shared instance)")
     ap.add_argument("--metrics-key")
+    ap.add_argument("--long-tokens", type=int, default=180_000,
+                    help="arm D long rung; keep under the server's max_model_len "
+                         "minus the output length")
     ap.add_argument("--prefix-tokens", type=int, default=64_000,
                     help="arm A/C shared prefix length -- the leverage knob")
     ap.add_argument("--hold", type=float, default=40, help="plateau seconds")
