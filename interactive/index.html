@@ -372,8 +372,16 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">1.70</span>×</span></label>
-          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
+          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
+          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.01" value="2.94">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="mbu-tip" data-tip="">Decode efficiency (MBU)</span> <span class="val"><span id="v-mbu">0.22</span></span></label>
+          <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Prefill Model FLOP Utilisation — the fraction of the group's advertised FP8 peak a prefill pass achieves. 0.45 is the study's anchor, calibrated twice: 39.6% on 2xA100 BF16 (controlled, research/prefill.md #1) and 40.0% implied by a 7-day 4xH200 FP8 production trace, agreeing to under 1% on the advertised-peak convention. The bracket is [0.35, 0.55], PROVISIONAL — two deployments, and the implied point's own reading spread (40–59% model-convention) exceeds it. Moves TTFT, the cold-request ceiling, f* and B*; leaves cache and decode untouched, and cancels entirely from the cold/warm thrash ratio.">Prefill efficiency (MFU)</span> <span class="val"><span id="v-mfu">0.45</span></span></label>
+          <input type="range" id="s-mfu" min="0.10" max="1.00" step="0.01" value="0.45">
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Host-RAM buffer for evicted sessions' KV + state: raises warm capacity as STORAGE, never decode speed — an offloaded session must be restored over PCIe first (unpriced). Split across replicas under DP.">CPU offload</span> <span class="val"><span id="v-ram">0</span> GiB</span></label>
@@ -688,7 +696,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
   <div class="sub-h" id="frontier"><span class="n">3·5</span><h3>Every alternative, ranked</h3><span class="lede">all model × split configurations on this GPU, at your load</span></div>
 
   <div class="panel card" id="frontierCard">
-    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
+    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration) and at the <b>MBU slider's</b> decode efficiency, one value for every row — measured on one deployment; nothing here measures a dense one. Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
     <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
     <div id="frontierTable"></div>
   </div>
@@ -703,6 +711,33 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
    Update MoE / provisional numbers here; everything downstream re-derives.
    ========================================================================== */
 const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
+
+// DECODE efficiency -- MFU's counterpart, and the newest constant here.
+// Decode was a PURE roofline until 2026-08-28 (bytes / effective_bw, no
+// efficiency term at all) while prefill had carried an anchor for weeks.
+// research/decode_mbu.md measures the gap on the reference row -- 27B /
+// 4xH200 TP4, production, five sessions -- at 4.1x optimistic, and ONE
+// constant brings it to a median 13% error across n = 1-25.
+// MODEL CONVENTION (already divided by tp_efficiency), so it multiplies
+// effective_bw directly; the raw advertised reading is 0.179.
+// It is fitted on a HYBRID model running speculative decode at k=2, so it
+// absorbs both streaming inefficiency and whatever the speculative verify
+// costs on a sequential recurrence. It therefore travels WITH the model's
+// mtp: change one and the fit breaks. Mirrors MBU_DEFAULT in scenario_model.py.
+// EXTRAPOLATION BIAS: fitted over n = 1-25, where weights are 80-95% of the
+// step. The decode ceiling lives at n ~ 100-250, where KV dominates and a
+// whole-ledger multiplier over-charges. The 27B/TP4 ceiling reads 108 here,
+// 238 under decode_mbu.md's reading A and 154 under reading B -- against a
+// cache ceiling of 249, so the BINDING ORDER is not identified. Per-user
+// speed near the fitted mix is; the ceiling is not. See MBU_DEFAULT.
+// ONE value for EVERY row, from the slider. A dense or MLA model has no
+// recurrence to serialise and should sit higher, but nothing in this study
+// measures one, and a per-model guess would rank the frontier on the guess.
+// So the slider is a GLOBAL sensitivity knob: drag it and watch which
+// configurations survive. (Not the MTP rule -- own capability per row --
+// because MTP is a shipped feature and MBU is an unmeasured efficiency.)
+// Per-row values come back the day a second architecture is measured.
+const DECODE_MBU    = 0.22;
 
 const CONFIG = {
   // ---- HARDWARE ----
@@ -777,7 +812,11 @@ const CONFIG = {
       w_decode_shared: 28.8 * GIB, // dense: every step reads all weights
       w_route_pertok: 0.0,
       w_route_total: 0.0,
-      mtp: 1.7,
+      // MEASURED 2026-08-28 on the production deployment (decode_mbu.md):
+      // accepted length 2.94 at num_speculative_tokens=2, per-draft
+      // acceptance 0.971, and 1+a+a^2 confirmed against vLLM's per-position
+      // counters. Was 1.7. PAIRED WITH DECODE_MBU -- see its comment.
+      mtp: 2.94,
       // nvidia/Qwen3.6-27B-NVFP4, MEASURED safetensors total (21.92e9 B)
       nvfp4_w: [21.92e9, 21.92e9, 0.0, 0.0],
       params_prefill: 24.5e9,      // 27B dense less ~2.5e9 embed + lm_head (vocab 248,320)
@@ -1052,6 +1091,7 @@ function effective_bw(topo){
 // below the anchor's efficiency, so short (p5-ish) misses now read ~10%
 // dearer on the MoEs — that is the model's content, not drift.
 const PREFILL_MFU   = 0.45;    // mid of the plausible [0.35, 0.55] FP8 bracket
+
                                // (tightened from [0.30, 0.60] 2026-08-27 on two
                                // production calibration points — prefill.md #1)
 const PREFILL_MFU_LO = 0.35, PREFILL_MFU_HI = 0.55;  // the bracket itself:
@@ -1096,7 +1136,7 @@ function peakFlops(topo){
 // prefill-duty ceiling has no such host — its passes run back-to-back and
 // each pays the overhead — so misses are priced by prefillPassSeconds below.
 function prefillSeconds(m, topo, T, P, mfu){
-  return prefillFlops(m, T, P) / (peakFlops(topo) * (mfu || PREFILL_MFU));
+  return prefillFlops(m, T, P) / (peakFlops(topo) * (mfu || prefillMfu()));
 }
 // Whole context, chunked, on top of `prior` cached tokens: each chunk is
 // priced with the cache it actually attends over, so later chunks cost more.
@@ -1139,7 +1179,7 @@ function prefillOverheadSeconds(m, topo){
   return m.w_resident / effective_bw(topo);
 }
 function mfuCeil(m, topo, anchor){
-  const A = anchor || PREFILL_MFU;
+  const A = anchor || prefillMfu();
   // PREFILL_CHUNK here is the CALIBRATION ANCHOR, never state.chunk: the
   // ceiling is solved so a 32,768 first chunk reads exactly 0.45. If this
   // followed the selected chunk, choosing 4,096 would re-solve the ceiling
@@ -1882,7 +1922,7 @@ function _hash(str){
 // sla/turn/burst, none of which touch the workload or the pool
 function samplingSig(){
   return [state.model,state.gpu,state.wdt,state.kv,state.state_dt,state.wover,
-          state.mtp,state.ngpu,state.tp,state.ram,state.cap,
+          state.mtp,state.mbu,state.mfu,state.ngpu,state.tp,state.ram,state.cap,
           state.user_median,state.user_sigma,state.sub_median,state.sub_sigma,
           state.sub_ratio,state.sub_shares_prefix,state.sys,state.inval].join('|');
 }
@@ -2148,8 +2188,31 @@ function decodePlan(gpuP95, draft){
   return { nMax, step, iter };
 }
 
+// The two efficiency knobs, read through helpers so nothing reaches past the
+// slider to the constant. Each falls back to the single global constant when
+// state has not been seeded yet (the load-time unit checks run that early).
+// The load-time unit checks and steadyChecks call decodeCurves/prefillSeconds
+// BEFORE `state` is declared (steadyChecks says as much in its own comment), so
+// these must survive being called during that window and fall back to the
+// constant -- which is also exactly the value those checks pin against.
+//
+// try/catch, NOT `typeof state !== "undefined"`: typeof is only safe for
+// UNDECLARED identifiers. `state` is a const declared later in the same scope,
+// so it is in the temporal dead zone and typeof throws a ReferenceError just
+// like a plain read would. That guard looked right, parsed fine, and silently
+// killed every load-time check before it ran.
+function decodeMbu(){
+  try { return state.mbu > 0 ? state.mbu : DECODE_MBU; }
+  catch (e) { return DECODE_MBU; }
+}
+function prefillMfu(){
+  try { return state.mfu > 0 ? state.mfu : PREFILL_MFU; }
+  catch (e) { return PREFILL_MFU; }
+}
+
 function decodeCurves(model, topo, wl, nMax, step, n_iter){
-  const bw = effective_bw(topo), scale = topo.replicas;
+  // MEASURED efficiency, not a roofline: see DECODE_MBU.
+  const bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU), scale = topo.replicas;
   const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);
   // LOW-n anchors. Per-user speed is a hyperbola in n, so the first regular
   // interval (1 -> 1+step) contains most of the curve's entire drop: at the
@@ -2255,9 +2318,13 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   //    (Re-pinned 2026-08-27 with AVG_OUT_TOK 1000 -> 400, measured: fewer
   //    decode-seconds per request, smaller faster batch. Was ~6.4 at ~365 —
   //    the JS pin; the Python mirror's historical pin was 370.)
-  console.assert(approx(sd.n, 2.2, 0.12) && approx(sd.pu, 430, 0.10),
-    "27B/TP2 at the reference load: ~2 sequences decoding, ~430 tok/s each");
-  console.assert(sd.n < 480/20 && sd.pu > 4*interpAt(dc,'p50',480,true),
+  // Re-pinned 2026-08-28 for DECODE_MBU + the 27B's measured mtp: slower
+  // decode holds each request in the batch longer, so the steady batch GROWS
+  // and each member runs slower. 2.2 at 430 -> ~6.5 at ~135. Mirrors the
+  // same re-pin in scenario_model.py's _selfcheck.
+  console.assert(approx(sd.n, 6.8, 0.08) && approx(sd.pu, 138, 0.09),
+    "27B/TP2 at the reference load: ~6.8 sequences decoding, ~138 tok/s each");
+  console.assert(sd.n < 480/5 && sd.pu > 4*interpAt(dc,'p50',480,true),
     "the steady batch must sit far left of the sweep, and far above its speed");
   // 4. monotone and linear in the load, exactly (demand is linear, and the
   //    inversion is of a fixed curve)
@@ -2304,7 +2371,14 @@ const state = {
   // state_dt: recurrent-state dtype (bf16 = the study default, inferred from
   // the baseline's 75 MiB); wover: deployed-weight overhead over the raw or
   // on-disk checkpoint bytes ("pub" = as published, "p15" = +15%).
-  state_dt: "bf16", wover: "pub", mtp: 1.7,
+  // mtp follows the SELECTED model's own value (the model segment resets it);
+  // the seed here is the 27B's measured 2.94 (decode_mbu.md), was 1.7.
+  state_dt: "bf16", wover: "pub", mtp: 2.94,
+  // Efficiency knobs. mbu (decode) and mfu (prefill) are the study's two
+  // measured-efficiency constants, exposed because both are single-deployment
+  // anchors rather than brackets and the reader should be able to argue with
+  // them. Both are GLOBAL: one value for every row, never reseeded per model.
+  mbu: DECODE_MBU, mfu: PREFILL_MFU,
   // max_num_batched_tokens. A string enum (the pue idiom) over the powers of
   // two chart E ticks: an A/B arm selector, not a free knob. The tiles, the
   // deploy recipe and the generated harness CONFIG all follow it; the MFU
@@ -3464,6 +3538,12 @@ function modelFor(key){
   if (state.wover === "p15" && state.model !== "27B")
     m = { ...m, w_resident: m.w_resident*1.15, name: m.name + " [+15% weights]" };
   m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
+  // ...and the decode-efficiency knob, baked onto the model so decodeCurves
+  // and decodeUsersApprox read one field whichever path built the model.
+  // Deliberately the SLIDER for every row, the frontier included (see
+  // DECODE_MBU); frontierDecSig carries state.mbu so the cached decode
+  // ceilings rebuild when it moves.
+  m = { ...m, decode_mbu: decodeMbu() };
   return m;
 }
 
@@ -3733,8 +3813,9 @@ function frontierWarmSig(wl){
        + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
        + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;
 }
-// the decode ceilings additionally move with the floor — and ONLY they do
-function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}`; }
+// the decode ceilings additionally move with the floor and the MBU slider —
+// and ONLY they do (both are closed-form scalings of the same search)
+function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}|${state.mbu}`; }
 /* Chunked rebuild: a settle used to recompute every stale row in ONE task —
    measured at 500–900 ms of main-thread block once the table reached 27 rows
    (7 models) — so the page froze after each drag. The rebuild now walks the
@@ -4821,7 +4902,7 @@ function decodeUsersApprox(model, topo, samples, floor){
   // argument, and a fixed 40 would leave the sensitivity panel's stand-in on a
   // different threshold from the MC ceiling it is calibrated against — calD
   // would silently absorb the mismatch at the anchor and be wrong everywhere else
-  const F = floor || decodeFloor(), bw = effective_bw(topo);
+  const F = floor || decodeFloor(), bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU);
   const tk = (model.kv_decode_const && model.kv_decode_topk) ? model.kv_decode_topk : 0;
   let mL = 0, mT = 0;
   for (let i = 0; i < samples.length; i++){
@@ -4928,6 +5009,15 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       pts: sweep(21, 1.0, 3.0, v =>
         evalAt(mo, f0, state.sla, state.think, cacheNow,
                decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
+  // 6a · decode efficiency (MBU) — one constant for every row, measured on
+  //      one deployment; decode speed is exactly linear in it, like the
+  //      speedup, so the same mean-context stand-in serves
+  if (calD > 0)
+    axes.push({ label: 'Decode MBU', cur: state.mbu, lo: 0.10, hi: 1.00,
+      fmt: v => fmt(v * 100, 0) + '%', approx: true,
+      pts: sweep(19, 0.10, 1.00, v =>
+        evalAt(mo, f0, state.sla, state.think, cacheNow,
+               decodeUsersApprox({ ...model, decode_mbu: v }, topo, cs.samples) * calD * reps), state.mbu) });
   // 6b · per-user decode floor — moves the DECODE ceiling only, and steeply
   //      (the ceiling is the reciprocal of per-user speed). This is the row
   //      that answers "is my deployment actually decode-bound, or just judged
@@ -5431,6 +5521,8 @@ document.querySelectorAll('.seg').forEach(seg=>{
 const sliderMap=[
   ['s-ngpu','ngpu',v=>parseInt(v,10)],
   ['s-mtp','mtp',v=>parseFloat(v)],
+  ['s-mbu','mbu',v=>parseFloat(v)],
+  ['s-mfu','mfu',v=>parseFloat(v)],
   ['s-ram','ram',v=>parseInt(v,10)],
   ['s-cap','cap',v=>parseInt(v,10)],
   ['s-user_median','user_median',v=>parseFloat(v)],
@@ -5536,6 +5628,8 @@ function syncLabels(){
   document.getElementById('v-ngpu').textContent=fmt(state.ngpu,0);
   document.getElementById('v-gpuname').textContent=CONFIG.GPUS[state.gpu].name;
   document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);
+  document.getElementById('v-mbu').textContent=state.mbu.toFixed(2);
+  document.getElementById('v-mfu').textContent=state.mfu.toFixed(2);
   // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
   // per-draft acceptance — the base quantity the speedup is computed from
   const acc = state.mtp<=1 ? 0 : (Math.sqrt(4*state.mtp-3)-1)/2;
@@ -5550,7 +5644,16 @@ function syncLabels(){
   const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
     : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
   document.getElementById('mtp-tip').setAttribute('data-tip',
-    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 1.7× ⇔ α ≈ 47% — the 27B\'s measured fit; switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
+    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — the 27B\'s measured accepted length (research/decode_mbu.md: per-position acceptance 0.971 then 0.944, which the two-draft inversion rounds up to 98%; 1.7× ⇔ α ≈ 47% was the pre-measurement fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
+  // MBU provenance, stated on the control: one measurement, applied to every
+  // row, the frontier included -- the slider is how a reader argues with it.
+  const mbuProv = state.model === "27B"
+    ? 'Measured on this model (research/decode_mbu.md): the uncalibrated roofline was ~4× optimistic; this constant brings it to a median 13% error.'
+    : (is_moe(CONFIG.MODELS[state.model]) || CONFIG.MODELS[state.model].deltanet_state > 0
+        ? 'Measured on the 27B and applied here unchanged; unmeasured on this model.'
+        : 'Measured on a recurrent hybrid and applied here unchanged; this model has no recurrence to serialise and may well sit higher, but nothing in this study measures a dense one.');
+  document.getElementById('mbu-tip').setAttribute('data-tip',
+    'Memory Bandwidth Utilisation — the fraction of the group\'s advertised HBM bandwidth a decode pass achieves. Decode\'s counterpart to the prefill MFU below, and the study\'s newest constant: before 2026-08-28 decode was priced at 1.00, a pure roofline. MODEL CONVENTION (already divided by tp_efficiency). ONE value for every row, the frontier included: a global sensitivity knob, not a per-model property — drag it and watch which configurations survive. It absorbs both streaming inefficiency and whatever speculative verification costs on a sequential recurrence, so on the 27B it TRAVELS WITH the MTP slider. ' + mbuProv);
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
   // the 0.1k step is only reachable at the chat end of the range, so show the
