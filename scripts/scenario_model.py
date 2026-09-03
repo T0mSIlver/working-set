@@ -3285,22 +3285,35 @@ def _selfcheck():
     # reference workload. It held for every configuration under the roofline
     # convention, and the first assertion still guards that published claim.
     #
-    # With the measured efficiency (research/decode_mbu.md, 2026-08-28) the
-    # decode ceiling falls a long way -- that IS identified, and the second
-    # assertion pins it. Whether it falls BELOW the cache ceiling is NOT: the
-    # note's two candidate mechanisms put the 27B/4xH200 ceiling at 238 (A,
-    # H7 stands) or 154 (B, H7 inverts) against cache 249, and the single
-    # constant used here lands at 108. So the ordering under MBU_DEFAULT is
-    # deliberately NOT asserted in either direction; it is decided by a
-    # spec-off / k-sweep A/B that has not run. Do not add that assertion back
-    # without the measurement behind it.
+    # What the measurement (research/decode_mbu.md, 2026-08-28) DID identify
+    # is per-user decode speed at the batch sizes it ran: 250-330 tok/s on the
+    # 27B / 4xH200 TP4 across n = 1-4, reproduced in four sessions. That is
+    # the pin: the model must land inside the measured band there (it reads
+    # 314 / 302 / 276 at n = 1 / 2 / 4). What it did NOT identify is the
+    # decode CEILING, and so not the binding order either: the constant is
+    # fitted where weights dominate the step (n = 1-25) and applied where KV
+    # does (n ~ 100-250), and the note's two candidate mechanisms put the
+    # 4xH200 ceiling at 238 (A, H7 stands) or 154 (B, H7 inverts) against a
+    # cache ceiling of 249, with the single-constant fold used here at ~150.
+    # On the 1xH200 row these assertions run on, the fold reads decode ~32
+    # against cache ~70 (published: 118 against 69) -- but that ordering is a
+    # projection of the fold, not a measurement, so it is deliberately NOT
+    # asserted in either direction. A spec-off / k-sweep A/B decides it. Do
+    # not add that assertion back without the measurement behind it.
     cache = max_users_cache(m27, t1, wl, n_iter=200)
     dec_pub = max_users_decode(m27_pub, t1, wl, n_iter=200, mbu=1.0)
     assert dec_pub > cache, \
         "H7 as published: under the roofline convention the cache binds first"
+    tp4 = topology("tp", 4, "H200")
+    _, p50_tp4, _, _ = decode_curves(m27, tp4, wl, [1, 2, 4], n_iter=400)
+    assert all(250 <= v <= 330 for v in p50_tp4), \
+        f"27B/TP4 per-user decode at n=1,2,4 must sit in the measured 250-330 " \
+        f"tok/s band, got {[round(float(v)) for v in p50_tp4]}"
+    # wiring guard only (same mtp on both sides): the efficiency term must
+    # actually reach the ceiling search
     dec = max_users_decode(m27, t1, wl, n_iter=200)
-    assert dec < 0.6 * dec_pub, \
-        "the calibrated decode ceiling must sit far below the roofline one"
+    assert dec < max_users_decode(m27, t1, wl, n_iter=200, mbu=1.0), \
+        "MBU_DEFAULT must lower the decode ceiling against the same-mtp roofline"
     assert max_users_decode(m27, t1, wl, floor=20.0, n_iter=200) > dec, \
         "a lower floor must admit more concurrent decoders"
     # an unreachable floor is a censored result, not a silent cap
@@ -3360,7 +3373,7 @@ def _selfcheck():
         f"27B/TP2 reference load: ~138 tok/s expected, " \
         f"got {sdp['per_user_tok_s']:.0f}"
     #    The stress-vs-steady gap SURVIVES calibration but narrows sharply:
-    #    the ceiling fell 228 -> 74 while the steady batch rose 2.2 -> 6.1, so
+    #    the ceiling fell 228 -> 74 while the steady batch rose 2.2 -> 6.8, so
     #    the ratio went ~100x -> ~11x. Still a real distinction, no longer a
     #    spectacular one -- and the reason the decode ceiling now binds.
     assert sdp["n"] < max_users_decode(m27, tp2, wl, n_iter=200) / 5, \

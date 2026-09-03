@@ -2189,7 +2189,7 @@ function decodePlan(gpuP95, draft){
 }
 
 // The two efficiency knobs, read through helpers so nothing reaches past the
-// slider to the constant. `mbuFor` falls back to the model's own default when
+// slider to the constant. Each falls back to the single global constant when
 // state has not been seeded yet (the load-time unit checks run that early).
 // The load-time unit checks and steadyChecks call decodeCurves/prefillSeconds
 // BEFORE `state` is declared (steadyChecks says as much in its own comment), so
@@ -5644,7 +5644,7 @@ function syncLabels(){
   const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
     : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
   document.getElementById('mtp-tip').setAttribute('data-tip',
-    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 97% — the 27B\'s measured acceptance (research/decode_mbu.md; 1.7× ⇔ α ≈ 47% was the pre-measurement fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
+    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — the 27B\'s measured accepted length (research/decode_mbu.md: per-position acceptance 0.971 then 0.944, which the two-draft inversion rounds up to 98%; 1.7× ⇔ α ≈ 47% was the pre-measurement fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
   // MBU provenance, stated on the control: one measurement, applied to every
   // row, the frontier included -- the slider is how a reader argues with it.
   const mbuProv = state.model === "27B"

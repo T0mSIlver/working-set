@@ -239,7 +239,7 @@ evenly instead of resetting to an end of the range.
 | Expert-union saturation (linear) | — | n = 32 (= 256 experts / 8 per token) |
 | KV pool, 1×H200 | 2.77M tok (measured anchor) | **8.42M tok** |
 | KV pool, 2×H200 TP2 | 6.48M tok | **20.30M tok** |
-| MTP decode speedup | 1.7× (α ≈ 47% per-draft acceptance) | 1.7× (transplanted fit) |
+| MTP decode speedup | 1.7× (α ≈ 47% per-draft acceptance; the pre-measurement fit — measured accepted length is 2.94 as of 2026-08-28, `research/decode_mbu.md`) | 1.7× (transplanted fit) |
 
 Both columns now come from **published configs** (the 27B's 64-layer / 16-full-attn /
 4-KV-head config reproduces the baseline's 32 KiB/token exactly). The 35B-A3B's
@@ -1371,7 +1371,7 @@ so is the bandwidth they would share.
 | H4 bigger shared prefix ⇒ more warm | **Supported** (506 → 964 at 3k → 30k, TP2) — but fragile to prefix drift |
 | H5 subagents raise warm count | **Supported** (640 → 918 across r = 0 → 1) |
 | H6 invalidation ≈ linear, ceiling 1 − f | **Supported** (−1.5% at f = 1%, −14% at 10%) |
-| H7 cache binds before bandwidth | **Supported in all 6 configs — with MTP** (warm < mns@40; v@warm ≥ 41 tok/s). **Reversed in all 6 without it** (mns@40 falls 1.8–2.0×, e.g. 118 → 60 on the 27B / 1×H200) |
+| H7 cache binds before bandwidth | **Supported in all 6 configs — with MTP, under the roofline decode convention these tables use** (warm < mns@40; v@warm ≥ 41 tok/s). **Reversed in all 6 without it** (mns@40 falls 1.8–2.0×, e.g. 118 → 60 on the 27B / 1×H200). **Unresolved on the 27B since the 2026-08-28 decode calibration** (limitation 11): the measured efficiency lowers every decode ceiling, and which side of the cache ceiling it lands on depends on a mechanism the measurement could not separate |
 | H8 spikes bind below f\*; MoE compounds | **Supported** (§ 9). f_sla is 0.35–0.93× f\* (tightest on Mistral-3.5/TP4) and duty still reads 76–93% there; B\* → 0 at f\*. MoE spike tolerance beats dense **8.8× (1×H200) / 7.2× (TP2)** against a 5.9× prefill-speed gap — and, as predicted, the advantage **shrinks to ~2.2–2.7× on a global flush**. Unpredicted corollary: under FCFS the miss tax lands on *hits* (74× their own service time at f = 20%). The § 9 planner adds a second: **which** constraint binds switches from cache to latency at f ≈ 5% on the 27B/TP2 (f ≈ 10% at the measured 43 s interval), and Mistral-3.5/TP4 turns out **decode**-bound at 36 users (it ships no MTP module) |
 | H9 steady state ≪ stress test | **Supported** (§ 10). At the reference load the batch holds 0.3–37 sequences against warm populations of 56–1,506, and per-user speed runs **2.7–228×** the all-warm figure. Predicted widening with decode headroom holds (largest on the MoE, smallest on GLM-5.2/TP8 at 1.0×), and the one config where decode already binds — Mistral-3.5/TP4 — has **no steady state at all** at this load, agreeing with § 9's independent `DECODE`-bound verdict |
 
@@ -1663,8 +1663,10 @@ Ordered roughly by how much each could move the numbers:
     ceiling on opposite sides of its cache ceiling. So § 7's ordering (H7) is
     **not identified** on that row in either direction, and `_selfcheck` no
     longer asserts it; what is identified is per-user decode speed near the
-    fitted batch sizes, and that the decode ceiling sits far below the
-    roofline figure. Every decode figure in this document's tables is still
+    fitted batch sizes (the self-check pins the model inside the measured
+    250–330 tok/s band on the calibrated topology). That the ceiling falls far
+    below the roofline figure is the single-constant fold's projection, not a
+    measurement. Every decode figure in this document's tables is still
     roofline-convention (`mbu = 1.0`, `mtp = 1.7`); `_selfcheck` pins them
     there until the tables are regenerated.
 12. **N > 2 GPUs is a projection.** The TP haircut (0.90 per GPU-count doubling) is
