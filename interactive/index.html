@@ -5382,8 +5382,9 @@ function renderFrontierChart(rows, curKey){
   }
   // the staircase: ascending users, so ascending cost. Vertical first (the
   // budget you must reach before the next configuration opens up), then
-  // horizontal (the users it buys); lead-in from the axis and lead-out to
-  // the edge read "nothing cheaper / nothing better".
+  // horizontal (the users it buys). Lead-in from the axis reads "nothing
+  // cheaper"; no lead-out — past the last point no configuration exists at
+  // any price, and a line to the edge would claim one does.
   const stair = [...par].sort((a,b)=>a.op.limit-b.op.limit);
   const P = r => [sx(r.op.limit), sy(r.eur)];
   if (stair.length){
@@ -5393,7 +5394,6 @@ function renderFrontierChart(rows, curKey){
       const [x,y] = P(stair[i]);
       d += ` L ${P(stair[i-1])[0]} ${y} L ${x} ${y}`;
     }
-    d += ` L ${mL+pw} ${P(stair[stair.length-1])[1]}`;
     g+=`<path d="${d}" fill="none" stroke="${muted}" stroke-width="1.5" stroke-linejoin="round" opacity="0.7"/>`;
   }
   // your load: everything left of it cannot carry you
