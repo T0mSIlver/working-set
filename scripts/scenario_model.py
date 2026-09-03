@@ -246,12 +246,11 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 # fitted mix (n = 1-25), where all three agree to ~10%.
 # Quote decode ceilings from this model as a range, not a point, until a
 # spec-off / k-sweep A/B settles which mechanism holds.
+# ONE value for EVERY model. A dense or MLA row has no recurrence to serialise
+# and should sit higher, but nothing in this study measures one, and a
+# per-model guess would rank configurations on the guess. Mirrors DECODE_MBU
+# in the explorer, where the slider moves every row at once.
 MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
-# UNMEASURED default for models with no recurrent state to serialise (dense
-# attention, MLA). Nothing in this study measures one, so it is a placeholder
-# near the top of what a well-served decode reaches, not a fit. Mirrors
-# DECODE_MBU_NONRECURRENT in the explorer, where it is a slider.
-MBU_NONRECURRENT = 0.75
 
 
 @dataclass
@@ -264,11 +263,6 @@ class Model:
     w_route_pertok: float
     w_route_total: float
     mtp: float = 1.7
-    # Decode efficiency for THIS model (see MBU_DEFAULT). Per-model because it
-    # is an architectural property: a recurrent stack serialises where a dense
-    # one does not. Measured on the 27B, transplanted to the other recurrent
-    # rows, and overridden upward on the rows with no recurrence at all.
-    decode_mbu: float = MBU_DEFAULT
     weight_dtype: str = "fp8"   # set via with_weight_dtype(); gates GPU choice
     # NVFP4-checkpoint weight bytes (w_resident, w_decode_shared,
     # w_route_pertok, w_route_total), or None if no NVFP4 variant exists.
@@ -428,7 +422,6 @@ MODELS = {
         w_route_pertok=0.0,
         w_route_total=0.0,
         mtp=1.0,                         # no MTP module (EAGLE draft is external)
-        decode_mbu=MBU_NONRECURRENT,     # dense GQA: no recurrence. UNMEASURED
         # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
         # edge MLP + all attention FP8, lm_head BF16 (research note #3).
         # Resident = the MEASURED safetensors total (95,224,812,960 B,
@@ -460,7 +453,6 @@ MODELS = {
         w_route_pertok=22_649_241_600,   # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
         w_route_total=724_775_731_200,   # 256 experts (saturates at n=32, like 35BA3B)
         mtp=1.7,                         # MTP module (5 drafts); transplanted fit, unmeasured
-        decode_mbu=MBU_NONRECURRENT,     # MLA+DSA, no recurrent state. UNMEASURED
         # nvidia/GLM-5.2-NVFP4: ONLY routed experts NVFP4; attn/shared/dense/
         # embeddings/lm_head/MTP stay BF16. Derived 464.8e9 B matches the vLLM
         # recipe's "~465 GB" within 0.05% (research/model_glm52.md #4).
@@ -1872,7 +1864,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     # MEASURED decode efficiency (research/decode_mbu.md). Before 2026-08-28
     # this line read `bw = effective_bw(topo)` -- a pure roofline, 4.1x
     # optimistic against production. Pass mbu=1.0 to recover that reading.
-    bw = effective_bw(topo) * (model.decode_mbu if mbu is None else mbu)
+    bw = effective_bw(topo) * (MBU_DEFAULT if mbu is None else mbu)
     # dense-attention models read every cached token per step (kv_bpt); a
     # sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
     # token (indexer scan) plus a top-k read per active sequence, capped at
@@ -3288,22 +3280,27 @@ def _selfcheck():
         "decode ceiling must reproduce the published mns@40 of 118"
     assert abs(max_users_decode(m27_pub, tp2, wl, n_iter=800, mbu=1.0) - 228) <= 8, \
         "decode ceiling must reproduce the published mns@40 of 228"
-    # ---- H7, and the measurement that overturned it -------------------------
+    # ---- H7, and what the decode measurement did and did not settle --------
     # H7 is the study's thesis: the CACHE binds before decode bandwidth at the
     # reference workload. It held for every configuration under the roofline
-    # convention, and this assertion guarded it.
+    # convention, and the first assertion still guards that published claim.
     #
-    # It does NOT hold once decode carries its measured efficiency
-    # (research/decode_mbu.md, 2026-08-28). Both statements are pinned below
-    # rather than one silently replacing the other, because the DIFFERENCE is
-    # the finding: H7 was an artefact of pricing decode at 100% of a bandwidth
-    # nothing achieves, not a property of the workload.
+    # With the measured efficiency (research/decode_mbu.md, 2026-08-28) the
+    # decode ceiling falls a long way -- that IS identified, and the second
+    # assertion pins it. Whether it falls BELOW the cache ceiling is NOT: the
+    # note's two candidate mechanisms put the 27B/4xH200 ceiling at 238 (A,
+    # H7 stands) or 154 (B, H7 inverts) against cache 249, and the single
+    # constant used here lands at 108. So the ordering under MBU_DEFAULT is
+    # deliberately NOT asserted in either direction; it is decided by a
+    # spec-off / k-sweep A/B that has not run. Do not add that assertion back
+    # without the measurement behind it.
     cache = max_users_cache(m27, t1, wl, n_iter=200)
-    assert max_users_decode(m27_pub, t1, wl, n_iter=200, mbu=1.0) > cache, \
+    dec_pub = max_users_decode(m27_pub, t1, wl, n_iter=200, mbu=1.0)
+    assert dec_pub > cache, \
         "H7 as published: under the roofline convention the cache binds first"
-    assert max_users_decode(m27, t1, wl, n_iter=200) < cache, \
-        "H7 OVERTURNED: with measured decode efficiency, bandwidth binds first"
     dec = max_users_decode(m27, t1, wl, n_iter=200)
+    assert dec < 0.6 * dec_pub, \
+        "the calibrated decode ceiling must sit far below the roofline one"
     assert max_users_decode(m27, t1, wl, floor=20.0, n_iter=200) > dec, \
         "a lower floor must admit more concurrent decoders"
     # an unreachable floor is a censored result, not a silent cap

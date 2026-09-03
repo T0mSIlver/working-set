@@ -1644,28 +1644,29 @@ Ordered roughly by how much each could move the numbers:
     workload that keeps hitting the offloaded tier pays restore bandwidth that
     competes with decode, so real per-user speed under heavy offload would be
     *worse* than the flat line here, never better.
-11. **Decode is a pure HBM roofline — and the bound is now MEASURED, not just
-    flagged.** Expert-dispatch overhead, attention/DeltaNet compute, TP
-    collectives and scheduler overhead are not priced, so all tok/s figures are
-    upper bounds. On a production 27B/4×H200 the bound is **3.3× loose**: the
-    measured effective decode bandwidth is 4.71 TB/s against the 15.55 TB/s
-    this model prices, and per-user decode is 250–330 tok/s where the model
-    says 812 ([`research/decode_mbu.md`](../research/decode_mbu.md), 2026-08-28).
-    The byte ledger survived the measurement intact — weights, `kv_bpt`, pool
-    size and per-sequence prefix reads are all confirmed — so the error is
-    entirely in the time side. **This inverts § 7's ordering on that row**:
-    the decode ceiling falls from 309 to ~150 users against a cache ceiling of
-    234, so bandwidth binds before cache, not after. **The mechanism is now
-    known, and it is not a hardware shortfall.** A Gated-DeltaNet state update
-    is a sequential recurrence, so verifying `1 + k` speculated positions costs
-    `1 + k` passes over the linear-attention layers where attention verifies
-    all of them in one kernel — a **2.5× multiplier on weight bytes** at this
-    model's 48-of-64 layer split and `num_speculative_tokens=2`. Priced that
-    way the deployment runs at 41–48% MBU, a healthy figure on a correctly
-    configured engine. So `mtp` must stop being a free multiplier on every
-    hybrid row (35B-A3B, Q38FN, GLM53F, DSV4F): measured net value of
-    speculation on this deployment is **~16%, not 2.9×**. A dense row is
-    unaffected.
+11. **Decode is a pure HBM roofline — now carrying one measured efficiency
+    term.** Expert-dispatch overhead, attention/DeltaNet compute, TP
+    collectives and scheduler overhead are still not priced individually;
+    since 2026-08-28 a single multiplicative constant (`MBU_DEFAULT`, 0.22 in
+    the model convention) stands in for all of them, fitted on one production
+    deployment of the 27B ([`research/decode_mbu.md`](../research/decode_mbu.md)).
+    The byte ledger survived that measurement intact — weights, `kv_bpt`, pool
+    size and per-sequence prefix reads all confirmed — so the error was
+    entirely on the time side, and the leading explanation is speculative
+    verification on a Gated-DeltaNet recurrence, which cannot batch `1 + k`
+    proposed positions the way an attention layer does. Three caveats bound
+    what the constant can say. It was fitted where weights dominate the step
+    (n = 1–25) and is applied where KV does (n ~ 100–250). It is applied to
+    **every** model, the dense and MLA rows included, although nothing here
+    measures one of those. And whether the verify cost is paid in bytes or in
+    latency is not established; the two readings put the calibrated 27B decode
+    ceiling on opposite sides of its cache ceiling. So § 7's ordering (H7) is
+    **not identified** on that row in either direction, and `_selfcheck` no
+    longer asserts it; what is identified is per-user decode speed near the
+    fitted batch sizes, and that the decode ceiling sits far below the
+    roofline figure. Every decode figure in this document's tables is still
+    roofline-convention (`mbu = 1.0`, `mtp = 1.7`); `_selfcheck` pins them
+    there until the tables are regenerated.
 12. **N > 2 GPUs is a projection.** The TP haircut (0.90 per GPU-count doubling) is
     an extrapolated assumption — real large-N TP depends on interconnect and
     kernel overlap, and pipeline parallelism is not modelled at all. The node

@@ -372,8 +372,8 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">1.70</span>×</span></label>
-          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.05" value="1.7">
+          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
+          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.01" value="2.94">
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" id="mbu-tip" data-tip="">Decode efficiency (MBU)</span> <span class="val"><span id="v-mbu">0.22</span></span></label>
@@ -696,7 +696,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
   <div class="sub-h" id="frontier"><span class="n">3·5</span><h3>Every alternative, ranked</h3><span class="lede">all model × split configurations on this GPU, at your load</span></div>
 
   <div class="panel card" id="frontierCard">
-    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration). Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
+    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration) and at the <b>MBU slider's</b> decode efficiency, one value for every row — measured on one deployment; nothing here measures a dense one. Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
     <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
     <div id="frontierTable"></div>
   </div>
@@ -730,14 +730,14 @@ const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 // 238 under decode_mbu.md's reading A and 154 under reading B -- against a
 // cache ceiling of 249, so the BINDING ORDER is not identified. Per-user
 // speed near the fitted mix is; the ceiling is not. See MBU_DEFAULT.
-// Per-model default lives in MODELS[].decode_mbu; this is the fallback and the
-// value every recurrent model carries. Non-recurrent rows override it upward.
+// ONE value for EVERY row, from the slider. A dense or MLA model has no
+// recurrence to serialise and should sit higher, but nothing in this study
+// measures one, and a per-model guess would rank the frontier on the guess.
+// So the slider is a GLOBAL sensitivity knob: drag it and watch which
+// configurations survive. (Not the MTP rule -- own capability per row --
+// because MTP is a shipped feature and MBU is an unmeasured efficiency.)
+// Per-row values come back the day a second architecture is measured.
 const DECODE_MBU    = 0.22;
-// UNMEASURED default for models with no recurrent state to serialise (dense
-// attention, MLA). Nothing in this study measures one, so it is a placeholder
-// chosen to sit near the top of what a well-served decode reaches, not a fit.
-// The MBU slider exists so this can be argued with rather than inherited.
-const DECODE_MBU_NONRECURRENT = 0.75;
 
 const CONFIG = {
   // ---- HARDWARE ----
@@ -848,7 +848,6 @@ const CONFIG = {
       w_route_pertok: 0.0,
       w_route_total: 0.0,
       mtp: 1.0,                    // NO MTP module (external EAGLE draft exists)
-      decode_mbu: DECODE_MBU_NONRECURRENT,  // dense GQA: no recurrence to serialise. UNMEASURED
       nvfp4_w: [95.2e9, 86.6e9, 0.0, 0.0],  // nvidia mixed recipe, MEASURED safetensors total
       params_prefill: 121.8e9,     // TEXT decoder only (ledger); vision tower excluded
       attn_layers: 88, attn_d: 96*128,
@@ -863,7 +862,6 @@ const CONFIG = {
       w_route_pertok: 22649241600, // 8 experts x (3x6144x2048) x 75 MoE layers, FP8
       w_route_total: 724775731200, // 256 experts (saturates at n=32)
       mtp: 1.7,                    // MTP module (5 drafts); transplanted fit, unmeasured
-      decode_mbu: DECODE_MBU_NONRECURRENT,  // MLA+DSA, no recurrent state. UNMEASURED
       // nvidia/GLM-5.2-NVFP4: ONLY routed experts NVFP4 (matches ~465 GB recipe)
       nvfp4_w: [464.8e9, 35.30e9, 12740198400, 407686348800],
       kv_decode_bpt: 2772,         // DSA: 21 indexer layers x 132 B per context token
@@ -2379,7 +2377,7 @@ const state = {
   // Efficiency knobs. mbu (decode) and mfu (prefill) are the study's two
   // measured-efficiency constants, exposed because both are single-deployment
   // anchors rather than brackets and the reader should be able to argue with
-  // them. Seeded from the selected model on every model change, like mtp.
+  // them. Both are GLOBAL: one value for every row, never reseeded per model.
   mbu: DECODE_MBU, mfu: PREFILL_MFU,
   // max_num_batched_tokens. A string enum (the pue idiom) over the powers of
   // two chart E ticks: an A/B arm selector, not a free knob. The tiles, the
@@ -3510,11 +3508,9 @@ function activeModel(){ return modelFor(state.model); }
 // what its own tooltip says it is.
 function modelForCompare(key){
   const own = CONFIG.MODELS[key].mtp;
-  const ownMbu = CONFIG.MODELS[key].decode_mbu || DECODE_MBU;
-  const saved = state.mtp, savedMbu = state.mbu;
-  state.mtp = own; state.mbu = ownMbu;
-  try { return modelFor(key); }
-  finally { state.mtp = saved; state.mbu = savedMbu; }
+  const saved = state.mtp;
+  state.mtp = own;
+  try { return modelFor(key); } finally { state.mtp = saved; }
 }
 function modelFor(key){
   let m = CONFIG.MODELS[key];
@@ -3542,12 +3538,11 @@ function modelFor(key){
   if (state.wover === "p15" && state.model !== "27B")
     m = { ...m, w_resident: m.w_resident*1.15, name: m.name + " [+15% weights]" };
   m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
-  // ...and the decode-efficiency knob, BAKED ONTO THE MODEL for the same
-  // reason mtp is: the frontier prices every row at its OWN capability via
-  // modelForCompare, and a decode efficiency read from global state at call
-  // time would hand every row the SELECTED model's value -- pricing MM35 and
-  // GLM52 (0.75, no recurrence) at a hybrid's 0.22 and vice versa. Baking it
-  // is also what keeps frontierWarmSig correct in omitting the slider.
+  // ...and the decode-efficiency knob, baked onto the model so decodeCurves
+  // and decodeUsersApprox read one field whichever path built the model.
+  // Deliberately the SLIDER for every row, the frontier included (see
+  // DECODE_MBU); frontierDecSig carries state.mbu so the cached decode
+  // ceilings rebuild when it moves.
   m = { ...m, decode_mbu: decodeMbu() };
   return m;
 }
@@ -3818,8 +3813,9 @@ function frontierWarmSig(wl){
        + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
        + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;
 }
-// the decode ceilings additionally move with the floor — and ONLY they do
-function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}`; }
+// the decode ceilings additionally move with the floor and the MBU slider —
+// and ONLY they do (both are closed-form scalings of the same search)
+function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}|${state.mbu}`; }
 /* Chunked rebuild: a settle used to recompute every stale row in ONE task —
    measured at 500–900 ms of main-thread block once the table reached 27 rows
    (7 models) — so the page froze after each drag. The rebuild now walks the
@@ -5013,6 +5009,15 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       pts: sweep(21, 1.0, 3.0, v =>
         evalAt(mo, f0, state.sla, state.think, cacheNow,
                decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
+  // 6a · decode efficiency (MBU) — one constant for every row, measured on
+  //      one deployment; decode speed is exactly linear in it, like the
+  //      speedup, so the same mean-context stand-in serves
+  if (calD > 0)
+    axes.push({ label: 'Decode MBU', cur: state.mbu, lo: 0.10, hi: 1.00,
+      fmt: v => fmt(v * 100, 0) + '%', approx: true,
+      pts: sweep(19, 0.10, 1.00, v =>
+        evalAt(mo, f0, state.sla, state.think, cacheNow,
+               decodeUsersApprox({ ...model, decode_mbu: v }, topo, cs.samples) * calD * reps), state.mbu) });
   // 6b · per-user decode floor — moves the DECODE ceiling only, and steeply
   //      (the ceiling is the reciprocal of per-user speed). This is the row
   //      that answers "is my deployment actually decode-bound, or just judged
@@ -5504,11 +5509,6 @@ document.querySelectorAll('.seg').forEach(seg=>{
       if (key==='model'){
         state.mtp = CONFIG.MODELS[state.model].mtp;
         document.getElementById('s-mtp').value = state.mtp;
-        // ...and the decode efficiency, which is a property of the model's
-        // architecture (a recurrent stack serialises where a dense one does
-        // not), not of the reader's opinion. Same reseed-on-model-change rule.
-        state.mbu = CONFIG.MODELS[state.model].decode_mbu || DECODE_MBU;
-        document.getElementById('s-mbu').value = state.mbu;
       }
       enforceConstraints();
       syncLabels();
@@ -5644,18 +5644,16 @@ function syncLabels(){
   const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
     : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
   document.getElementById('mtp-tip').setAttribute('data-tip',
-    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 1.7× ⇔ α ≈ 47% — the 27B\'s measured fit; switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
-  // MBU provenance is per model and worth stating on the control: one row is
-  // measured, the recurrent rows inherit it, and the non-recurrent rows carry
-  // a placeholder nothing in this study measured.
-  const mbuDef = CONFIG.MODELS[state.model].decode_mbu || DECODE_MBU;
+    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 97% — the 27B\'s measured acceptance (research/decode_mbu.md; 1.7× ⇔ α ≈ 47% was the pre-measurement fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
+  // MBU provenance, stated on the control: one measurement, applied to every
+  // row, the frontier included -- the slider is how a reader argues with it.
   const mbuProv = state.model === "27B"
-    ? 'MEASURED on this row: 0.22, from five production sessions against a 27B / 4×H200 TP4 (research/decode_mbu.md). The uncalibrated roofline was 4.1× optimistic; this constant brings it to a median 13% error.'
-    : (mbuDef === DECODE_MBU_NONRECURRENT
-        ? 'UNMEASURED for this model. It has no recurrent state to serialise, so it should sit well above the 0.22 measured on a DeltaNet hybrid — 0.75 is a placeholder, not a fit. Treat any decode figure on this row as bracketed by the slider, not predicted.'
-        : 'TRANSPLANTED: 0.22 was measured on the 27B and carried here because this model also decodes through a recurrent stack. Unmeasured on this row.');
+    ? 'Measured on this model (research/decode_mbu.md): the uncalibrated roofline was ~4× optimistic; this constant brings it to a median 13% error.'
+    : (is_moe(CONFIG.MODELS[state.model]) || CONFIG.MODELS[state.model].deltanet_state > 0
+        ? 'Measured on the 27B and applied here unchanged; unmeasured on this model.'
+        : 'Measured on a recurrent hybrid and applied here unchanged; this model has no recurrence to serialise and may well sit higher, but nothing in this study measures a dense one.');
   document.getElementById('mbu-tip').setAttribute('data-tip',
-    'Memory Bandwidth Utilisation — the fraction of the group\'s advertised HBM bandwidth a decode pass achieves. Decode\'s counterpart to the prefill MFU below, and the study\'s newest constant: before 2026-08-28 decode was priced at 1.00, a pure roofline. MODEL CONVENTION (already divided by tp_efficiency). It absorbs both streaming inefficiency and whatever speculative verification costs on a sequential recurrence, so it TRAVELS WITH the MTP slider — moving one alone breaks the fit. Switching model resets it to that model\'s default. ' + mbuProv);
+    'Memory Bandwidth Utilisation — the fraction of the group\'s advertised HBM bandwidth a decode pass achieves. Decode\'s counterpart to the prefill MFU below, and the study\'s newest constant: before 2026-08-28 decode was priced at 1.00, a pure roofline. MODEL CONVENTION (already divided by tp_efficiency). ONE value for every row, the frontier included: a global sensitivity knob, not a per-model property — drag it and watch which configurations survive. It absorbs both streaming inefficiency and whatever speculative verification costs on a sequential recurrence, so on the 27B it TRAVELS WITH the MTP slider. ' + mbuProv);
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
   // the 0.1k step is only reachable at the chat end of the range, so show the
@@ -5704,12 +5702,6 @@ function encodeStateURL(){
   // globally silently flipped a 1.7x Mistral link back to that model's 1.0x
   if (String(state.mtp) !== String(CONFIG.MODELS[state.model].mtp)) p.set('mtp', String(state.mtp));
   else p.delete('mtp');
-  // mbu is per-model for the same reason mtp is: a recurrent stack and a dense
-  // one have different defaults, so diffing against the global constant would
-  // stamp mbu into every dense-model link and, worse, pin it on decode.
-  const mbuDef = CONFIG.MODELS[state.model].decode_mbu || DECODE_MBU;
-  if (String(state.mbu) !== String(mbuDef)) p.set('mbu', String(state.mbu));
-  else p.delete('mbu');
   for (const k of Object.keys(URL_EXTRA_NUM)) put(k, state[k]);
   // booleans encode as 1/0, so the diff test must compare the BOOLEANS —
   // comparing "0" to "false" would stamp the key into every default link
@@ -5731,8 +5723,6 @@ function applyURLState(){
   // the same reset the model buttons apply on click
   if (p.get('model') !== null && p.get('mtp') === null)
     state.mtp = CONFIG.MODELS[state.model].mtp;
-  if (p.get('model') !== null && p.get('mbu') === null)
-    state.mbu = CONFIG.MODELS[state.model].decode_mbu || DECODE_MBU;
   // the prompt-median sliders get model-scaled maxima (up to 4× the HTML
   // attribute, ctxScale) from enforceConstraints AFTER this runs — clamp
   // against the widest legal range here and let the constraint pass do the
