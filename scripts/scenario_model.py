@@ -214,6 +214,55 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 # 256 experts / 8 routed + 1 shared, vocab 248,320). Full derivations and
 # the assumption ledger: research/model_35ba3b.md.
 # ============================================================================
+# ---- DECODE efficiency: MFU's counterpart, and the study's newest constant ----
+# Decode was priced as a PURE roofline until 2026-08-28: bytes / effective_bw,
+# with no efficiency term at all, while prefill had carried an MFU anchor for
+# weeks. research/decode_mbu.md measures the gap on the reference row
+# (27B / 4xH200 TP4, production, five sessions): the model ran **4.1x
+# optimistic**, and ONE multiplicative constant brings it to a median 13%
+# (worst 20%) across batch sizes 1-25 and step bytes 35-90 GB.
+#
+# CONVENTION, as in prefill.md: this is the MODEL-convention figure, i.e.
+# already divided by tp_efficiency, so it multiplies effective_bw() directly.
+# The measurement reads 0.179 of the RAW advertised aggregate; 0.179/0.81 =
+# 0.221 here. Quote the convention whenever quoting the number.
+#
+# WHAT IT ABSORBS, and why that matters: the constant is fitted on a HYBRID
+# model (48 Gated-DeltaNet layers of 64) running speculative decoding at
+# num_speculative_tokens=2. It therefore absorbs both the streaming
+# inefficiency and whatever the speculative verify costs on a sequential
+# recurrence -- decode_mbu.md could not separate those from outside the pod.
+# Two consequences:
+#   * MBU and the model's `mtp` TRAVEL TOGETHER. The 27B's mtp is the measured
+#     accepted length at k=2; changing one without the other breaks the fit.
+#   * It is NOT a hardware constant. A dense model has no recurrence to
+#     serialise and should sit higher; nothing in this study measures one.
+# ONE deployment, ONE model, ONE spec config -- an anchor, not a bracket. The
+# LOW/HIGH pair spans the residual spread, not independent measurements.
+#
+# EXTRAPOLATION BIAS -- the sharpest limitation, and it bites where the study
+# cares most. The constant was fitted over n = 1-25, where WEIGHTS are 80-95%
+# of the step. Folding a weight-side inefficiency into a multiplier on the
+# WHOLE ledger then over-charges the KV term, and the decode ceiling lives at
+# n ~ 100-250 where KV dominates instead. Against the two candidate mechanisms
+# in decode_mbu.md sec 4.3, both anchored to the same n=1 measurement, the
+# 27B / 4xH200 decode ceiling reads:
+#     this single-constant fold      108 users
+#     reading A (weights x(1+k))     238 users
+#     reading B (serial latency)     154 users
+# against a cache ceiling of 249. So the CEILING IS NOT IDENTIFIED by this
+# measurement, and neither is the binding order: A leaves H7 standing, B and
+# the fold overturn it. What IS identified is the per-user speed near the
+# fitted mix (n = 1-25), where all three agree to ~10%.
+# Quote decode ceilings from this model as a range, not a point, until a
+# spec-off / k-sweep A/B settles which mechanism holds.
+# ONE value for EVERY model. A dense or MLA row has no recurrence to serialise
+# and should sit higher, but nothing in this study measures one, and a
+# per-model guess would rank configurations on the guess. Mirrors DECODE_MBU
+# in the explorer, where the slider moves every row at once.
+MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
+
+
 @dataclass
 class Model:
     name: str
@@ -318,7 +367,13 @@ MODELS = {
         w_decode_shared=28.8 * GIB,      # dense: every step reads all weights
         w_route_pertok=0.0,
         w_route_total=0.0,
-        mtp=1.7,
+        # MEASURED on the production deployment 2026-08-28 (research/decode_mbu.md):
+        # accepted length 2.94 at num_speculative_tokens=2, per-draft acceptance
+        # 0.971 -- and the 1+a+a^2 acceptance model confirmed to three decimals
+        # against vLLM's per-position counters. Was 1.7, the baseline's fit.
+        # PAIRED WITH MBU_DEFAULT: both were calibrated against the same passes,
+        # so moving one without the other breaks the fit (see MBU_DEFAULT).
+        mtp=2.94,
         # nvidia/Qwen3.6-27B-NVFP4: MEASURED safetensors total 21,921,428,072 B
         # (2026-07-27 re-verification). Same convention as the FP8 28.8 GiB,
         # which the measured Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B =
@@ -917,6 +972,7 @@ def effective_bw(topo: Topology) -> float:
 # than by published-benchmark spread alone. Every prefill
 # number in this study should be read with the bracket, not the point.
 MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.35, 0.45, 0.55
+
 
 
 def prefill_flops(model: Model, tokens: float, prior: float = 0.0) -> tuple:
@@ -1799,7 +1855,7 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 # CONCURRENCY  (per-user / aggregate decode tok/s vs max_num_seqs)
 # ============================================================================
 def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
-                  n_iter=3000, seed=0, union="linear"):
+                  n_iter=3000, seed=0, union="linear", mbu: float = None):
     """Per-user tok/s percentiles (p5,p50,p95) and aggregate p50 vs max_num_seqs.
 
     step_bytes(n) = weights (MoE: shared + expert union, see Model.w_decode)
@@ -1815,7 +1871,10 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
         raise ValueError(f"{model.name}: weights do not fit {topo.name} — "
                          "no context can be resident, decode is undefined")
     rng = np.random.default_rng(seed)
-    bw = effective_bw(topo)
+    # MEASURED decode efficiency (research/decode_mbu.md). Before 2026-08-28
+    # this line read `bw = effective_bw(topo)` -- a pure roofline, 4.1x
+    # optimistic against production. Pass mbu=1.0 to recover that reading.
+    bw = effective_bw(topo) * (MBU_DEFAULT if mbu is None else mbu)
     # dense-attention models read every cached token per step (kv_bpt); a
     # sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
     # token (indexer scan) plus a top-k read per active sequence, capped at
@@ -1975,7 +2034,8 @@ def max_users_cache(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 
 def max_users_decode(model: Model, topo: Topology, wl: Workload,
                      floor: float = DECODE_FLOOR_TOKS, union: str = "linear",
-                     n_iter: int = 400, seed: int = 0, hi: int = 4096) -> float:
+                     n_iter: int = 400, seed: int = 0, hi: int = 4096,
+                     mbu: float = None) -> float:
     """Concurrent decoders at which per-user p50 tok/s falls to `floor`.
 
     Bisection, not the linear scan tables.py uses: per-user speed is monotone
@@ -1986,7 +2046,7 @@ def max_users_decode(model: Model, topo: Topology, wl: Workload,
     """
     def p50(n):
         return decode_curves(model, topo, wl, [n], n_iter=n_iter, seed=seed,
-                             union=union)[1][0]
+                             union=union, mbu=mbu)[1][0]
     if p50(1) < floor:
         return 0.0
     if p50(hi) >= floor:
@@ -3227,15 +3287,56 @@ def _selfcheck():
         "cache ceiling must reproduce the published warm-users p5 of 69"
     assert abs(max_users_cache(m27, tp2, wl, n_iter=800) - 177) <= 6, \
         "cache ceiling must reproduce the published warm-users p5 of 177"
-    assert abs(max_users_decode(m27, t1, wl, n_iter=800) - 118) <= 4, \
+    # PUBLISHED-TABLE CONVENTION. These two pin figures that appear in
+    # docs/scenarios.md, and those tables were generated before decode had any
+    # efficiency term at all (MBU_DEFAULT, 2026-08-28). They are pinned at
+    # mbu=1.0 so the published numbers stay reproducible from this file; the
+    # DEFAULT model is now the calibrated one and disagrees with them by ~2.6x.
+    # Regenerating the tables is an owner decision, not a mechanical one --
+    # until it happens, every decode figure in the docs is roofline-convention.
+    # ...and at the pre-calibration mtp too: the 27B's speedup moved 1.7 -> 2.94
+    # on the same measurement, so BOTH knobs must be rewound to reproduce a
+    # published figure. That they travel together is the point, not an
+    # inconvenience -- see MBU_DEFAULT.
+    m27_pub = dataclasses.replace(m27, mtp=1.7)
+    assert abs(max_users_decode(m27_pub, t1, wl, n_iter=800, mbu=1.0) - 118) <= 4, \
         "decode ceiling must reproduce the published mns@40 of 118"
-    assert abs(max_users_decode(m27, tp2, wl, n_iter=800) - 228) <= 8, \
+    assert abs(max_users_decode(m27_pub, tp2, wl, n_iter=800, mbu=1.0) - 228) <= 8, \
         "decode ceiling must reproduce the published mns@40 of 228"
-    # decode: monotone, bisected, and matching the study's H7 finding that the
-    # CACHE binds before bandwidth at the reference workload (with MTP on)
+    # ---- H7, and what the decode measurement did and did not settle --------
+    # H7 is the study's thesis: the CACHE binds before decode bandwidth at the
+    # reference workload. It held for every configuration under the roofline
+    # convention, and the first assertion still guards that published claim.
+    #
+    # What the measurement (research/decode_mbu.md, 2026-08-28) DID identify
+    # is per-user decode speed at the batch sizes it ran: 250-330 tok/s on the
+    # 27B / 4xH200 TP4 across n = 1-4, reproduced in four sessions. That is
+    # the pin: the model must land inside the measured band there (it reads
+    # 314 / 302 / 276 at n = 1 / 2 / 4). What it did NOT identify is the
+    # decode CEILING, and so not the binding order either: the constant is
+    # fitted where weights dominate the step (n = 1-25) and applied where KV
+    # does (n ~ 100-250), and the note's two candidate mechanisms put the
+    # 4xH200 ceiling at 238 (A, H7 stands) or 154 (B, H7 inverts) against a
+    # cache ceiling of 249, with the single-constant fold used here at ~150.
+    # On the 1xH200 row these assertions run on, the fold reads decode ~32
+    # against cache ~70 (published: 118 against 69) -- but that ordering is a
+    # projection of the fold, not a measurement, so it is deliberately NOT
+    # asserted in either direction. A spec-off / k-sweep A/B decides it. Do
+    # not add that assertion back without the measurement behind it.
+    cache = max_users_cache(m27, t1, wl, n_iter=200)
+    dec_pub = max_users_decode(m27_pub, t1, wl, n_iter=200, mbu=1.0)
+    assert dec_pub > cache, \
+        "H7 as published: under the roofline convention the cache binds first"
+    tp4 = topology("tp", 4, "H200")
+    _, p50_tp4, _, _ = decode_curves(m27, tp4, wl, [1, 2, 4], n_iter=400)
+    assert all(250 <= v <= 330 for v in p50_tp4), \
+        f"27B/TP4 per-user decode at n=1,2,4 must sit in the measured 250-330 " \
+        f"tok/s band, got {[round(float(v)) for v in p50_tp4]}"
+    # wiring guard only (same mtp on both sides): the efficiency term must
+    # actually reach the ceiling search
     dec = max_users_decode(m27, t1, wl, n_iter=200)
-    assert dec > max_users_cache(m27, t1, wl, n_iter=200), \
-        "H7: the cache must bind before decode bandwidth on the 27B / 1xH200"
+    assert dec < max_users_decode(m27, t1, wl, n_iter=200, mbu=1.0), \
+        "MBU_DEFAULT must lower the decode ceiling against the same-mtp roofline"
     assert max_users_decode(m27, t1, wl, floor=20.0, n_iter=200) > dec, \
         "a lower floor must admit more concurrent decoders"
     # an unreachable floor is a censored result, not a silent cap
@@ -3281,14 +3382,25 @@ def _selfcheck():
     #    finding; if it closes, the load conversion has broken somewhere.
     #    (Re-pinned 2026-08-27 when OUT_TOKENS_DEFAULT moved 1,000 -> 400,
     #    the measured value: fewer decode-seconds per request means a smaller
-    #    steady batch running faster. Old pin: ~6.4 at ~370 tok/s.)
-    assert abs(sdp["n"] - 2.2) <= 0.4, \
-        f"27B/TP2 reference load: ~2 decoders expected, got {sdp['n']:.2f}"
-    assert abs(sdp["per_user_tok_s"] - 430) <= 40, \
-        f"27B/TP2 reference load: ~430 tok/s expected, " \
+    #    steady batch running faster. Old pin: ~6.4 at ~370 tok/s.
+    #    Re-pinned again 2026-08-28 for MBU_DEFAULT + the 27B's measured mtp:
+    #    slower decode keeps each request in the batch longer, so the steady
+    #    batch GROWS and each member runs slower. 2.2 at 430 -> 6.8 at 138.
+    #    The band is tight: cross-seed spread is ~0.1 in n and ~2 in tok/s,
+    #    so an earlier +/-1.0 / +/-25 pin -- justified by hand-waving about a
+    #    steeper curve -- would have let real drift through. Measured, not
+    #    reasoned.)
+    assert abs(sdp["n"] - 6.8) <= 0.4, \
+        f"27B/TP2 reference load: ~6.8 decoders expected, got {sdp['n']:.2f}"
+    assert abs(sdp["per_user_tok_s"] - 138) <= 10, \
+        f"27B/TP2 reference load: ~138 tok/s expected, " \
         f"got {sdp['per_user_tok_s']:.0f}"
-    assert sdp["n"] < max_users_decode(m27, tp2, wl, n_iter=200) / 20, \
-        "the steady batch must sit far inside the decode ceiling at this load"
+    #    The stress-vs-steady gap SURVIVES calibration but narrows sharply:
+    #    the ceiling fell 228 -> 74 while the steady batch rose 2.2 -> 6.8, so
+    #    the ratio went ~100x -> ~11x. Still a real distinction, no longer a
+    #    spectacular one -- and the reason the decode ceiling now binds.
+    assert sdp["n"] < max_users_decode(m27, tp2, wl, n_iter=200) / 5, \
+        "the steady batch must still sit inside the decode ceiling at this load"
     # 4. exactly linear in the PRODUCT rate x output tokens, and in nothing else
     assert (steady_decode_point(m27, tp2, wl, 2 * rate_g, n_iter=200)["n"]
             > sdp["n"]), "more arrivals must mean more concurrent decoders"
