@@ -506,8 +506,9 @@ MODELS = {
     # deltanet_state. Decode reads the FP4 indexer scan + dense-HCA compressed
     # axis (426 B/ctx-token) and top-512 latents + windows (9.36 MB/seq).
     # Native checkpoint is already mixed FP8/FP4 (experts FP4 + E8M0 scales,
-    # servable on H200 per the vLLM recipe) -> no NVFP4 variant exists or
-    # helps (the community conversion is LARGER). research/model_dsv4flash.md.
+    # servable on H200 per the vLLM recipe). NVIDIA's 0731 NVFP4 repack
+    # (E4M3 block-16 scales) is HEAVIER than native — see nvfp4_w below and
+    # research/nvfp4_2026-09.md; research/model_dsv4flash.md for the rest.
     "DSV4F": Model(
         name="DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
         kv_bpt=3_450,                    # 21 x 576/4 + 20 x 576/128 + 21 x 64/4 (fp8 latent+fp4 idx)

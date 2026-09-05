@@ -173,6 +173,10 @@ uncertainty (±0.2e9, ~±3% of the shared read — the exact dtype split of the
 
 ### NVFP4 — **deliberately not modelled** (`nvfp4_w = None`)
 
+> **Superseded 2026-09-06:** `nvidia/DeepSeek-V4-Flash-0731-NVFP4` (2026-08-19) is
+> priced, and it is 5.2% heavier than the native checkpoint (E8M0 block-32 →
+> E4M3 block-16 scales). `research/nvfp4_2026-09.md`.
+
 There is **no official NVFP4 checkpoint of the 0731 release**:
 `nvidia/DeepSeek-V4-Flash-NVFP4` (created 2026-05-18) targets the April base
 model, and the only 0731 conversion is community-made

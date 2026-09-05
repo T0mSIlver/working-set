@@ -68,8 +68,9 @@ tokens, the MFU(chunk) anchor, decode MBU).
 - **NVFP4 checkpoint.** `nvidia/Qwen3.6-27B-NVFP4` was measured (21.92e9 B).
   No NVIDIA NVFP4 of Qwen3.8-27B exists as of 2026-09-05; the community
   `unsloth/Qwen3.8-27B-NVFP4` keeps more tensors in FP8 (23.42e9 B, a
-  different recipe). The explorer's NVFP4 arm keeps the NVIDIA recipe's
-  bytes as a **projection** onto tensor-identical weights.
+  different recipe). The explorer's NVFP4 arm kept the NVIDIA recipe's
+  bytes as a projection until 2026-09-06, when `RedHatAI/Qwen3.8-27B-NVFP4`
+  (23,417,339,744 B, measured) replaced it — `research/nvfp4_2026-09.md`.
 - **Release.** 2026-08-14 vs 2026-04-22; `transformers` 5.8 at export.
 
 ## 3. What changed in the repo
