@@ -382,7 +382,11 @@ MODELS = {
         # which the measured Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B =
         # 28.75 GiB) matches within 0.2% — the old x22/27.8 "as-deployed"
         # scaling was a mis-derivation. Dense: decode reads everything.
-        nvfp4_w=(21.92e9, 21.92e9, 0.0, 0.0),
+        # Superseded 2026-09-06 by RedHatAI/Qwen3.8-27B-NVFP4, MEASURED from
+        # every shard header: 23,417,339,744 B (dense MLPs of 56/64 layers
+        # NVFP4; attention, DeltaNet, lm_head FP8; embed/MTP/vision BF16).
+        # research/nvfp4_2026-09.md.
+        nvfp4_w=(23417339744, 23417339744, 0.0, 0.0),
         max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
         # prefill (research/prefill.md #2): 27B dense, less ~2.5e9 of
         # embed + untied lm_head (vocab 248,320 — the family figure the
@@ -512,7 +516,14 @@ MODELS = {
         w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
         w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
         mtp=1.7,                         # DSpark drafts 7 tokens; transplanted fit, unmeasured
-        nvfp4_w=None,                    # experts already FP4 natively; no official 0731 NVFP4
+        # nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
+        # shard header. Routed experts repacked NVFP4 (E4M3 block-16 scales):
+        # 14,155,800 B/expert vs 13,369,344 native (E8M0 block-32) — this arm
+        # is 5.2% HEAVIER than FP8; MTP experts and everything else identical.
+        # research/nvfp4_2026-09.md.
+        nvfp4_w=(175_535_844_088, 7.66e9,
+                 3_652_196_400,           # 6 experts x 14,155,800 B x 43
+                 155_827_046_400),        # 256 experts x 14,155,800 B x 43
         kv_decode_bpt=426,               # 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA
         kv_decode_const=9_363_456,       # 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
         kv_decode_topk=2_048,            # 512 compressed entries x ratio 4, in token space
@@ -548,7 +559,13 @@ MODELS = {
         w_route_total=120_810_700_800,   # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
         mtp=1.7,                         # MTP module (1 hybrid layer, 3 drafts per the vLLM
                                          # recipe); transplanted fit, unmeasured
-        nvfp4_w=None,                    # no official NVFP4 (community only); experts already FP8
+        # nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
+        # shard header: routed experts of the 48 main layers NVFP4
+        # (2,764,824 B/expert, x0.5625 of FP8); n-gram table, MTP experts,
+        # attention, DeltaNet, heads byte-identical. research/nvfp4_2026-09.md.
+        nvfp4_w=(132_639_846_394, 8_623_999_000,
+                 1_327_115_520,           # 10 experts x 2,764,824 B x 48
+                 67_948_314_624),         # 512 experts x 2,764,824 B x 48
         kv_decode_bpt=384,               # QSA indexer scan: 12 layers x 128 B / ratio 4 per ctx tok
         kv_decode_const=25_165_824,      # 12 layers x top-2048 x 1,024 B full-KV reads per seq
         kv_decode_topk=2_048,            # indexer_budget, read in token space (research note #6)
@@ -582,7 +599,15 @@ MODELS = {
         w_route_pertok=8_457_781_248,    # 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
         w_route_total=304_480_124_928,   # 288 experts (kink at n = 288/8 = 36)
         mtp=1.7,                         # MTP draft layer (recipe runs 5 drafts); transplanted fit
-        nvfp4_w=None,                    # no official NVFP4 (community only)
+        # RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
+        # NVFP4 checkpoint), MEASURED from every shard header: routed experts
+        # of the 42 decode layers NVFP4 (14,155,800 B/expert, x0.5625), MTP
+        # layer keeps FP8 experts, the rest UPCAST to BF16 (+2.75e9 on the
+        # always-active read). research/nvfp4_2026-09.md.
+        nvfp4_w=(197_822_818_044,
+                 16_705_715_836,          # 13,957,216,504 + 2,748,499,332 upcast delta
+                 4_756_348_800,           # 8 experts x 14,155,800 B x 42
+                 171_228_556_800),        # 288 experts x 14,155,800 B x 42
         kv_decode_bpt=363,               # compressed indexer scan: 11 x 132 B / kpool 4 per ctx tok
         kv_decode_const=11_534_336,      # 11 layers x top-2048 x 512-B latent reads per seq
         kv_decode_topk=2_048,            # index_topk, read in token space (research note #6)
@@ -2819,11 +2844,16 @@ def _selfcheck():
     assert dsf.kv_decode_const == 21 * 512 * 576 + 43 * 128 * 576
     assert dsf.kv_decode_topk == 2_048
     assert abs(dsf.attn_layers * dsf.attn_d - (21 * 1024 + 20 * 256)) < 1e-9
-    assert dsf.nvfp4_w is None                                  # no NVFP4 variant modelled
-    try:
-        with_weight_dtype(dsf, "nvfp4"); raise AssertionError("expected ValueError")
-    except ValueError:
-        pass
+    # NVIDIA's 0731 NVFP4 repacks the natively-4-bit experts with denser
+    # scales: the arm is HEAVIER than FP8 everywhere but the fixed read
+    dsf4 = with_weight_dtype(dsf, "nvfp4")
+    assert dsf4.w_route_total == 256 * 14_155_800 * 43
+    assert dsf4.w_route_pertok == 6 * 14_155_800 * 43
+    assert dsf4.w_route_total > dsf.w_route_total and dsf4.w_resident > dsf.w_resident
+    assert dsf4.w_decode_shared == dsf.w_decode_shared
+    # only the routed experts moved: the resident delta IS the expert delta
+    # (w_resident's FP8 figure is rounded to 166.88e9, hence the tolerance)
+    assert abs((dsf4.w_resident - dsf.w_resident) - (155_827_046_400 - 147_169_738_752)) < 1e7
 
     # Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md)
     q38 = MODELS["Q38FN"]
@@ -2840,11 +2870,14 @@ def _selfcheck():
     # (n-gram table, embed, vision, MTP) far exceeds what a step can touch
     assert q38.w_decode_shared == 8_623_999_000                 # exact ledger sum (note #4)
     assert q38.w_resident > q38.w_route_total + q38.w_decode_shared + 50e9
-    assert q38.nvfp4_w is None                                  # no official NVFP4 (note #4)
-    try:
-        with_weight_dtype(q38, "nvfp4"); raise AssertionError("expected ValueError")
-    except ValueError:
-        pass
+    # NVIDIA's NVFP4: routed experts x0.5625 (4 bits + E4M3 block-16 scales),
+    # everything else — n-gram table included — byte-identical
+    q384 = with_weight_dtype(q38, "nvfp4")
+    assert q384.w_route_total == 512 * 2_764_824 * 48
+    assert q384.w_route_pertok == 10 * 2_764_824 * 48
+    assert q384.w_decode_shared == q38.w_decode_shared
+    assert abs(q384.w_resident - (q38.w_resident - q38.w_route_total + q384.w_route_total)) < 1e6
+    assert abs(2_764_824 / 4_915_800 - 0.5625) < 2e-4
     assert q38.state_fp32_ok and q38.kv_fp16_ok                 # bf16 DN state; no fp8-KV assert
     # FP16 KV on the sparse path: pool bytes double AND the top-k main-KV
     # gathers double; the fp8 indexer scan does not
@@ -2871,11 +2904,13 @@ def _selfcheck():
     # routed experts + embed + MTP layer + vision tower = the checkpoint
     assert (g53.w_decode_shared + g53.w_route_total
             + 1_268_776_960 + 7_493_399_168 + 1_127_254_016) == g53.w_resident
-    assert g53.nvfp4_w is None                                  # no official NVFP4 (note #4)
-    try:
-        with_weight_dtype(g53, "nvfp4"); raise AssertionError("expected ValueError")
-    except ValueError:
-        pass
+    # RedHatAI's NVFP4: 42 decode layers' experts x0.5625, MTP layer's FP8
+    # experts kept, the rest upcast to BF16 (+2.75e9 on the fixed read)
+    g534 = with_weight_dtype(g53, "nvfp4")
+    assert g534.w_route_total == 288 * 14_155_800 * 42
+    assert g534.w_route_pertok == 8 * 14_155_800 * 42
+    assert g534.w_decode_shared - g53.w_decode_shared == 2_748_499_332
+    assert g534.w_resident < g53.w_resident * 0.61        # 197.8e9 vs 328.3e9
     # bf16 KDA state; BF16 KV is not merely allowed but REQUIRED on Hopper
     # (fp8 KV is Blackwell-only — vLLM recipe, note #2), so the FP16 toggle
     # must stay live and scale the sparse constants like Q38FN's

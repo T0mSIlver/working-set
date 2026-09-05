@@ -130,11 +130,14 @@ export const CONFIG = {
       // comment. NOT re-measured on Qwen3.8-27B: acceptance depends on the
       // draft head's weights, not the architecture. Re-measure when it ships.
       mtp: 2.94,
-      // PROJECTION: nvidia/Qwen3.6-27B-NVFP4's MEASURED safetensors total
-      // (21.92e9 B) applied to tensor-identical weights. No NVIDIA NVFP4 of
-      // Qwen3.8-27B exists (2026-09-05); the community unsloth/Qwen3.8-27B-
-      // NVFP4 keeps more layers in FP8 and is 23.42e9 B — a different recipe.
-      nvfp4_w: [21.92e9, 21.92e9, 0.0, 0.0],
+      // RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
+      // header (research/nvfp4_2026-09.md): 23,417,339,744 B. The recipe
+      // quantizes only the dense MLPs of 56 of the 64 layers; attention,
+      // DeltaNet and lm_head stay FP8, embed/MTP/vision BF16 — hence
+      // +6.8% over NVIDIA's 3.6 recipe (21.92e9, which no longer applies).
+      // Same whole-checkpoint convention as the FP8 arm: dense, every step
+      // reads everything.
+      nvfp4_w: [23417339744, 23417339744, 0.0, 0.0],
       params_prefill: 24.5e9,      // 27B dense less ~2.5e9 embed + lm_head (vocab 248,320)
       attn_layers: 16, attn_d: 24*256,
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
@@ -208,8 +211,15 @@ export const CONFIG = {
       w_route_pertok: 3449290752,  // 6 experts x 13,369,344 B (FP4 packed + E8M0 scales) x 43
       w_route_total: 147169738752, // 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
       mtp: 1.7,                    // DSpark drafts 7 tokens; transplanted fit, unmeasured
-      // no nvfp4_w: experts are ALREADY FP4 natively; no official 0731 NVFP4
-      // exists and the community conversion is LARGER (research note #4)
+      // nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
+      // shard header (research/nvfp4_2026-09.md). Only the 43 main layers'
+      // routed experts change: the native checkpoint already packs them 4-bit
+      // with E8M0 block-32 scales (13,369,344 B/expert), NVFP4 repacks them
+      // with E4M3 block-16 scales (14,155,800 B/expert, +5.9%). Everything
+      // else byte-identical, MTP experts stay native. So this arm is 5.2%
+      // HEAVIER than FP8 — it exists for the NVFP4 kernel path, not for
+      // bytes; the explorer prices what the checkpoint weighs.
+      nvfp4_w: [175535844088, 7.66e9, 3652196400, 155827046400],
       kv_decode_bpt: 426,          // 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA read
       kv_decode_const: 9363456,    // 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
       kv_decode_topk: 2048,        // 512 compressed entries x ratio 4, in token space
@@ -227,8 +237,13 @@ export const CONFIG = {
       w_route_pertok: 2359584000,  // 10 experts x 4,915,800 B (FP8 + block scales) x 48
       w_route_total: 120810700800, // 512 experts (kink at n = 512/10 = 51.2 — the study's deepest)
       mtp: 1.7,                    // MTP module (1 hybrid layer, 3 drafts per the vLLM recipe); transplanted fit, unmeasured
-      // no nvfp4_w: no official NVFP4 checkpoint exists (community conversions
-      // only) and the two dominant blocks are already FP8 (research note #4)
+      // nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
+      // shard header (research/nvfp4_2026-09.md): only the 48 main layers'
+      // routed experts are NVFP4 (2,764,824 B/expert vs 4,915,800 FP8, x0.5625
+      // = 4 bits + 1/16 scales); the n-gram table, MTP experts, attention,
+      // DeltaNet and heads are byte-identical, so w_decode_shared is the
+      // FP8 ledger's. 132.64e9 B resident vs 185.50e9.
+      nvfp4_w: [132639846394, 8623999000, 1327115520, 67948314624],
       kv_decode_bpt: 384,          // QSA indexer scan: 12 layers x 128 B / ratio 4 per ctx token
       kv_decode_const: 25165824,   // 12 layers x top-2048 x 1,024 B full-KV reads per active seq
       kv_decode_topk: 2048,        // indexer_budget, read in token space (research note #6)
@@ -250,7 +265,16 @@ export const CONFIG = {
       w_route_pertok: 8457781248,  // 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
       w_route_total: 304480124928, // 288 experts (kink at n = 288/8 = 36)
       mtp: 1.7,                    // MTP draft layer (recipe runs 5 drafts); transplanted fit
-      // no nvfp4_w: no official NVFP4 checkpoint exists (community only)
+      // RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
+      // NVFP4 checkpoint), MEASURED from every shard header (research/
+      // nvfp4_2026-09.md). Routed experts of the 42 decode MoE layers NVFP4
+      // (14,155,800 B/expert vs 25,171,968 FP8, x0.5625); the MTP draft layer
+      // (index 45) keeps its FP8 experts. The recipe UPCASTS the rest to
+      // BF16 — shared experts, o_proj, dense MLP, DSA projections — so the
+      // always-active read grows 13.96e9 -> 16.71e9 (+2.75e9, the FP8->BF16
+      // delta measured on the same tensors) while expert reads shrink 1.78x.
+      // 197.82e9 B resident vs 328.33e9.
+      nvfp4_w: [197822818044, 16705715836, 4756348800, 171228556800],
       kv_decode_bpt: 363,          // compressed indexer scan: 11 x 132 B / kpool 4 per ctx token
       kv_decode_const: 11534336,   // 11 layers x top-2048 x 512-B latent reads per active seq
       kv_decode_topk: 2048,        // index_topk, read in token space (research note #6)
