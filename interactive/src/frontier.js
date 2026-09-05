@@ -55,8 +55,9 @@ export function renderFrontierTable(rows, curKey){
          + `<td class="num">${fmt(r.bstar,1)}</td>`
          // energy is meaningful only where the load can actually be served
          + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td>`
-         // chart H's y: the bill with the row full, per user it then carries
-         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable && isFinite(r.eurSeat) ? fmt(r.eurSeat,0) : '—'}</td></tr>`;
+         // chart H's y: the bill with the row full, per user it then carries;
+         // priced at a censored limit it is an upper bound, hence '≤'
+         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable && isFinite(r.eurSeat) ? (cen?'≤ ':'')+fmt(r.eurSeat,0) : '—'}</td></tr>`;
   }).join('');
   document.getElementById('frontierTable').innerHTML =
     `<div class="ftable-wrap"><table class="ftable">${head}${body}</table></div>`;
@@ -180,7 +181,8 @@ export function renderFrontierChart(rows, curKey){
   const pts = [];
   // a censored decode limit is a LOWER bound (the search stopped before the
   // floor): hollow, so the reader sees a bound, not a point. The seat price
-  // does not depend on it (the bill is at your load), but "fits" does.
+  // is priced AT that limit, so it is an UPPER bound (both bill/users terms
+  // fall as the true ceiling rises); the table and tooltip carry the '≤'.
   const dot = (r, on) => {
     const [x,y] = P(r), col = C[r.op.binding] || muted;
     pts.push({ x, y, color: col, r });
@@ -221,7 +223,14 @@ export function renderFrontierChart(rows, curKey){
       if (!hit) break;
       bb = { ...bb, y0: hit.y1+2, y1: hit.y1+2+h };
     }
-    if (bb.y1 > mT+ph) bb = { ...bb, y0: y-16, y1: y-4 };   // off the bottom: go above
+    if (bb.y1 > mT+ph){                                     // off the bottom: go above,
+      bb = { ...bb, y0: y-16, y1: y-4 };                     // pushing UP past what is placed
+      for (let k=0;k<12;k++){
+        const hit = placed.find(q => overlaps(bb,q));
+        if (!hit) break;
+        bb = { ...bb, y0: hit.y0-2-h, y1: hit.y0-2 };
+      }
+    }
     placed.push(bb);
     if (bb.y0 !== by){
       const lx = end ? bb.x1+3 : bb.x0-3, ly = bb.y1-6;
