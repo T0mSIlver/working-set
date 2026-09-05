@@ -158,6 +158,10 @@ active" (= `params_prefill` basis).
 
 ### NVFP4 — **not modelled** (`nvfp4_w = None`)
 
+> **Superseded 2026-09-06:** `RedHatAI/GLM-5.3-Flash-NVFP4` (2026-08-27, the vLLM
+> recipe's named checkpoint) is priced — 42 decode layers' experts NVFP4, the
+> rest upcast to BF16. `research/nvfp4_2026-09.md`.
+
 No official NVFP4 checkpoint exists (no `nvidia/GLM-5.3-Flash-NVFP4`; the
 only conversions are community — `LibertAIDAI/…-NVFP4` at 181.3 GiB and an
 empty `vcruz305` repo, 2026-08-26). Same treatment as DSv4-Flash and

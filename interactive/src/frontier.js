@@ -91,7 +91,10 @@ const FRONTIER_SHORT = { "27B": "Qwen3.8-27B", "35BA3B": "35B-A3B", "MM35": "Mis
 // architecture tag and the split in the TP/DP shorthand. r.label keeps the
 // Python-identical topology name (deploy card, harness, self-checks)
 export function frontierRowName(r){
-  return CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '') + ' · '
+  // the arm tags modelFor appends ([NVFP4], [FP16 KV], [fp32 state], ...)
+  // ride along: a row priced on a non-default arm must say so
+  const tags = (r.label.split(' · ')[0].match(/\[[^\]]+\]/g) || []).join(' ');
+  return CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '') + (tags ? ' ' + tags : '') + ' · '
        + makeGrid(r.dp, r.tp, state.gpu).name.replace(' tensor-par', ' TP').replace(' data-par', ' DP');
 }
 function frontierShortLabel(r){

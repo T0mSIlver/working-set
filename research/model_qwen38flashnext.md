@@ -160,6 +160,9 @@ vision and MTP make the difference).
 
 ### NVFP4 — **not modelled** (`nvfp4_w = None`)
 
+> **Superseded 2026-09-06:** `nvidia/Qwen3.8-Flash-Next-NVFP4` (2026-09-02) is
+> priced — routed experts only, 132.6 GB resident. `research/nvfp4_2026-09.md`.
+
 No official NVFP4 checkpoint exists (`nvidia/Qwen3.8-Flash-Next-NVFP4` is
 absent; RadixArk/Inferact/community conversions only, 2026-08-26). The upside
 would also be modest: the two dominant blocks (experts 120.8e9, n-gram table

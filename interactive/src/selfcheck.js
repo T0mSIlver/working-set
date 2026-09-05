@@ -143,7 +143,9 @@ export function unitChecks(){
   console.assert(kv_pool_tokens(CONFIG.MODELS["27B"], b1) > p1, "B300 pool > H200 pool");
   console.assert(Math.abs(glm.nvfp4_w[0]/465e9 - 1) < 0.005,
     "GLM-5.2 NVFP4 resident must match the vLLM recipe's ~465 GB");
-  for (const mk of ["27B","35BA3B"])
+  // every model but GLM-5.3 (nvidia's 5.2 recipe kept as a projection there)
+  // has a measured NVFP4 checkpoint as of 2026-09-06
+  for (const mk of Object.keys(CONFIG.MODELS))
     console.assert(!!CONFIG.MODELS[mk].nvfp4_w, mk+" must be NVFP4-selectable");
   let gateThrew = false;
   try { kv_pool_tokens({...CONFIG.MODELS["27B"], weight_dtype:"nvfp4"}, makeTopo("tp",1,"H200")); }
@@ -204,7 +206,14 @@ export function unitChecks(){
                  dsf.kv_decode_topk === 2048, "DSV4F sparse-decode pricing");
   console.assert(Math.abs(dsf.attn_layers*dsf.attn_d - (21*1024 + 20*256)) < 1e-9,
     "DSV4F prefill quadratic term = indexer + dense-HCA equivalents");
-  console.assert(!dsf.nvfp4_w, "DSV4F must not be NVFP4-selectable");
+  // NVIDIA's 0731 NVFP4 repacks the natively-4-bit experts with denser
+  // scales: heavier than FP8 on every expert byte, identical elsewhere
+  console.assert(dsf.nvfp4_w[3] === 256*14155800*43 && dsf.nvfp4_w[2] === 6*14155800*43,
+    "DSV4F NVFP4 expert bytes are the measured 14,155,800 B/expert x 43 layers");
+  console.assert(dsf.nvfp4_w[3] > dsf.w_route_total && dsf.nvfp4_w[1] === dsf.w_decode_shared,
+    "DSV4F NVFP4 is heavier on experts and unchanged on the fixed read");
+  console.assert(Math.abs((dsf.nvfp4_w[0] - dsf.w_resident) - (dsf.nvfp4_w[3] - dsf.w_route_total)) < 1e7,
+    "DSV4F NVFP4 resident delta is the expert delta alone");
   // Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md; mirror _selfcheck)
   const q38 = CONFIG.MODELS["Q38FN"];
   console.assert(q38.kv_bpt === 12*2*256*2 + 12*128/4,
@@ -222,7 +231,12 @@ export function unitChecks(){
     "Q38FN shared per-step read = the exact BF16 ledger sum");
   console.assert(q38.w_resident > q38.w_route_total + q38.w_decode_shared + 50e9,
     "Q38FN resident (n-gram table, embed, vision, MTP) far exceeds the touchable bytes");
-  console.assert(!q38.nvfp4_w, "Q38FN must not be NVFP4-selectable (no official ckpt)");
+  // NVIDIA's NVFP4: routed experts x0.5625, everything else byte-identical
+  console.assert(q38.nvfp4_w[3] === 512*2764824*48 && q38.nvfp4_w[2] === 10*2764824*48,
+    "Q38FN NVFP4 expert bytes are the measured 2,764,824 B/expert x 48 layers");
+  console.assert(q38.nvfp4_w[1] === q38.w_decode_shared
+    && Math.abs(q38.nvfp4_w[0] - (q38.w_resident - q38.w_route_total + q38.nvfp4_w[3])) < 1e6,
+    "Q38FN NVFP4 changes the routed experts only");
   console.assert(q38.kv_fp16_ok === true && q38.state_fp32_ok === true,
     "Q38FN: FP16-KV and fp32-state toggles stay enabled (explicit flags)");
   // FP16-KV on the sparse path — exercises the REAL transform modelFor uses
@@ -254,7 +268,12 @@ export function unitChecks(){
   console.assert(g53.w_decode_shared + g53.w_route_total
                  + 1268776960 + 7493399168 + 1127254016 === g53.w_resident,
     "GLM53F closing identity: shared + routed + embed + MTP + vision = total_size");
-  console.assert(!g53.nvfp4_w, "GLM53F must not be NVFP4-selectable (no official ckpt)");
+  // RedHatAI's NVFP4: 42 decode layers' experts x0.5625, MTP layer's FP8
+  // experts kept, the rest upcast to BF16 (+2.75e9 on the fixed read)
+  console.assert(g53.nvfp4_w[3] === 288*14155800*42 && g53.nvfp4_w[2] === 8*14155800*42,
+    "GLM53F NVFP4 expert bytes are the measured 14,155,800 B/expert x 42 decode layers");
+  console.assert(g53.nvfp4_w[1] - g53.w_decode_shared === 2748499332 && g53.nvfp4_w[0] < 0.61*g53.w_resident,
+    "GLM53F NVFP4 upcasts the fixed read by the measured delta and cuts the resident 40%");
   console.assert(g53.kv_fp16_ok === true && g53.state_fp32_ok === true,
     "GLM53F: FP16-KV live (REQUIRED on Hopper) and fp32-state live");
   const g53fp16 = withKvDtype(g53, "fp16");

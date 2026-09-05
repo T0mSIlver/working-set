@@ -188,6 +188,8 @@ simply the measured checkpoint under the same convention:
 
 ```
 w_resident_nvfp4(27B) = 21.92e9 B = 20.4 GiB   (was derived 24.47e9: -10.4%)
+> Superseded 2026-09-06: the 27B row is Qwen3.8-27B and its arm is
+> RedHatAI/Qwen3.8-27B-NVFP4 at 23,417,339,744 B — `research/nvfp4_2026-09.md`.
 w_decode_shared       = w_resident   (dense: every step reads all weights)
 ```
 
