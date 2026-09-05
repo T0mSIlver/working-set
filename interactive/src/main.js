@@ -596,7 +596,9 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
 
 /* ---- init ---- */
 // the load-time checks first, in the order they were written: unitChecks
-// draws nothing, prefillSampledChecks and steadyChecks seed the RNG themselves
+// draws nothing, prefillSampledChecks draws from the RNG's initial state (no
+// module draws at evaluation time, so it sees the same seed the single file
+// gave it), steadyChecks seeds explicitly
 unitChecks();
 prefillSampledChecks();
 steadyChecks();
