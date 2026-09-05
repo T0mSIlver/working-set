@@ -1075,6 +1075,35 @@ function actReserve(){
 // activeModel() for why the low anchor was retired.
 const ACT_RESERVE = actReserve();
 
+/* ---- study constants: the reference values every published figure is quoted
+   at (mirrors scenario_model.py). They sit here rather than beside the prefill
+   and decode code that uses them because the state object's DEFAULTS read
+   them at load, and the module that holds them must not depend on anything
+   that depends on state. ---- */
+const PREFILL_MFU   = 0.45;    // mid of the plausible [0.35, 0.55] FP8 bracket
+
+                               // (tightened from [0.30, 0.60] 2026-08-27 on two
+                               // production calibration points — prefill.md #1)
+const PREFILL_MFU_LO = 0.35, PREFILL_MFU_HI = 0.55;  // the bracket itself:
+// an ERROR BAR on every prefill-derived figure, not a knob anyone chooses
+const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor — now the
+                                   // DEFAULT of state.decode_floor, kept as a
+                                   // named constant because every published
+                                   // figure is quoted at it
+// the comfortable mark has always been 1.25x the hard floor (50 against 40);
+// keeping the ratio means the chart-C guide lines and the tile's green/amber
+// split still mean the same thing at any floor the slider is set to
+const DECODE_COMFORT_RATIO = 1.25;
+// Output tokens ONE REQUEST decodes (every request, subagents included) —
+// MEASURED 2026-08-27: ~400 mean over a 7-day production agentic trace
+// (research/workload_agentic_poc.md; was assumed 1,000). At the observed
+// 50-90 tok/s this decodes in ~5-8 s of the measured 10.8 s served per turn.
+// The reference value; the `out` slider starts here and STATE_DEFAULTS pins it,
+// so a default page still reproduces every published number. Drives the
+// steady-state decode point below and the power model's decode duty.
+const AVG_OUT_TOK = 400;
+
+
 // NVFP4 weights require native FP4 tensor cores (B300) — the UI greys the
 // option out on the H200; this guard backstops any programmatic path.
 function checkDtypeSupported(m, topo){
@@ -1117,6 +1146,56 @@ function minTpFor(m, gpuKey){
   return Math.floor(m.w_resident / (gpu.vram - (ACT_RESERVE + (gpu.reserve_extra || 0)))) + 1;
 }
 
+// topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
+// in scenario_model.py): TP = one engine, weights sharded, one shared cache,
+// 0.90 bandwidth haircut per GPU-count doubling inside the node, then a steeper
+// CROSS_DOMAIN_EFFICIENCY penalty per doubling once a TP group spans nodes.
+function tpEff(n, domain){
+  // an explicit 0/negative domain is an ERROR, not a request for the default —
+  // `domain || 8` would silently mask a non-NVLink part as an 8-GPU node while
+  // Python's tp_efficiency raises. Only undefined/null falls back.
+  const d = (domain === undefined || domain === null) ? 8 : domain;
+  if (!(d >= 1) || Math.floor(d) !== d)
+    throw new Error(`nvlink_domain must be a positive integer, got ${domain}`);
+  if (n<=1) return 1.0;
+  let eff = Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(Math.min(n, d)));
+  if (n > d) eff *= Math.pow(CONFIG.CROSS_DOMAIN_EFFICIENCY, Math.log2(n/d));
+  return eff;
+}
+// DP x TP grid (mirrors topology_grid() in scenario_model.py). DP replicates
+// whole GROUPS of `tp` GPUs — the only way the models that fit no single GPU
+// (Mistral-Medium-3.5, GLM-5.2) can be data-parallel at all.
+function makeGrid(dp, tp, gpuKey){
+  // mirror topology_grid()'s validation: a silently-accepted dp=0 would build a
+  // zero-GPU topology whose pool still reads non-empty (the pool depends on tp)
+  for (const [label, v] of [["dp", dp], ["tp", tp]])
+    if (!(v >= 1) || Math.floor(v) !== v)
+      throw new Error(`${label} must be a positive integer, got ${v}`);
+  const key = gpuKey || "H200";
+  if (!CONFIG.GPUS[key]) throw new Error(`unknown gpu ${key}`);
+  const g = CONFIG.GPUS[key], n = dp*tp;
+  // names match Python's topology_grid() exactly (× for x)
+  const name = n===1 ? `1×${g.name}`
+             : dp===1 ? `${tp}×${g.name} tensor-par`
+             : tp===1 ? `${dp}×${g.name} data-par`
+             : `${n}×${g.name} DP${dp}×TP${tp}`;
+  const kind = n===1 ? "single" : dp===1 ? "tp" : tp===1 ? "dp" : "hybrid";
+  return {name, dp, tp, n_gpu:n, kind, replicas:dp, gpu:g};
+}
+// single-axis helper for the explorer's TP/DP toggle: the two grid edges
+function makeTopo(kind, n, gpuKey){
+  if (kind!=="tp" && kind!=="dp") throw new Error(`kind must be 'tp' or 'dp', got ${kind}`);
+  return kind==="tp" ? makeGrid(1, n, gpuKey) : makeGrid(n, 1, gpuKey);
+}
+// divisors of n, ascending — the TP widths that evenly split n GPUs
+function divisors(n){ const d=[]; for (let i=1;i<=n;i++) if (n%i===0) d.push(i); return d; }
+// Snap a TP width to a legal one for `ngpu`: the largest divisor <= tp, so
+// shrinking the GPU count keeps as much TP as still divides evenly rather than
+// resetting the user to pure TP or pure DP. Always returns a divisor of ngpu.
+function clampTp(tp, ngpu){
+  const ds = divisors(ngpu);
+  return ds.includes(tp) ? tp : (ds.filter(d => d <= tp).pop() ?? 1);
+}
 // Bandwidth seen by ONE replica group. DP adds groups, it never widens one.
 function effective_bw(topo){
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
@@ -1142,12 +1221,8 @@ function effective_bw(topo){
 // Deliberate exception: a context SHORTER than the chunk is one small pass
 // below the anchor's efficiency, so short (p5-ish) misses now read ~10%
 // dearer on the MoEs — that is the model's content, not drift.
-const PREFILL_MFU   = 0.45;    // mid of the plausible [0.35, 0.55] FP8 bracket
-
-                               // (tightened from [0.30, 0.60] 2026-08-27 on two
-                               // production calibration points — prefill.md #1)
-const PREFILL_MFU_LO = 0.35, PREFILL_MFU_HI = 0.55;  // the bracket itself:
-// an ERROR BAR on every prefill-derived figure, not a knob anyone chooses
+// PREFILL_MFU and its [LO, HI] bracket live with the study constants in the
+// config section: the state object's defaults read them at load.
 const PREFILL_CHUNK = 32768;   // vLLM max_num_batched_tokens (the study default)
 const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn).
 // The study's reference value and the Warm turn size slider's default.
@@ -1158,6 +1233,8 @@ const WARM_TURN_TOK = 2000;    // tokens a warm hit still prefills (the new turn
 // the sliders; at their defaults these ARE the published reference values, so
 // the unit checks pin the page to the docs' tables by construction.
 let liveTurn = WARM_TURN_TOK, liveThink = 30;
+function setLiveTurn(v){ liveTurn = v; }
+function setLiveThink(v){ liveThink = v; }
 const REF_REQ_RATE  = 2.13;    // req/s: 64 users, one turn every 30 s (docs' f* load)
 
 // FLOPs of ONE forward pass over T tokens with P tokens already cached:
@@ -1428,29 +1505,14 @@ function spikeMetrics(m, topo, wl, cs, rate, chunk){
    Under those, all four ceilings become MAX CONCURRENT USERS and the binding
    one is simply the smallest. Mirrors operating_point() in scenario_model.py.
    -------------------------------------------------------------------------- */
-const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor — now the
-                                   // DEFAULT of state.decode_floor, kept as a
-                                   // named constant because every published
-                                   // figure is quoted at it
-// the comfortable mark has always been 1.25x the hard floor (50 against 40);
-// keeping the ratio means the chart-C guide lines and the tile's green/amber
-// split still mean the same thing at any floor the slider is set to
-const DECODE_COMFORT_RATIO = 1.25;
+// DECODE_FLOOR_TOKS, DECODE_COMFORT_RATIO and AVG_OUT_TOK live with the study
+// constants in the config section: the state object's defaults read them.
 function decodeFloor(){ return state.decode_floor; }
 // The SELECTED max_num_batched_tokens (state is a string enum; consumers want
 // the number). Everything priced at the deployment's chunk reads this; the
 // mfuCeil anchor and the unit checks stay on the PREFILL_CHUNK const.
 function prefillChunk(){ return parseInt(state.chunk, 10); }
 function decodeComfort(){ return state.decode_floor * DECODE_COMFORT_RATIO; }
-// Output tokens ONE REQUEST decodes (every request, subagents included) —
-// MEASURED 2026-08-27: ~400 mean over a 7-day production agentic trace
-// (research/workload_agentic_poc.md; was assumed 1,000). At the observed
-// 50-90 tok/s this decodes in ~5-8 s of the measured 10.8 s served per turn.
-// The reference value; the `out` slider starts here and STATE_DEFAULTS pins it,
-// so a default page still reproduces every published number. Drives the
-// steady-state decode point below and the power model's decode duty.
-const AVG_OUT_TOK = 400;
-
 function requestRate(users, think){ return users / (think || liveThink); }
 
 // TOTAL arrival rate at the prefill server: each main request tows subR
@@ -1637,7 +1699,7 @@ function operatingPoint(model, topo, wl, cs, opts){
 /* ============================================================================
    UNIT CHECKS — must match scenario_model.py derived numbers
    ========================================================================== */
-(function unitChecks(){
+function unitChecks(){
   const approx = (a,b,rt)=>Math.abs(a-b) <= Math.abs(b)*rt;
   console.assert(approx(ACT_RESERVE/GIB, 17.98, 0.01), "ACT_RESERVE ~ 17.98 GiB, got "+(ACT_RESERVE/GIB).toFixed(3));
   const p1  = kv_pool_tokens(CONFIG.MODELS["27B"],    CONFIG.TOPOLOGIES["1xH200"]);
@@ -1940,7 +2002,7 @@ function operatingPoint(model, topo, wl, cs, opts){
     "…and the MoE within 2% (under: its later passes run at the higher solved ceiling)");
   console.log("[unit checks] ACT_RESERVE=%s GiB | pools: 27B/1x=%s TP2=%s 35BA3B/1x=%s",
     (ACT_RESERVE/GIB).toFixed(2), p1.toExponential(3), p2.toExponential(3), p3.toExponential(3));
-})();
+}
 
 /* ============================================================================
    RNG + math primitives
@@ -1986,6 +2048,7 @@ function samplingSig(){
 // knob (model, MTP, ngpu/tp — none of which change what the rows contain)
 // moved mid-rebuild cannot shift the draws of the rows still queued
 function seedFor(purpose, sig){ _rngState = _hash((sig || samplingSig()) + '#' + purpose) || 1; _spare = null; }
+function seedRng(seed){ _rngState = seed; _spare = null; }   // an explicit seed (the steady-state checks)
 
 function randn(){                        // standard normal (Box-Muller)
   if (_spare !== null){ const v=_spare; _spare=null; return v; }
@@ -2044,12 +2107,11 @@ function sampleFull(wl){
   return clip(length, Math.min(prefix, wl.cap), wl.cap);
 }
 
-// prefill-ceiling unit checks, sampled part — a separate block because it
-// draws from the RNG, whose `let _spare` state does not exist yet when the
-// main unitChecks IIFE (above the RNG section) runs. Expected values are
+// prefill-ceiling unit checks, sampled part — a separate function because it
+// draws from the RNG (unitChecks does not). Expected values are
 // docs/scenarios.md § 8's table, so the tile can never silently drift from
-// the numbers the study quotes.
-(function prefillSampledChecks(){
+// the numbers the study quotes. Runs from init, before the first render.
+function prefillSampledChecks(){
   const approx = (a,b,rt)=>Math.abs(a-b) <= Math.abs(b)*rt;
   // the reference workload (Python Workload defaults); the mean over 200k
   // draws has ~0.2% sampling error, so a 5% tolerance is all jitter headroom
@@ -2132,7 +2194,7 @@ function sampleFull(wl){
   // B* factored out of spikeMetrics must agree with it exactly
   console.assert(approx(bStar(sp2.mo, wlRef.invalidation, SPIKE_SLA_S, REF_REQ_RATE),
                         sp2.bstar, 1e-9), "bStar must agree with spikeMetrics");
-})();
+}
 
 /* ============================================================================
    CAPACITY — warm reusable sessions in one cache  (mirrors _warm_once)
@@ -2339,7 +2401,7 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
 // unit checks, because they need a real decode sweep — and the identities they
 // pin are exact, so a coarse 24-sample sweep is enough to catch a sign error,
 // a per-group/system unit slip, or a broken inversion.
-(function steadyChecks(){
+function steadyChecks(){
   const approx = (a,b,rt)=>Math.abs(a-b) <= Math.abs(b)*rt;
   const wlRef = { user_median:31000, user_sigma:0.81, sub_median:8000, sub_sigma:0.9,
                   sub_ratio:0.10, sys_user:15000, sys_sub:3000, sub_shares_prefix:false,
@@ -2348,7 +2410,7 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // seeded by hand, not seedFor: samplingSig() reads `state`, which does not
   // exist this early. A fixed seed makes the pinned values below reproducible
   // rather than a function of whatever drew from the stream before this ran.
-  _rngState = 20260807; _spare = null;
+  seedRng(20260807);
   const dc = decodeCurves(m27, tp2, wlRef, 480, 20, 400);
   const OUT = AVG_OUT_TOK;
   // the reference load, as one replica group sees it (TP2 => replicas = 1)
@@ -2409,7 +2471,7 @@ function decodeCurves(model, topo, wl, nMax, step, n_iter){
               && approx(sdDp.demanded, 2*sd.demanded, 1e-9)
               && approx(sdDp.delivered, 2*sd.delivered, 1e-9),
     "steady n is per replica group; only the aggregates carry the replica count");
-})();
+}
 
 /* ============================================================================
    STATE
@@ -2476,57 +2538,6 @@ const state = {
 // default page shares as a bare URL and every link stays readable.
 const STATE_DEFAULTS = { ...state };
 
-// topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
-// in scenario_model.py): TP = one engine, weights sharded, one shared cache,
-// 0.90 bandwidth haircut per GPU-count doubling inside the node, then a steeper
-// CROSS_DOMAIN_EFFICIENCY penalty per doubling once a TP group spans nodes.
-function tpEff(n, domain){
-  // an explicit 0/negative domain is an ERROR, not a request for the default —
-  // `domain || 8` would silently mask a non-NVLink part as an 8-GPU node while
-  // Python's tp_efficiency raises. Only undefined/null falls back.
-  const d = (domain === undefined || domain === null) ? 8 : domain;
-  if (!(d >= 1) || Math.floor(d) !== d)
-    throw new Error(`nvlink_domain must be a positive integer, got ${domain}`);
-  if (n<=1) return 1.0;
-  let eff = Math.pow(CONFIG.TP_EFFICIENCY, Math.log2(Math.min(n, d)));
-  if (n > d) eff *= Math.pow(CONFIG.CROSS_DOMAIN_EFFICIENCY, Math.log2(n/d));
-  return eff;
-}
-// DP x TP grid (mirrors topology_grid() in scenario_model.py). DP replicates
-// whole GROUPS of `tp` GPUs — the only way the models that fit no single GPU
-// (Mistral-Medium-3.5, GLM-5.2) can be data-parallel at all.
-function makeGrid(dp, tp, gpuKey){
-  // mirror topology_grid()'s validation: a silently-accepted dp=0 would build a
-  // zero-GPU topology whose pool still reads non-empty (the pool depends on tp)
-  for (const [label, v] of [["dp", dp], ["tp", tp]])
-    if (!(v >= 1) || Math.floor(v) !== v)
-      throw new Error(`${label} must be a positive integer, got ${v}`);
-  const key = gpuKey || "H200";
-  if (!CONFIG.GPUS[key]) throw new Error(`unknown gpu ${key}`);
-  const g = CONFIG.GPUS[key], n = dp*tp;
-  // names match Python's topology_grid() exactly (× for x)
-  const name = n===1 ? `1×${g.name}`
-             : dp===1 ? `${tp}×${g.name} tensor-par`
-             : tp===1 ? `${dp}×${g.name} data-par`
-             : `${n}×${g.name} DP${dp}×TP${tp}`;
-  const kind = n===1 ? "single" : dp===1 ? "tp" : tp===1 ? "dp" : "hybrid";
-  return {name, dp, tp, n_gpu:n, kind, replicas:dp, gpu:g};
-}
-// single-axis helper for the explorer's TP/DP toggle: the two grid edges
-function makeTopo(kind, n, gpuKey){
-  if (kind!=="tp" && kind!=="dp") throw new Error(`kind must be 'tp' or 'dp', got ${kind}`);
-  return kind==="tp" ? makeGrid(1, n, gpuKey) : makeGrid(n, 1, gpuKey);
-}
-function currentTopo(){ return makeGrid(state.ngpu / state.tp, state.tp, state.gpu); }
-// divisors of n, ascending — the TP widths that evenly split n GPUs
-function divisors(n){ const d=[]; for (let i=1;i<=n;i++) if (n%i===0) d.push(i); return d; }
-// Snap a TP width to a legal one for `ngpu`: the largest divisor <= tp, so
-// shrinking the GPU count keeps as much TP as still divides evenly rather than
-// resetting the user to pure TP or pure DP. Always returns a divisor of ngpu.
-function clampTp(tp, ngpu){
-  const ds = divisors(ngpu);
-  return ds.includes(tp) ? tp : (ds.filter(d => d <= tp).pop() ?? 1);
-}
 // top stop of the max_seq_len slider for the active model, derived from its
 // max_ctx (1049 for 1M models, 262 for Mistral). At the top stop the workload
 // cap maps to the EXACT model max (1,048,576 / 262,144), everywhere else to
@@ -2534,6 +2545,7 @@ function clampTp(tp, ngpu){
 // different models at the very top, by design. The clamp on model switch is
 // one-way: a 1024k cap snaps down to 262 for Mistral and is NOT restored on
 // switching back (the user sees the clamped value and can re-raise it).
+function currentTopo(){ return makeGrid(state.ngpu / state.tp, state.tp, state.gpu); }
 function capSliderMax(){ return Math.round(CONFIG.MODELS[state.model].max_ctx/1000); }
 // the host-RAM offload buffer is shared: DP replicas each get 1/N of it
 function ramPerCache(topo){ return topo.replicas>1 ? state.ram/topo.replicas : state.ram; }
@@ -2882,6 +2894,7 @@ function renderChartC(dc, zone, stress, steady){
 
 /* ---- Chart D: aggregate ---- */
 let chartDGeom=null;
+function clearChartGeomCD(){ chartCGeom=null; chartDGeom=null; }
 function renderChartD(dc, stress, kink, steady){
   const W=560,H=300, mL=54,mR=16,mT=14,mB=40;
   const pw=W-mL-mR, ph=H-mT-mB;
@@ -3604,7 +3617,7 @@ function modelFor(key){
   return m;
 }
 
-function syncState(){ liveTurn = state.turn; liveThink = state.think; }
+function syncState(){ setLiveTurn(state.turn); setLiveThink(state.think); }
 
 function computeAndRender(draft, deferFrontierDecode){
   syncState();
@@ -3700,7 +3713,7 @@ function computeAndRender(draft, deferFrontierDecode){
 
   if (noFit){
     renderNoFit('chartC'); renderNoFit('chartD');
-    chartCGeom=null; chartDGeom=null;
+    clearChartGeomCD();
   } else {
     renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress, lastSteady);
     renderChartD(dc, lastStress, unionKink(model), lastSteady);
@@ -3728,7 +3741,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
     renderBindingChart(null); renderSpikeChart(null); renderCeilingBars(null);
     renderDeployCard(null); renderTestCard(null); renderCostCard(null);
-    renderFlipPanel(null); lastFlipAxes = null;
+    renderFlipPanel(null); setLastFlipAxes(null);
     // The frontier enumerates every configuration and does not depend on the
     // current one fitting — when the answer to "can I run this?" is no, it is
     // the only thing on screen that answers "then what?". It now carries
@@ -3837,7 +3850,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   // sampled halves it runs on SETTLED renders only and drafts reuse the last
   // result (the 120 ms settle corrects it)
   if (!draft || !lastFlipAxes)
-    lastFlipAxes = computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps);
+    setLastFlipAxes(computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps));
   renderFlipPanel(lastFlipAxes);
 }
 
@@ -3884,6 +3897,7 @@ function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor
    the one-task rebuild's. Only HOW LONG the main thread blocks changes. */
 const FRONTIER_SLICE_MS = 40;
 let frontierGen = 0;        // bumping this abandons any in-flight rebuild
+let frontierDecodeDeferred = false;   // set here, read by the 500 ms settle tier
 let frontierJobSig = null;  // signature of the in-flight rebuild, if any
 
 function renderFrontierSection(wl, cs, draft, q, deferDecode){
@@ -5003,6 +5017,7 @@ function decodeUsersApprox(model, topo, samples, floor){
 }
 
 let lastFlipAxes = null;
+function setLastFlipAxes(v){ lastFlipAxes = v; }
 function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const f0 = wl.invalidation, subR = wl.sub_ratio;
   const cacheNow = op.ceilings.cache, decodeNow = op.ceilings.decode;
@@ -5065,11 +5080,11 @@ function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     let pts;
     try {
       pts = sweep(17, 250, 16000, v => {
-        liveTurn = v;
+        setLiveTurn(v);
         const mo2 = prefillServiceMoments(model, topo, wl, cs, prefillChunk());
         return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
       }, state.turn);
-    } finally { liveTurn = saved; }
+    } finally { setLiveTurn(saved); }
     axes.push({ label: 'Warm turn size', cur: state.turn, lo: 250, hi: 16000,
       fmt: v => fmt(v / 1000, v < 1000 ? 2 : 1) + 'k tok', approx: false, pts });
   }
@@ -5607,7 +5622,6 @@ let debTimer=null, frontierTimer=null;
 // Deliberately NOT a numeric shortcut: no probe count is reduced and no
 // published frontier number moves. Only WHEN it recomputes changes.
 const FRONTIER_SETTLE_MS = 500;
-let frontierDecodeDeferred = false;
 function scheduleFull(){
   clearTimeout(debTimer);
   debTimer=setTimeout(()=>{ computeAndRender(false, true); }, 120);
@@ -6054,7 +6068,7 @@ function redrawCharts(){
   if(!lastDC) return;
   if (kv_pool_tokens(activeModel(),currentTopo()) <= 0){
     renderNoFit('chartC'); renderNoFit('chartD');
-    chartCGeom=null; chartDGeom=null;
+    clearChartGeomCD();
   } else {
     renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress,lastSteady);
     renderChartD(lastDC,lastStress,unionKink(activeModel()),lastSteady);
@@ -6144,6 +6158,11 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
 })();
 
 /* ---- init ---- */
+// the load-time checks first, in the order they were written: unitChecks
+// draws nothing, prefillSampledChecks and steadyChecks seed the RNG themselves
+unitChecks();
+prefillSampledChecks();
+steadyChecks();
 applyURLState();       // a shared link restores every control before first paint
 syncEnumSegs();
 enforceConstraints();
