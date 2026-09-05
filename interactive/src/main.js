@@ -353,11 +353,11 @@ function syncLabels(){
   const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
     : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
   document.getElementById('mtp-tip').setAttribute('data-tip',
-    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — the 27B\'s measured accepted length (research/decode_mbu.md: per-position acceptance 0.971 then 0.944, which the two-draft inversion rounds up to 98%; 1.7× ⇔ α ≈ 47% was the pre-measurement fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
+    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — the accepted length measured on the production 27B deployment before the Qwen3.8-27B swap, carried over unmeasured on 3.8 (research/decode_mbu.md: per-position acceptance 0.971 then 0.944, which the two-draft inversion rounds up to 98%; 1.7× ⇔ α ≈ 47% was the pre-measurement fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
   // MBU provenance, stated on the control: one measurement, applied to every
   // row, the frontier included -- the slider is how a reader argues with it.
   const mbuProv = state.model === "27B"
-    ? 'Measured on this model (research/decode_mbu.md): the uncalibrated roofline was ~4× optimistic; this constant brings it to a median 13% error.'
+    ? 'Measured on the production 27B deployment before the Qwen3.8-27B swap (research/decode_mbu.md) and carried over with its paired MTP fit, unmeasured on 3.8: the uncalibrated roofline was ~4× optimistic; this constant brought it to a median 13% error.'
     : (is_moe(CONFIG.MODELS[state.model]) || CONFIG.MODELS[state.model].deltanet_state > 0
         ? 'Measured on the 27B and applied here unchanged; unmeasured on this model.'
         : 'Measured on a recurrent hybrid and applied here unchanged; this model has no recurrence to serialise and may well sit higher, but nothing in this study measures a dense one.');

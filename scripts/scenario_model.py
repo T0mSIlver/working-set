@@ -359,7 +359,8 @@ MODELS = {
     # 4 KV heads x 256) reproduces the baseline's 32 KiB/token exactly.
     # Named Qwen3.8-27B since 2026-09-05: its config and its FP8 checkpoint
     # (1,606 tensors, dtypes and shapes) are identical to Qwen3.6-27B's, so
-    # every constant carries over; mtp is unmeasured on it (see the note).
+    # every architecture-determined constant carries over; mtp is unmeasured
+    # on it (see the note); nvfp4_w is measured on 3.8's own checkpoint.
     "27B": Model(
         name="Qwen3.8-27B (dense)",
         kv_bpt=32 * KIB,                 # 16 attn layers x 4 KV heads x 256 x 2(K,V) x 1B
@@ -370,22 +371,24 @@ MODELS = {
         w_decode_shared=28.8 * GIB,      # dense: every step reads all weights
         w_route_pertok=0.0,
         w_route_total=0.0,
-        # MEASURED on the production deployment 2026-08-28 (research/decode_mbu.md):
-        # accepted length 2.94 at num_speculative_tokens=2, per-draft acceptance
-        # 0.971 -- and the 1+a+a^2 acceptance model confirmed to three decimals
-        # against vLLM's per-position counters. Was 1.7, the baseline's fit.
-        # PAIRED WITH MBU_DEFAULT: both were calibrated against the same passes,
-        # so moving one without the other breaks the fit (see MBU_DEFAULT).
+        # MEASURED 2026-08-28 on the production 27B deployment recorded as
+        # Qwen3.6-27B (research/decode_mbu.md): accepted length 2.94 at
+        # num_speculative_tokens=2, per-draft acceptance 0.971 -- and the
+        # 1+a+a^2 acceptance model confirmed to three decimals against vLLM's
+        # per-position counters. Was 1.7, the baseline's fit. NOT re-measured
+        # on Qwen3.8-27B: acceptance is a property of the draft head's
+        # weights, not the architecture. PAIRED WITH MBU_DEFAULT: both were
+        # calibrated against the same passes, so moving one without the
+        # other breaks the fit (see MBU_DEFAULT).
         mtp=2.94,
-        # nvidia/Qwen3.6-27B-NVFP4: MEASURED safetensors total 21,921,428,072 B
-        # (2026-07-27 re-verification). Same convention as the FP8 28.8 GiB,
-        # which the measured Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B =
-        # 28.75 GiB) matches within 0.2% — the old x22/27.8 "as-deployed"
-        # scaling was a mis-derivation. Dense: decode reads everything.
-        # Superseded 2026-09-06 by RedHatAI/Qwen3.8-27B-NVFP4, MEASURED from
-        # every shard header: 23,417,339,744 B (dense MLPs of 56/64 layers
-        # NVFP4; attention, DeltaNet, lm_head FP8; embed/MTP/vision BF16).
-        # research/nvfp4_2026-09.md.
+        # RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
+        # header: 23,417,339,744 B (dense MLPs of 56/64 layers NVFP4;
+        # attention, DeltaNet, lm_head FP8; embed/MTP/vision BF16). Replaces
+        # the projection of nvidia/Qwen3.6-27B-NVFP4's 21.92e9 B onto 3.8's
+        # weights (no NVIDIA NVFP4 of 3.8 exists). Same whole-checkpoint
+        # convention as the FP8 28.8 GiB, which the measured
+        # Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B = 28.75 GiB) matches
+        # within 0.2%. Dense: decode reads everything. research/nvfp4_2026-09.md.
         nvfp4_w=(23417339744, 23417339744, 0.0, 0.0),
         max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
         # prefill (research/prefill.md #2): 27B dense, less ~2.5e9 of
