@@ -578,7 +578,7 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
       +`<div class="row">Terminal-Bench 2.1 <b class="tnum">${fmt(frontierScore(r)*100,1)}%</b></div>`
       // every plotted row carries the load (renderFrontierChart draws `live`
       // only), so the seat price always exists
-      +`<div class="row">€/seat/month, full <b class="tnum">${fmt(r.eurSeat,2)}</b></div>`
+      +`<div class="row">€/seat/month, full <b class="tnum">${cen?'≤ ':''}${fmt(r.eurSeat,2)}</b></div>`
       +`<div class="row">€/user/month at your load <b class="tnum">${fmt(r.eur/Math.max(1,state.users),2)}</b></div>`
       +`<div class="row">€/month <b class="tnum">${fmt(r.eur,0)}</b> · max users <b class="tnum">${cen}${fmt(r.op.limit,0)}</b></div>`;
     const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();
