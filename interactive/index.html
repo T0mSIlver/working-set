@@ -176,7 +176,11 @@ input[type=range]::-moz-range-thumb{
 
 /* charts grid */
 .charts{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
-.charts + .charts{margin-top:14px}   /* stacked grids (E/F, E2/E3, E4) keep the grid's own gap */
+/* Vertical rhythm: every stacked block (chart grid, card, tiles) is 14 px
+   from the next. Cards carry it inline as margin-bottom; a chart grid gets it
+   here. A new block placed next to an existing one MUST have it — two cards
+   with rounded corners touching is the tell. */
+.charts + .charts, .charts + .panel{margin-top:14px}
 @media (max-width:820px){ .charts{grid-template-columns:1fr} }
 .card{padding:14px 16px 12px; overflow:hidden;}
 .card .ct{font-size:13.5px; font-weight:620; margin:0 0 1px}
@@ -656,7 +660,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
     <div id="flipRows"></div>
   </div>
 
-  <div class="sub-h" id="recipe"><span class="n">3·3</span><h3>What to run, and what it costs</h3><span class="lede">the controls as a vLLM recipe, and its electricity bill</span></div>
+  <div class="sub-h" id="recipe"><span class="n">3·3</span><h3>What to run, and what it costs</h3><span class="lede">the controls as a vLLM recipe, and its bill</span></div>
 
   <div class="panel card" id="deployCard" style="margin-bottom:14px">
     <p class="ct">The deploy card — this configuration as a recipe</p>
@@ -665,16 +669,20 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
   </div>
 
   <div class="panel card" id="costCard" style="margin-bottom:14px">
-    <p class="ct">The electricity bill</p>
-    <p class="cs">Wall power priced from the duty cycle the model already computes — prefill bursts near the power cap, bandwidth-bound decode well under it, idle in between — plus the chassis and the facility overhead (PUE). Energy only: the GPUs themselves are not priced. GPU term ±20–25%; B300 figures are extrapolated from Hopper measurements — <a href="method.html#power">method &amp; sources</a>.</p>
+    <p class="ct">The bill: hardware and electricity</p>
+    <p class="cs">Two lines. <b>Hardware</b> is GPU-hours at the on-demand rental rate (the default is the cross-provider median for the selected part; owned hardware is whatever your depreciation says). <b>Electricity</b> is wall power priced from the duty cycle the model already computes — prefill bursts near the power cap, bandwidth-bound decode well under it, idle in between — plus the chassis and the facility overhead (PUE). GPU term ±20–25%; B300 figures are extrapolated from Hopper measurements — <a href="method.html#power">method &amp; sources</a>.</p>
     <div class="ctl-grid" style="margin-bottom:4px">
       <div class="ctl-group">
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="What one kWh costs you. Default €0.19 = the Eurostat EU-27 non-household average (H1-2025); the spread runs €0.077 (FI) to €0.258 (CY). The bill is exactly linear in it.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
+          <label class="flabel"><span class="tip" data-tip="What one kWh costs you. Default €0.19 = the Eurostat EU-27 non-household average (H1-2025); the spread runs €0.077 (FI) to €0.258 (CY). The electricity line is exactly linear in it; the hardware line does not move.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
           <input type="range" id="s-ekwh" min="0.05" max="0.60" step="0.01" value="0.19">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Power Usage Effectiveness — facility watts per IT watt (cooling, distribution). 1.2 ≈ hyperscale, 1.5 ≈ the Uptime-survey colo average, 2.0 ≈ a small in-house server room. Multiplies the whole bill.">Facility PUE</span></label>
+          <label class="flabel"><span class="tip" data-tip="One GPU-hour of the selected part, on demand. Default = the cross-provider on-demand median (getdeploying.com, Sept 2026: H200 $4.40, B300 $7.89, at EUR/USD 1.16); hyperscalers charge 2–3× that, an owned rack amortises to well under €1. Clicking a GPU re-seeds it to that part's median. Every row of the frontier (all on the selected part) moves with this knob. A rental price is the provider's all-in rate, power included, so for a RENTED GPU the electricity line below double-counts (~7% of the total at the defaults) — the honest total is the hardware line alone. For OWNED hardware enter your amortised €/GPU-hour and both lines apply. Neither is a cost of ownership: no staff, networking or storage.">GPU price</span> <span class="val">€<span id="v-gpuh">3.80</span> / GPU·h</span></label>
+          <input type="range" id="s-gpuh" min="0.5" max="20" step="0.1" value="3.8">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Power Usage Effectiveness — facility watts per IT watt (cooling, distribution). 1.2 ≈ hyperscale, 1.5 ≈ the Uptime-survey colo average, 2.0 ≈ a small in-house server room. Multiplies the electricity line only.">Facility PUE</span></label>
           <div class="seg" id="seg-pue" data-key="pue">
             <button data-v="1.2" aria-pressed="false">1.2 hyperscale</button>
             <button data-v="1.5" aria-pressed="true">1.5 colo</button>
@@ -695,8 +703,25 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
   <div class="sub-h" id="frontier"><span class="n">3·5</span><h3>Every alternative, ranked</h3><span class="lede">all model × split configurations on this GPU, at your load</span></div>
 
+  <div class="charts solo">
+    <div class="panel card">
+      <p class="ct">H · The frontier: what a seat costs against what the model can do</p>
+      <p class="cs">Every configuration that can carry your load as one dot: its Terminal-Bench 2.1 score (one lab, one harness — Artificial Analysis) against what one seat costs a month with the configuration <b>full</b> — the bill at its max users, divided by them (hardware + electricity, at your prices). Priced full rather than at your load because at your load the hardware line of the bill is just the GPU count; at capacity a row that carries twice the users halves the seat. Dots stacked at one score are the same model on different splits — the column is what the topology choice costs. The <b>staircase</b> joins the configurations nothing beats on both counts: for any capability floor, the cheapest seat. Dots off it are dimmed because some other row scores at least as high for no more money — bills within 1% count as the same money, so a dearer dot can win on score alone.</p>
+      <div class="legend">
+        <span class="li"><span class="sw dot" style="background:var(--s1)"></span>binds on cache</span>
+        <span class="li"><span class="sw dot" style="background:var(--s4)"></span>decode</span>
+        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>latency</span>
+        <span class="li"><span class="sw dot" style="background:var(--muted)"></span>saturation</span>
+        <span class="li"><span class="sw" style="background:var(--muted)"></span>efficient set</span>
+        <span class="li"><span class="sw dot" style="background:var(--muted); opacity:.35"></span>dominated</span>
+        <span class="li"><span class="sw dot" style="background:var(--surface); box-shadow:inset 0 0 0 2px var(--s4)"></span>hollow: max users is a lower bound (decode search censored)</span>
+      </div>
+      <div class="chartbox"><div id="chartH"></div><div class="tt" id="ttH"></div></div>
+    </div>
+  </div>
+
   <div class="panel card" id="frontierCard">
-    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration) and at the <b>MBU slider's</b> decode efficiency, one value for every row — measured on one deployment; nothing here measures a dense one. Figures are system-wide users, per-group in parentheses for DP. The €/mo column is the energy bill at your load and your €/kWh — two rows with the same headroom rarely bill the same.</p>
+    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration) and at the <b>MBU slider's</b> decode efficiency, one value for every row — measured on one deployment; nothing here measures a dense one. Figures are system-wide users, per-group in parentheses for DP. TB 2.1 is the model's Terminal-Bench 2.1 pass@1 as Artificial Analysis measures it (one harness for every model; vendor cards are not comparable) — a model property, so every split of a model shares it. The €/mo column is the whole bill at your load — GPU-hours at your GPU price plus the electricity at your €/kWh — so two rows with the same headroom rarely bill the same; €/seat is that bill with the row full, per user it then carries (chart H's y-axis).</p>
     <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
     <div id="frontierTable"></div>
   </div>
@@ -768,11 +793,23 @@ const CONFIG = {
   // across the MFU 35-55% band); host_w the DGX chassis adder per GPU (spec
   // ceiling, conservative). B300 rows are ENTIRELY extrapolated — no
   // published Blackwell Ultra power-state measurements exist.
+  // eur_gpu_h: what one GPU-hour RENTS for, on demand, no commitment — the
+  // hardware line of the bill (research/power.md prices only the electricity).
+  // NVIDIA publishes no list price for either part and owned hardware
+  // amortises to whatever the buyer's depreciation schedule says, so the
+  // defensible public number is the cross-provider on-demand MEDIAN:
+  // getdeploying.com/gpus/nvidia-h200 $4.40 and /nvidia-b300 $7.89 per
+  // GPU-hour (both read 2026-09-03; H200 spans $3.59 RunPod – $10.00 OCI,
+  // B300 $6.50 – $17.80 AWS), converted at EUR/USD 1.16 (market quote, same day)
+  // and rounded to a slider step. The ratio (~1.8x) is what the frontier
+  // actually leans on: the GPU-price slider scales BOTH parts by one factor,
+  // so a reader on a hyperscaler or an owned rack moves the level, not the
+  // relative ranking. Not a measurement; revisit when the market moves.
   GPUS: {
     "H200": { name: "H200", vram: 141e9,   hbm_bw: 4.8e12, supports_nvfp4: false, reserve_extra: 0,      nvlink_domain: 8, peak_flops_fp8: 1.979e15,
-              tdp_w: 700,  idle_w: 80,  p_decode_w: 385, p_prefill_w: 630,  host_w: 575 },
+              tdp_w: 700,  idle_w: 80,  p_decode_w: 385, p_prefill_w: 630,  host_w: 575, eur_gpu_h: 3.8 },
     "B300": { name: "B300", vram: 288.4e9, hbm_bw: 8.0e12, supports_nvfp4: true,  reserve_extra: 9.75e9, nvlink_domain: 8, peak_flops_fp8: 4.5e15,
-              tdp_w: 1400, idle_w: 150, p_decode_w: 770, p_prefill_w: 1260, host_w: 500 },
+              tdp_w: 1400, idle_w: 150, p_decode_w: 770, p_prefill_w: 1260, host_w: 500, eur_gpu_h: 6.8 },
   },
   VRAM_PER_GPU: 141e9,     // calibration-anchor GPU (H200) HBM bytes
   HBM_BW:       4.8e12,    // calibration-anchor GPU bandwidth, bytes/s
@@ -936,6 +973,26 @@ const CONFIG = {
       attn_layers: 11, attn_d: 64*256,  // dense upper bound; DSA prefill sparsity uncharacterised
       max_ctx: 1048576,            // native 1M context
     },
+  },
+
+  // ---- QUALITY ----
+  // One coding-agent score per model, so the frontier ranks on what a
+  // configuration delivers and not only on what it costs. Terminal-Bench
+  // 2.1 pass@1 as MEASURED BY ARTIFICIAL ANALYSIS (one lab, one harness:
+  // Terminus 2, 89 tasks x 3 repeats), read 2026-09-05 — vendor cards
+  // quote other harnesses and other versions and are not comparable, so
+  // they are deliberately not used. Reasoning variant at the effort AA ran
+  // for its index. The FP16-KV / NVFP4 arms inherit the base score: the
+  // quantisation loss is unmeasured, and a per-arm guess would rank the
+  // frontier on the guess. Ledger and protocol: research/terminal_bench.md.
+  QUALITY: {
+    "27B":    { tb21: 162/267, aa: "qwen3-6-27b" },
+    "35BA3B": { tb21: 120/267, aa: "qwen3-6-35b-a3b" },
+    "MM35":   { tb21: 135/267, aa: "mistral-medium-3-5" },
+    "GLM52":  { tb21: 208/267, aa: "glm-5-2" },
+    "DSV4F":  { tb21: 210/267, aa: "deepseek-v4-flash" },
+    "Q38FN":  { tb21: 230/267, aa: "qwen3-8-flash-next" },
+    "GLM53F": { tb21: 225/267, aa: "glm-5-3-flash" },
   },
 
   // ---- TOPOLOGY ----
@@ -2412,6 +2469,11 @@ const state = {
   // Defaults: Eurostat EU non-household average and the Uptime-survey colo
   // figure (research/power.md).
   ekwh: 0.19, pue: "1.5",
+  // €/GPU-hour of the SELECTED part (the other part rides along at its own
+  // list price scaled by the same ratio — gpuHourPrice). Seeded from
+  // CONFIG.GPUS[gpu].eur_gpu_h and re-seeded on every GPU switch, the way mtp
+  // follows the model; a pricing constant, so NOT in samplingSig either.
+  gpuh: CONFIG.GPUS["H200"].eur_gpu_h,
 };
 
 // Snapshot of the published reference configuration, taken BEFORE any URL
@@ -3972,6 +4034,13 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   slice();   // first slice runs inside the settle render, the rest queue behind it
 }
 
+// €/seat/month: the bill with the configuration carrying its max users,
+// divided by them. Infinity where there is no ceiling to fill.
+function seatPrice(op, topo, mo, f, wl, r){
+  if (!isFinite(op.limit) || op.limit < 1) return Infinity;
+  const rateMax = serverRate(op.limit, state.think, wl.sub_ratio) / r.reps;
+  return energyCost(topo, mo, f, rateMax, r.decodeUsers / r.reps).totalMonth / op.limit;
+}
 function assembleFrontier(wl, cs){
   const f = wl.invalidation;
   const rows = lastFrontier.base.map(r0=>{
@@ -3980,16 +4049,27 @@ function assembleFrontier(wl, cs){
     const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
     const mo2 = lastFrontierMo.mo[r.key]
              || (lastFrontierMo.mo[r.key] = prefillServiceMoments(m2, t2, wl, cs));
-    return { ...r,
-             op: operatingPoint(m2, t2, wl, cs, {
+    const op = operatingPoint(m2, t2, wl, cs, {
                mo: mo2, reps: r.reps,
-               warmUsers: r.warmUsers, decodeUsers: r.decodeUsers }),
+               warmUsers: r.warmUsers, decodeUsers: r.decodeUsers });
+    return { ...r, op,
              bstar: bStar(mo2, f, state.sla, r2),
-             // energy at YOUR load (research/power.md) — comparable across
-             // rows because every row is priced at the same demand
-             eur: energyCost(t2, mo2, f, r2, r.decodeUsers / r.reps).eurMonth };
+             // the whole bill at YOUR load — hardware plus energy
+             // (research/power.md) — comparable across rows because every
+             // row is priced at the same demand and the same €/GPU-hour
+             eur: energyCost(t2, mo2, f, r2, r.decodeUsers / r.reps).totalMonth,
+             // and the bill at the row's OWN ceiling, per seat: what one
+             // user costs when the configuration is full. At your load the
+             // bill is the GPU count and every row on a topology prices the
+             // same; at capacity a row that carries twice the users halves
+             // the seat. Chart H's y-axis (research/power.md for the terms)
+             eurSeat: seatPrice(op, t2, mo2, f, wl, r) };
   }).sort((a,b)=>b.op.limit-a.op.limit);
-  renderFrontierTable(rows, `${state.model}|${state.ngpu/state.tp}x${state.tp}`);
+  const curKey = `${state.model}|${state.ngpu/state.tp}x${state.tp}`;
+  renderFrontierTable(rows, curKey);
+  // chart H draws EXACTLY the rows the table just painted — this is the one
+  // commit point, so it can never show a half-rebuilt set
+  renderFrontierChart(rows, curKey);
 }
 
 // chart D's subtitle explains the n=32 slope break, but only when the active
@@ -4810,14 +4890,27 @@ function powerDraw(topo, mo, f, rateGroup, decodeUsersGroup){
   const kw = topo.n_gpu * (perGpu + g.host_w) * pue / 1000;
   return { dP, dD, perGpu, kw, pue };
 }
-// € figures on top of the draw. 720 h/month; €/1M output tokens divides the
-// whole system's cost rate by the output-token rate the load implies.
+// €/GPU-hour of any part at the current slider. The slider names the price of
+// the SELECTED part; the other part keeps its own list price scaled by the
+// same ratio. Today every frontier row is on the selected part (ratio 1), so
+// the scaling only matters if the frontier ever spans both parts.
+function gpuHourPrice(g){
+  return g.eur_gpu_h * state.gpuh / CONFIG.GPUS[state.gpu].eur_gpu_h;
+}
+// € figures on top of the draw. 720 h/month. eurMonth is the ELECTRICITY
+// alone (the power model's own output); hwMonth is GPU-hours at the rental
+// rate; totalMonth their sum, and the per-user / per-token figures divide the
+// TOTAL — a €/Mtok that priced the watts but not the silicon would read an
+// order of magnitude too cheap.
 function energyCost(topo, mo, f, rateGroup, decodeUsersGroup){
   const p = powerDraw(topo, mo, f, rateGroup, decodeUsersGroup);
   const eurMonth = p.kw * 720 * state.ekwh;
+  const hwMonth = topo.n_gpu * gpuHourPrice(topo.gpu || CONFIG.GPUS["H200"]) * 720;
+  const totalMonth = eurMonth + hwMonth;
   const outTokS = rateGroup * (topo.replicas || 1) * state.out;
-  const eurMtok = outTokS > 0 ? (p.kw * state.ekwh / 3600) / outTokS * 1e6 : Infinity;
-  return { ...p, eurMonth, eurUser: eurMonth / Math.max(1, state.users), eurMtok };
+  const eurMtok = outTokS > 0 ? (totalMonth / 720 / 3600) / outTokS * 1e6 : Infinity;
+  return { ...p, eurMonth, hwMonth, totalMonth,
+           eurUser: totalMonth / Math.max(1, state.users), eurMtok };
 }
 
 function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
@@ -4837,11 +4930,16 @@ function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
     ['Time split', `${fmt(c.dP * 100, 0)}% prefill · ${fmt(c.dD * 100, 0)}% decode · ${fmt(idleFrac * 100, 0)}% idle`],
     ['Host + PUE', `${fmt(g.host_w, 0)} W/GPU · ×${c.pue}`],
   ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
+  // the idle floor keeps the hardware line: a rented GPU bills whether or
+  // not it decodes, and an owned one depreciates just the same
+  const idleMonth = topo.n_gpu * (g.idle_w + g.host_w) * c.pue / 1000 * 720 * state.ekwh + c.hwMonth;
   const bill = [
-    ['Energy / month', `€${fmt(c.eurMonth, 0)}`],
+    ['Hardware / month', `€${fmt(c.hwMonth, 0)} <span style="color:${cssv('--muted')};font-weight:400">(${topo.n_gpu} × €${fmt(gpuHourPrice(g), 2)}/h)</span>`],
+    ['Electricity / month', `€${fmt(c.eurMonth, 0)}`],
+    ['Total / month', `€${fmt(c.totalMonth, 0)}`],
     ['Per user / month', `€${fmt(c.eurUser, 2)}`],
     ['Per 1M output tokens', isFinite(c.eurMtok) ? `€${fmt(c.eurMtok, 2)}` : '—'],
-    ['At idle (floor)', `€${fmt(topo.n_gpu * (g.idle_w + g.host_w) * c.pue / 1000 * 720 * state.ekwh, 0)} /mo`],
+    ['At idle (floor)', `€${fmt(idleMonth, 0)} /mo`],
   ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
   box.innerHTML =
     `<div class="deploy">`
@@ -4849,7 +4947,7 @@ function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
     + `<div><h4>Bill</h4><dl class="spec">${bill}</dl></div>`
     + `<p class="verdictline" style="color:${cssv('--muted')};font-weight:400">`
     + `Output assumed at ${fmt(state.out, 0)} tokens per request (unmeasured). `
-    + `Two seemingly equal configurations rarely bill equally: idle watts scale with GPU count, decode watts with the load.</p>`
+    + `Per-user and per-token figures divide the total. Two seemingly equal configurations rarely bill equally: hardware and idle watts scale with GPU count, decode watts with the load.</p>`
     + `</div>`;
 }
 
@@ -5303,9 +5401,9 @@ function renderFrontierTable(rows, curKey){
   const ceilHead = state.showCeil
     ? `<th class="num">cache</th><th class="num">decode</th>`
       + `<th class="num">latency</th><th class="num">saturation</th>` : '';
-  const head = `<tr><th>configuration</th><th>your load</th><th class="num">max users</th>`
+  const head = `<tr><th>configuration</th><th class="num">TB 2.1</th><th>your load</th><th class="num">max users</th>`
              + `<th>binds on</th><th class="num">headroom</th>${ceilHead}`
-             + `<th class="num">B*</th><th class="num">€/mo</th></tr>`;   // .num headers right-align over their digits
+             + `<th class="num">B*</th><th class="num">€/mo</th><th class="num">€/seat</th></tr>`;   // .num headers right-align over their digits
   const body = rows.map(r=>{
     const you = r.key===curKey ? ' class="you"' : '';
     const viable = r.op.limit >= 1;
@@ -5322,7 +5420,10 @@ function renderFrontierTable(rows, curKey){
     // a censored decode search is a floor, not an estimate — carry the '≥'
     // through every figure derived from it, not just the headline
     const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
-    return `<tr${you}><td>${esc(r.label)}</td>`
+    const q = frontierScore(r);
+    return `<tr${you}><td>${esc(frontierRowName(r))}</td>`
+         // the model's score, not the row's: every split of a model shares it
+         + `<td class="num">${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</td>`
          + (viable
             ? `<td class="v" style="color:${fits?good:crit}">${fits?'✓ fits':'✗ over'}</td>`
             : `<td class="v" style="color:${muted}">—</td>`)
@@ -5336,10 +5437,210 @@ function renderFrontierTable(rows, curKey){
          + ceilCells
          + `<td class="num">${fmt(r.bstar,1)}</td>`
          // energy is meaningful only where the load can actually be served
-         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td></tr>`;
+         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td>`
+         // chart H's y: the bill with the row full, per user it then carries;
+         // priced at a censored limit it is an upper bound, hence '≤'
+         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable && isFinite(r.eurSeat) ? (cen?'≤ ':'')+fmt(r.eurSeat,0) : '—'}</td></tr>`;
   }).join('');
   document.getElementById('frontierTable').innerHTML =
     `<div class="ftable-wrap"><table class="ftable">${head}${body}</table></div>`;
+}
+
+/* ---- Chart H: the frontier as a picture — €/user vs Terminal-Bench ------
+   The table ranks by max users and prints a bill; the hardware line of
+   the bill is a function of the GPU count alone, so users-vs-cost collapsed
+   every row on one topology onto a band and said "run fewer GPUs". The buying question is
+   what a seat costs against what the model can do: y = the bill with the
+   row FULL divided by the users it then carries — its €/seat at capacity
+   (log; seats span more than a decade). Not the bill at your load over your
+   users: that is the GPU count again, and every row on a topology would
+   price the same. x =
+   the model's Terminal-Bench 2.1 score (research/terminal_bench.md; one
+   value per model, so a model's rows stack in a column and the column is
+   the price of the topology choice). The Pareto-efficient set (no other
+   row scores >= for <= money) is a staircase: for any capability floor,
+   the cheapest seat. Rows that cannot carry the load have no seat price
+   and are counted, not drawn. Drawn from EXACTLY the rows the table was
+   handed (assembleFrontier's one commit point, and redrawCharts for theme
+   flips), never from a half-rebuilt set. */
+let frontierChartGeom = null;
+// short row name for a direct label: the model as its button reads (a full
+// name is ~25 characters and three of them stack at a 560-wide viewBox) and
+// the split as the DP×TP shorthand the split control uses
+const FRONTIER_SHORT = { "27B": "Qwen3.6-27B", "35BA3B": "35B-A3B", "MM35": "Mistral-Med-3.5",
+                         "GLM52": "GLM-5.2", "DSV4F": "DSv4-Flash", "Q38FN": "Q3.8-Flash",
+                         "GLM53F": "G5.3-Flash" };
+// the row as the table and the tooltip print it: the model without its
+// architecture tag and the split in the TP/DP shorthand. r.label keeps the
+// Python-identical topology name (deploy card, harness, self-checks)
+function frontierRowName(r){
+  return CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '') + ' · '
+       + makeGrid(r.dp, r.tp, state.gpu).name.replace(' tensor-par', ' TP').replace(' data-par', ' DP');
+}
+function frontierShortLabel(r){
+  const m = FRONTIER_SHORT[r.mk] || CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '');
+  const t = r.dp*r.tp === 1 ? '1 GPU' : r.dp === 1 ? `TP${r.tp}`
+          : r.tp === 1 ? `DP${r.dp}` : `DP${r.dp}×TP${r.tp}`;
+  return `${m} · ${t}`;
+}
+const frontierScore = r => (CONFIG.QUALITY[r.mk] || {}).tb21;
+function renderFrontierChart(rows, curKey){
+  const box = document.getElementById('chartH'); if (!box) return;
+  const tt = document.getElementById('ttH'); if (tt) tt.style.opacity = 0;
+  const users = Math.max(1, state.users);
+  // a seat price needs a ceiling to fill; a configuration that cannot carry
+  // the load is not a choice and is counted in-chart rather than drawn
+  const viable = rows.filter(r => isFinite(r.op.limit) && r.op.limit >= 1 && isFinite(r.eurSeat) && r.eurSeat > 0);
+  const carries = viable.filter(r => r.op.fits);
+  const live = carries.filter(r => isFinite(frontierScore(r)));
+  const over = viable.length - carries.length, unscored = carries.length - live.length;
+  const notViable = rows.length - viable.length;
+  const perUser = r => r.eurSeat;
+  if (!live.length){
+    const W=560,H=120;
+    const why = carries.length ? `no configuration that carries ${fmt(users,0)} users has a Terminal-Bench score`
+                               : `no configuration on this GPU can carry ${fmt(users,0)} users at these settings`;
+    box.innerHTML = svgEl(`<text x="${W/2}" y="${H/2+4}" text-anchor="middle" class="axlbl" font-size="13">${esc(why)}</text>`,
+                          W, H, 'Nothing to plot');
+    frontierChartGeom = null; return;
+  }
+  // same width rule as chart G: act 3 panels are page-wide, so the viewBox
+  // must track the paint width or the type scales with it
+  const wide = (typeof window !== 'undefined' ? window.innerWidth : 1400) >= 900;
+  const W = wide ? 1120 : 560, H = wide ? 400 : 330;
+  const mL = wide ? 64 : 56, mR = wide ? 22 : 16, mT = 18, mB = wide ? 46 : 42;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const surface=cssv('--surface'), text=cssv('--text');
+  const C = PLANNER_COLORS();
+  const eurTick = t => t >= 1000 ? `€${fmt(t/1000, t % 1000 ? 1 : 0)}k` : t >= 10 ? `€${fmt(t,0)}` : `€${fmt(t,1)}`;
+  // the Pareto-efficient set: nothing else scores as high for as little
+  // per seat. Two rows on the same GPU count differ in price only by the
+  // electricity term, and the power model carries ±20-25% (research/
+  // power.md), so a bill within 1% is a TIE — otherwise three 1-GPU rows
+  // at €315.0 / €315.4 / €315.9 all count as efficient and the higher
+  // score among them does not win. Scores tie exactly (same model).
+  const near = (a,b) => perUser(b) <= perUser(a)*1.01;
+  const par = new Set(live.filter(a => !live.some(b => b !== a
+      && frontierScore(b) >= frontierScore(a) && near(a,b)
+      && (frontierScore(b) > frontierScore(a) || perUser(b) < perUser(a)))));
+  const qs = live.map(r => frontierScore(r)*100), es = live.map(perUser);
+  // right-hand slack is for the direct labels, which sit to the upper right;
+  // the axis is a percentage, so it never runs past 100
+  const xLo = Math.max(0, Math.floor((Math.min(...qs)-4)/5)*5), xHi = Math.min(100, Math.max(...qs) + (wide ? 8 : 14));
+  const yLo = Math.min(...es)*0.7, yHi = Math.max(...es)*1.5;
+  const sx = linScale(xLo, xHi, mL, mL+pw), sy = logScale(yLo, yHi, mT+ph, mT);
+  let g='';
+  for (const t of logTicks(yLo,yHi)){
+    const Y=sy(t);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${eurTick(t)}</text>`;
+  }
+  for (let t=Math.ceil(xLo/10)*10; t<=xHi; t+=10){
+    const X=sx(t);
+    g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${X}" y="${mT+ph+16}" text-anchor="middle">${t}%</text>`;
+  }
+  // the staircase is the function "cheapest seat that scores at least q":
+  // flat at a row's price up to its score, then a jump to the next
+  // efficient row's price. Each step is vertical at x_{i-1} (past that
+  // score, the cheaper row no longer qualifies) then horizontal to x_i.
+  // Lead-in: horizontal at the cheapest row's price from the left edge —
+  // for any lower floor it is still the cheapest. No lead-out: nothing
+  // scores higher than the last row, so the function ends there.
+  const stair = [...par].sort((a,b)=>frontierScore(a)-frontierScore(b));
+  const P = r => [sx(frontierScore(r)*100), sy(perUser(r))];
+  if (stair.length){
+    const [x0,y0] = P(stair[0]);
+    let d = `M ${mL} ${y0} L ${x0} ${y0}`;
+    for (let i=1;i<stair.length;i++){
+      const [x,y] = P(stair[i]);
+      d += ` L ${P(stair[i-1])[0]} ${y} L ${x} ${y}`;
+    }
+    g+=`<path d="${d}" fill="none" stroke="${muted}" stroke-width="1.5" stroke-linejoin="round" opacity="0.7"/>`;
+  }
+  // dots: dominated first (dimmed), then the efficient set, then the
+  // selected configuration's ring on top of everything
+  const pts = [];
+  // a censored decode limit is a LOWER bound (the search stopped before the
+  // floor): hollow, so the reader sees a bound, not a point. The seat price
+  // is priced AT that limit, so it is an UPPER bound (both bill/users terms
+  // fall as the true ceiling rises); the table and tooltip carry the '≤'.
+  const dot = (r, on) => {
+    const [x,y] = P(r), col = C[r.op.binding] || muted;
+    pts.push({ x, y, color: col, r });
+    const hollow = r.op.binding==='decode' && r.censored;
+    return `<circle cx="${x}" cy="${y}" r="5" fill="${hollow?surface:col}" stroke="${hollow?col:surface}" stroke-width="2"${on?'':' opacity="0.35"'}/>`;
+  };
+  for (const r of live) if (!par.has(r)) g += dot(r, false);
+  for (const r of stair) g += dot(r, true);
+  const cur = live.find(r => r.key === curKey);
+  if (cur){
+    const [x,y] = P(cur);
+    g+=`<circle cx="${x}" cy="${y}" r="10" fill="none" stroke="${text}" stroke-width="1.5" opacity="0.8"/>`;
+    // an efficient selection is named by its own label below; a dominated
+    // one would otherwise be an anonymous ring
+    if (!par.has(cur))
+      g+=`<text class="dlabel" x="${x+14}" y="${y+4}" text-anchor="start" fill="${muted}">you</text>`;
+  }
+  // direct labels on the efficient set only, to the LOWER RIGHT of each dot:
+  // a higher score for less money (the price axis grows upward) is empty of
+  // efficient dots by definition — but not of dominated ones, and the 1%
+  // tolerance lets a dearer dot sit just above, so every drawn dot is an
+  // obstacle too. Labels that would collide are pushed down in y order; one
+  // that would run past the right edge flips to the upper left instead.
+  // Width is estimated (no layout pass in an SVG string). A displaced label
+  // gets a hairline leader back to its dot: two efficient rows at nearly the
+  // same price stack two labels, and without the leader the reader cannot
+  // tell which name is which dot.
+  const placed = pts.map(p => ({ x0: p.x-6, x1: p.x+6, y0: p.y-6, y1: p.y+6 }));
+  const overlaps = (a,b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+  for (const r of [...stair].sort((a,b)=>P(a)[1]-P(b)[1])){
+    const [x,y] = P(r), name = frontierShortLabel(r) + (r.key===curKey ? ' (you)' : '');
+    const w = name.length*5.9, h = 12;
+    let end = x + 9 + w > W - mR;
+    let bx = end ? x-9-w : x+9, by = end ? y-16 : y+4;
+    let bb = { x0: bx, x1: bx+w, y0: by, y1: by+h };
+    for (let k=0;k<12;k++){
+      const hit = placed.find(q => overlaps(bb,q));
+      if (!hit) break;
+      bb = { ...bb, y0: hit.y1+2, y1: hit.y1+2+h };
+    }
+    if (bb.y1 > mT+ph){                                     // off the bottom: go above,
+      bb = { ...bb, y0: y-16, y1: y-4 };                     // pushing UP past what is placed
+      for (let k=0;k<12;k++){
+        const hit = placed.find(q => overlaps(bb,q));
+        if (!hit) break;
+        bb = { ...bb, y0: hit.y0-2-h, y1: hit.y0-2 };
+      }
+    }
+    placed.push(bb);
+    if (bb.y0 !== by){
+      const lx = end ? bb.x1+3 : bb.x0-3, ly = bb.y1-6;
+      g+=`<line x1="${x}" y1="${y}" x2="${lx}" y2="${ly}" stroke="${muted}" stroke-width="1" opacity="0.7"/>`;
+    }
+    g+=`<text class="dlabel" x="${end?bb.x1:bb.x0}" y="${bb.y1-2}" text-anchor="${end?'end':'start'}">${esc(name)}</text>`;
+  }
+  // the census sits inside the plot, top right: a higher score for less
+  // money than every efficient row is empty, and the footer already holds
+  // the axis title at the narrow width
+  const notes = [`at ${fmt(users,0)} users`];
+  // the plan grid holds six DP x TP shapes; the split control offers every
+  // divisor, so a DP3 or TP6 selection matches no row and gets no ring —
+  // say so rather than leave the reader hunting for "you"
+  const curOver = viable.some(r => r.key === curKey && !r.op.fits);
+  const curNotViable = rows.some(r => r.key === curKey && !viable.includes(r));
+  if (over) notes.push(`${over} row${over>1?'s':''} cannot carry it${curOver?' (yours among them)':''}`);
+  if (unscored) notes.push(`${unscored} unscored`);
+  if (notViable) notes.push(`${notViable} not viable${curNotViable?' (yours among them)':''}`);
+  if (!rows.some(r => r.key === curKey)) notes.push('your split is not in the grid');
+  g+=`<text class="axtick" x="${mL+pw-4}" y="${mT+11}" text-anchor="end">${esc(notes.join(' · '))}</text>`;
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">Terminal-Bench 2.1, pass@1 (Artificial Analysis)</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">€ per seat per month, configuration full (log)</text>`;
+  box.innerHTML = svgEl(g, W, H,
+    'Every configuration that carries the load as Terminal-Bench score versus monthly cost per seat at capacity, with the Pareto-efficient set joined as a staircase');
+  frontierChartGeom = { W,H,mL,mR,mT,pw,ph, pts, par, curKey };
 }
 
 /* ============================================================================
@@ -5510,6 +5811,13 @@ document.querySelectorAll('.seg').forEach(seg=>{
         state.mtp = CONFIG.MODELS[state.model].mtp;
         document.getElementById('s-mtp').value = state.mtp;
       }
+      // switching GPU adopts ITS on-demand price the same way — the slider
+      // names the selected part's price, so leaving it at the old part's
+      // would silently re-price the new one
+      if (key==='gpu'){
+        state.gpuh = CONFIG.GPUS[state.gpu].eur_gpu_h;
+        document.getElementById('s-gpuh').value = state.gpuh;
+      }
       enforceConstraints();
       syncLabels();
       computeAndRender(false);
@@ -5540,6 +5848,7 @@ const sliderMap=[
   ['s-out','out',v=>parseInt(v,10)],
   ['s-burst','burst',v=>parseInt(v,10)],
   ['s-ekwh','ekwh',v=>parseFloat(v)],
+  ['s-gpuh','gpuh',v=>parseFloat(v)],
 ];
 sliderMap.forEach(([id,key,cast])=>{
   const el=document.getElementById(id);
@@ -5671,6 +5980,7 @@ function syncLabels(){
   document.getElementById('v-sys').textContent=fmt(state.sys,0);
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
   document.getElementById('v-ekwh').textContent=state.ekwh.toFixed(2);
+  document.getElementById('v-gpuh').textContent=state.gpuh.toFixed(2);
 }
 
 /* ---- share link: the whole configuration in the URL fragment ------------
@@ -5702,6 +6012,11 @@ function encodeStateURL(){
   // globally silently flipped a 1.7x Mistral link back to that model's 1.0x
   if (String(state.mtp) !== String(CONFIG.MODELS[state.model].mtp)) p.set('mtp', String(state.mtp));
   else p.delete('mtp');
+  // gpuh likewise diffs against the SELECTED part's list price: the decoder
+  // re-seeds an absent gpuh from CONFIG.GPUS[gpu], so a B300 link at the
+  // B300 median must stay a bare link
+  if (String(state.gpuh) !== String(CONFIG.GPUS[state.gpu].eur_gpu_h)) p.set('gpuh', String(state.gpuh));
+  else p.delete('gpuh');
   for (const k of Object.keys(URL_EXTRA_NUM)) put(k, state[k]);
   // booleans encode as 1/0, so the diff test must compare the BOOLEANS —
   // comparing "0" to "false" would stamp the key into every default link
@@ -5723,6 +6038,9 @@ function applyURLState(){
   // the same reset the model buttons apply on click
   if (p.get('model') !== null && p.get('mtp') === null)
     state.mtp = CONFIG.MODELS[state.model].mtp;
+  // and a shared GPU carries its own price unless the link pins one
+  if (p.get('gpu') !== null && p.get('gpuh') === null)
+    state.gpuh = CONFIG.GPUS[state.gpu].eur_gpu_h;
   // the prompt-median sliders get model-scaled maxima (up to 4× the HTML
   // attribute, ctxScale) from enforceConstraints AFTER this runs — clamp
   // against the widest legal range here and let the constraint pass do the
@@ -5798,7 +6116,10 @@ function redrawCharts(){
   // the frontier bakes chart-palette colors (PLANNER_COLORS -> cssv) into
   // inline styles, so a theme flip must repaint it; the deploy card only uses
   // var() colors but is repainted too so its copy-button state never goes stale
-  if (lastFrontierRows) renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
+  if (lastFrontierRows){
+    renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
+    renderFrontierChart(lastFrontierRows, lastFrontierCurKey);
+  }
   if (lastDeploy) renderDeployCard(lastDeploy.op, lastDeploy.model, lastDeploy.topo,
                                    lastDeploy.wl, lastDeploy.mo, lastDeploy.decodeUsers);
   // the flip panel bakes chart-palette colors into the SVG, so repaint it
@@ -5832,6 +6153,49 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
   return `<div class="tth tnum">max_num_seqs = ${n}</div>`+
     `<div class="row"><span class="sw" style="background:${s3}"></span>aggregate <b class="tnum">${fmt(interpAt(dc,'agg',n)/1000,2)}</b> ktok/s</div>`;
 }, (n,dc)=>[{v:interpAt(dc,'agg',n), color:cssv('--s3'), r:4}]);
+
+// chart H is a scatter, so the crosshair snaps to the NEAREST dot rather
+// than to an x: the hit radius is ~24 css px around each mark, not the
+// 10 px dot itself (the ring is part of the target)
+(function(){
+  const box=document.getElementById('chartH'), tt=document.getElementById('ttH');
+  if (!box || !tt) return;
+  function leave(){ tt.style.opacity=0; const svg=box.querySelector('svg'); if(svg) removeCross(svg); }
+  function handler(e){
+    const geom=frontierChartGeom; if(!geom) return;
+    const svg=box.querySelector('svg'); if(!svg) return;
+    const rect=svg.getBoundingClientRect();
+    const scale=rect.width/geom.W;                     // css px per viewBox unit
+    const vx=(e.clientX-rect.left)/scale, vy=(e.clientY-rect.top)/scale;
+    let best=null, bd=Infinity;
+    for (const p of geom.pts){ const d=Math.hypot(p.x-vx, p.y-vy); if (d<bd){ bd=d; best=p; } }
+    if (!best || bd > Math.max(12, 24/scale)){ leave(); return; }
+    drawCross(svg, best.x, geom, [{ y: best.y, color: best.color, r: 6 }]);
+    const r=best.r, on=geom.par.has(r);
+    const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
+    tt.innerHTML=`<div class="tth">${esc(frontierRowName(r))}${r.key===geom.curKey?' — yours':''}</div>`
+      +`<div class="row"><span class="sw" style="background:${best.color}"></span>binds on ${esc(PLANNER_LABEL[r.op.binding])} · ${on?'efficient':'dominated'}</div>`
+      +`<div class="row">Terminal-Bench 2.1 <b class="tnum">${fmt(frontierScore(r)*100,1)}%</b></div>`
+      // every plotted row carries the load (renderFrontierChart draws `live`
+      // only), so the seat price always exists
+      +`<div class="row">€/seat/month, full <b class="tnum">${cen?'≤ ':''}${fmt(r.eurSeat,2)}</b></div>`
+      +`<div class="row">€/user/month at your load <b class="tnum">${fmt(r.eur/Math.max(1,state.users),2)}</b></div>`
+      +`<div class="row">€/month <b class="tnum">${fmt(r.eur,0)}</b> · max users <b class="tnum">${cen}${fmt(r.op.limit,0)}</b></div>`;
+    const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();
+    const cx=(rect.left-parRect.left)+best.x*scale, cy=(rect.top-parRect.top)+best.y*scale;
+    const tw=tt.offsetWidth, th=tt.offsetHeight, pad=4, gap=12;
+    let left=cx+gap; if (left+tw>parRect.width-pad) left=cx-gap-tw;
+    let top=cy-th-gap; if (top<pad) top=cy+gap;
+    tt.style.left=Math.max(pad,Math.min(left,parRect.width-tw-pad))+'px';
+    tt.style.top =Math.max(pad,Math.min(top, parRect.height-th-pad))+'px';
+    tt.style.opacity=1;
+  }
+  box.addEventListener('mousemove', handler);
+  box.addEventListener('mouseleave', leave);
+  box.addEventListener('touchstart',(e)=>{ if(e.touches[0]) handler(e.touches[0]); },{passive:true});
+  box.addEventListener('touchmove',(e)=>{ if(e.touches[0]) handler(e.touches[0]); },{passive:true});
+  box.addEventListener('touchend', leave); box.addEventListener('touchcancel', leave);
+})();
 
 /* ---- init ---- */
 applyURLState();       // a shared link restores every control before first paint

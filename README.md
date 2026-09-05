@@ -11,8 +11,8 @@ live sliders for the workload, model (Qwen3.6-27B / 35B-A3B /
 Mistral-Medium-3.5 / GLM-5.2 / DeepSeek-V4-Flash / Qwen3.8-Flash-Next /
 GLM-5.3-Flash), GPU (H200 / B300), weight & KV dtypes, and DP × TP
 topology. It answers as a decision tool: a binding-constraint verdict, a
-deploy recipe (vLLM flags), the **electricity bill** (€/kWh slider,
-duty-cycle power model), a **sensitivity panel** showing which assumption
+deploy recipe (vLLM flags), the **bill** (€/GPU-hour and €/kWh sliders:
+hardware plus a duty-cycle power model), a **sensitivity panel** showing which assumption
 would flip the decision, the **steady-state decode point** (how many
 sessions are actually decoding at your load, and how fast each one runs —
 Little's law, not the all-warm stress test), **shareable links** that
