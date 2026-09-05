@@ -456,9 +456,11 @@ MODELS = {
     # on 21+1 layers = 47.3 KiB/token fp8; vLLM REQUIRES fp8 KV on this path
     # (kv_fp16_ok=False). Decode is sparse: indexer scans the context at
     # 2,772 B/token while attention reads only top-2048 tokens/layer.
-    # Constants: research/model_glm52.md.
+    # Constants: research/model_glm52.md. Named GLM-5.3 since 2026-09-06:
+    # its config (55/56 keys) and its FP8 checkpoint (118,629 tensors, dtypes,
+    # shapes, bytes) are identical to GLM-5.2's; research/model_glm53.md.
     "GLM52": Model(
-        name="GLM-5.2 (MoE 744B-A40B, MLA+DSA)",
+        name="GLM-5.3 (MoE 744B-A40B, MLA+DSA)",
         kv_bpt=48_408,                   # 79 x 576 (MLA latent) + 22 x 132 (indexer)
         deltanet_state=0.0,              # MLA is cached attention, no recurrent state
         w_resident=755.5e9,              # official FP8 ckpt: 753.3e9 params + BF16 excess
