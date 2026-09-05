@@ -66,13 +66,13 @@ function modelFor(key){
     m = { ...m, w_resident: wr, w_decode_shared: wds, w_route_pertok: wpt,
           w_route_total: wtot, weight_dtype: "nvfp4", name: m.name + " [NVFP4]" };
   }
-  // FP16 KV is not servable for GLM-5.2 (DSA asserts a quantized cache);
+  // FP16 KV is not servable for GLM-5.3 (DSA asserts a quantized cache);
   // the UI disables the toggle — withKvDtype's guard keeps the math honest
   // anyway (and prices the sparse-decode doubling on Q38FN). servableKv
   // first resolves GPU-coupled dtypes (GLM-5.3-Flash: BF16 forced on H200),
   // so no code path — the frontier included — ever prices an unservable arm.
   m = withKvDtype(m, servableKv(m, state.kv, state.gpu));
-  // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.2
+  // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.3
   // carry no state at all) and on DSv4-Flash (its per-session state is a
   // fixed mixed-precision buffer, state_fp32_ok) — the UI disables both.
   if (state.state_dt === "fp32" && m.deltanet_state > 0 && m.state_fp32_ok !== false)

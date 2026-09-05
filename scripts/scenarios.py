@@ -290,7 +290,7 @@ def fig_prefill_thrash():
                ("27B", 1, 2, "H200", BLUE, "27B TP2"),
                ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
                ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
-               ("GLM52", 1, 8, "H200", AQUA, "GLM-5.2 TP8"),
+               ("GLM52", 1, 8, "H200", AQUA, "GLM-5.3 TP8"),
                ("DSV4F", 1, 2, "H200", YELLOW, "DSv4-Flash TP2"),
                ("Q38FN", 1, 2, "H200", PURPLE, "Q3.8-Flash TP2"),
                ("GLM53F", 1, 4, "H200", MAGENTA, "G5.3-Flash TP4 (BF16 KV)")]
@@ -369,7 +369,7 @@ def fig_cold_spike():
                ("27B", 1, 2, "H200", BLUE, "27B TP2"),
                ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
                ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
-               ("GLM52", 1, 8, "H200", AQUA, "GLM-5.2 TP8")]
+               ("GLM52", 1, 8, "H200", AQUA, "GLM-5.3 TP8")]
 
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
 
@@ -506,7 +506,7 @@ def fig_binding_map():
             ("35BA3B", 1, 1, "H200", "35B-A3B 1xH200"),
             ("35BA3B", 1, 2, "H200", "35B-A3B TP2"),
             ("MM35", 1, 4, "H200", "Mistral-3.5 TP4"),
-            ("GLM52", 1, 8, "H200", "GLM-5.2 TP8"),
+            ("GLM52", 1, 8, "H200", "GLM-5.3 TP8"),
             ("27B", 1, 1, "B300", "27B 1xB300")]
     COLOR = {k: c for k, c, _ in CEIL}
     bars = []

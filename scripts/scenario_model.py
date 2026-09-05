@@ -6,7 +6,7 @@ methodology as the baseline scripts (warm_whisker.py / real_mns.py) and
 generalizes it along the axes we now want to explore:
 
   * model         : 27B (dense sibling), 35B-A3B (MoE, ~3B active),
-                    Mistral-Medium-3.5-128B (dense GQA), GLM-5.2 (744B-A40B
+                    Mistral-Medium-3.5-128B (dense GQA), GLM-5.3 (744B-A40B
                     MoE, MLA + DeepSeek Sparse Attention)
   * gpu           : H200 (calibrated baseline) or B300 (Blackwell Ultra)
   * weight dtype  : FP8 (baseline) or NVFP4 (B300-only; weights, never KV)
@@ -293,7 +293,7 @@ class Model:
     kv_decode_const: float = 0.0
     kv_decode_topk: float | None = None
     # False for models vLLM can only serve with a quantized KV cache
-    # (GLM-5.2's DSA path asserts fp8) — with_kv_dtype("fp16") then raises.
+    # (GLM-5.3's DSA path asserts fp8) — with_kv_dtype("fp16") then raises.
     kv_fp16_ok: bool = True
     # The KV dtype these constants currently price ("fp8" = the study
     # baseline; with_kv_dtype("fp16") stamps "fp16"). Exists so
@@ -314,7 +314,7 @@ class Model:
     # Largest max_seq_len the study allows for this model (tokens). The
     # workload cap (Workload.cap) may not exceed it — warm_capacity and
     # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
-    # the Qwens (262,144 native, 1M via YaRN rope scaling) and GLM-5.2
+    # the Qwens (262,144 native, 1M via YaRN rope scaling) and GLM-5.3
     # (1M native); Mistral-Medium-3.5 stays at its 262,144 model max.
     max_ctx: float = 262_144
 
@@ -665,7 +665,7 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
     if not model.kv_fp16_ok:
         raise ValueError(
             f"{model.name}: FP16 KV is not servable (vLLM requires a quantized "
-            "KV cache on this model's sparse-attention path — GLM-5.2's DSA, "
+            "KV cache on this model's sparse-attention path — GLM-5.3's DSA, "
             "DSv4-Flash's CSA; see the model's research note)")
     # On a sparse-decode model the top-k gathers read MAIN-KV bytes and double
     # with the cache dtype; the indexer scan (kv_decode_bpt) keeps its own
@@ -747,13 +747,13 @@ def check_dtype_supported(model: Model, topo: Topology) -> None:
 #
 #     min TP to fit FP8 weights      H200    B300
 #       Mistral-Medium-3.5-128B         2       1     <- fits a single B300
-#       GLM-5.2 (744B-A40B)             7       3
+#       GLM-5.3 (744B-A40B)             7       3
 #
 # In every cell above where min TP > 1, `topology("dp", n)` — n INDEPENDENT
 # SINGLE GPUs — is not a deployment that exists: no count of single GPUs ever
 # holds the weights, so the whole DP axis reported a 0 pool. (MM35 on B300 is
 # the exception: min TP 1, so pure DP is real there.) Data parallelism in the
-# other cells means replicating whole TP groups: on one 8-GPU node GLM-5.2 runs
+# other cells means replicating whole TP groups: on one 8-GPU node GLM-5.3 runs
 # DP2xTP4 on B300, and MM35 runs DP4xTP2 on H200. Total GPUs = dp * tp.
 #
 #   weights  : sharded across a group's tp GPUs -> stored ONCE per group
@@ -934,7 +934,7 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     branch and tp=n the old TP branch, so every published number is unchanged.
 
     A model too large for its group still clamps to 0 (the study's existing
-    "does not fit" sentinel, asserted for GLM-5.2 on one GPU in _selfcheck).
+    "does not fit" sentinel, asserted for GLM-5.3 on one GPU in _selfcheck).
     min_tp_for() reports the group size that would fit.
 
     The activation reserve is the H200-calibrated ACT_RESERVE applied per GPU
@@ -1909,7 +1909,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     # optimistic against production. Pass mbu=1.0 to recover that reading.
     bw = effective_bw(topo) * (MBU_DEFAULT if mbu is None else mbu)
     # dense-attention models read every cached token per step (kv_bpt); a
-    # sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
+    # sparse-attention model (GLM-5.3/DSA) reads kv_decode_bpt per context
     # token (indexer scan) plus a top-k read per active sequence, capped at
     # the sequence's own length when it is shorter than the top-k window
     kv_read_bpt = model.kv_bpt if model.kv_decode_bpt is None else model.kv_decode_bpt
@@ -2679,7 +2679,7 @@ def _selfcheck():
         pass
 
     # ---- the grid is what makes DP expressible for the 2026-07+ models ------
-    # MM35, GLM-5.2, DSv4-Flash, Qwen3.8-Flash-Next and GLM-5.3-Flash fit no
+    # MM35, GLM-5.3, DSv4-Flash, Qwen3.8-Flash-Next and GLM-5.3-Flash fit no
     # single H200, so pure DP is a 0 pool at every N -- the study's existing
     # "does not fit" sentinel, and it stands.
     # (GLM-5.3-Flash appears as its BF16-KV arm wherever an H200 topology is
@@ -2742,7 +2742,7 @@ def _selfcheck():
     # totals must rise along node_splits, which is ordered widest-DP first. The
     # margin scales with W: on 8 GPUs, TP8 beats the widest fitting DP split by
     # 1.36x for the 35B-A3B (35.5 GB), 1.91x for MM35 (133.6 GB) and 2.34x for
-    # GLM-5.2 (755.5 GB). DP buys cache isolation and routing headroom, never
+    # GLM-5.3 (755.5 GB). DP buys cache isolation and routing headroom, never
     # capacity.
     for mk, gk in (("GLM52", "B300"), ("MM35", "H200"),
                    ("MM35", "B300"), ("35BA3B", "H200")):
@@ -2962,7 +2962,7 @@ def _selfcheck():
         except ValueError:
             pass
 
-    # GLM-5.2 sizing: FP8 weights (755.5e9 B) fit no single GPU — pool clamps
+    # GLM-5.3 sizing: FP8 weights (755.5e9 B) fit no single GPU — pool clamps
     # to 0 — but 8xH200 TP and 4xB300 hold a real pool, NVFP4 a bigger one
     assert kv_pool_tokens(glm, t1) == 0 and kv_pool_tokens(glm, b1) == 0
     assert kv_pool_tokens(glm, topology("tp", 8)) > 0
@@ -3584,7 +3584,7 @@ def _selfcheck():
     for dtype in KV_DTYPES:
         for mk in MODELS:
             if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:
-                continue   # GLM-5.2 (DSA) / DSv4-Flash (CSA): FP16 KV not servable
+                continue   # GLM-5.3 (DSA) / DSv4-Flash (CSA): FP16 KV not servable
             if dtype == "fp8" and MODELS[mk].kv_fp8_blackwell_only:
                 continue   # GLM-5.3-Flash: fp8 KV is Blackwell-only and these
                            # legacy topologies are all H200 — its H200 arm is
