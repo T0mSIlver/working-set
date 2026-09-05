@@ -61,9 +61,9 @@ export function renderFrontierTable(rows, curKey){
 }
 
 /* ---- Chart H: the frontier as a picture — €/user vs Terminal-Bench ------
-   The table ranks by max users and prints a bill; the bill is a function
-   of the GPU count alone, so users-vs-cost collapsed every row on one
-   topology onto a band and said "run fewer GPUs". The buying question is
+   The table ranks by max users and prints a bill; the hardware line of
+   the bill is a function of the GPU count alone, so users-vs-cost collapsed
+   every row on one topology onto a band and said "run fewer GPUs". The buying question is
    what a seat costs against what the model can do: y = the bill at YOUR
    load divided by your users (log — seats span more than a decade), x =
    the model's Terminal-Bench 2.1 score (research/terminal_bench.md; one
@@ -95,13 +95,17 @@ export function renderFrontierChart(rows, curKey){
   // a seat price needs a bill and a configuration that actually carries
   // the load; rows short of it are named in-chart so the count agrees
   const viable = rows.filter(r => isFinite(r.op.limit) && r.op.limit >= 1 && isFinite(r.eur) && r.eur > 0);
-  const live = viable.filter(r => r.op.fits && isFinite(frontierScore(r)));
-  const over = viable.length - live.length, notViable = rows.length - viable.length;
+  const carries = viable.filter(r => r.op.fits);
+  const live = carries.filter(r => isFinite(frontierScore(r)));
+  const over = viable.length - carries.length, unscored = carries.length - live.length;
+  const notViable = rows.length - viable.length;
   const perUser = r => r.eur / users;
   if (!live.length){
     const W=560,H=120;
-    box.innerHTML = svgEl(`<text x="${W/2}" y="${H/2+4}" text-anchor="middle" class="axlbl" font-size="13">no configuration on this GPU can carry ${fmt(users,0)} users at these settings</text>`,
-                          W, H, 'No configuration carries the load; nothing to plot');
+    const why = carries.length ? `no configuration that carries ${fmt(users,0)} users has a Terminal-Bench score`
+                               : `no configuration on this GPU can carry ${fmt(users,0)} users at these settings`;
+    box.innerHTML = svgEl(`<text x="${W/2}" y="${H/2+4}" text-anchor="middle" class="axlbl" font-size="13">${esc(why)}</text>`,
+                          W, H, 'Nothing to plot');
     frontierChartGeom = null; return;
   }
   // same width rule as chart G: act 3 panels are page-wide, so the viewBox
@@ -182,28 +186,30 @@ export function renderFrontierChart(rows, curKey){
     if (!par.has(cur))
       g+=`<text class="dlabel" x="${x+14}" y="${y+4}" text-anchor="start" fill="${muted}">you</text>`;
   }
-  // direct labels on the efficient set only, to the UPPER RIGHT of each dot:
-  // a higher score for less money is empty by definition, so the label never
-  // covers another dot. Labels that would collide are pushed up in y order;
-  // one that would run past the right edge flips to the lower left instead.
+  // direct labels on the efficient set only, to the LOWER RIGHT of each dot:
+  // a higher score for less money (the price axis grows upward) is empty of
+  // efficient dots by definition — but not of dominated ones, and the 1%
+  // tolerance lets a dearer dot sit just above, so every drawn dot is an
+  // obstacle too. Labels that would collide are pushed down in y order; one
+  // that would run past the right edge flips to the upper left instead.
   // Width is estimated (no layout pass in an SVG string). A displaced label
   // gets a hairline leader back to its dot: two efficient rows at nearly the
   // same price stack two labels, and without the leader the reader cannot
   // tell which name is which dot.
-  const placed = [];
+  const placed = pts.map(p => ({ x0: p.x-6, x1: p.x+6, y0: p.y-6, y1: p.y+6 }));
   const overlaps = (a,b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-  for (const r of [...stair].sort((a,b)=>P(b)[1]-P(a)[1])){
+  for (const r of [...stair].sort((a,b)=>P(a)[1]-P(b)[1])){
     const [x,y] = P(r), name = frontierShortLabel(r) + (r.key===curKey ? ' (you)' : '');
     const w = name.length*5.9, h = 12;
     let end = x + 9 + w > W - mR;
-    let bx = end ? x-9-w : x+9, by = end ? y+4 : y-16;
+    let bx = end ? x-9-w : x+9, by = end ? y-16 : y+4;
     let bb = { x0: bx, x1: bx+w, y0: by, y1: by+h };
     for (let k=0;k<12;k++){
       const hit = placed.find(q => overlaps(bb,q));
       if (!hit) break;
-      bb = { ...bb, y0: hit.y0-2-h, y1: hit.y0-2 };
+      bb = { ...bb, y0: hit.y1+2, y1: hit.y1+2+h };
     }
-    if (bb.y0 < mT) bb = { ...bb, y0: y+4, y1: y+16 };   // off the top: go below
+    if (bb.y1 > mT+ph) bb = { ...bb, y0: y-16, y1: y-4 };   // off the bottom: go above
     placed.push(bb);
     if (bb.y0 !== by){
       const lx = end ? bb.x1+3 : bb.x0-3, ly = bb.y1-6;
@@ -215,8 +221,9 @@ export function renderFrontierChart(rows, curKey){
   // money than every efficient row is empty, and the footer already holds
   // the axis title at the narrow width
   const notes = [`at ${fmt(users,0)} users`];
-  const curOver = !cur && viable.some(r => r.key === curKey);
+  const curOver = viable.some(r => r.key === curKey && !r.op.fits);
   if (over) notes.push(`${over} row${over>1?'s':''} cannot carry it${curOver?' (yours among them)':''}`);
+  if (unscored) notes.push(`${unscored} unscored`);
   if (notViable) notes.push(`${notViable} not viable`);
   g+=`<text class="axtick" x="${mL+pw-4}" y="${mT+11}" text-anchor="end">${esc(notes.join(' · '))}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
