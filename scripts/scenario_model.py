@@ -3503,6 +3503,11 @@ def _selfcheck():
     assert cost_2e["hw_month"] == cost_ref["hw_month"] \
         and cost_2p["hw_month"] == cost_ref["hw_month"]
     assert cost_ref["total_month"] == cost_ref["eur_month"] + cost_ref["hw_month"]
+    # every part must carry a price: the dataclass default is 0.0 so that an
+    # unpriced GPU cannot pass as free by accident
+    for _gk, _g in GPUS.items():
+        assert _g.eur_gpu_h > 0, f"GPUS[{_gk!r}] has no eur_gpu_h"
+
     assert cost_ref["eur_user"] == cost_ref["total_month"] / REF_USERS
     assert energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, turn_tokens=TURN,
                        eur_gpu_h=0.0)["total_month"] == cost_ref["eur_month"], \
