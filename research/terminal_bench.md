@@ -35,7 +35,8 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` field),
 
 | Explorer key | AA slug | AA name | TB 2.1 | runs | AA release date |
 |---|---|---|---|---|---|
-| `27B` | `qwen3-6-27b` | Qwen3.6 27B (Reasoning) | **60.7%** | 162 | 2026-04-22 |
+| `27B` | `qwen3-8-27b` | Qwen3.8 27B (xhigh) | **79.8%** | 213 | 2026-08-14 |
+| — | `qwen3-6-27b` | Qwen3.6 27B (Reasoning) — the model `27B` was until 2026-09-05 | 60.7% | 162 | 2026-04-22 |
 | `35BA3B` | `qwen3-6-35b-a3b` | Qwen3.6 35B A3B (Reasoning) | **44.9%** | 120 | 2026-04-16 |
 | `MM35` | `mistral-medium-3-5` | Mistral Medium 3.5 (high) | **50.6%** | 135 | 2026-04-29 |
 | `GLM52` | `glm-5-2` | GLM-5.2 (max) | **77.9%** | 208 | 2026-06-16 |
@@ -43,8 +44,10 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` field),
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | 2026-08-26 |
 
-Not taken, for the record: the non-reasoning variants (27B 51.3%, 35B-A3B
-41.6%, GLM-5.2 51.7%; DeepSeek V4 Flash non-reasoning has no v2.1 run) and
+Not taken, for the record: Qwen3.8 27B's other effort levels (low 67.4%,
+medium 65.2%, non-reasoning 49.1% — xhigh is the level AA's index runs),
+the non-reasoning variants (Qwen3.6 27B 51.3%, 35B-A3B 41.6%, GLM-5.2
+51.7%; DeepSeek V4 Flash non-reasoning has no v2.1 run) and
 AA's *Terminal-Bench Hard* (only four of the seven models have a run, so it
 cannot be the axis).
 

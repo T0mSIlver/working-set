@@ -108,20 +108,32 @@ export const CONFIG = {
   //          attn_layers price the quadratic QK^T/AV term of full-attention
   //          layers only (DeltaNet layers contribute nothing quadratic).
   MODELS: {
-    "27B": {
-      name: "Qwen3.6-27B (dense)",
+    "27B": {                       // Qwen3.8-27B since 2026-09-05; research/model_qwen38_27b.md
+      // Every constant below was MEASURED or derived on Qwen3.6-27B. The
+      // swap to Qwen3.8-27B keeps them all: the two config.json files agree
+      // on all 34 text fields and the vision block, and the two official FP8
+      // checkpoints hold the same 1,606 tensors with identical dtypes and
+      // shapes (30,866,866,928 B each) — only the values differ. The one
+      // measurement that is a property of the VALUES is mtp (draft
+      // acceptance); it is carried over unmeasured, see below.
+      name: "Qwen3.8-27B (dense)",
       kv_bpt: 32 * KIB,            // 16 attn x 4 KV heads x 256 x 2 x 1B (published config)
       deltanet_state: 75 * MIB,    // 48 DN layers x 48 vheads x 128x128 bf16 (+conv) = 75.7 MiB
       w_resident: 28.8 * GIB,      // baseline's stated as-deployed FP8 footprint
       w_decode_shared: 28.8 * GIB, // dense: every step reads all weights
       w_route_pertok: 0.0,
       w_route_total: 0.0,
-      // MEASURED 2026-08-28 on the production deployment (decode_mbu.md):
-      // accepted length 2.94 at num_speculative_tokens=2, per-draft
-      // acceptance 0.971, and 1+a+a^2 confirmed against vLLM's per-position
-      // counters. Was 1.7. PAIRED WITH DECODE_MBU -- see its comment.
+      // MEASURED 2026-08-28 on the production Qwen3.6-27B deployment
+      // (decode_mbu.md): accepted length 2.94 at num_speculative_tokens=2,
+      // per-draft acceptance 0.971, and 1+a+a^2 confirmed against vLLM's
+      // per-position counters. Was 1.7. PAIRED WITH DECODE_MBU -- see its
+      // comment. NOT re-measured on Qwen3.8-27B: acceptance depends on the
+      // draft head's weights, not the architecture. Re-measure when it ships.
       mtp: 2.94,
-      // nvidia/Qwen3.6-27B-NVFP4, MEASURED safetensors total (21.92e9 B)
+      // PROJECTION: nvidia/Qwen3.6-27B-NVFP4's MEASURED safetensors total
+      // (21.92e9 B) applied to tensor-identical weights. No NVIDIA NVFP4 of
+      // Qwen3.8-27B exists (2026-09-05); the community unsloth/Qwen3.8-27B-
+      // NVFP4 keeps more layers in FP8 and is 23.42e9 B — a different recipe.
       nvfp4_w: [21.92e9, 21.92e9, 0.0, 0.0],
       params_prefill: 24.5e9,      // 27B dense less ~2.5e9 embed + lm_head (vocab 248,320)
       attn_layers: 16, attn_d: 24*256,
@@ -253,7 +265,7 @@ export const CONFIG = {
   // quantisation loss is unmeasured, and a per-arm guess would rank the
   // frontier on the guess. Ledger and protocol: research/terminal_bench.md.
   QUALITY: {
-    "27B":    { tb21: 162/267, aa: "qwen3-6-27b" },
+    "27B":    { tb21: 213/267, aa: "qwen3-8-27b" },   // xhigh effort (the index run); 3.6 was 162/267
     "35BA3B": { tb21: 120/267, aa: "qwen3-6-35b-a3b" },
     "MM35":   { tb21: 135/267, aa: "mistral-medium-3-5" },
     "GLM52":  { tb21: 208/267, aa: "glm-5-2" },
