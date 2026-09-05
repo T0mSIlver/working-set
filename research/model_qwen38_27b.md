@@ -26,6 +26,15 @@ say otherwise — every tensor's dtype and shape matches and the totals agree
 exactly — so that figure is an indexing artefact, not a checkpoint
 difference.
 
+Sources: `https://huggingface.co/Qwen/Qwen3.6-27B-FP8` and
+`https://huggingface.co/Qwen/Qwen3.8-27B-FP8` (`raw/main/config.json`,
+`raw/main/generation_config.json`, `resolve/main/model.safetensors.index.json`,
+each `model-000NN-of-00066.safetensors` header via HTTP range reads);
+`https://huggingface.co/api/models/<repo>?blobs=true` for sizes, dates and
+the parameter breakdown this note disbelieves; `https://huggingface.co/unsloth/Qwen3.8-27B-NVFP4`
+for the community NVFP4 size; `https://artificialanalysis.ai/models/qwen3-8-27b`
+(embedded dataset, `terminalbenchV21`, effort variants) for the scores.
+
 Architecture-determined constants that therefore carry over untouched:
 `kv_bpt` (32 KiB), `deltanet_state` (75 MiB), `w_resident` /
 `w_decode_shared` (28.8 GiB FP8), `params_prefill`, `attn_layers`, `attn_d`,
@@ -37,10 +46,20 @@ tokens, the MFU(chunk) anchor, decode MBU).
 - **Weights.** Different values, hence the score. Nothing in the memory,
   prefill or decode model reads a weight value.
 - **MTP acceptance (`mtp: 2.94`).** Measured 2026-08-28 on the production
-  Qwen3.6-27B deployment (`decode_mbu.md`). Draft acceptance is a property
-  of the MTP head's weights against the base model's, so it does not carry
-  over by architecture. Kept at 2.94 and marked unmeasured; re-measure when
-  3.8 ships to production. (The harness's per-position counters do this.)
+  27B deployment that `decode_mbu.md` records as Qwen3.6-27B. Draft
+  acceptance is a property of the MTP head's weights against the base
+  model's, so it does not carry over by architecture. Kept at 2.94 and
+  marked unmeasured; re-measure on a confirmed 3.8 deployment (the
+  harness's per-position counters do this).
+- **Which checkpoint the production deployment ran — owner to confirm.**
+  `prefill.md` § "First measured calibration point (2026-08-27)" records
+  the MFU anchor on "a Qwen3.8-27B FP8-weight checkpoint"; `decode_mbu.md`,
+  one day later on what reads as the same 4×H200 TP4 deployment, records
+  Qwen3.6-27B. One of the two labels is likely wrong. If the deployment was
+  3.8, the MTP/MBU pair is a 3.8 measurement and the caveat above lifts; if
+  3.6, the MFU anchor's label in `prefill.md` needs correcting. Nothing
+  numeric depends on the answer (the two checkpoints are tensor-identical
+  in shape), only the provenance wording.
 - **Reasoning effort ladder.** Qwen3.8-27B exposes effort levels; AA ran
   low (67.4%), medium (65.2%), xhigh (79.8%, the index run) and
   non-reasoning (49.1%). The ledger takes xhigh per the variant rule. The
