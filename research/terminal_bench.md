@@ -31,7 +31,7 @@ measured, and a per-arm guess would rank the frontier on the guess.
 ## 2. Ledger
 
 Read from the per-model pages' embedded dataset (`terminalbenchV21` field),
-2026-09-05. Percent = runs passed / 267.
+2026-09-05 (the `glm-5-3` row 2026-09-06). Percent = runs passed / 267.
 
 | Explorer key | AA slug | AA name | TB 2.1 | runs | AA release date |
 |---|---|---|---|---|---|
@@ -39,7 +39,8 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` field),
 | — | `qwen3-6-27b` | Qwen3.6 27B (Reasoning) — the model `27B` was until 2026-09-05 | 60.7% | 162 | 2026-04-22 |
 | `35BA3B` | `qwen3-6-35b-a3b` | Qwen3.6 35B A3B (Reasoning) | **44.9%** | 120 | 2026-04-16 |
 | `MM35` | `mistral-medium-3-5` | Mistral Medium 3.5 (high) | **50.6%** | 135 | 2026-04-29 |
-| `GLM52` | `glm-5-2` | GLM-5.2 (max) | **77.9%** | 208 | 2026-06-16 |
+| `GLM52` | `glm-5-3` | GLM-5.3 (max) | **83.9%** | 224 | 2026-08-18 |
+| — | `glm-5-2` | GLM-5.2 (max) — the model `GLM52` was until 2026-09-06 | 77.9% | 208 | 2026-06-16 |
 | `DSV4F` | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) | **78.7%** | 210 | 2026-07-31 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | 2026-08-26 |

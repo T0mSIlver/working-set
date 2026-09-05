@@ -8,7 +8,7 @@ for agentic coding workloads.
 
 **Start with the [interactive explorer](https://workingset.tomvaucourt.com/)** —
 live sliders for the workload, model (Qwen3.8-27B / 35B-A3B /
-Mistral-Medium-3.5 / GLM-5.2 / DeepSeek-V4-Flash / Qwen3.8-Flash-Next /
+Mistral-Medium-3.5 / GLM-5.3 / DeepSeek-V4-Flash / Qwen3.8-Flash-Next /
 GLM-5.3-Flash), GPU (H200 / B300), weight & KV dtypes, and DP × TP
 topology. It answers as a decision tool: a binding-constraint verdict, a
 deploy recipe (vLLM flags), the **bill** (€/GPU-hour and €/kWh sliders:

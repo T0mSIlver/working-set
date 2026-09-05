@@ -100,7 +100,7 @@ export const CONFIG = {
   //          read per CONTEXT token / per ACTIVE SEQUENCE per step. Dense-
   //          attention models omit them (decode reads the full cache at kv_bpt).
   // kv_fp16_ok: false = vLLM can only serve this model with a quantized KV
-  //          cache (GLM-5.2's DSA path) -> the FP16 toggle is disabled.
+  //          cache (GLM-5.3's DSA path) -> the FP16 toggle is disabled.
   // params_prefill/attn_layers/attn_d: prefill-ceiling constants (research/
   //          prefill.md). params_prefill = parameters doing a GEMM per token
   //          (dense: total minus embeddings+lm_head; MoE: ACTIVE params — a
@@ -169,16 +169,26 @@ export const CONFIG = {
       attn_layers: 88, attn_d: 96*128,
       max_ctx: 262144,             // hard model max (YaRN x64 over a 4k base)
     },
-    "GLM52": {                     // research/model_glm52.md
-      name: "GLM-5.2 (MoE 744B-A40B, MLA+DSA)",
+    "GLM52": {                     // GLM-5.3 since 2026-09-06; research/model_glm53.md
+      // Every constant below was derived for GLM-5.2 (research/model_glm52.md).
+      // GLM-5.3 keeps them all: config.json agrees on 55 of 56 keys (the
+      // 56th is transformers_version) and the two official FP8 checkpoints
+      // hold the same 118,629 tensors with identical dtypes, shapes and
+      // bytes (755,632,050,320 B). Only the values differ. Two things are
+      // not carried by architecture and are flagged below: the MTP fit and
+      // the NVFP4 bytes. License changed: MIT -> "GLM-5.3 License" (MIT plus
+      // a security-review clause for >$10B-revenue Model-as-a-Service).
+      name: "GLM-5.3 (MoE 744B-A40B, MLA+DSA)",
       kv_bpt: 48408,               // 79 x 576 MLA latent + 22 x 132 indexer keys (fp8)
       deltanet_state: 0,           // MLA is cached attention, no recurrent state
       w_resident: 755.5e9,         // official FP8 ckpt: 753.3e9 params + BF16 excess
       w_decode_shared: 18.92e9,    // MLA + indexers + dense MLP + shared exp + lm_head
       w_route_pertok: 22649241600, // 8 experts x (3x6144x2048) x 75 MoE layers, FP8
       w_route_total: 724775731200, // 256 experts (saturates at n=32)
-      mtp: 1.7,                    // MTP module (5 drafts); transplanted fit, unmeasured
-      // nvidia/GLM-5.2-NVFP4: ONLY routed experts NVFP4 (matches ~465 GB recipe)
+      mtp: 1.7,                    // MTP module (5 drafts, same in the 5.3 recipe); transplanted fit, unmeasured
+      // PROJECTION: nvidia/GLM-5.2-NVFP4 (ONLY routed experts NVFP4, ~465 GB
+      // recipe) applied to tensor-identical weights. No NVIDIA NVFP4 of
+      // GLM-5.3 exists (2026-09-06).
       nvfp4_w: [464.8e9, 35.30e9, 12740198400, 407686348800],
       kv_decode_bpt: 2772,         // DSA: 21 indexer layers x 132 B per context token
       kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
@@ -268,7 +278,7 @@ export const CONFIG = {
     "27B":    { tb21: 213/267, aa: "qwen3-8-27b" },   // xhigh effort (the index run); 3.6 was 162/267
     "35BA3B": { tb21: 120/267, aa: "qwen3-6-35b-a3b" },
     "MM35":   { tb21: 135/267, aa: "mistral-medium-3-5" },
-    "GLM52":  { tb21: 208/267, aa: "glm-5-2" },
+    "GLM52":  { tb21: 224/267, aa: "glm-5-3" },   // max effort (the index run); 5.2 was 208/267
     "DSV4F":  { tb21: 210/267, aa: "deepseek-v4-flash" },
     "Q38FN":  { tb21: 230/267, aa: "qwen3-8-flash-next" },
     "GLM53F": { tb21: 225/267, aa: "glm-5-3-flash" },
@@ -448,7 +458,7 @@ export function tpEff(n, domain){
 }
 // DP x TP grid (mirrors topology_grid() in scenario_model.py). DP replicates
 // whole GROUPS of `tp` GPUs — the only way the models that fit no single GPU
-// (Mistral-Medium-3.5, GLM-5.2) can be data-parallel at all.
+// (Mistral-Medium-3.5, GLM-5.3) can be data-parallel at all.
 export function makeGrid(dp, tp, gpuKey){
   // mirror topology_grid()'s validation: a silently-accepted dp=0 would build a
   // zero-GPU topology whose pool still reads non-empty (the pool depends on tp)

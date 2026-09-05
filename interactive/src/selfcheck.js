@@ -101,10 +101,10 @@ export function unitChecks(){
   console.assert(kv_pool_tokens(CONFIG.MODELS["MM35"], makeGrid(4,2)) > 0,
     "MM35 DP4xTP2 on H200 must hold a real pool");
   console.assert(kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(2,4,"B300")) > 0,
-    "GLM-5.2 DP2xTP4 on B300 must hold a real pool");
+    "GLM-5.3 DP2xTP4 on B300 must hold a real pool");
   // widening TP raises the SYSTEM total: each DP group re-pays for the weights
   const sys = tp => tp>0 ? (8/tp)*kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(8/tp,tp,"B300")) : 0;
-  console.assert(sys(8) > sys(4), "GLM-5.2 TP8 must beat DP2xTP4 on system total");
+  console.assert(sys(8) > sys(4), "GLM-5.3 TP8 must beat DP2xTP4 on system total");
   // TP past the node's NVLink domain must cliff, not extrapolate
   for (const g of Object.values(CONFIG.GPUS))
     console.assert(g.nvlink_domain===8, "both parts are 8-GPU nodes");
@@ -151,7 +151,7 @@ export function unitChecks(){
   console.assert(gateThrew, "NVFP4 on H200 must throw (B300-only gate)");
   console.assert(kv_pool_tokens(glm, makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(glm, makeTopo("tp",8,"H200")) > 0,
-    "GLM-5.2 FP8 must not fit 1 GPU but fit 8xH200");
+    "GLM-5.3 FP8 must not fit 1 GPU but fit 8xH200");
   console.assert(kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",2,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"B300")) > 0,
@@ -227,7 +227,7 @@ export function unitChecks(){
     "Q38FN: FP16-KV and fp32-state toggles stay enabled (explicit flags)");
   // FP16-KV on the sparse path — exercises the REAL transform modelFor uses
   // (withKvDtype), not a local copy: pool bytes AND the top-k main-KV gathers
-  // double; the fp8 indexer scan does not; GLM-5.2 stays refused (identity)
+  // double; the fp8 indexer scan does not; GLM-5.3 stays refused (identity)
   const q38fp16 = withKvDtype(q38, "fp16");
   console.assert(q38fp16.kv_bpt === 2*q38.kv_bpt &&
                  q38fp16.kv_decode_const === 2*q38.kv_decode_const &&

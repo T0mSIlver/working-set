@@ -1,5 +1,9 @@
 # GLM-5.2 (744B-A40B, MLA + DeepSeek Sparse Attention) — parameterization note
 
+> **Superseded row (2026-09-06):** the study's `GLM52` row is now GLM-5.3
+> (`research/model_glm53.md`). Every derivation below still applies — the two
+> checkpoints share every tensor shape — and the code cites this note for it.
+
 **Purpose:** defensible KV-cache / decode-bandwidth constants for **GLM-5.2**
 (Z.ai / Zhipu, `zai-org/GLM-5.2`, MIT weights, released 2026-06) as used by
 `scripts/scenario_model.py` and the explorer.

@@ -85,7 +85,7 @@ export let frontierChartGeom = null;
 // name is ~25 characters and three of them stack at a 560-wide viewBox) and
 // the split as the DP×TP shorthand the split control uses
 const FRONTIER_SHORT = { "27B": "Qwen3.8-27B", "35BA3B": "35B-A3B", "MM35": "Mistral-Med-3.5",
-                         "GLM52": "GLM-5.2", "DSV4F": "DSv4-Flash", "Q38FN": "Q3.8-Flash",
+                         "GLM52": "GLM-5.3", "DSV4F": "DSv4-Flash", "Q38FN": "Q3.8-Flash",
                          "GLM53F": "G5.3-Flash" };
 // the row as the table and the tooltip print it: the model without its
 // architecture tag and the split in the TP/DP shorthand. r.label keeps the
