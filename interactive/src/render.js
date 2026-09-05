@@ -518,6 +518,13 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   slice();   // first slice runs inside the settle render, the rest queue behind it
 }
 
+// €/seat/month: the bill with the configuration carrying its max users,
+// divided by them. Infinity where there is no ceiling to fill.
+function seatPrice(op, topo, mo, f, wl, r){
+  if (!isFinite(op.limit) || op.limit < 1) return Infinity;
+  const rateMax = serverRate(op.limit, state.think, wl.sub_ratio) / r.reps;
+  return energyCost(topo, mo, f, rateMax, r.decodeUsers / r.reps).totalMonth / op.limit;
+}
 function assembleFrontier(wl, cs){
   const f = wl.invalidation;
   const rows = lastFrontier.base.map(r0=>{
@@ -526,15 +533,21 @@ function assembleFrontier(wl, cs){
     const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
     const mo2 = lastFrontierMo.mo[r.key]
              || (lastFrontierMo.mo[r.key] = prefillServiceMoments(m2, t2, wl, cs));
-    return { ...r,
-             op: operatingPoint(m2, t2, wl, cs, {
+    const op = operatingPoint(m2, t2, wl, cs, {
                mo: mo2, reps: r.reps,
-               warmUsers: r.warmUsers, decodeUsers: r.decodeUsers }),
+               warmUsers: r.warmUsers, decodeUsers: r.decodeUsers });
+    return { ...r, op,
              bstar: bStar(mo2, f, state.sla, r2),
              // the whole bill at YOUR load — hardware plus energy
              // (research/power.md) — comparable across rows because every
              // row is priced at the same demand and the same €/GPU-hour
-             eur: energyCost(t2, mo2, f, r2, r.decodeUsers / r.reps).totalMonth };
+             eur: energyCost(t2, mo2, f, r2, r.decodeUsers / r.reps).totalMonth,
+             // and the bill at the row's OWN ceiling, per seat: what one
+             // user costs when the configuration is full. At your load the
+             // bill is the GPU count and every row on a topology prices the
+             // same; at capacity a row that carries twice the users halves
+             // the seat. Chart H's y-axis (research/power.md for the terms)
+             eurSeat: seatPrice(op, t2, mo2, f, wl, r) };
   }).sort((a,b)=>b.op.limit-a.op.limit);
   const curKey = `${state.model}|${state.ngpu/state.tp}x${state.tp}`;
   renderFrontierTable(rows, curKey);

@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js';
+import { CONFIG, makeGrid } from './config.js';
 import { state } from './state.js';
 import { cssv, esc, fmt, linScale, logScale, logTicks, svgEl } from './svg.js';
 import { PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
@@ -20,7 +20,7 @@ export function renderFrontierTable(rows, curKey){
       + `<th class="num">latency</th><th class="num">saturation</th>` : '';
   const head = `<tr><th>configuration</th><th class="num">TB 2.1</th><th>your load</th><th class="num">max users</th>`
              + `<th>binds on</th><th class="num">headroom</th>${ceilHead}`
-             + `<th class="num">B*</th><th class="num">€/mo</th></tr>`;   // .num headers right-align over their digits
+             + `<th class="num">B*</th><th class="num">€/mo</th><th class="num">€/seat</th></tr>`;   // .num headers right-align over their digits
   const body = rows.map(r=>{
     const you = r.key===curKey ? ' class="you"' : '';
     const viable = r.op.limit >= 1;
@@ -38,7 +38,7 @@ export function renderFrontierTable(rows, curKey){
     // through every figure derived from it, not just the headline
     const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
     const q = frontierScore(r);
-    return `<tr${you}><td>${esc(r.label)}</td>`
+    return `<tr${you}><td>${esc(frontierRowName(r))}</td>`
          // the model's score, not the row's: every split of a model shares it
          + `<td class="num">${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</td>`
          + (viable
@@ -54,7 +54,9 @@ export function renderFrontierTable(rows, curKey){
          + ceilCells
          + `<td class="num">${fmt(r.bstar,1)}</td>`
          // energy is meaningful only where the load can actually be served
-         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td></tr>`;
+         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td>`
+         // chart H's y: the bill with the row full, per user it then carries
+         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable && isFinite(r.eurSeat) ? fmt(r.eurSeat,0) : '—'}</td></tr>`;
   }).join('');
   document.getElementById('frontierTable').innerHTML =
     `<div class="ftable-wrap"><table class="ftable">${head}${body}</table></div>`;
@@ -64,8 +66,11 @@ export function renderFrontierTable(rows, curKey){
    The table ranks by max users and prints a bill; the hardware line of
    the bill is a function of the GPU count alone, so users-vs-cost collapsed
    every row on one topology onto a band and said "run fewer GPUs". The buying question is
-   what a seat costs against what the model can do: y = the bill at YOUR
-   load divided by your users (log — seats span more than a decade), x =
+   what a seat costs against what the model can do: y = the bill with the
+   row FULL divided by the users it then carries — its €/seat at capacity
+   (log; seats span more than a decade). Not the bill at your load over your
+   users: that is the GPU count again, and every row on a topology would
+   price the same. x =
    the model's Terminal-Bench 2.1 score (research/terminal_bench.md; one
    value per model, so a model's rows stack in a column and the column is
    the price of the topology choice). The Pareto-efficient set (no other
@@ -81,6 +86,13 @@ export let frontierChartGeom = null;
 const FRONTIER_SHORT = { "27B": "Qwen3.6-27B", "35BA3B": "35B-A3B", "MM35": "Mistral-Med-3.5",
                          "GLM52": "GLM-5.2", "DSV4F": "DSv4-Flash", "Q38FN": "Q3.8-Flash",
                          "GLM53F": "G5.3-Flash" };
+// the row as the table and the tooltip print it: the model without its
+// architecture tag and the split in the TP/DP shorthand. r.label keeps the
+// Python-identical topology name (deploy card, harness, self-checks)
+export function frontierRowName(r){
+  return CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '') + ' · '
+       + makeGrid(r.dp, r.tp, state.gpu).name.replace(' tensor-par', ' TP').replace(' data-par', ' DP');
+}
 function frontierShortLabel(r){
   const m = FRONTIER_SHORT[r.mk] || CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '');
   const t = r.dp*r.tp === 1 ? '1 GPU' : r.dp === 1 ? `TP${r.tp}`
@@ -92,14 +104,14 @@ export function renderFrontierChart(rows, curKey){
   const box = document.getElementById('chartH'); if (!box) return;
   const tt = document.getElementById('ttH'); if (tt) tt.style.opacity = 0;
   const users = Math.max(1, state.users);
-  // a seat price needs a bill and a configuration that actually carries
-  // the load; rows short of it are named in-chart so the count agrees
-  const viable = rows.filter(r => isFinite(r.op.limit) && r.op.limit >= 1 && isFinite(r.eur) && r.eur > 0);
+  // a seat price needs a ceiling to fill; a configuration that cannot carry
+  // the load is not a choice and is counted in-chart rather than drawn
+  const viable = rows.filter(r => isFinite(r.op.limit) && r.op.limit >= 1 && isFinite(r.eurSeat) && r.eurSeat > 0);
   const carries = viable.filter(r => r.op.fits);
   const live = carries.filter(r => isFinite(frontierScore(r)));
   const over = viable.length - carries.length, unscored = carries.length - live.length;
   const notViable = rows.length - viable.length;
-  const perUser = r => r.eur / users;
+  const perUser = r => r.eurSeat;
   if (!live.length){
     const W=560,H=120;
     const why = carries.length ? `no configuration that carries ${fmt(users,0)} users has a Terminal-Bench score`
@@ -233,8 +245,8 @@ export function renderFrontierChart(rows, curKey){
   g+=`<text class="axtick" x="${mL+pw-4}" y="${mT+11}" text-anchor="end">${esc(notes.join(' · '))}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">Terminal-Bench 2.1, pass@1 (Artificial Analysis)</text>`;
-  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">€ per user per month at your load (log)</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">€ per seat per month, configuration full (log)</text>`;
   box.innerHTML = svgEl(g, W, H,
-    'Every configuration that carries the load as Terminal-Bench score versus monthly cost per user, with the Pareto-efficient set joined as a staircase');
+    'Every configuration that carries the load as Terminal-Bench score versus monthly cost per seat at capacity, with the Pareto-efficient set joined as a staircase');
   frontierChartGeom = { W,H,mL,mR,mT,pw,ph, pts, par, curKey };
 }

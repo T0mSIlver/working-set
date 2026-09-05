@@ -41,8 +41,7 @@ import { activeModel, computeAndRender, frontierDecodeDeferred, lastCS, lastDC,
 import { PLANNER_LABEL } from './planner.js';
 import { lastFlipAxes, renderFlipPanel } from './sensitivity.js';
 import { deployCmdText, lastDeploy, renderDeployCard } from './deploy.js';
-import { frontierChartGeom, frontierScore, lastFrontierCurKey, lastFrontierRows,
-         renderFrontierChart, renderFrontierTable } from './frontier.js';
+import { frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable } from './frontier.js';
 
 /* ============================================================================
    CONTROL WIRING
@@ -573,11 +572,12 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
     drawCross(svg, best.x, geom, [{ y: best.y, color: best.color, r: 6 }]);
     const r=best.r, on=geom.par.has(r);
     const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
-    tt.innerHTML=`<div class="tth">${esc(r.label)}${r.key===geom.curKey?' — yours':''}</div>`
+    tt.innerHTML=`<div class="tth">${esc(frontierRowName(r))}${r.key===geom.curKey?' — yours':''}</div>`
       +`<div class="row"><span class="sw" style="background:${best.color}"></span>binds on ${esc(PLANNER_LABEL[r.op.binding])} · ${on?'efficient':'dominated'}</div>`
       +`<div class="row">Terminal-Bench 2.1 <b class="tnum">${fmt(frontierScore(r)*100,1)}%</b></div>`
       // every plotted row carries the load (renderFrontierChart draws `live`
       // only), so the seat price always exists
+      +`<div class="row">€/seat/month, full <b class="tnum">${fmt(r.eurSeat,2)}</b></div>`
       +`<div class="row">€/user/month at your load <b class="tnum">${fmt(r.eur/Math.max(1,state.users),2)}</b></div>`
       +`<div class="row">€/month <b class="tnum">${fmt(r.eur,0)}</b> · max users <b class="tnum">${cen}${fmt(r.op.limit,0)}</b></div>`;
     const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();

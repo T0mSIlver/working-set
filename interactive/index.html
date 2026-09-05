@@ -176,7 +176,11 @@ input[type=range]::-moz-range-thumb{
 
 /* charts grid */
 .charts{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
-.charts + .charts{margin-top:14px}   /* stacked grids (E/F, E2/E3, E4) keep the grid's own gap */
+/* Vertical rhythm: every stacked block (chart grid, card, tiles) is 14 px
+   from the next. Cards carry it inline as margin-bottom; a chart grid gets it
+   here. A new block placed next to an existing one MUST have it — two cards
+   with rounded corners touching is the tell. */
+.charts + .charts, .charts + .panel{margin-top:14px}
 @media (max-width:820px){ .charts{grid-template-columns:1fr} }
 .card{padding:14px 16px 12px; overflow:hidden;}
 .card .ct{font-size:13.5px; font-weight:620; margin:0 0 1px}
@@ -702,8 +706,8 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
   <div class="charts solo">
     <div class="panel card">
-      <p class="ct">H · The frontier: what a user costs against what the model can do</p>
-      <p class="cs">Every configuration that can carry your load as one dot: its Terminal-Bench 2.1 score (one lab, one harness — Artificial Analysis) against what one user costs a month on it (hardware + electricity at your load, at your prices). Dots stacked at one score are the same model on different splits — the column is what the topology choice costs. The <b>staircase</b> joins the configurations nothing beats on both counts: for any capability floor, the cheapest seat. Dots off it are dimmed because some other row scores at least as high for no more money — bills within 1% count as the same money, so a dearer dot can win on score alone.</p>
+      <p class="ct">H · The frontier: what a seat costs against what the model can do</p>
+      <p class="cs">Every configuration that can carry your load as one dot: its Terminal-Bench 2.1 score (one lab, one harness — Artificial Analysis) against what one seat costs a month with the configuration <b>full</b> — the bill at its max users, divided by them (hardware + electricity, at your prices). Priced full rather than at your load because at your load the bill is just the GPU count; at capacity a row that carries twice the users halves the seat. Dots stacked at one score are the same model on different splits — the column is what the topology choice costs. The <b>staircase</b> joins the configurations nothing beats on both counts: for any capability floor, the cheapest seat. Dots off it are dimmed because some other row scores at least as high for no more money — bills within 1% count as the same money, so a dearer dot can win on score alone.</p>
       <div class="legend">
         <span class="li"><span class="sw dot" style="background:var(--s1)"></span>binds on cache</span>
         <span class="li"><span class="sw dot" style="background:var(--s4)"></span>decode</span>
@@ -718,7 +722,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
   </div>
 
   <div class="panel card" id="frontierCard">
-    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration) and at the <b>MBU slider's</b> decode efficiency, one value for every row — measured on one deployment; nothing here measures a dense one. Figures are system-wide users, per-group in parentheses for DP. TB 2.1 is the model's Terminal-Bench 2.1 pass@1 as Artificial Analysis measures it (one harness for every model; vendor cards are not comparable) — a model property, so every split of a model shares it. The €/mo column is the whole bill at your load — GPU-hours at your GPU price plus the electricity at your €/kWh — so two rows with the same headroom rarely bill the same.</p>
+    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration) and at the <b>MBU slider's</b> decode efficiency, one value for every row — measured on one deployment; nothing here measures a dense one. Figures are system-wide users, per-group in parentheses for DP. TB 2.1 is the model's Terminal-Bench 2.1 pass@1 as Artificial Analysis measures it (one harness for every model; vendor cards are not comparable) — a model property, so every split of a model shares it. The €/mo column is the whole bill at your load — GPU-hours at your GPU price plus the electricity at your €/kWh — so two rows with the same headroom rarely bill the same; €/seat is that bill with the row full, per user it then carries (chart H's y-axis).</p>
     <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
     <div id="frontierTable"></div>
   </div>
