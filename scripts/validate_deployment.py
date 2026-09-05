@@ -7,7 +7,7 @@
 # ///
 """
 Live-endpoint validation harness for the serving-capacity model
-(scripts/scenario_model.py; interactive/index.html mirrors it in JS).
+(scripts/scenario_model.py; interactive/src/*.js mirrors it in JS).
 
 The model predicts four ceilings for a configuration — cache (warm p5),
 decode (users at the tok/s floor), latency (users where a miss's mean TTFT
