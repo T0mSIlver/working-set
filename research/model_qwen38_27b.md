@@ -51,15 +51,13 @@ tokens, the MFU(chunk) anchor, decode MBU).
   model's, so it does not carry over by architecture. Kept at 2.94 and
   marked unmeasured; re-measure on a confirmed 3.8 deployment (the
   harness's per-position counters do this).
-- **Which checkpoint the production deployment ran — owner to confirm.**
-  `prefill.md` § "First measured calibration point (2026-08-27)" records
-  the MFU anchor on "a Qwen3.8-27B FP8-weight checkpoint"; `decode_mbu.md`,
-  one day later on what reads as the same 4×H200 TP4 deployment, records
-  Qwen3.6-27B. One of the two labels is likely wrong. If the deployment was
-  3.8, the MTP/MBU pair is a 3.8 measurement and the caveat above lifts; if
-  3.6, the MFU anchor's label in `prefill.md` needs correcting. Nothing
-  numeric depends on the answer (the two checkpoints are tensor-identical
-  in shape), only the provenance wording.
+- **Two deployments, not one.** The MFU anchor in `prefill.md` (2026-08-27)
+  was measured on a Qwen3.8-27B FP8 checkpoint on **2×A100 TP2** (FP8
+  weight-only on Ampere, BF16 compute); the decode MBU / MTP measurements in
+  `decode_mbu.md` (2026-08-28) on Qwen3.6-27B on **4×H200 TP4**. Both labels
+  are correct (owner, 2026-09-06). So the MTP/MBU pair remains a 3.6
+  measurement and the caveat above stands; the MFU anchor is the one
+  figure the study already holds on a 3.8 checkpoint.
 - **Reasoning effort ladder.** Qwen3.8-27B exposes effort levels; AA ran
   low (67.4%), medium (65.2%), xhigh (79.8%, the index run) and
   non-reasoning (49.1%). The ledger takes xhigh per the variant rule. The
