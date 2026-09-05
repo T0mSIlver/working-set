@@ -221,10 +221,15 @@ export function renderFrontierChart(rows, curKey){
   // money than every efficient row is empty, and the footer already holds
   // the axis title at the narrow width
   const notes = [`at ${fmt(users,0)} users`];
+  // the plan grid holds six DP x TP shapes; the split control offers every
+  // divisor, so a DP3 or TP6 selection matches no row and gets no ring —
+  // say so rather than leave the reader hunting for "you"
   const curOver = viable.some(r => r.key === curKey && !r.op.fits);
+  const curNotViable = rows.some(r => r.key === curKey && !viable.includes(r));
   if (over) notes.push(`${over} row${over>1?'s':''} cannot carry it${curOver?' (yours among them)':''}`);
   if (unscored) notes.push(`${unscored} unscored`);
-  if (notViable) notes.push(`${notViable} not viable`);
+  if (notViable) notes.push(`${notViable} not viable${curNotViable?' (yours among them)':''}`);
+  if (!rows.some(r => r.key === curKey)) notes.push('your split is not in the grid');
   g+=`<text class="axtick" x="${mL+pw-4}" y="${mT+11}" text-anchor="end">${esc(notes.join(' · '))}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">Terminal-Bench 2.1, pass@1 (Artificial Analysis)</text>`;
