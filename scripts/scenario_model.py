@@ -27,7 +27,7 @@ reproduce the baseline's measured 1xH200 + 27B pool of 2.77e6 KV tokens*, so
 the 27B/1-GPU path matches the original study by construction and the other
 configs fall out of the same arithmetic.
 
-The interactive viz (interactive/index.html) mirrors this math in JS; keep the
+The interactive viz (interactive/src/*.js) mirrors this math in JS; keep the
 two in sync.
 """
 from __future__ import annotations
@@ -2113,7 +2113,7 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     prefill_duty() is at 1.0 the queue is unbounded and no steady state exists
     upstream of this one. Check that first; the explorer does.
 
-    Mirrors steadyDecodePoint() in interactive/index.html.
+    Mirrors steadyDecodePoint() in interactive/src/prefill.js.
     """
     if rate_group < 0:
         raise ValueError(f"rate_group must be >= 0, got {rate_group!r}")
@@ -2402,7 +2402,7 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
 # trap): d_d is the decode demand the load implies against the decode capacity
 # at the 40 tok/s floor, capped at whatever prefill leaves.
 # P_total = n_gpu x (P_gpu + host) x PUE. Mirrors the explorer's powerDraw /
-# energyCost (interactive/index.html, "THE ELECTRICITY BILL") — same
+# energyCost (interactive/src/cost.js, "THE ELECTRICITY BILL") — same
 # arithmetic, same clamps, so the two cannot disagree.
 #
 # STATUS: mixed provenance, weaker than the capacity notes. TDPs and system

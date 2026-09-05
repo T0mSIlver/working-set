@@ -7,8 +7,8 @@ Embed scripts/validate_deployment.py into the explorer.
 
 The explorer's "Test these hypotheses" button hands out the validation
 harness with its CONFIG block rewritten from the live controls. The page is
-a single dependency-free file that must also work from file://, so the
-harness travels INSIDE it — as a JSON string literal (no template-literal
+dependency-free and fetches nothing at run time, so the harness travels
+INSIDE its harness module — as a JSON string literal (no template-literal
 escaping hazards: the Python source contains both backticks and `${`).
 
 This script is the only writer of that string. Run it after every edit to
@@ -26,7 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = ROOT / "scripts" / "validate_deployment.py"
-PAGE = ROOT / "interactive" / "index.html"
+PAGE = ROOT / "interactive" / "src" / "harness.js"
 BEGIN, END = "/* @@HARNESS_EMBED_BEGIN@@ */", "/* @@HARNESS_EMBED_END@@ */"
 
 

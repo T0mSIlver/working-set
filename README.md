@@ -38,7 +38,14 @@ the real limits.
   ```
 
 - [research/](research/) — sourced constants for each model and GPU.
-- [interactive/index.html](interactive/index.html) — the explorer, a single
-  dependency-free page mirroring the Python model.
+- [interactive/](interactive/) — the explorer, a dependency-free page
+  mirroring the Python model: `index.html` holds the markup and styles,
+  `src/*.js` the model and the charts as ES modules (`src/main.js` is the
+  entry and lists the layering). Browsers refuse module scripts from
+  `file://`, so serve the folder to open it locally:
+
+  ```sh
+  python3 -m http.server 8000 --directory interactive   # then http://localhost:8000
+  ```
 
 Method, calibration, and caveats are laid out in the docs above.
