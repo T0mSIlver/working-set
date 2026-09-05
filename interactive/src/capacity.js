@@ -186,7 +186,7 @@ export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   const p5=[], p50=[], p95=[], agg=[];
   const buf = new Float64Array(n_iter);
   // dense attention reads the whole cache (kv_bpt per context token); a
-  // sparse-attention model (GLM-5.2/DSA) reads kv_decode_bpt per context
+  // sparse-attention model (GLM-5.3/DSA) reads kv_decode_bpt per context
   // token (indexer scan) plus the length-capped top-k read per sequence
   const kvReadBpt = model.kv_decode_bpt ?? model.kv_bpt;
   const perTok = topk ? model.kv_decode_const/topk : 0;

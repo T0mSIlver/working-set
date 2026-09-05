@@ -345,7 +345,7 @@ def main():
         _, b, _, _ = M.decode_curves(m4, t_b1, w0, [n], n_iter=2000)
         print(f"  mns={n:3d}  fp8={a[0]:6.0f}  nvfp4={b[0]:6.0f}  ({(b[0] / a[0] - 1) * 100:+.0f}%)")
 
-    print("\n== GLM-5.2 sparse-attention decode: DSA pricing vs dense-read pricing ==")
+    print("\n== GLM-5.3 sparse-attention decode: DSA pricing vs dense-read pricing ==")
     print("  DSA reads top-2048 tokens/layer + an indexer scan instead of the full")
     print("  cache; the dense-read row shows what the same bytes would cost if")
     print("  decode streamed the whole cache (the study's default pricing).")
@@ -396,7 +396,7 @@ def main():
 
     print("\n== max_seq_len cap sweep to 1M (35B-A3B, TP2, warm p5/p50) ==")
     print("  the allowed cap now extends to 1,048,576 for the Qwens (YaRN) and")
-    print("  GLM-5.2; Mistral-Medium-3.5's hard model max stays 262,144 and the")
+    print("  GLM-5.3; Mistral-Medium-3.5's hard model max stays 262,144 and the")
     print("  model raises on a larger cap. Raising the cap admits ever-larger")
     print("  log-normal tail sessions, so capacity keeps falling past 262k:")
     for cap in (180_000, 262_144, 524_288, 1_048_576):
@@ -405,7 +405,7 @@ def main():
         print(f"  cap={cap:>9,}  {p5:5.0f} / {p50:5.0f}")
 
     print("\n== DP x TP splits of ONE 8-GPU node (fp8 weights, fp8 KV) ==")
-    print("  MM35 and GLM-5.2 fit no single H200 (min TP 2 and 7), so pure DP -")
+    print("  MM35 and GLM-5.3 fit no single H200 (min TP 2 and 7), so pure DP -")
     print("  N independent SINGLE GPUs - is not a deployment that exists there:")
     print("  the whole DP axis reports a 0 pool. Data parallelism then means")
     print("  replicating whole TP GROUPS, which the grid now expresses. (MM35 on")
@@ -521,7 +521,7 @@ def prefill_tables():
           f"{M.mean_context(w0) / 1e3:.1f}k, warm turn {TURN / 1e3:.0f}k) ==")
     print("  thrash = machine time of a cache MISS / a cache HIT. Invariant to MFU")
     print("  and to the GPU part (both cancel), NOT to the attention model: the")
-    print("  GLM-5.2 row prices MLA as dense attention (a flagged upper bound), so")
+    print("  GLM-5.3 row prices MLA as dense attention (a flagged upper bound), so")
     print("  its ratio inherits that pessimism. A hit is charged its attention over")
     print("  the cached context (linear in E[L]); a miss re-pays the full quadratic.")
     print("  ITLx   = what the OTHER users see: a chunk lands in their batch and")

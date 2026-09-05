@@ -100,7 +100,7 @@ export const CONFIG = {
   //          read per CONTEXT token / per ACTIVE SEQUENCE per step. Dense-
   //          attention models omit them (decode reads the full cache at kv_bpt).
   // kv_fp16_ok: false = vLLM can only serve this model with a quantized KV
-  //          cache (GLM-5.2's DSA path) -> the FP16 toggle is disabled.
+  //          cache (GLM-5.3's DSA path) -> the FP16 toggle is disabled.
   // params_prefill/attn_layers/attn_d: prefill-ceiling constants (research/
   //          prefill.md). params_prefill = parameters doing a GEMM per token
   //          (dense: total minus embeddings+lm_head; MoE: ACTIVE params — a
@@ -458,7 +458,7 @@ export function tpEff(n, domain){
 }
 // DP x TP grid (mirrors topology_grid() in scenario_model.py). DP replicates
 // whole GROUPS of `tp` GPUs — the only way the models that fit no single GPU
-// (Mistral-Medium-3.5, GLM-5.2) can be data-parallel at all.
+// (Mistral-Medium-3.5, GLM-5.3) can be data-parallel at all.
 export function makeGrid(dp, tp, gpuKey){
   // mirror topology_grid()'s validation: a silently-accepted dp=0 would build a
   // zero-GPU topology whose pool still reads non-empty (the pool depends on tp)

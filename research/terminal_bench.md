@@ -31,7 +31,7 @@ measured, and a per-arm guess would rank the frontier on the guess.
 ## 2. Ledger
 
 Read from the per-model pages' embedded dataset (`terminalbenchV21` field),
-2026-09-05. Percent = runs passed / 267.
+2026-09-05 (the `glm-5-3` row 2026-09-06). Percent = runs passed / 267.
 
 | Explorer key | AA slug | AA name | TB 2.1 | runs | AA release date |
 |---|---|---|---|---|---|
