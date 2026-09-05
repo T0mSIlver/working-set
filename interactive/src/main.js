@@ -163,7 +163,7 @@ function enforceConstraints(){
     ? "Slack between a checkpoint's stated bytes and the server's real resident footprint. This model's figure is raw/on-disk — an under-estimate by an unknown margin; +15% is the one calibrated data point (the 27B's as-deployed 28.8 GiB vs its raw params), transferred here as an extrapolation."
     : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Its NVFP4 figure is a measured checkpoint total under the same convention, so the knob stays disabled on this model.");
   const modelTips = {
-    "27B": "Qwen3.6-27B — dense hybrid, the calibrated baseline: 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.",
+    "27B": "Qwen3.8-27B — dense hybrid, the calibrated baseline (measured on Qwen3.6-27B, whose checkpoint is tensor-for-tensor the same shape): 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.",
     "35BA3B": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN.",
     "MM35": "Mistral-Medium-3.5-128B — dense, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B), the study's KV-hungriest model. No MTP module: speculative default 1.0× (external EAGLE draft unmeasured). Hard 262k context max.",
     "GLM52": "GLM-5.2 — 744B-A40B MLA+DSA: 47.3 KiB/token stored, but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context.",
@@ -341,7 +341,7 @@ function syncLabels(){
   // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
   // per-draft acceptance — the base quantity the speedup is computed from
   const acc = state.mtp<=1 ? 0 : (Math.sqrt(4*state.mtp-3)-1)/2;
-  // α inverts the 2-draft MTP model — exact for the Qwen3.6 pair only.
+  // α inverts the 2-draft MTP model — exact for the two 2-draft Qwen models only.
   // GLM-5.2 drafts 5 tokens, DSv4-Flash 7, Q3.8-Flash-Next 3, and Mistral
   // has no MTP module (its slider models EAGLE) — indicative on all of those.
   const aNote = state.model==="GLM52" ? ' GLM-5.2 drafts 5 tokens — α is indicative only.'

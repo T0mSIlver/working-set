@@ -357,8 +357,11 @@ MODELS = {
     # Baseline dense sibling — numbers straight from the original study. The
     # published Qwen3.6-27B config (64 layers, interval 4 -> 16 full-attn x
     # 4 KV heads x 256) reproduces the baseline's 32 KiB/token exactly.
+    # Named Qwen3.8-27B since 2026-09-05: its config and its FP8 checkpoint
+    # (1,606 tensors, dtypes and shapes) are identical to Qwen3.6-27B's, so
+    # every constant carries over; mtp is unmeasured on it (see the note).
     "27B": Model(
-        name="Qwen3.6-27B (dense)",
+        name="Qwen3.8-27B (dense)",
         kv_bpt=32 * KIB,                 # 16 attn layers x 4 KV heads x 256 x 2(K,V) x 1B
         deltanet_state=75 * MIB,         # baseline's 75 MiB; bf16 arithmetic (48 DN layers x
                                          # 48 vheads x 128x128 + conv) gives 75.7 MiB

@@ -69,7 +69,7 @@ CONFIG = {
     # The explorer replaces this whole block with the configuration on screen.
     "endpoint": {
         "base_url": "http://localhost:8000/v1",
-        "model": "Qwen/Qwen3.6-27B-FP8",
+        "model": "Qwen/Qwen3.8-27B-FP8",
         "api_key_env": "VLLM_API_KEY",       # env var NAME, not the key itself
     },
     # what the server under test was started with. Informational: nothing is
