@@ -22,6 +22,21 @@ that generates a standalone load-test script
 with the on-screen predictions — run it against a live vLLM endpoint to find
 the real limits.
 
+## The `workingset` package
+
+The model behind the explorer is a Python package (`src/workingset/`, the
+source of truth; the explorer's JS mirrors it). It ships a CLI:
+
+```bash
+uv run ws init --model Q38FN --gpu B300 --tp 8 --weight-dtype nvfp4   # writes workingset.toml
+uv run ws predict workingset.toml        # the four ceilings, which one binds, the operating point
+uv run ws predict workingset.toml --json # the same as a run record
+uv run ws models                         # model / GPU keys
+uv run pytest                            # self-checks + config round-trips
+```
+
+`ws predict` also reads a downloaded `validate_deployment.py` (its CONFIG block).
+
 ## Contents
 
 - [docs/writeup.md](docs/writeup.md) — baseline study: KV-cache capacity and
@@ -32,7 +47,7 @@ the real limits.
 - [scripts/](scripts/) — everything is reproducible:
 
   ```bash
-  uv run scripts/scenario_model.py   # shared model + self-checks
+  uv run ws selfcheck                # the shared model's self-checks (src/workingset/model.py)
   uv run scripts/scenarios.py        # renders the scenario figures
   uv run scripts/tables.py           # regenerates every number in docs/scenarios.md
   ```
