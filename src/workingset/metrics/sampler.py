@@ -875,15 +875,27 @@ class MetricsSampler:
             return False
 
     # ---- the loop --------------------------------------------------------
-    def _now(self) -> float:
-        """Wall-clock seconds that never runs backwards.
+    def now(self) -> float:
+        """THIS SAMPLER'S CLOCK, in wall-clock seconds that never run
+        backwards.
 
         `time.time()` can step back (NTP), which would break the sort and
         the bisect that every window depends on. Anchoring an offset from
         `time.monotonic()` to one wall reading keeps timestamps comparable
         with a caller's own `time.time()` while staying ordered.
+
+        PUBLIC because it is the only correct source of the `t` a caller
+        hands to `at()` or `window()`. Every snapshot is stamped with it, so
+        a caller timing its own work against `time.monotonic()` (which the
+        probe layer does, for span arithmetic) must convert through this and
+        not through its own clock -- the two differ by the unix epoch, and
+        asking for a monotonic instant lands before the whole series.
         """
         return self._epoch_wall + (time.monotonic() - self._epoch_mono)
+
+    # the private spelling this had before it needed to be part of the
+    # sampler's contract; kept so an existing caller does not break
+    _now = now
 
     async def _loop(self) -> None:
         try:
@@ -995,7 +1007,8 @@ class MetricsSampler:
 
     def at(self, t: float) -> Snapshot:
         """The nearest successful snapshot at or before `t` -- the covariate
-        reading to attach to an event that happened at `t`. Falls back to the
+        reading to attach to an event that happened at `t`. `t` is in THIS
+        SAMPLER'S base (`now()`), not `time.monotonic()`. Falls back to the
         first snapshot when `t` precedes the series."""
         ok = self._sorted_ok()
         if not ok:
@@ -1003,6 +1016,29 @@ class MetricsSampler:
             raise ValueError("no successful snapshots yet")
         i = bisect.bisect_right([s.t for s in ok], t) - 1
         return ok[i] if i >= 0 else ok[0]
+
+    def gauges_at(self, t: float) -> dict[str, float | None]:
+        """The SEMANTIC gauges as of `t` -- what a caller attaching covariates
+        to one request actually wants.
+
+        `at()` hands back a raw `Snapshot`, which is the archive format: a
+        list of parsed `/metrics` lines whose names are engine-specific
+        (`vllm:num_requests_running`). The semantic names only exist through
+        an adapter, so a consumer that read a Snapshot's attributes looking
+        for `requests_running` found nothing and recorded an empty covariate
+        set -- silently, since a snapshot WAS returned. This is the accessor
+        that resolves them, so no consumer has to know the engine's spelling.
+
+        Units: requests for `requests_running` / `requests_waiting`, FRACTION
+        in [0, 1] for `kv_cache_usage`. A key the server does not export is
+        None, never 0 -- an unexported queue is not an empty one.
+        """
+        snap = self.at(t)
+        ad = self.adapter or detect_adapter(snap.samples, engine=self.engine)
+        return {"t": snap.t,
+                "requests_running": ad.gauge(snap.samples, "requests_running"),
+                "requests_waiting": ad.gauge(snap.samples, "requests_waiting"),
+                "kv_cache_usage": ad.gauge(snap.samples, "kv_cache_usage")}
 
     def window(self, t0: float | None = None, t1: float | None = None) -> WindowDelta:
         """Deltas and gauge stats over [t0, t1], bounded by snapshots that

@@ -53,10 +53,10 @@ the four gates it failed. A plain sample with no covariates attached — no
 Units, everywhere in this module: seconds for TTFT and durations,
 MILLISECONDS for inter-token gaps, tokens/second for decode rates,
 KILOTOKENS for `L`, requests for `running`/`waiting`, fraction for
-`kv_usage`. Wall-clock timestamps handed to a metrics sampler are UNIX
-seconds (`time.time()`), which is the clock `MetricsSampler` stamps its
-snapshots with; `RequestTrace.t_send` stays `time.monotonic()` because the
-probe layer does span arithmetic with it.
+`kv_usage`. Every instant handed to a metrics sampler comes from
+`probe.request.sampler_now`, which reads the SAMPLER's own clock;
+`RequestTrace.t_send` stays `time.monotonic()` because the probe layer does
+span arithmetic with it, and the two bases differ by the unix epoch.
 
 No modelling happens here. Every predicted quantity is fetched from
 `workingset.predict` / `workingset.model`.
@@ -73,7 +73,8 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 
 from .probe.population import Sample, eval_sample
-from .probe.request import RequestTrace, _covariates, _plain, send_request
+from .probe.request import (RequestTrace, _covariates, sampler_now,
+                           send_request, window_dict)
 from .probe.session import make_text
 from .probe.stats import pct
 
@@ -884,7 +885,7 @@ async def cross_check(metrics, t0: float, t1: float,
         return {"t0": t0, "t1": t1,
                 "error": f"{type(e).__name__}: {e}"[:300]}
 
-    out: dict = {"t0": t0, "t1": t1, "window": _plain_window(w)}
+    out: dict = {"t0": t0, "t1": t1, "window": window_dict(w)}
     out.update(_server_quantiles(w))
     ok = [t for t in traces if not t.error and t.ttft is not None]
     miss = [t for t in ok if t.kind in ("miss", "first")]
@@ -932,16 +933,6 @@ def _server_quantiles(w) -> dict:
     if hr is not None:
         out["prefix_hit_rate"] = _f(hr)
     return out
-
-
-def _plain_window(w) -> dict | None:
-    d = getattr(w, "to_dict", None)
-    if d is not None:
-        try:
-            return d()
-        except Exception:                       # noqa: BLE001
-            return None
-    return _plain(w)
 
 
 # ============================================================================
@@ -1125,7 +1116,7 @@ async def _one(client, ep, opts, gov: ProbeGovernor, metrics, traces: list,
         gov.raise_if_aborted()
         # the gauges as of NOW, before we add to them. Wall clock: that is
         # what a MetricsSampler stamps its snapshots with.
-        gov.observe(_covariates(metrics, time.time()))
+        gov.observe(_covariates(metrics, sampler_now(metrics)))
         tr = RequestTrace(uid=900_001, is_sub=False, kind=kind,
                           t_send=time.monotonic(), ptok_intended=intended)
         traces.append(tr)
@@ -1153,7 +1144,7 @@ async def _watchdog(gov: ProbeGovernor, metrics, stop: asyncio.Event) -> None:
     """Read the server's gauges on their own timer, so a rail can fire
     between two of our requests — "at any tick", not "at any send"."""
     while not stop.is_set():
-        gov.observe(_covariates(metrics, time.time()))
+        gov.observe(_covariates(metrics, sampler_now(metrics)))
         try:
             await asyncio.wait_for(stop.wait(), gov.budget.gauge_poll_s)
         except asyncio.TimeoutError:
@@ -1184,7 +1175,7 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
                       for f in sopts.length_fractions()})
     stop = asyncio.Event()
     side: list[asyncio.Task] = []
-    t_start = time.time()
+    t_start = sampler_now(metrics)
 
     if budget.canary:
         side.append(asyncio.create_task(
@@ -1203,7 +1194,7 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
             if time.monotonic() >= deadline:
                 break
             on_progress("shared-round", (r + 1, len(lengths)))
-            t_round, i0 = time.time(), len(traces)
+            t_round, i0 = sampler_now(metrics), len(traces)
             for n_tok in lengths:
                 await _one(client, ep, opts, gov, metrics, traces,
                            _miss_prompt(rng, prefixes.user, floor, n_tok, cpt),
@@ -1227,7 +1218,8 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
             # the same stretch of time, so it must not be handed traces from
             # outside it. Canaries are excluded — they are the safety signal,
             # not part of the measurement.
-            w = await cross_check(metrics, t_round, time.time(),
+            w = await cross_check(metrics, t_round,
+                                  sampler_now(metrics),
                                   [t for t in traces[i0:]
                                    if t.kind != "canary"])
             if w is not None:
@@ -1248,7 +1240,7 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
 
     result = _assemble(cfg, opts, sopts, gov, traces, windows, lengths)
     result.cross = await cross_check(
-        metrics, t_start, time.time(),
+        metrics, t_start, sampler_now(metrics),
         [t for t in traces if t.kind != "canary"])
     if abort is not None:
         result.aborted = abort.reason

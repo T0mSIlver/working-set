@@ -1003,3 +1003,41 @@ def test_flags_override_one_rail_at_a_time(tmp_path, capsys):
     assert "at most 6 of our requests" in out
     assert "requests_waiting > 12" in out
     assert "canary         : off" in out
+
+
+# ============================================================================
+# the real sampler, not a double
+# ============================================================================
+def test_the_shared_probe_stamps_real_gauges_off_a_real_sampler():
+    """End to end over `MetricsSampler` itself: the clock conversion AND the
+    semantic-gauge lookup have to both be right, or every request records an
+    empty covariate set and the whole fit silently rests on nothing."""
+    from test_metrics import FakeServer, _until
+
+    from workingset.metrics import MetricsSampler
+
+    cfg, opts = small_cfg(), small_opts()
+
+    async def go():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            await _until(lambda: len(s) >= 3)
+            async with client_for(fake_server()) as client:
+                return await run_shared(
+                    client, EndpointSpec(base_url="http://x/v1", model="m"),
+                    cfg, opts,
+                    build_prefixes(cfg.workload, opts.chars_per_token),
+                    budget(abort_if_waiting=None, abort_if_kv_above=None),
+                    shared_opts(rounds=4), s)
+
+    res = asyncio.run(go())
+    assert res.n_covariate_rows > 0, "no request carried a load stamp"
+    running = [r["running"] for r in covariate_rows(res.sample.traces)]
+    assert all(v is not None for v in running)
+    # the fake's gauge counts scrapes, so a covariate that never moved would
+    # mean every request read the same snapshot
+    assert len(set(running)) > 1, running
+    # and the governor saw those same gauges, so the rails were live
+    assert res.governor["n_gauge_checks"] > 0
+    assert res.governor["peak_kv_cache_usage"] is not None
