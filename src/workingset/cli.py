@@ -212,6 +212,66 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a gap at or above this counts as a FREEZE "
                         "(default 100). Keep it BELOW the smaller predicted "
                         "freeze; the freeze ladder is threshold-free.")
+    # --- shared-endpoint safety rails ------------------------------------
+    # These bind WITHOUT --exclusive, where the endpoint belongs to somebody
+    # else. Each defaults to the conservative value in
+    # `shared.ProbeBudget.conservative()`; --exclusive takes them all off.
+    g = p.add_argument_group(
+        "shared-endpoint safety rails",
+        "Bind without --exclusive. Any rail that trips aborts the run, "
+        "records the reason and exits non-zero.")
+    g.add_argument("--max-extra-load", type=int, metavar="N",
+                   help="never more than N of OUR requests in flight, canary "
+                        "included (default 2; 0 = no cap)")
+    g.add_argument("--abort-if-waiting", type=float, metavar="N",
+                   help="abort when the server's requests_waiting gauge "
+                        "exceeds N (default 0, i.e. abort on any queue). "
+                        "Needs --metrics-url")
+    g.add_argument("--abort-if-kv-above", type=float, metavar="F",
+                   help="abort when KV occupancy exceeds this fraction "
+                        "(default 0.90). Needs --metrics-url")
+    g.add_argument("--max-probe-tokens", type=int, metavar="T",
+                   help="total intended prompt tokens the run may send "
+                        "(default 2,000,000; 0 = no cap)")
+    g.add_argument("--no-canary", action="store_true",
+                   help="drop the periodic 1-token canary (it is the only "
+                        "contention signal when no --metrics-url is given)")
+    g.add_argument("--canary-every-s", type=float, metavar="S")
+    g.add_argument("--canary-baseline-s", type=float, metavar="S",
+                   help="the run's first S seconds set the canary baseline "
+                        "p50 (default 60)")
+    g.add_argument("--canary-window-s", type=float, metavar="S",
+                   help="trailing window the canary p50 is compared over "
+                        "(default 60)")
+    g.add_argument("--canary-drift", type=float, metavar="X",
+                   help="abort when the trailing canary p50 exceeds X times "
+                        "the baseline p50 (default 3.0)")
+    g.add_argument("--canary-min-n", type=int, metavar="N",
+                   help="samples each canary window needs before the drift "
+                        "rule can fire (default 5)")
+    # --- shared-endpoint covariate fit -----------------------------------
+    g = p.add_argument_group(
+        "shared-endpoint covariate fit",
+        "Other people's traffic is a covariate, not noise: the probe stamps "
+        "every request with the server's load and regresses it out.")
+    g.add_argument("--shared-lengths", metavar="F,F,...",
+                   help="prompt lengths to probe, as fractions of the context "
+                        "cap (default 0.1,0.25,0.5,0.75,1.0)")
+    g.add_argument("--shared-rounds", type=int, metavar="N",
+                   help="passes over the prompt-length ladder (default 3)")
+    g.add_argument("--shared-warm-turns", type=int, metavar="N",
+                   help="warm prefix-hit turns per round (default 2)")
+    g.add_argument("--shared-ladder", action="store_true",
+                   help="run for --shared-duration-s cycling the lengths, and "
+                        "report TTFT/ITL binned by the concurrency the server "
+                        "happened to be carrying")
+    g.add_argument("--shared-duration-s", type=float, metavar="S",
+                   help="length of a --shared-ladder run (default 300)")
+    g.add_argument("--max-extrapolation", type=float, metavar="SD",
+                   help="a fitted verdict is refused when the operating point "
+                        "lies more than SD observed standard deviations "
+                        "outside the probed range of any regressor "
+                        "(default 1.0)")
     p.add_argument("--seed", type=int, help="probe RNG seed")
     p.add_argument("--no-ignore-eos", action="store_true",
                    help="drop the vLLM ignore_eos extension (strict OpenAI "

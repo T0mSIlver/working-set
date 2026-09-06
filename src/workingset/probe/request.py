@@ -279,7 +279,13 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
 
     t0 = time.monotonic()
     trace.t_send = t0
-    trace.covariates = _covariates(metrics, t0)
+    # WALL clock for the sampler, monotonic for the trace. `t_send` does span
+    # arithmetic and must not step backwards; a metrics sampler stamps its
+    # snapshots with `time.time()`, and asking it for a MONOTONIC instant
+    # (uptime seconds, ~3 orders of magnitude smaller than a unix time) always
+    # landed before the whole series, so every request got the FIRST snapshot's
+    # gauges instead of its own. Shared mode fits on these numbers.
+    trace.covariates = _covariates(metrics, time.time())
     t_first = t_last = None
     n_chunks, text, usage = 0, [], None
     gaps: list[float] = []

@@ -119,8 +119,10 @@ def test_shared_mode_skips_every_exclusive_hypothesis():
     assert set(skipped) == {"H-cache", "H-decode", "H-latency",
                             "H-saturation", "H-binding", "H-burst"}
     assert "--exclusive" in skipped["H-cache"]
-    # the ladder is not run, so the cheap ones fall back to their own sample
-    assert p.probes == {"sample"} and not p.run_ladder
+    # the ladder is not run, so the cheap ones fall back to their own sample —
+    # which in shared mode is the SHARED probe (the same handful of requests,
+    # plus covariate stamping and the safety rails), never both
+    assert p.probes == {"shared"} and not p.run_ladder
 
 
 def test_exclusive_mode_runs_the_ladder_once_for_all_of_them():
