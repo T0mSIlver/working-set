@@ -89,10 +89,14 @@ def cmd_init(args) -> int:
     cfg = _apply_overrides(RunConfig(), args)
     cfg.validate()
     text = cfg.dumps("json" if args.json else "toml")
-    if args.output and args.output != "-":
-        with open(args.output, "w", encoding="utf-8") as f:
+    # the default name follows the format: `ws init --json` writing JSON into
+    # workingset.toml left the next `ws predict` failing on a TOML parse
+    out = args.output if args.output is not None else (
+        "workingset.json" if args.json else "workingset.toml")
+    if out and out != "-":
+        with open(out, "w", encoding="utf-8") as f:
             f.write(text)
-        print(f"wrote {args.output}")
+        print(f"wrote {out}")
     else:
         sys.stdout.write(text)
     return 0
@@ -148,7 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_predict)
 
     p = sub.add_parser("init", help="write a starter config")
-    p.add_argument("-o", "--output", default="workingset.toml")
+    p.add_argument("-o", "--output", default=None,
+                   help="output path ('-' for stdout); default "
+                        "workingset.toml, or workingset.json with --json")
     p.add_argument("--json", action="store_true")
     _add_deploy_flags(p)
     p.set_defaults(fn=cmd_init)
