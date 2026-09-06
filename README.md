@@ -17,10 +17,8 @@ would flip the decision, the **steady-state decode point** (how many
 sessions are actually decoding at your load, and how fast each one runs —
 Little's law, not the all-warm stress test), **shareable links** that
 encode the whole configuration, and a **"Test these hypotheses" button**
-that generates a standalone load-test script
-([`scripts/validate_deployment.py`](scripts/validate_deployment.py)) preloaded
-with the on-screen predictions — run it against a live vLLM endpoint to find
-the real limits.
+that hands out the configuration on screen as a `workingset.toml` — feed it to
+`ws test` below and measure the real limits on a live vLLM endpoint.
 
 ## The `workingset` package
 
@@ -39,16 +37,31 @@ uv run ws models                         # model / GPU keys
 uv run pytest                            # self-checks + config round-trips
 ```
 
-`ws predict` also reads a downloaded `validate_deployment.py` (its CONFIG block).
+No checkout needed — the explorer's `workingset.toml` runs straight off PyPI
+(the package publishes one console script, `ws`, so the package name travels in
+`--from`):
+
+```bash
+uvx --from workingset ws predict workingset.toml
+uvx --from workingset ws test workingset.toml --dry-run
+uvx --from workingset ws test workingset.toml --all --exclusive --out run.json
+```
+
+Until the PyPI release, read the package straight from git:
+`uvx --from git+https://github.com/T0mSIlver/working-set ws predict workingset.toml`.
+
+Predictions live in no file: `ws predict` recomputes them from the config every
+time, so a config can never carry a number the code did not produce. A harness
+`.py` downloaded from the explorer before the package existed still loads (its
+CONFIG block is extracted).
 
 `ws test` puts the predictions to a live endpoint, one falsifiable hypothesis
 at a time. Without `--exclusive` it runs only the hypotheses that need a
 handful of requests (miss TTFT, the inter-token gap distribution, the steady
 decode point) and lists the rest as skipped — a hypothesis that has to
 generate its own population is never measured against someone else's load.
-With `--exclusive` it drives the geometric load ladder that
-`scripts/validate_deployment.py` drives, once, and every ceiling reads from
-it. `--burst N` adds the correlated-flush probe (B*).
+With `--exclusive` it drives the geometric load ladder once, and every ceiling
+reads from it. `--burst N` adds the correlated-flush probe (B*).
 
 ## Contents
 

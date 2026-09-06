@@ -5,7 +5,7 @@ carry `requires = {"exclusive"}`. They share one ladder: the `RunContext`
 runs it once and each reads the bracket it cares about.
 
 Verdict logic ported from `print_report`'s PREDICTED vs MEASURED block in
-scripts/validate_deployment.py, statement text from `harnessHypotheses` in
+the retired standalone harness, statement text from `harnessHypotheses` in
 interactive/src/harness.js.
 """
 from __future__ import annotations

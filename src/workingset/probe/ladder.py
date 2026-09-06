@@ -1,6 +1,6 @@
 """The geometric load ladder bracketing a predicted limit.
 
-Ported from `build_ladder` in scripts/validate_deployment.py.
+Ported from `build_ladder` in the retired standalone harness.
 """
 from __future__ import annotations
 

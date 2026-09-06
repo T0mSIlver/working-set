@@ -62,7 +62,7 @@ class HBurst(Hypothesis):
                            "run with --burst N --exclusive to probe the "
                            "correlated-flush tolerance")
         n, budget = m.data["n"], m.data["ttft_budget_s"]
-        # DEVIATION from scripts/validate_deployment.py, which scored the max
+        # DEVIATION from the retired standalone harness, which scored the max
         # TTFT over the requests that ANSWERED. B* is about a flush of N: with
         # a failure among them, "last first-token" is the drain of a burst of
         # n_ok, and a burst that half failed could report support because the

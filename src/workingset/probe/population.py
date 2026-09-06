@@ -1,7 +1,7 @@
 """The closed-loop population: N sessions thinking, sending and streaming.
 
 Ported from `user_loop`, `run_rung` and `eval_rung` in
-scripts/validate_deployment.py. `eval_rung` is a PURE function of the traces
+the retired standalone harness. `eval_rung` is a PURE function of the traces
 and the measure-window start, so a rung's statistics can be (and are) tested
 on synthetic traces without an endpoint.
 

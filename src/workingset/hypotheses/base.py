@@ -17,7 +17,7 @@ STATUSES
   not_established  the run does not separate this ceiling from the others, or
                    the measurement's own validity guards did not clear
 
-DEVIATION from scripts/validate_deployment.py: the harness has three glyphs
+DEVIATION from the retired standalone harness: it had three glyphs
 (✓ ~ ✗) and prints "lower bound only" in the note column. `bounded_below` is
 that note promoted to a status, so a machine reading the record cannot mistake
 a lower bound for a confirmation. The note TEXT is unchanged.
@@ -171,7 +171,7 @@ def bracket_verdict(pred: float | None, lo: float | None,
     smallest-fail] population bracket. lo/hi None = side not observed.
     "within 25%" of the nearest observed edge is not_established.
 
-    Ported from `bracket_verdict` in scripts/validate_deployment.py. The only
+    Ported from `bracket_verdict` in the retired standalone harness. The only
     change is the status of the "never failed" branch: the harness prints ~
     there, this returns bounded_below, because a run that never failed has
     established a lower bound and nothing else.

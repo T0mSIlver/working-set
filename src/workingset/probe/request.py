@@ -1,6 +1,6 @@
 """One streamed completion, timed per SSE event.
 
-Ported from `send_turn` in scripts/validate_deployment.py, with three
+Ported from `send_turn` in the retired standalone harness, with three
 additions and one deviation, all deliberate:
 
   ADDED  `usage.prompt_tokens_details.cached_tokens` is read back when the

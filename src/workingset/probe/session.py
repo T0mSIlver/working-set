@@ -1,6 +1,6 @@
 """Byte-stable prefixes and per-session context generation.
 
-Ported verbatim from scripts/validate_deployment.py (`make_text`,
+Ported verbatim from the retired standalone harness (`make_text`,
 `draw_session_tokens`, and the prompt assembly inside `user_loop`). The three
 properties that make the workload the one the model prices:
 

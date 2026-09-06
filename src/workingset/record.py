@@ -97,7 +97,7 @@ def _json_default(o):
 # ============================================================================
 # "what this run does not establish"
 # ----------------------------------------------------------------------------
-# Ported from the trailer in scripts/validate_deployment.py's print_report.
+# Ported from the trailer in the retired standalone harness's print_report.
 # It is the part of the output users are most likely to skip and most need,
 # so it is built from the run, not hard-coded, and it is stored in the record
 # rather than regenerated at print time.
