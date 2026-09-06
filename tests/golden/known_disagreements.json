@@ -1,0 +1,217 @@
+{
+ "_readme": "tests/golden/README.md",
+ "_what": "Differences between src/workingset/model.py and interactive/src/*.js that are known, measured and explained. CI is green on this set and red on anything else. An entry is a DEBT, not a decision: it records that the two implementations disagree and why we believe they do, never that the disagreement is correct. Delete an entry when the difference is fixed - the test ASSERTS that every entry matched something, so a stale allowlist fails the build.",
+ "_fields": {
+  "quantity": "vectors.json out-key, exact or with a trailing * as a prefix glob",
+  "where": "matches the vector's state fields, the derived n_gpu / replicas, and the vector's cond block under a _ prefix (_duty, _sla_headroom, _sla10_headroom, _warm_p5, _decode_ceiling, _ctx_cv2, _steady_nmax_ratio, _sla_f_unreachable). Values: a literal, a list, or {gt|gte|lt|lte|ne|nin}. An entry with NO where and max_rel 1.0 pins nothing at all - relErr is bounded by 1 for any finite pair - so every entry here is gated on the condition that causes it. Use _sla10_headroom, not _sla_headroom, for the quantities compared at the hard-wired 10 s budget.",
+  "observed_rel": "the worst relative error actually measured on 2026-09-06, 821 vectors / 46,797 comparisons",
+  "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
+  "hypothesis": "one line on the cause"
+ },
+ "_measured_at": "2026-09-06, tests/golden/vectors.json schema 1, 821 vectors, against src/workingset/model.py at origin/main 8d3ea61 (PR #56's mbu pass-through included)",
+
+ "entries": [
+  {
+   "quantity": "steady_saturated",
+   "where": { "_steady_nmax_ratio": { "gte": 1.0 } },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "THE FLAG, gated on its own cause. steadyDecodePoint inverts the sweep the page already drew, whose widest n is decodePlan's 1.15 x warm-p95; steady_decode_point bisects integer n out to 4,096. _steady_nmax_ratio is the load's demand against the aggregate at the MIRROR's widest n, so at >= 1 the demand runs off the end of the axis the explorer inverts and it reports `saturated` where Python resolves a point. Every one of the 30 flag mismatches sits at ratio >= 1.005; none sits below."
+  },
+  {
+   "quantity": "steady_n",
+   "where": { "_steady_nmax_ratio": { "gte": 1.0 } },
+   "observed_rel": 0.971,
+   "max_rel": 1.0,
+   "hypothesis": "same axis truncation: past the mirror's widest n its answer is a FLOOR (n = nMax, flagged saturated) while Python's search resolves - 4,096 against 119. The two are not estimating the same quantity there, which is why the ceiling is 1.0 and why it is gated to exactly that regime."
+  },
+  {
+   "quantity": "steady_per_user_tok_s",
+   "where": { "_steady_nmax_ratio": { "gte": 1.0 } },
+   "observed_rel": 0.97,
+   "max_rel": 1.0,
+   "hypothesis": "demand/n at a truncated n; same cause as steady_n"
+  },
+  {
+   "quantity": "steady_n",
+   "where": { "_steady_nmax_ratio": { "lt": 1.0 } },
+   "observed_rel": 0.177,
+   "max_rel": 0.25,
+   "hypothesis": "INSIDE the mirror's axis the same two algorithms disagree by a bounded amount: Python bisects integer n redrawing contexts at every probe, the explorer inverts a LINEAR interpolation of one pre-sampled aggregate. 45 of 821 states, worst 18%, no trend in _steady_nmax_ratio below 1 - so this is the algorithmic residue, not the truncation."
+  },
+  {
+   "quantity": "steady_per_user_tok_s",
+   "where": { "_steady_nmax_ratio": { "lt": 1.0 } },
+   "observed_rel": 0.177,
+   "max_rel": 0.25,
+   "hypothesis": "same bounded interpolation-vs-bisection residue as steady_n"
+  },
+
+  {
+   "quantity": "power_d_d",
+   "where": { "decode_floor": { "ne": 40 } },
+   "observed_rel": 0.875,
+   "max_rel": 0.9,
+   "hypothesis": "model.power_draw hard-codes DECODE_FLOOR_TOKS in `cap = decode_users_group * DECODE_FLOOR_TOKS` while cost.js reads decodeFloor() = state.decode_floor. The decode duty comes out EXACTLY 40/floor apart (8x at the 5 tok/s floor, 0.5x at 80) wherever d_d's min(1 - d_p, ...) clip is not binding and the two decode ceilings agree; approximate where either does. Python bug: the floor is a parameter of every other ceiling in the module."
+  },
+  {
+   "quantity": "power_per_gpu_w",
+   "where": { "decode_floor": { "ne": 40 } },
+   "observed_rel": 0.54,
+   "max_rel": 0.65,
+   "hypothesis": "downstream of the power_d_d floor bug: d_d x p_decode_w is one of the three terms of the per-GPU draw"
+  },
+  {
+   "quantity": "power_kw",
+   "where": { "decode_floor": { "ne": 40 } },
+   "observed_rel": 0.331,
+   "max_rel": 0.4,
+   "hypothesis": "downstream of the power_d_d floor bug, diluted by the flat host_w adder"
+  },
+  {
+   "quantity": "energy_eur_month",
+   "where": { "decode_floor": { "ne": 40 } },
+   "observed_rel": 0.331,
+   "max_rel": 0.4,
+   "hypothesis": "the electricity line is power_kw x 720 x eur_kwh, so it inherits the power_d_d floor bug exactly. energy_total_month does not fail: the hardware line dominates the bill."
+  },
+  {
+   "quantity": "power_*",
+   "where": { "decode_floor": 40, "_decode_ceiling": { "lte": 40 },
+              "_duty": { "lte": 0.85 } },
+   "observed_rel": 0.049,
+   "max_rel": 0.12,
+   "hypothesis": "with the floor bug excluded, d_d still divides the output demand by decode_users_group x floor. On a configuration whose decode ceiling is a few dozen sequences the two sides' separate integer bisections land one apart, and one step of ten is a tenth of the capacity."
+  },
+  {
+   "quantity": "power_d_d",
+   "where": { "_duty": { "gt": 0.85 } },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "d_d is clamped to what prefill leaves, min(max(0, 1 - d_p), ...), and d_p is itself clamped at 1. At rho = 0.9996 the two samplers land on opposite sides of that clamp: one side has 3.6e-4 of the machine left for decode and the other exactly none."
+  },
+
+  {
+   "quantity": "max_users_latency",
+   "where": { "_sla_headroom": { "gte": -0.05, "lt": 0.05 } },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "ILL-CONDITIONED at the cliff, not a formula difference: lam = k/(a + k b) with k = 2(SLA - E[S|miss]), and these are configurations whose miss alone eats 95-100% of its own TTFT budget (almost all Mistral-Medium-3.5, whose 88 full-attention layers make a miss cost ~10 s against a 10 s SLA). k is then the difference of two nearly equal sampled numbers and passes through zero, where Python returns a hard 0 and the mirror returns 1.5 users. The window is bounded on BOTH sides so a state arbitrarily past its SLA is not admitted."
+  },
+  {
+   "quantity": "max_users_latency",
+   "where": { "_sla_headroom": { "gte": 0.05, "lt": 0.75 } },
+   "observed_rel": 0.113,
+   "max_rel": 0.2,
+   "hypothesis": "the same 1/k amplification, away from the cliff and therefore bounded: a relative difference in E[S|miss] enters lam multiplied by roughly SLA/(SLA - c) = 1/headroom, so at a headroom of 0.15-0.75 a 2% moment difference reads as 3-13%. Seven states of 821, all inside that window; above 0.75 headroom the quantity is inside its band everywhere."
+  },
+
+  {
+   "quantity": "ttft_*",
+   "where": { "_duty": { "gt": 0.85 } },
+   "observed_rel": "Infinity",
+   "max_rel": "Infinity",
+   "hypothesis": "ILL-CONDITIONED: the Pollaczek-Khinchine wait carries 1/(1 - rho), which is ~2,700 at the rho = 0.9996 the worst state sits at, so a 0.04% difference in E[S] between the two samplers decides whether the queue has a steady state at all - one side returns 939 s and the other Infinity. The closed forms match term for term."
+  },
+  {
+   "quantity": "queue_wait_seconds",
+   "where": { "_duty": { "gt": 0.85 } },
+   "observed_rel": "Infinity",
+   "max_rel": "Infinity",
+   "hypothesis": "same 1/(1 - rho) amplification at rho = 0.9996"
+  },
+  {
+   "quantity": "spike_tolerance*",
+   "where": { "_duty": { "gt": 0.85 } },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "B* = SLA (1 - rho) / E[S|miss] is LINEAR in (1 - rho), so at rho = 0.9996 one side reads 6.6e-4 bursts and the other clamps to 0"
+  },
+  {
+   "quantity": "burst_drain_seconds_b32",
+   "where": { "_duty": { "gt": 0.85 } },
+   "observed_rel": "Infinity",
+   "max_rel": "Infinity",
+   "hypothesis": "B x E[S|miss] / (1 - rho); same amplification, and the same Infinity-vs-finite split at rho = 0.9996"
+  },
+  {
+   "quantity": "breakeven_miss_rate",
+   "where": { "_duty": { "gt": 0.85 } },
+   "observed_rel": 0.541,
+   "max_rel": 0.7,
+   "hypothesis": "f* = (1/rate - warm)/(cold - warm); at rho ~ 1 the numerator is a difference of two nearly equal numbers, so f* lands at 3.1e-4 against 1.4e-4 - both meaning 'this configuration is already saturated'"
+  },
+
+  {
+   "quantity": "sla_miss_rate_sla10",
+   "where": { "_sla_f_unreachable": 1 },
+   "observed_rel": 0.998,
+   "max_rel": 1.0,
+   "hypothesis": "THE CLAMP, and the same verdict on both sides. f is a miss RATE, so model.sla_miss_rate bisects it over [0, 1] and returns hi = 1.0 when the SLA survives an all-cold stream at this load. spikeMetrics solves the closed form and does not clamp the upper end, so it reports f* = 41 or 55 - a fraction of requests above one. 407 of 821 states, every one of them a configuration where the latency constraint is simply not reached. A JS-side fix (clamp fsla at 1) would close it; the two are not computing different models."
+  },
+  {
+   "quantity": "sla_miss_rate_sla10",
+   "where": { "_sla10_headroom": { "gte": -0.05, "lt": 0.05 } },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "THE ZERO TEST, and the two sides ask different questions. Python returns 0 when the mean TTFT at f = 0 already breaches the budget - queue wait included; the explorer returns 0 when k = 2(SLA - E[S|miss]) <= 0, i.e. on the miss's own prefill alone. Between those two thresholds Python reads 0 and the mirror reads 6e-4, which agree in meaning and not in value. All 20 states sit within a percent of the cliff."
+  },
+  {
+   "quantity": "sla_miss_rate_sla10",
+   "where": { "_sla10_headroom": { "lt": 0.35 } },
+   "observed_rel": 0.445,
+   "max_rel": 0.6,
+   "hypothesis": "the same 1/k amplification max_users_latency has: f* solves a linear equation whose coefficient is k = 2(SLA - E[S|miss]), so a couple of percent of sampling difference in the miss cost becomes tens of percent in f* once the miss eats most of the budget. Four states, headroom 0.10-0.30; above 0.35 headroom this quantity is inside its band everywhere it is not clamped."
+  },
+  {
+   "quantity": "moments_miss_sq",
+   "where": { "_ctx_cv2": { "gt": 0.9 } },
+   "observed_rel": 0.146,
+   "max_rel": 0.2,
+   "hypothesis": "E[S^2] on a miss is essentially the FOURTH moment of the context length, and its sampling variance grows steeply with the context's squared coefficient of variation. Every state past it comes from the heavy-tailed decile (fixture p90 of _ctx_cv2 is 0.97); 200,000 Python draws against the explorer's 20,000 is not enough there."
+  },
+  {
+   "quantity": "queue_wait_seconds",
+   "where": { "_ctx_cv2": { "gt": 0.9 } },
+   "observed_rel": 0.084,
+   "max_rel": 0.15,
+   "hypothesis": "the P-K wait is lam E[S^2] / (2(1 - rho)), so it inherits E[S^2]'s heavy-tail sampling error one-for-one"
+  },
+  {
+   "quantity": "ttft_hit_fcfs",
+   "where": { "_ctx_cv2": { "gt": 0.9 } },
+   "observed_rel": 0.071,
+   "max_rel": 0.15,
+   "hypothesis": "queue wait + the hit's own prefill; the wait term carries E[S^2] and the same heavy-tail error"
+  },
+
+  {
+   "quantity": "max_users_decode",
+   "where": { "_decode_ceiling": { "lte": 25 } },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "two independent integer bisections on a sampled monotone curve. At a ceiling of ONE the relative error is 1 by definition: it says one side's single decoder just clears the floor and the other's just misses it. Every failing state has a ceiling of 23 or below; above that the two agree inside the band."
+  },
+  {
+   "quantity": "max_users_cache",
+   "where": { "_warm_p5": { "lt": 12 } },
+   "observed_rel": 0.3,
+   "max_rel": 0.4,
+   "hypothesis": "a COUNT of two to nine sessions (Mistral-Medium-3.5 on narrow topologies), where one session either way is 12-33%, PLUS the standing approximation: the explorer scales warm p5 by (1 - p_sub) where Python counts user-class sessions inside each fill. The approximation is invisible at ordinary counts and rounds badly at two."
+  },
+  {
+   "quantity": "warm_p5_all",
+   "where": { "_warm_p5": { "lt": 20 } },
+   "observed_rel": 0.333,
+   "max_rel": 0.4,
+   "hypothesis": "the same tiny-count effect on the raw p5. Both sides take the p5 of an integer-valued fill; at a count of two nothing else can be expected of them. The bands for this quantity and max_users_cache are already derived with these states excluded (see mc_spread.excluded_from_bands), so this entry is the tail that exclusion names."
+  },
+
+  {
+   "quantity": "decode_p50_n1",
+   "observed_rel": 0.071,
+   "max_rel": 0.1,
+   "hypothesis": "SIGN-STABLE SAMPLER-STRUCTURE BIAS, not a state-dependent one, which is why this entry has no `where`: the mirror reads 5-7% LOW on every one of the 30 states past the band and never high. decodeCurves draws one context pool per iteration and reads it cumulatively (common random numbers across n) where decode_curves redraws per n, and at n = 1 the per-user speed is a median of 1/(a + b L) on a single draw - the most tail-sensitive statistic compared, hardest under FP16 KV where the sampled term dominates the step. decode_p50_n8 and _n64, the same estimator once the average over n contexts washes the structure out, stay inside their bands everywhere; that is the evidence for this reading rather than a formula difference."
+  }
+ ]
+}
