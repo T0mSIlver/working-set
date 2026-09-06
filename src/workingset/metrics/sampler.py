@@ -765,6 +765,7 @@ class MetricsSampler:
         self.snapshots: list[Snapshot] = []
         self.adapter = None
         self.n_failed = 0
+        self._max_rtt = 0.0        # slowest SUCCESSFUL round trip seen
         self.error: str | None = None      # set when the loop dies terminally
         self._epoch_wall = time.time()
         self._epoch_mono = time.monotonic()
@@ -875,15 +876,27 @@ class MetricsSampler:
             return False
 
     # ---- the loop --------------------------------------------------------
-    def _now(self) -> float:
-        """Wall-clock seconds that never runs backwards.
+    def now(self) -> float:
+        """THIS SAMPLER'S CLOCK, in wall-clock seconds that never run
+        backwards.
 
         `time.time()` can step back (NTP), which would break the sort and
         the bisect that every window depends on. Anchoring an offset from
         `time.monotonic()` to one wall reading keeps timestamps comparable
         with a caller's own `time.time()` while staying ordered.
+
+        PUBLIC because it is the only correct source of the `t` a caller
+        hands to `at()` or `window()`. Every snapshot is stamped with it, so
+        a caller timing its own work against `time.monotonic()` (which the
+        probe layer does, for span arithmetic) must convert through this and
+        not through its own clock -- the two differ by the unix epoch, and
+        asking for a monotonic instant lands before the whole series.
         """
         return self._epoch_wall + (time.monotonic() - self._epoch_mono)
+
+    # the private spelling this had before it needed to be part of the
+    # sampler's contract; kept so an existing caller does not break
+    _now = now
 
     async def _loop(self) -> None:
         try:
@@ -955,6 +968,8 @@ class MetricsSampler:
             self.adapter = cand
 
     def _record(self, snap: Snapshot) -> None:
+        if snap.ok and math.isfinite(snap.rtt):
+            self._max_rtt = max(self._max_rtt, snap.rtt)
         self.snapshots.append(snap)
         if self.max_snapshots and len(self.snapshots) > self.max_snapshots:
             del self.snapshots[: len(self.snapshots) - self.max_snapshots]
@@ -995,7 +1010,8 @@ class MetricsSampler:
 
     def at(self, t: float) -> Snapshot:
         """The nearest successful snapshot at or before `t` -- the covariate
-        reading to attach to an event that happened at `t`. Falls back to the
+        reading to attach to an event that happened at `t`. `t` is in THIS
+        SAMPLER'S base (`now()`), not `time.monotonic()`. Falls back to the
         first snapshot when `t` precedes the series."""
         ok = self._sorted_ok()
         if not ok:
@@ -1003,6 +1019,75 @@ class MetricsSampler:
             raise ValueError("no successful snapshots yet")
         i = bisect.bisect_right([s.t for s in ok], t) - 1
         return ok[i] if i >= 0 else ok[0]
+
+    def gauges_at(self, t: float) -> dict[str, float | None]:
+        """The SEMANTIC gauges as of `t` -- what a caller attaching covariates
+        to one request actually wants.
+
+        `at()` hands back a raw `Snapshot`, which is the archive format: a
+        list of parsed `/metrics` lines whose names are engine-specific
+        (`vllm:num_requests_running`). The semantic names only exist through
+        an adapter, so a consumer that read a Snapshot's attributes looking
+        for `requests_running` found nothing and recorded an empty covariate
+        set -- silently, since a snapshot WAS returned. This is the accessor
+        that resolves them, so no consumer has to know the engine's spelling.
+
+        Units: requests for `requests_running` / `requests_waiting`, FRACTION
+        in [0, 1] for `kv_cache_usage`. A key the server does not export is
+        None, never 0 -- an unexported queue is not an empty one.
+
+        FRESHNESS is part of the answer, not an afterthought. `at()` returns
+        the last SUCCESSFUL snapshot however old it is, so a server that has
+        stopped answering keeps handing back a plausible-looking reading
+        forever -- a consumer watching for "no reading" never sees one, and a
+        safety rail keyed on that silently disarms. `age_s` is how old the
+        snapshot is, `stale` is that against this sampler's own interval, and
+        `n_failed` is the running count of failed scrapes.
+
+        PER-ENGINE: `n_engines` counts the label sets behind the gauges and
+        `kv_cache_usage_max` is the worst engine's occupancy. An unselected
+        multi-engine dump SUMS request counts across engines (which is not
+        what a per-replica-group operating point means) and cannot combine
+        occupancy at all, so `kv_cache_usage` comes back None -- see
+        `Resolution` and `--engine`.
+        """
+        snap = self.at(t)
+        ad = self.adapter or detect_adapter(snap.samples, engine=self.engine)
+        per_engine = ad.series(snap.samples, "kv_cache_usage") or {}
+        kv_vals = [v for v in per_engine.values()
+                   if v is not None and math.isfinite(v)]
+        running_series = ad.series(snap.samples, "requests_running") or {}
+        return {
+            "t": snap.t,
+            "age_s": max(0.0, self.now() - snap.t),
+            "stale": (self.now() - snap.t) > self.stale_after_s,
+            "n_failed": self.n_failed,
+            "n_engines": max(len(per_engine), len(running_series)),
+            "engine_selected": self.engine,
+            "requests_running": ad.gauge(snap.samples, "requests_running"),
+            "requests_waiting": ad.gauge(snap.samples, "requests_waiting"),
+            "kv_cache_usage": ad.gauge(snap.samples, "kv_cache_usage"),
+            # the worst engine, so a KV rail still binds on an unselected
+            # multi-engine dump where the combined gauge is undefined
+            "kv_cache_usage_max": max(kv_vals) if kv_vals else None,
+        }
+
+    @property
+    def stale_after_s(self) -> float:
+        """A snapshot older than this is not a current reading.
+
+        Three scrape PERIODS, where a period is the interval plus the slowest
+        round trip actually observed. Two missed ticks is noise; three is a
+        server that has stopped answering.
+
+        The observed rtt, not the configured `timeout`: a timeout is the worst
+        case for one hanging scrape, and using it made the threshold
+        ~`timeout` whenever the interval was short -- 5.03 s on a 10 ms
+        interval, so a sampler that had missed five hundred ticks still read as
+        fresh. Where scrapes genuinely do hang, the observed rtt rises to meet
+        them and the threshold follows.
+        """
+        return 3.0 * (self.interval + self._max_rtt)
 
     def window(self, t0: float | None = None, t1: float | None = None) -> WindowDelta:
         """Deltas and gauge stats over [t0, t1], bounded by snapshots that

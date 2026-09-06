@@ -33,7 +33,8 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 
-from .request import EndpointSpec, RequestTrace, _plain, send_request
+from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_window,
+                      send_request)
 from .session import Prefixes, make_session
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
 
@@ -352,6 +353,13 @@ async def run_population(client, ep: EndpointSpec, cfg, opts, pop: int,
         for i in range(pop + n_sub)]
     t0 = time.monotonic()
     measure_start = t0 + opts.ramp_s
+    # the same instant in the SAMPLER's base. Two clocks, on purpose:
+    # `measure_start` clips the traces (whose `t_send` is monotonic) and
+    # `w_start` bounds the metrics window (whose snapshots are stamped by
+    # `MetricsSampler.now()`). Passing the monotonic one to `window()` asked
+    # about a moment before the series existed, so every rung's `server` came
+    # back None — see `probe.request.sampler_now`.
+    w_start = sampler_now(metrics) + opts.ramp_s
     if on_partial is not None:
         on_partial(pop, n_sub, traces, measure_start)
     try:
@@ -361,18 +369,8 @@ async def run_population(client, ep: EndpointSpec, cfg, opts, pop: int,
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    server = _window(metrics, measure_start, time.monotonic())
+    server = await sampler_window(metrics, w_start, sampler_now(metrics))
     return eval_rung(pop, n_sub, traces, measure_start, cfg, opts, server)
-
-
-def _window(metrics, t0: float, t1: float) -> dict | None:
-    """Duck-typed read of a metrics sampler: `window(t0, t1) -> delta-like`."""
-    if metrics is None:
-        return None
-    try:
-        return _plain(metrics.window(t0, t1))
-    except Exception:
-        return None
 
 
 # ============================================================================
@@ -492,7 +490,7 @@ async def run_sample(client, ep: EndpointSpec, cfg, opts, prefixes: Prefixes,
     """
     wl = cfg.workload
     traces: list[RequestTrace] = []
-    t0 = time.monotonic()
+    w0 = sampler_now(metrics)          # the sampler's base, not monotonic
 
     async def one(i: int):
         session = make_session(wl, opts, prefixes, uid=700_000 + i,
@@ -509,5 +507,5 @@ async def run_sample(client, ep: EndpointSpec, cfg, opts, prefixes: Prefixes,
             session.commit(reply)
 
     await asyncio.gather(*[one(i) for i in range(max(1, opts.sample_requests))])
-    return eval_sample(traces, _window(metrics, t0, time.monotonic()),
-                       cap_tokens=opts.context_cap_tokens)
+    server = await sampler_window(metrics, w0, sampler_now(metrics))
+    return eval_sample(traces, server, cap_tokens=opts.context_cap_tokens)

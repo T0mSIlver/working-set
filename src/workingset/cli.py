@@ -121,6 +121,20 @@ def cmd_selfcheck(_args) -> int:
     return 0
 
 
+def _dflt(obj, field: str, fmt: str = "") -> str:
+    """"(default X)" rendered from the dataclass field itself.
+
+    One source of truth: a help string that carries its own copy of a default
+    drifts the first time the default moves, and two of these already had —
+    `--max-probe-tokens` said 2,000,000 against a code default of 4,000,000,
+    and `--shared-rounds` said 3 against 4.
+    """
+    v = getattr(obj, field)
+    if v is None:
+        return "default: off"
+    return f"default {v:{fmt}}" if fmt else f"default {v}"
+
+
 def _add_deploy_flags(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--model", help="model key (see `ws models`)")
     ap.add_argument("--gpu", help="GPU part (H200, B300)")
@@ -220,6 +234,118 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a gap at or above this counts as a FREEZE "
                         "(default 100). Keep it BELOW the smaller predicted "
                         "freeze; the freeze ladder is threshold-free.")
+    # --- shared-endpoint safety rails ------------------------------------
+    # These bind WITHOUT --exclusive, where the endpoint belongs to somebody
+    # else; --exclusive takes them all off. Every "(default X)" below is
+    # rendered from the dataclass field itself by `_dflt`, because a help
+    # string carrying its own copy of a default is a help string that will one
+    # day be wrong — and this one already was, on two flags.
+    from .shared import ProbeBudget, SharedOptions
+
+    bud, sh = ProbeBudget(), SharedOptions()
+
+    def _b(field: str, fmt: str = "") -> str:
+        return _dflt(bud, field, fmt)
+
+    def _s(field: str, fmt: str = "") -> str:
+        return _dflt(sh, field, fmt)
+
+    g = p.add_argument_group(
+        "shared-endpoint safety rails",
+        "Bind without --exclusive. Any rail that trips aborts the run, "
+        "records the reason and exits non-zero.")
+    g.add_argument("--max-extra-load", type=int, metavar="N",
+                   help="never more than N of OUR requests in flight, canary "
+                        f"included ({_b('max_extra_load')}; 0 = no cap). "
+                        "Enforced as given: never raised to make room for the "
+                        "canary")
+    g.add_argument("--abort-if-waiting", type=float, metavar="N",
+                   help="abort when the server's requests_waiting gauge "
+                        f"exceeds N ({_b('abort_if_waiting', 'g')}, i.e. abort "
+                        "on any queue). Needs --metrics-url")
+    g.add_argument("--abort-if-kv-above", type=float, metavar="F",
+                   help="abort when KV occupancy exceeds this fraction "
+                        f"({_b('abort_if_kv_above', 'g')}). Needs "
+                        "--metrics-url")
+    g.add_argument("--max-gauge-age-s", type=float, metavar="S",
+                   help="a gauge reading older than S seconds is treated as a "
+                        "failed read (default: the sampler's own staleness "
+                        "rule, 3 scrape intervals + one timeout). Without "
+                        "this a dead sampler keeps handing back its last good "
+                        "snapshot and the rails never notice")
+    g.add_argument("--max-metrics-gaps", type=int, metavar="N",
+                   help="abort after N consecutive failed gauge reads once "
+                        f"the sampler has been working ({_b('max_metrics_gaps')}"
+                        "; 0 = off). Fails CLOSED: without it a sampler dying "
+                        "mid-run disarms the queue and KV rails silently")
+    g.add_argument("--max-probe-tokens", type=int, metavar="T",
+                   help="total intended prompt tokens the run may send "
+                        f"({_b('max_probe_tokens', ',')}; 0 = no cap)")
+    g.add_argument("--no-canary", action="store_true",
+                   help="drop the periodic 1-token canary (it is the only "
+                        "contention signal when no --metrics-url is given)")
+    g.add_argument("--canary-every-s", type=float, metavar="S",
+                   help=f"seconds between canary requests "
+                        f"({_b('canary_every_s', 'g')})")
+    g.add_argument("--canary-baseline-s", type=float, metavar="S",
+                   help="the run's first S seconds set the canary baseline "
+                        f"p50 ({_b('canary_baseline_s', 'g')})")
+    g.add_argument("--canary-window-s", type=float, metavar="S",
+                   help="trailing window the canary p50 is compared over "
+                        f"({_b('canary_window_s', 'g')})")
+    g.add_argument("--canary-drift", type=float, metavar="X",
+                   help="abort when the trailing canary p50 exceeds X times "
+                        f"the baseline p50 ({_b('canary_drift', 'g')})")
+    g.add_argument("--canary-min-n", type=int, metavar="N",
+                   help="samples each canary window needs before the drift "
+                        f"rule can fire ({_b('canary_min_n')})")
+    # --- shared-endpoint covariate fit -----------------------------------
+    g = p.add_argument_group(
+        "shared-endpoint covariate fit",
+        "Other people's traffic is a covariate, not noise: the probe stamps "
+        "every request with the server's load and regresses it out.")
+    g.add_argument("--shared-lengths", metavar="F,F,...",
+                   help="prompt lengths to probe, as fractions of the context "
+                        f"cap ({_s('lengths')})")
+    g.add_argument("--shared-rounds", type=int, metavar="N",
+                   help=f"passes over the prompt-length ladder ({_s('rounds')})")
+    g.add_argument("--shared-warm-turns", type=int, metavar="N",
+                   help=f"warm prefix-hit turns per round ({_s('warm_turns')})")
+    g.add_argument("--shared-ladder", action="store_true",
+                   help="run for --shared-duration-s cycling the lengths, and "
+                        "report TTFT/ITL binned by the concurrency the server "
+                        "happened to be carrying")
+    g.add_argument("--shared-duration-s", type=float, metavar="S",
+                   help=f"length of a --shared-ladder run ({_s('duration_s', 'g')})")
+    g.add_argument("--max-extrapolation", type=float, metavar="SD",
+                   help="a fitted verdict is refused when the operating point "
+                        "lies more than SD observed standard deviations "
+                        "outside the probed range of any regressor "
+                        f"({_s('max_extrapolation', 'g')})")
+    g.add_argument("--max-extrapolation-requests", type=float, metavar="N",
+                   help="the same gate in REQUESTS, so a noisy background "
+                        "cannot buy a wider absolute licence than a quiet one "
+                        f"({_s('max_extrapolation_requests', 'g')}). Both "
+                        "gates bind")
+    g.add_argument("--verdict-sigmas", type=float, metavar="K",
+                   help="a fitted verdict must not change within +/- K "
+                        "standard errors of the fitted value, or the row stays "
+                        f"not_established ({_s('verdict_sigmas', 'g')})")
+    g.add_argument("--min-local-n", type=int, metavar="N",
+                   help="observations required within --local-radius of the "
+                        "operating point in the load covariates "
+                        f"({_s('min_local_n')}). Without this a design that "
+                        "only ever saw two load levels can report the chord "
+                        "of a curve it never sampled the middle of")
+    g.add_argument("--local-radius", type=float, metavar="SD",
+                   help="radius of that neighbourhood, in standardised units "
+                        f"({_s('local_radius', 'g')})")
+    g.add_argument("--engine", metavar="ID",
+                   help="select ONE engine from a multi-engine /metrics dump. "
+                        "Required for a fit when several are exported: "
+                        "otherwise the request gauges are sums across engines "
+                        "while the operating point is per replica group, and "
+                        "KV occupancy cannot be combined at all")
     p.add_argument("--seed", type=int, help="probe RNG seed")
     p.add_argument("--no-ignore-eos", action="store_true",
                    help="drop the vLLM ignore_eos extension (strict OpenAI "

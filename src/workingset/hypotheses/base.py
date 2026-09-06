@@ -109,6 +109,11 @@ def _safe(x):
 
 
 LADDER, SAMPLE, BURST_PROBE = "ladder", "sample", "burst"
+# The shared-endpoint probe: the cheap sample plus the covariate stamping and
+# the safety rails that let a shared run say anything at all. It REPLACES
+# `sample` whenever the run is not exclusive (see `hypotheses.plan`), so a
+# shared run never fires both.
+SHARED = "shared"
 
 
 class Hypothesis:

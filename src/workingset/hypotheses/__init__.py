@@ -18,8 +18,9 @@ from dataclasses import dataclass, field
 
 from .base import (BOUNDED_BELOW, BURST, BURST_PROBE, EXCLUSIVE, GLYPH,
                    LADDER, METRICS, NOT_ESTABLISHED, REFUTED, REQUIREMENTS,
-                   SAMPLE, STATUSES, SUPPORTED, Hypothesis, Measurement,
-                   Prediction, Verdict, bracket_verdict, ratio_verdict)
+                   SAMPLE, SHARED, STATUSES, SUPPORTED, Hypothesis,
+                   Measurement, Prediction, Verdict, bracket_verdict,
+                   ratio_verdict)
 from .burst import HBurst
 from .ceilings import HBinding, HCache, HDecode, HLatency, HSaturation
 from .context import LadderView, RunContext
@@ -131,12 +132,19 @@ def plan(hypotheses, exclusive: bool = False, metrics: bool = False,
         *(h.conditional_probes(mandatory) for h in p.selected)) \
         if p.selected else frozenset()
     p.probes = mandatory | conditional
+    if not exclusive and SAMPLE in p.probes:
+        # A shared run's cheap probe is the SHARED one: the same handful of
+        # requests, plus the covariate stamping, the prompt-length ladder and
+        # the safety rails. It is a REPLACEMENT, never an addition — firing
+        # both would double the load this mode exists to keep small — and it
+        # produces the same `Sample`, so every existing reader is unchanged.
+        p.probes = (p.probes - {SAMPLE}) | {SHARED}
     return p
 
 
 __all__ = [
     "BOUNDED_BELOW", "BURST", "BURST_PROBE", "EXCLUSIVE", "GLYPH", "LADDER",
-    "METRICS", "SAMPLE",
+    "METRICS", "SAMPLE", "SHARED",
     "NOT_ESTABLISHED", "REFUTED", "REGISTRY", "REQUIREMENTS", "STATUSES",
     "SUPPORTED", "Hypothesis", "LadderView", "Measurement", "Plan",
     "Prediction", "Registry", "RunContext", "Verdict", "bracket_verdict",

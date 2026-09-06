@@ -18,6 +18,7 @@ from .probe.request import EndpointSpec, make_client
 from .probe.session import sampler_selfcheck
 from .record import RunRecord, not_established_notes
 from .report import print_report
+from .shared import BudgetAbort, ProbeBudget, SharedOptions
 
 
 # ============================================================================
@@ -45,6 +46,54 @@ def build_options(args, cfg) -> ProbeOptions:
     return ProbeOptions(**kw)
 
 
+def build_budget(args) -> ProbeBudget:
+    """The safety rails. WITHOUT `--exclusive` the defaults are the
+    conservative ones (`ProbeBudget.conservative`) — a shared endpoint gets
+    the timid budget unless the operator says otherwise, and every flag given
+    overrides just that one rail. `--exclusive` takes them off, because the
+    queue the ladder builds IS the measurement there."""
+    kw = {}
+    for flag, field_ in (("max_extra_load", "max_extra_load"),
+                         ("abort_if_waiting", "abort_if_waiting"),
+                         ("abort_if_kv_above", "abort_if_kv_above"),
+                         ("max_metrics_gaps", "max_metrics_gaps"),
+                         ("max_probe_tokens", "max_probe_tokens"),
+                         ("canary_every_s", "canary_every_s"),
+                         ("canary_baseline_s", "canary_baseline_s"),
+                         ("canary_window_s", "canary_window_s"),
+                         ("canary_drift", "canary_drift"),
+                         ("canary_min_n", "canary_min_n"),
+                         ("max_gauge_age_s", "max_gauge_age_s")):
+        v = getattr(args, flag, None)
+        if v is not None:
+            kw[field_] = v
+    if getattr(args, "no_canary", False):
+        kw["canary"] = False
+    if getattr(args, "exclusive", False):
+        return ProbeBudget.for_exclusive(**kw)
+    return ProbeBudget.conservative(**kw)
+
+
+def build_shared(args) -> SharedOptions:
+    kw = {}
+    for flag, field_ in (("shared_lengths", "lengths"),
+                         ("shared_rounds", "rounds"),
+                         ("shared_warm_turns", "warm_turns"),
+                         ("shared_duration_s", "duration_s"),
+                         ("max_extrapolation", "max_extrapolation"),
+                         ("max_extrapolation_requests",
+                          "max_extrapolation_requests"),
+                         ("verdict_sigmas", "verdict_sigmas"),
+                         ("min_local_n", "min_local_n"),
+                         ("local_radius", "local_radius"),
+                         ("seed", "seed")):
+        v = getattr(args, flag, None)
+        if v is not None:
+            kw[field_] = v
+    kw["ladder"] = bool(getattr(args, "shared_ladder", False))
+    return SharedOptions(**kw)
+
+
 def build_endpoint(args, cfg) -> EndpointSpec:
     return EndpointSpec.from_config(
         cfg.endpoint, api=getattr(args, "api", None) or "completions",
@@ -53,7 +102,7 @@ def build_endpoint(args, cfg) -> EndpointSpec:
         api_key_env=getattr(args, "api_key_env", None))
 
 
-def open_metrics(url: str | None):
+def open_metrics(url: str | None, engine: str | None = None):
     """Duck-typed hand-off to `workingset.metrics.MetricsSampler`, built by a
     separate module. Only `at(t)` and `window(t0, t1)` are relied on; start /
     stop are called when they exist, and the constructor is tried positionally
@@ -64,10 +113,18 @@ def open_metrics(url: str | None):
         from .metrics import MetricsSampler        # type: ignore
     except Exception as e:
         raise SystemExit(f"--metrics-url needs workingset.metrics: {e}")
+    # `engine` picks ONE engine out of a multi-engine dump. Without it the
+    # request gauges are SUMS across engines while the operating point is per
+    # replica group, and occupancy cannot be combined at all -- see
+    # `SharedResult.reading`, which refuses the fit rather than compare two
+    # different units.
     try:
-        return MetricsSampler(url)
+        return MetricsSampler(url, engine=engine)
     except TypeError:
-        return MetricsSampler(url=url)
+        try:
+            return MetricsSampler(url=url, engine=engine)
+        except TypeError:
+            return MetricsSampler(url)
 
 
 async def _maybe(obj, *names):
@@ -85,10 +142,15 @@ async def _maybe(obj, *names):
 # dry run
 # ============================================================================
 def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
+    from .hypotheses.base import SHARED
+    from .shared import plan_lines
+
     out = out or sys.stdout
     w = lambda s="": print(s, file=out)          # noqa: E731
     slo, wl = cfg.slo, cfg.workload
     mode = "exclusive" if args.exclusive else "shared"
+    budget = build_budget(args)
+    sopts = build_shared(args)
 
     w("DRY RUN — plan only, no requests sent\n")
     w(f"endpoint : {ep.base_url}  model={ep.model or '<unset>'}  "
@@ -100,6 +162,32 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
     w(f"SLOs     : p{slo.percentile} TTFT <= {slo.ttft_budget_s:g}s, "
       f"per-user p50 decode >= {slo.itl_floor_tok_s:g} tok/s")
     w(f"probes   : {', '.join(sorted(pl.probes)) or 'none'}")
+
+    # the sampler is CONSTRUCTED, never started: --dry-run still sends
+    # nothing, and its scrape interval is what makes the rails' detection lag
+    # a number rather than a shrug
+    sampler = None
+    if args.metrics_url:
+        try:
+            sampler = open_metrics(args.metrics_url,
+                                   getattr(args, 'engine', None))
+        except SystemExit:
+            sampler = True          # unreachable module: the rails still bind
+    w("\nPROBE BUDGET — the rails this run may not cross"
+      + ("" if args.exclusive else " (conservative by default; every one of "
+                                   "these is a flag)"))
+    for line in budget.describe(sampler):
+        w(f"  {line}")
+    if not args.exclusive:
+        w("  any rail that trips aborts the run, writes a record carrying the "
+          "reason, and exits non-zero")
+
+    if SHARED in pl.probes:
+        w("\nSHARED-MODE PLAN — other people's traffic is a covariate, not "
+          "noise")
+        for line in plan_lines(cfg, opts, sopts, budget,
+                               bool(args.metrics_url)):
+            w(f"  {line}")
 
     if pl.run_ladder:
         from .probe.ladder import build_ladder
@@ -254,11 +342,18 @@ def _progress(kind, payload) -> None:
     elif kind == "burst":
         print(f"\n--- burst probe: N={payload[0]} at {payload[1]} standing "
               "users ---", flush=True)
+    elif kind == "shared":
+        print("\n--- shared-endpoint probe (rails on) ---", flush=True)
+    elif kind == "shared-round":
+        print(f"  round {payload[0]}: {payload[1]} prompt lengths",
+              flush=True)
 
 
-async def run_test(cfg, preds, opts, ep, pl, metrics, exclusive: bool) -> tuple:
-    """Returns (hypothesis rows, probe cache, capacity bracket, interrupted)."""
+async def run_test(cfg, preds, opts, ep, pl, metrics, exclusive: bool,
+                   budget=None, shared_opts=None) -> tuple:
+    """Returns (rows, probe cache, capacity bracket, interrupted, aborted)."""
     interrupted = False
+    aborted: BudgetAbort | None = None
     rows: list[dict] = []
     await _maybe(metrics, "start", "open")
     try:
@@ -266,13 +361,24 @@ async def run_test(cfg, preds, opts, ep, pl, metrics, exclusive: bool) -> tuple:
             ctx = RunContext(cfg, preds, opts, ep, client=client,
                              metrics=metrics, exclusive=exclusive,
                              burst=opts.burst, burst_users=opts.burst_users,
-                             probes=pl.probes, on_progress=_progress)
+                             probes=pl.probes, on_progress=_progress,
+                             budget=budget, shared_opts=shared_opts)
             try:
                 await _score(ctx, pl, rows)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 # the verdicts already computed ARE the run's output; the rest
                 # are scored against the cache, starting nothing new
                 interrupted = True
+                rows += await _score_from_cache(ctx, pl,
+                                                {r["key"] for r in rows})
+            except BudgetAbort as e:
+                # a safety rail on somebody else's endpoint. Everything the
+                # probe HAD measured is kept (the partial result rides on the
+                # exception), the rest is scored against the cache without
+                # sending anything more, and the run exits non-zero.
+                aborted = e
+                if e.result is not None:
+                    ctx.seed(shared=e.result)
                 rows += await _score_from_cache(ctx, pl,
                                                 {r["key"] for r in rows})
     finally:
@@ -288,7 +394,7 @@ async def run_test(cfg, preds, opts, ep, pl, metrics, exclusive: bool) -> tuple:
             r.partial = True
             cached["rungs"].append(r.to_dict())
     bracket = _bracket(cached["rungs"])
-    return rows, cached, bracket, interrupted
+    return rows, cached, bracket, interrupted, aborted
 
 
 def _bracket(rung_dicts) -> list:
@@ -330,32 +436,42 @@ def cmd_test(args) -> int:
             print(f"  {h.key:<14} {reason}", file=sys.stderr)
         return 2
 
-    metrics = open_metrics(args.metrics_url)
+    metrics = open_metrics(args.metrics_url, getattr(args, 'engine', None))
+    budget, sopts = build_budget(args), build_shared(args)
     try:
-        rows, cached, bracket, interrupted = asyncio.run(
-            run_test(cfg, preds, opts, ep, pl, metrics, args.exclusive))
+        rows, cached, bracket, interrupted, aborted = asyncio.run(
+            run_test(cfg, preds, opts, ep, pl, metrics, args.exclusive,
+                     budget=budget, shared_opts=sopts))
     except KeyboardInterrupt:
         print("\ninterrupted before any hypothesis was scored", file=sys.stderr)
         return 130
 
+    opt_dict = {**opts.to_dict(), "probe_budget": budget.to_dict(),
+                "shared": sopts.to_dict()}
     rec = RunRecord.new(
         __version__, mode="exclusive" if args.exclusive else "shared",
         interrupted=interrupted, config=cfg.to_dict(),
-        predictions=preds.to_dict(), options=opts.to_dict(),
+        predictions=preds.to_dict(), options=opt_dict,
         endpoint=ep.redacted(), plan=pl.to_dict(),
         rungs=cached["rungs"], sample=cached["sample"], burst=cached["burst"],
-        hypotheses=rows,
+        shared=cached.get("shared"), hypotheses=rows,
         skipped=[{**h.describe(), "reason": r} for h, r in pl.skipped],
         not_established=not_established_notes(
             cfg, opts, pl, rungs=cached["rungs"], sample=cached["sample"],
             burst=cached["burst"], hypotheses=rows, exclusive=args.exclusive,
-            metrics=bool(metrics_url), interrupted=interrupted),
+            metrics=bool(metrics_url), interrupted=interrupted,
+            shared=cached.get("shared")),
         measured_capacity_bracket=bracket)
 
     print_report(rec)
     if args.out:
         rec.save(args.out)
         print(f"\nrun record written to {args.out}")
+    if aborted is not None:
+        # the record is written FIRST: an abort that loses its own evidence
+        # tells the operator nothing about why the endpoint was left alone
+        print(f"\nPROBE ABORTED: {aborted.reason}", file=sys.stderr)
+        return 3
     return 130 if interrupted else 0
 
 
