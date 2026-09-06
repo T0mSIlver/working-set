@@ -8,6 +8,8 @@
     ws models                                  list model / GPU keys
     ws selfcheck                               run the model's self-checks
     ws metrics probe|tail|window ...           sample a live /metrics endpoint
+    ws workload --prometheus URL --range 7d    measure the real workload and
+                                               emit the config's [workload]
 """
 from __future__ import annotations
 
@@ -239,6 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     # `ws metrics` owns its own subtree, and builds it itself.
     from .metrics.cli import add_subparser as _add_metrics
     _add_metrics(sub)
+    from .workload import add_subparser as _add_workload
+    _add_workload(sub)
     return ap
 
 
