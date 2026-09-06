@@ -1,0 +1,2061 @@
+"""`ws workload` — characterise the real workload, emit the config's `[workload]`.
+
+The study's `[workload]` block was last set BY HAND from a 7-day Grafana pull
+(`research/workload_agentic_poc.md`: mean prompt 57.4k tokens, 87.5%
+prefix-cache savings, 404 mean output tokens). This module makes that pull
+reproducible, and doubles as the EMPLOYER-DATA FIREWALL: it reads a
+Prometheus that scrapes vLLM, and emits only ROUNDED AGGREGATES — never a
+timestamp, never a raw series value, never the instance's identity beyond the
+selector you typed yourself.
+
+Three sources behind one interface, all producing a `Reading`:
+
+    --prometheus URL --range 7d [--step 5m] [--selector 'model_name="..."']
+        PromQL over the HTTP API. `increase()` over the whole range for the
+        counters and the histogram buckets, `query_range` for the gauges.
+        Counter resets are absorbed by `increase()` and reported separately
+        by `resets()`; scrape gaps show as missing steps in the range.
+    --jsonl FILE
+        a `ws metrics tail --out` archive, delta'd whole-log with
+        `window_from_snapshots`. Counter resets and layout changes land in
+        `WindowDelta.invalid` and are reported, never papered over.
+    --metrics-text FILE
+        one raw `/metrics` dump. Its counters are CUMULATIVE SINCE SERVER
+        START, so distributions and ratios are available but every RATE is
+        not: there is no duration to divide by, and one reading of a gauge
+        is not a mean or a p95 of it either.
+
+What comes out (`WorkloadEstimate`, every field's units and formula in its
+docstring):
+
+    prompt length     log-normal fit to the `request_prompt_tokens` bucket CDF
+                      -- over ALL requests, since that histogram carries no
+                      request-class label, so it is reported as
+                      `prompt_median_all` / `prompt_sigma_all` and is NOT the
+                      config's main-user `user_prompt_*` unless
+                      `--single-class` says the mixture is degenerate
+    output tokens     mean + log-normal fit to `request_generation_tokens`
+    request rate      `request_success_total` / window seconds
+    residence time    Little's law on `num_requests_running`: W = L / lambda
+    think time        Z = cycle - R with cycle = sessions (1 + r) / lambda,
+                      matching the model's closed population
+                      `users = lam_total (Z + R) / (1 + r)`. `sessions` has no
+                      default: no metric counts sessions, and no quantile of
+                      `num_requests_running` bounds the time-average
+                      population in either direction.
+    prefix cache      hits / queries, and the TWO readings it admits
+
+The prefix-cache reading is the point the research note makes and this module
+refuses to blur: 87.5% savings is ONE observable over TWO unknowns (the miss
+rate and the warm-turn size). Fixing either yields the other; nothing in
+`/metrics` separates them. Both are printed, each labelled with the
+assumption it needs.
+
+Anything the metrics cannot answer is printed as
+"not observable from these metrics: <reason>" and never as a default. That
+includes the config's own `users`: nothing here counts sessions, so without
+`--sessions` the key is not assigned at all. And `--into` carries every
+unmeasured key of an existing `[workload]` over verbatim — a command that
+measures four keys must not reset the other seven to dataclass defaults on
+its way past.
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+import statistics
+import sys
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import httpx
+import numpy as np
+
+from .metrics.adapter import resolve_aliases
+from .metrics.parse import Histogram, parse_text
+from .metrics.sampler import load_jsonl, window_from_snapshots
+from .metrics.vllm import ALIASES, detect_adapter
+
+__all__ = [
+    "Reading", "Provenance", "LogNormalFit", "CacheReadings", "WorkloadEstimate",
+    "PrometheusClient", "read_prometheus", "read_jsonl", "read_metrics_text",
+    "fit_lognormal", "estimate", "emit_toml", "emit_json", "emit_table",
+    "merge_into", "existing_workload", "parse_duration", "promql", "PROMQL",
+    "DEFAULT_TURN_TOKENS", "DEFAULT_MISS_RATE", "DEFAULT_SUBAGENT_RATIO",
+]
+
+# The study's two candidate assumptions, from research/workload_agentic_poc.md.
+DEFAULT_TURN_TOKENS = 2_000.0     # the study's warm turn (tokens)
+DEFAULT_MISS_RATE = 0.01          # the config's `miss_rate` default
+# the model's `r`: subagent requests per main-user request. Not observable
+# here (no request-class label), and the closed-loop cycle scales with (1+r),
+# so `--into` prefers the value in the config being merged into.
+DEFAULT_SUBAGENT_RATIO = 0.10
+
+# Semantic keys this command reads. Everything else in the adapter's
+# vocabulary is irrelevant to a workload characterisation and is not queried,
+# which keeps the Prometheus round trips down to one per key. A key is on
+# this list only if something downstream CONSUMES it: a series fetched and
+# never used costs a round trip and, worse, appears in `missing` as though
+# its absence mattered.
+COUNTER_KEYS = ("prompt_tokens_total", "prompt_tokens_cached_total",
+                "generation_tokens_total", "prefix_cache_queries_total",
+                "prefix_cache_hits_total", "request_success_total")
+HIST_KEYS = ("request_prompt_tokens_hist", "request_generation_tokens_hist",
+             "e2e_hist", "queue_time_hist")
+GAUGE_KEYS = ("requests_running",)
+
+
+# ===========================================================================
+# PromQL, built from the adapter's metric names
+# ===========================================================================
+_ENGINE_LABEL = re.compile(r"(?:^|[,{\s])engine\s*(?:=~|!~|!=|=)")
+
+
+def _matcher(selector: str, engine: str | None) -> str:
+    """The `{...}` label matcher, or `""` when nothing is selected.
+
+    `selector` is passed through verbatim (it is PromQL the user typed), less
+    ONE wrapping pair of braces so both `model_name="m"` and `{model_name="m"}`
+    are accepted. Exactly one pair: `.strip("{}")` would eat the braces of a
+    selector that legitimately ends in one.
+
+    `engine` is appended as `engine="N"`, the label vLLM V1 puts on every
+    per-engine series. Appending it to a selector that ALREADY constrains
+    `engine` builds `{engine="1",engine="0"}` — not a narrower selection but
+    invalid PromQL, and a 400 three queries later is a worse place to learn
+    it than here.
+    """
+    s = (selector or "").strip()
+    if s.startswith("{") and s.endswith("}"):
+        s = s[1:-1].strip()
+    parts = [s] if s else []
+    if engine is not None:
+        if _ENGINE_LABEL.search(s):
+            raise ValueError(
+                f"--selector already constrains `engine` ({s!r}) and --engine "
+                f"{engine!r} would append a second matcher for the same label, "
+                f"which is invalid PromQL. Drop one of the two.")
+        parts.append(f'engine="{engine}"')
+    return "{" + ",".join(parts) + "}" if parts else ""
+
+
+@dataclass(frozen=True)
+class PROMQL:
+    """The five query shapes, built from an EXPORTED metric name.
+
+    Nothing here hardcodes a `vllm:` string: the names come from
+    `resolve_aliases(names, ALIASES, ...)` against what the server actually
+    exposes, exactly as the scrape-side adapter resolves them. An engine
+    rename upstream changes `ALIASES` and both paths follow.
+    """
+
+    selector: str = ""
+    engine: str | None = None
+    range: str = "7d"
+
+    @property
+    def m(self) -> str:
+        return _matcher(self.selector, self.engine)
+
+    def counter(self, name: str) -> str:
+        """Counter increase over the whole range, summed over label sets."""
+        return f"sum(increase({name}{self.m}[{self.range}]))"
+
+    def resets(self, name: str) -> str:
+        """How many times this counter went backwards inside the range.
+
+        SUMMED, not maxed: two data-parallel engines restarting once each is
+        two restarts in the window's totals, and `max` would report one.
+        """
+        return f"sum(resets({name}{self.m}[{self.range}]))"
+
+    def hist_resets(self, name: str) -> str:
+        """Restarts inside a HISTOGRAM family, via its `_count` member.
+
+        A histogram is not exempt from a restart, and the two families this
+        command FITS are exactly the ones a silent reset would corrupt: the
+        bucket CDF would mix a pre- and a post-restart shape and the fit would
+        report a confident median for a distribution that never existed.
+        `resets()` needs a plain counter, and `_count` is the family's.
+        """
+        return f"sum(resets({name}_count{self.m}[{self.range}]))"
+
+    def buckets(self, name: str) -> str:
+        """Histogram bucket increase, keyed by `le` — the bucket-wise delta
+        that makes a quantile over the range definable at all."""
+        return f"sum by (le) (increase({name}_bucket{self.m}[{self.range}]))"
+
+    def hist_sum(self, name: str) -> str:
+        return f"sum(increase({name}_sum{self.m}[{self.range}]))"
+
+    def hist_count(self, name: str) -> str:
+        return f"sum(increase({name}_count{self.m}[{self.range}]))"
+
+    def gauge(self, name: str) -> str:
+        """A gauge summed across engines — the deployment-wide concurrency."""
+        return f"sum({name}{self.m})"
+
+
+def promql(kind: str, name: str, *, selector: str = "", engine: str | None = None,
+           range: str = "7d") -> str:
+    """One query string by kind: counter|resets|buckets|hist_sum|hist_count|gauge."""
+    q = PROMQL(selector=selector, engine=engine, range=range)
+    fn = getattr(q, kind, None)
+    if fn is None:
+        raise ValueError(f"unknown query kind {kind!r}")
+    return fn(name)
+
+
+_DUR = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w|y)\s*$")
+_DUR_S = {"ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0,
+          "w": 604800.0, "y": 31536000.0}
+
+
+def parse_duration(spec: str) -> float:
+    """A Prometheus duration (`7d`, `90m`, `30s`) as SECONDS.
+
+    Only single-unit forms are accepted; `1h30m` is legal PromQL but two
+    different windows spelled one way is exactly the ambiguity a measurement
+    should not carry silently.
+    """
+    m = _DUR.match(spec or "")
+    if not m:
+        raise ValueError(f"bad duration {spec!r}: use one of "
+                         f"{sorted(_DUR_S)} (e.g. 7d, 12h, 90m)")
+    return float(m.group(1)) * _DUR_S[m.group(2)]
+
+
+# ===========================================================================
+# the Prometheus HTTP API
+# ===========================================================================
+class PrometheusClient:
+    """The three `/api/v1` endpoints this command needs, and nothing else.
+
+    url          Prometheus base URL (`http://prom:9090`, with or without
+                 a trailing `/api/v1`)
+    headers      extra request headers; `--auth-header 'Authorization: ...'`
+    verify       True, False, or a CA bundle path (a corporate interception
+                 proxy presents its own certificate: the bundle is the fix,
+                 `--insecure` is the escape hatch)
+    client       an injected `httpx.Client` (tests pass one built on
+                 `httpx.MockTransport`); the client will not close what it
+                 did not open.
+    """
+
+    def __init__(self, url: str, *, headers: dict[str, str] | None = None,
+                 verify: bool | str = True, timeout: float = 30.0,
+                 client: httpx.Client | None = None):
+        base = url.rstrip("/")
+        if base.endswith("/api/v1"):
+            base = base[: -len("/api/v1")]
+        self.base = base
+        self._owned = client is None
+        self._client = client or httpx.Client(headers=headers or {},
+                                              verify=verify, timeout=timeout)
+
+    def close(self) -> None:
+        if self._owned:
+            self._client.close()
+
+    def __enter__(self) -> "PrometheusClient":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    # ---- raw calls ------------------------------------------------------
+    def _get(self, path: str, params: dict[str, Any]) -> dict:
+        r = self._client.get(f"{self.base}/api/v1/{path}", params=params)
+        r.raise_for_status()
+        body = r.json()
+        if body.get("status") != "success":
+            raise ValueError(f"prometheus {path}: "
+                             f"{body.get('error', 'unsuccessful response')}")
+        return body.get("data") or {}
+
+    def metric_names(self, match: str | None = None) -> set[str]:
+        """Every metric name Prometheus knows, optionally narrowed by a
+        `match[]` series selector.
+
+        The `match[]` narrowing is an optimisation, not a requirement: a
+        Prometheus too old to accept it (or one that rejects the regex) is
+        retried unfiltered, since the only use of this set is alias
+        resolution.
+        """
+        if match:
+            try:
+                return set(self._get("label/__name__/values", {"match[]": match}))
+            except (httpx.HTTPError, ValueError):
+                pass
+        return set(self._get("label/__name__/values", {}))
+
+    def query(self, q: str, at: float | None = None) -> list[dict]:
+        """Instant query -> the `result` list (empty when nothing matched).
+
+        `at` pins the evaluation instant. Every query of one run passes the
+        SAME instant, so the counter totals, the histogram buckets and the
+        gauge range all describe one window; left to Prometheus's own "now"
+        each query would land a round trip later than the last and the
+        aggregates would span slightly different windows.
+        """
+        params: dict[str, Any] = {"query": q}
+        if at is not None:
+            params["time"] = repr(at)
+        return list(self._get("query", params).get("result") or [])
+
+    def query_range(self, q: str, start: float, end: float, step: str) -> list[dict]:
+        """Range query -> the `result` list of `{metric, values:[[t, "v"], ...]}`."""
+        data = self._get("query_range", {"query": q, "start": repr(start),
+                                         "end": repr(end), "step": step})
+        return list(data.get("result") or [])
+
+
+def _scalar(result: list) -> float | None:
+    """The single value of an instant query, or None when it matched nothing.
+
+    Prometheus has TWO instant shapes. A `vector` result is a list of
+    `{metric, value: [t, "v"]}`; a `scalar` result (what `time()` returns) is
+    the bare pair `[t, "v"]`, whose first element is a float and not a dict.
+    Reading the second shape as the first used to raise AttributeError deep in
+    a helper, so both are handled and anything else is skipped rather than
+    crashing a measurement on a response shape.
+    """
+    if (len(result) == 2 and isinstance(result[0], (int, float))
+            and isinstance(result[1], str)):
+        return _finite(result[1])
+    for series in result:
+        if not isinstance(series, dict):
+            continue
+        v = series.get("value")
+        if v and len(v) == 2:
+            x = _finite(v[1])
+            if x is not None:
+                return x
+    return None
+
+
+def _finite(tok) -> float | None:
+    try:
+        x = float(tok)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def _bucket_result(result: list[dict]) -> tuple[dict[float, float], float] | None:
+    """`sum by (le) (increase(..._bucket[...]))` -> (`le` -> count, adjustment).
+
+    `increase()` extrapolates each bucket series INDEPENDENTLY at the range
+    edges, so the counts are floats and can come back very slightly
+    NON-monotone across `le`. A cumulative histogram that dips is not one, so
+    the series is made monotone by running maximum.
+
+    That correction is silent and only ever pushes counts UP, so the size of
+    the largest one is returned alongside: the caller reports it, and reports
+    nothing when it was zero. A large adjustment is not a rounding artefact —
+    it means the buckets disagree by more than extrapolation explains.
+    """
+    raw: dict[float, float] = {}
+    for series in result:
+        le = (series.get("metric") or {}).get("le")
+        v = series.get("value")
+        if le is None or not v or len(v) != 2:
+            continue
+        try:
+            b = math.inf if le in ("+Inf", "Inf") else float(le)
+            x = float(v[1])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x):
+            raw[b] = raw.get(b, 0.0) + x
+    if not raw:
+        return None
+    out: dict[float, float] = {}
+    run, adjust = 0.0, 0.0
+    for b in sorted(raw):
+        if raw[b] < run:
+            adjust = max(adjust, run - raw[b])
+        run = max(run, raw[b])
+        out[b] = run
+    return out, adjust
+
+
+# ===========================================================================
+# a source-agnostic reading
+# ===========================================================================
+@dataclass(frozen=True)
+class Provenance:
+    """Where a reading came from. Carries NO timestamp and no raw value —
+    everything here is either something the user typed or a metric name."""
+
+    source: str                       # "prometheus" | "jsonl" | "metrics-text"
+    # A file's BASENAME, or "" for a live endpoint. NEVER a URL and never a
+    # path: an emitted block is meant to be pasted into a config other people
+    # read, and the Prometheus hostname is the deployment's identity — the
+    # one thing the employer-data firewall exists to keep in the building.
+    # What the user typed is theirs to repeat; what this command learned by
+    # dialling is not, so the endpoint is used and then forgotten.
+    target: str = ""
+    range: str | None = None          # "7d", or None for a file source
+    step: str | None = None
+    selector: str = ""
+    engine: str | None = None
+    resolved: dict[str, str] = field(default_factory=dict)
+    missing: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {"source": self.source, "target": self.target, "range": self.range,
+                "step": self.step, "selector": self.selector,
+                "engine": self.engine, "resolved": dict(self.resolved),
+                "missing": list(self.missing)}
+
+
+@dataclass
+class Reading:
+    """Aggregates from one source, before any workload interpretation.
+
+    counters    semantic key -> total over the window (units: `KEY_UNITS`)
+    histograms  semantic key -> the window's bucket-wise `Histogram`
+    running     the `num_requests_running` VALUES over the window (requests).
+                Kept as a list only long enough to take a mean and a p95;
+                nothing downstream sees it and nothing emitted contains it.
+    seconds     window length in seconds, or None when the source cannot say
+                (a single `/metrics` dump has no duration)
+    gaps        scrape/step gaps observed inside the window
+    resets      semantic key -> why no delta exists, or how many resets
+    unobservable  quantity -> why THIS SOURCE cannot answer it, on top of
+                whatever the metrics themselves cannot answer. A single
+                `/metrics` dump exports `num_requests_running` perfectly
+                well and still cannot produce a mean or a p95 of it.
+    """
+
+    provenance: Provenance
+    counters: dict[str, float | None] = field(default_factory=dict)
+    histograms: dict[str, Histogram | None] = field(default_factory=dict)
+    running: list[float] = field(default_factory=list)
+    seconds: float | None = None
+    gaps: int = 0
+    resets: dict[str, str] = field(default_factory=dict)
+    unobservable: dict[str, str] = field(default_factory=dict)
+    caveats: list[str] = field(default_factory=list)
+
+    @property
+    def hours(self) -> float | None:
+        return None if self.seconds is None else self.seconds / 3600.0
+
+
+# ---------------------------------------------------------------------------
+# source (a): Prometheus
+# ---------------------------------------------------------------------------
+def read_prometheus(url: str, *, range: str = "7d", step: str = "5m",
+                    selector: str = "", engine: str | None = None,
+                    headers: dict[str, str] | None = None,
+                    verify: bool | str = True, timeout: float = 30.0,
+                    now: float | None = None,
+                    client: httpx.Client | None = None) -> Reading:
+    """Pull the window's aggregates out of a Prometheus scraping vLLM.
+
+    Counters and histogram buckets come from `increase(...[range])` evaluated
+    once at the end of the window — one instant query per series, not a range
+    of them, because the workload question is about the WHOLE window and a
+    per-step series would be raw data this command exists not to move.
+
+    Gauges are the exception: `num_requests_running` needs its distribution
+    (a mean for Little's law, a p95 for the peak), so it is pulled as a
+    `query_range` at `step` and reduced to two numbers here, in memory.
+
+    Every query — instant and range alike — is evaluated at the SAME instant,
+    resolved once before the first of them. Otherwise each round trip pushes
+    the next query's window a little later and the aggregates stop describing
+    one window.
+
+    `now` overrides that instant (tests pin it); the default is Prometheus's
+    own clock, which is what `time()` in PromQL would report.
+    """
+    q = PROMQL(selector=selector, engine=engine, range=range)
+    q.m                                   # refuse a bad matcher before dialling
+    seconds = parse_duration(range)
+    step_s = parse_duration(step)
+    owned = client is None
+    pc = PrometheusClient(url, headers=headers, verify=verify, timeout=timeout,
+                          client=client)
+    try:
+        end = float(now if now is not None else _server_now(pc))
+        names = pc.metric_names(match='{__name__=~"(vllm|sglang):.*"}')
+        bases = {n[: -len("_bucket")] for n in names if n.endswith("_bucket")}
+        resolved = resolve_aliases(names, ALIASES, bases)
+        # `target=""`: the endpoint is dialled and then forgotten. See
+        # `Provenance.target`.
+        prov = Provenance(source="prometheus", target="", range=range, step=step,
+                          selector=selector, engine=engine, resolved=dict(resolved),
+                          missing=tuple(k for k in COUNTER_KEYS + HIST_KEYS
+                                        + GAUGE_KEYS if k not in resolved))
+        rd = Reading(provenance=prov, seconds=seconds)
+        adjusted: dict[str, float] = {}
+
+        def resets_for(key: str, query: str, kind: str) -> None:
+            n_reset = _scalar(pc.query(query, at=end))
+            if n_reset:
+                rd.resets[key] = (
+                    f"{n_reset:.0f} {kind} reset(s) inside the range (summed "
+                    f"over engines); increase() bridges each one, so the total "
+                    f"is a LOWER bound and a fitted shape mixes the two runs")
+
+        for key in COUNTER_KEYS:
+            name = resolved.get(key)
+            if name is None:
+                rd.counters[key] = None
+                continue
+            rd.counters[key] = _scalar(pc.query(q.counter(name), at=end))
+            resets_for(key, q.resets(name), "counter")
+
+        for key in HIST_KEYS:
+            name = resolved.get(key)
+            if name is None:
+                rd.histograms[key] = None
+                continue
+            got = _bucket_result(pc.query(q.buckets(name), at=end))
+            if got is None:
+                rd.histograms[key] = None
+                continue
+            buckets, adjust = got
+            if adjust > 0:
+                adjusted[key] = adjust
+            total = _scalar(pc.query(q.hist_sum(name), at=end))
+            count = _scalar(pc.query(q.hist_count(name), at=end))
+            # `_count` and the `+Inf` bucket are the same quantity, extrapolated
+            # independently. The fit divides one by the other, so a real
+            # disagreement between them is not a detail.
+            inf = buckets.get(math.inf)
+            if count and inf is not None and abs(count - inf) > 0.01 * abs(count):
+                rd.caveats.append(
+                    f"{name}: _count reads {count:,.0f} against a +Inf bucket of "
+                    f"{inf:,.0f} ({abs(count - inf) / abs(count):.1%} apart). "
+                    f"increase() extrapolates the two independently, so a small "
+                    f"gap is expected and this one is not: the CDF the fit "
+                    f"divides by is uncertain to about that much.")
+            rd.histograms[key] = Histogram(name=name, buckets=buckets,
+                                           count=count, sum=total)
+            resets_for(key, q.hist_resets(name), "histogram")
+
+        name = resolved.get("requests_running")
+        if name is not None:
+            series = pc.query_range(q.gauge(name), end - seconds, end, step)
+            vals, n_points = _range_values(series)
+            rd.running = vals
+            expected = int(seconds // step_s) + 1
+            rd.gaps = max(0, expected - n_points)
+            if rd.gaps:
+                rd.caveats.append(
+                    f"{rd.gaps} of {expected} {step} steps carry no "
+                    f"num_requests_running sample: the scrape was down, or the "
+                    f"series had not started. Means and the p95 are over the "
+                    f"{n_points} steps that exist.")
+        rd.caveats.append(
+            "Prometheus increase() extrapolates to the range edges, so counter "
+            "totals and bucket counts are fractional and accurate to about one "
+            "scrape interval at each end.")
+        if adjusted:
+            worst = max(adjusted.items(), key=lambda kv: kv[1])
+            rd.caveats.append(
+                f"{len(adjusted)} histogram(s) came back non-monotone across "
+                f"`le` and were made cumulative by running maximum, which only "
+                f"raises counts; the largest correction was {worst[1]:,.1f} "
+                f"observations on {worst[0]}.")
+        return rd
+    finally:
+        if owned:
+            pc.close()
+
+
+def _server_now(pc: PrometheusClient) -> float:
+    """Prometheus's own clock, so the range ends where the data does.
+
+    `vector(time())`, not `time()`: the bare form returns a SCALAR result,
+    which is the pair `[t, "v"]` and not the list of series every other query
+    here returns. `_scalar` now reads both, and asking for the shape we want
+    keeps the seam narrow.
+
+    Falls back to the local clock, which is what any client would use anyway
+    and is wrong only by the machines' skew.
+    """
+    try:
+        v = _scalar(pc.query("vector(time())"))
+        if v is not None:
+            return v
+    except (httpx.HTTPError, ValueError):
+        pass
+    import time as _t
+    return _t.time()
+
+
+def _range_values(series: list[dict]) -> tuple[list[float], int]:
+    """A `query_range` result -> (values, n steps present).
+
+    Timestamps are DROPPED here, at the boundary: nothing downstream can leak
+    a when, because nothing downstream is given one.
+    """
+    by_step: dict[float, float] = {}
+    for s in series:
+        for pair in s.get("values") or []:
+            if not pair or len(pair) != 2:
+                continue
+            try:
+                t, v = float(pair[0]), float(pair[1])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(v):
+                by_step[t] = by_step.get(t, 0.0) + v
+    return [by_step[t] for t in sorted(by_step)], len(by_step)
+
+
+# ---------------------------------------------------------------------------
+# source (b): a `ws metrics tail` archive
+# ---------------------------------------------------------------------------
+def _reset_code(why: str) -> str:
+    """`WindowDelta.invalid`'s reason, reduced to a code carrying NO readings.
+
+    The sampler's message is written for a terminal and quotes the counter on
+    both sides of the jump ("le=2000 went backwards (876543 -> 123457)").
+    Those are raw series values, and this command's whole contract is that no
+    raw series value reaches an emitted block; the CLASSIFICATION is all the
+    reader needs, and it is what gets carried.
+    """
+    low = why.lower()
+    if "backwards" in low:
+        return ("counter reset: the series went backwards inside the window, "
+                "so no delta exists for it here")
+    if "layout" in low or "not defined" in low:
+        return ("bucket layout changed inside the window: the engine was "
+                "reconfigured and the two histograms are not subtractable")
+    return "no delta exists for this key inside the window"
+
+
+def read_jsonl(path: str | Path, *, engine: str | None = None) -> Reading:
+    """Delta a whole `ws metrics tail --out` log into one window.
+
+    The window is the log's own endpoints (`t0=t1=None`): there is nothing
+    outside the first and last snapshot to enclose with, and the archive IS
+    the measurement.
+    """
+    snaps = load_jsonl(path)
+    if len(snaps) < 2:
+        raise ValueError(f"{path}: {len(snaps)} snapshot(s); a window needs >= 2")
+    w = window_from_snapshots(snaps, None, None, engine=engine)
+    adapter = detect_adapter(w.hi.samples, engine=engine)
+    res = adapter.resolution()
+    prov = Provenance(source="jsonl", target=Path(path).name, selector="",
+                      engine=engine, resolved=dict(res.resolved),
+                      missing=tuple(k for k in COUNTER_KEYS + HIST_KEYS
+                                    + GAUGE_KEYS if k not in res.resolved))
+    rd = Reading(provenance=prov, seconds=w.dt)
+    for key in COUNTER_KEYS:
+        rd.counters[key] = w.counters.get(key)
+    for key in HIST_KEYS:
+        rd.histograms[key] = w.histograms.get(key)
+    for key, why in w.invalid.items():
+        rd.resets[key] = _reset_code(why)
+    rd.running = [v for v in (adapter.gauge(s.samples, "requests_running")
+                              for s in snaps if s.ok and s.samples)
+                  if v is not None]
+    failed = sum(1 for s in snaps if not s.ok)
+    rd.gaps = failed
+    if failed:
+        rd.caveats.append(f"{failed} of {len(snaps)} scrapes in the archive "
+                          f"failed; the counter delta still spans the whole log, "
+                          f"but the gauge mean and p95 skip those instants.")
+    if w.dt > 0:
+        rd.caveats.append(
+            f"window endpoints are fuzzy by +/-{w.dt_uncertainty * 1e3:.0f} ms "
+            f"(the two scrapes' round trips), so a rate over a short archive is "
+            f"only as sharp as that.")
+    return rd
+
+
+# ---------------------------------------------------------------------------
+# source (c): one raw /metrics dump
+# ---------------------------------------------------------------------------
+def read_metrics_text(path: str | Path, *, engine: str | None = None) -> Reading:
+    """Read ONE `/metrics` dump. Cumulative since server start.
+
+    Everything here is a since-boot total: the distributions and the ratios
+    built from them are usable (they are shape, not rate), but the window
+    length is unknown, so `seconds` is None and every rate — request rate,
+    Little's law, think time — comes out "not observable". Point a
+    `--prometheus` or a `--jsonl` at it if you need those.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    samples = parse_text(text)
+    adapter = detect_adapter(samples, engine=engine)
+    res = adapter.resolution()
+    prov = Provenance(source="metrics-text", target=Path(path).name, engine=engine,
+                      resolved=dict(res.resolved),
+                      missing=tuple(k for k in COUNTER_KEYS + HIST_KEYS
+                                    + GAUGE_KEYS if k not in res.resolved))
+    rd = Reading(provenance=prov, seconds=None)
+    for key in COUNTER_KEYS:
+        rd.counters[key] = adapter.counter(samples, key)
+    for key in HIST_KEYS:
+        rd.histograms[key] = adapter.histogram(samples, key)
+    # `num_requests_running` is exported here and is still not usable: ONE
+    # reading of a gauge is the concurrency at the instant of the scrape, and
+    # a mean, a p95 and a session count are all statistics OF A WINDOW. Taking
+    # the single value for all three would write `users = <whatever the engine
+    # happened to be doing>` into a config, which is precisely the invented
+    # number this command exists not to produce.
+    rd.running = []
+    why = ("a single /metrics dump is one INSTANT of the gauge, not a window "
+           "of it: a mean and a p95 do not exist over one sample")
+    rd.unobservable["concurrency"] = why
+    rd.unobservable["sessions"] = why + ", so there is no session count to "\
+                                        "compute a cycle at"
+    rd.unobservable["users"] = rd.unobservable["sessions"]
+    rd.caveats.append(
+        "a single /metrics dump is CUMULATIVE SINCE SERVER START: these totals "
+        "cover the server's whole uptime, not a window you chose, and no rate "
+        "is derivable from them because the duration is not exported.")
+    return rd
+
+
+# ===========================================================================
+# the log-normal fit
+# ===========================================================================
+@dataclass(frozen=True)
+class LogNormalFit:
+    """A log-normal fitted to a bucketed CDF. Lengths in TOKENS.
+
+    The fit: a log-normal has Phi^-1(F(b)) = (ln b - mu) / sigma, so plotting
+    `ln b` against `Phi^-1(F(b))` over the histogram's bucket edges is a
+    straight line whose SLOPE is sigma and whose INTERCEPT is mu. Weighted
+    least squares on those points gives both at once (`fit_lognormal` has the
+    weights and why they are needed), and `residual_ln` is the WEIGHTED RMS
+    distance from the line in ln-token units — a straight-line fit with a
+    small residual is evidence the distribution really is log-normal, which
+    the study assumes and had never checked against buckets. `n_points` is
+    how many edges voted: three or fewer is a line through almost nothing.
+
+        median_tokens = exp(mu)
+        fit_mean_tokens = exp(mu + sigma^2 / 2)
+        mean_tokens = histogram _sum / _count  (exact, not from the fit)
+
+    `censored` is True when observations fell above the largest FINITE bucket
+    bound: the tail is then only bounded, not measured, and sigma is a lower
+    bound on the true spread. vLLM's top prompt bucket is 200k tokens, so a
+    deployment with a longer `max_model_len` censors.
+    """
+
+    median_tokens: float
+    sigma: float
+    mu: float
+    fit_mean_tokens: float
+    mean_tokens: float | None
+    observations: float
+    n_points: int
+    residual_ln: float
+    max_residual_ln: float
+    censored: bool
+    censored_fraction: float
+    top_finite_bound: float
+
+    @property
+    def residual_pct(self) -> float:
+        """RMS residual as a multiplicative error on a length, e.g. 0.07 = 7%."""
+        return math.exp(self.residual_ln) - 1.0
+
+    def to_dict(self) -> dict:
+        return {"median_tokens": self.median_tokens, "sigma": self.sigma,
+                "mu_ln": self.mu, "fit_mean_tokens": self.fit_mean_tokens,
+                "mean_tokens": self.mean_tokens, "observations": self.observations,
+                "n_fit_points": self.n_points, "residual_ln": self.residual_ln,
+                "residual_pct": self.residual_pct,
+                "max_residual_ln": self.max_residual_ln,
+                "censored": self.censored,
+                "censored_fraction": self.censored_fraction,
+                "top_finite_bound_tokens": self.top_finite_bound}
+
+
+class NotObservable(ValueError):
+    """This quantity cannot be derived from the metrics at hand, and why."""
+
+
+def fit_lognormal(h: Histogram | None, what: str = "distribution") -> LogNormalFit:
+    """Weighted least-squares log-normal over a cumulative histogram's edges.
+
+    The regression is `ln b = mu + sigma * Phi^-1(F(b))` over the bucket
+    edges, and it is WEIGHTED, because the edges are not equally informative.
+    The empirical CDF at an edge crossed by k of n observations has variance
+    F(1-F)/n; mapped onto the quantile scale that is
+
+        var(y) = F(1-F) / (n * phi(y)^2),   w = 1 / sqrt(var(y))
+
+    (the unknown `sigma` that converts a y-error into an x-error is common to
+    every point, and a common factor does not change a weighted fit). Without
+    this an edge crossed by 2 of 40,000 requests — F ~ 5e-5, where phi is
+    tiny and one more or one fewer request moves `y` by a lot — casts the
+    same vote as the edge at the median. vLLM's size buckets are decades
+    wide, so the extreme edges are always present and always the noisiest.
+
+    Raises `NotObservable` with the reason when there is nothing to fit:
+    the histogram is absent, it holds no observation in the window, or fewer
+    than two bucket edges carry a strictly-interior CDF value (a distribution
+    entirely inside one bucket has no shape to recover).
+    """
+    if h is None:
+        raise NotObservable(f"{what}: the server exports no such histogram")
+    n = h.observations
+    if not n:
+        raise NotObservable(f"{what}: the histogram holds no observation in "
+                            f"this window")
+    bounds = [b for b in h.bounds if math.isfinite(b) and b > 0]
+    if not bounds:
+        raise NotObservable(f"{what}: the histogram has no finite positive "
+                            f"bucket bound")
+    top = max(bounds)
+    top_cum = h.buckets[top]
+    censored_frac = max(0.0, (n - top_cum) / n)
+
+    nd = statistics.NormalDist()
+    xs, ys, ws = [], [], []
+    for b in bounds:
+        f = h.buckets[b] / n
+        if not 0.0 < f < 1.0:
+            continue
+        y = nd.inv_cdf(f)
+        phi = math.exp(-0.5 * y * y) / math.sqrt(2.0 * math.pi)
+        xs.append(math.log(b))
+        ys.append(y)
+        ws.append(phi * math.sqrt(n / (f * (1.0 - f))))
+    if len(xs) < 2:
+        raise NotObservable(
+            f"{what}: only {len(xs)} bucket edge(s) fall strictly inside the "
+            f"distribution — the exporter's buckets are too coarse here to "
+            f"recover a median and a sigma")
+
+    x = np.asarray(xs, dtype=float)
+    y = np.asarray(ys, dtype=float)
+    w = np.asarray(ws, dtype=float)
+    sigma, mu = np.polyfit(y, x, 1, w=w)     # x = mu + sigma * y
+    resid = x - (mu + sigma * y)
+    # the WEIGHTED RMS: the quantity actually minimised, so it says how well
+    # the line fits where the data is, not how far a two-observation edge sits
+    # from it. `max_residual_ln` stays unweighted and reports that worst edge.
+    rms = float(np.sqrt(float(np.sum((w * resid) ** 2) / np.sum(w ** 2))))
+    if not math.isfinite(sigma) or sigma <= 0:
+        raise NotObservable(f"{what}: the bucket CDF is not monotone enough to "
+                            f"fit (slope {sigma:.3g})")
+    return LogNormalFit(
+        median_tokens=math.exp(float(mu)), sigma=float(sigma), mu=float(mu),
+        fit_mean_tokens=math.exp(float(mu) + float(sigma) ** 2 / 2.0),
+        mean_tokens=h.mean(), observations=float(n), n_points=len(xs),
+        residual_ln=rms, max_residual_ln=float(np.max(np.abs(resid))),
+        censored=censored_frac > 0.0, censored_fraction=censored_frac,
+        top_finite_bound=top)
+
+
+# ===========================================================================
+# the prefix-cache reading
+# ===========================================================================
+@dataclass(frozen=True)
+class CacheReadings:
+    """Prefix-cache savings, and the TWO workload readings it admits.
+
+    `savings` S = prefix_cache_hits_total / prefix_cache_queries_total, in
+    TOKENS: the fraction of prompt tokens that did not have to be prefilled.
+
+    Under the study's turn model a request either matches nothing (a MISS,
+    probability f, costing its whole context C tokens) or continues a warm
+    session (costing only the new turn, T tokens). The computed tokens per
+    request are then
+
+        (1 - S) * C  =  f * C  +  (1 - f) * T
+
+    which is ONE equation in TWO unknowns. Fix either and the other follows:
+
+        miss_rate_given_turn = ((1 - S) * C - T) / (C - T)
+        turn_tokens_given_miss = C * (1 - S - f) / (1 - f)
+
+    They cannot be separated by any counter vLLM exports — the note in
+    research/workload_agentic_poc.md §3 is the same finding, reached from a
+    dashboard rather than from the counters. Separating them needs per-request
+    hit/query attribution, which is not on the /metrics surface.
+
+    C (`mean_prompt_tokens`) is the mean prompt length over the window, from
+    the `request_prompt_tokens` histogram (or prompt_tokens_total / requests).
+    """
+
+    savings: float
+    savings_source: str
+    mean_prompt_tokens: float
+    assumed_turn_tokens: float
+    miss_rate_given_turn: float | None
+    assumed_miss_rate: float
+    turn_tokens_given_miss: float | None
+    cached_savings: float | None          # the prompt_tokens_cached cross-check
+    note: str = (
+        "savings is ONE observable over TWO unknowns (miss rate, warm-turn "
+        "size); each reading states the assumption it needs, and the two "
+        "cannot be separated by any counter this surface exports")
+
+    def to_dict(self) -> dict:
+        return {"savings": self.savings, "savings_source": self.savings_source,
+                "mean_prompt_tokens": self.mean_prompt_tokens,
+                "assumed_turn_tokens": self.assumed_turn_tokens,
+                "miss_rate_given_turn": self.miss_rate_given_turn,
+                "assumed_miss_rate": self.assumed_miss_rate,
+                "turn_tokens_given_miss": self.turn_tokens_given_miss,
+                "cached_tokens_savings": self.cached_savings,
+                "note": self.note}
+
+
+def _cache_readings(rd: Reading, mean_prompt: float | None,
+                    turn_tokens: float, miss_rate: float) -> CacheReadings | None:
+    q = rd.counters.get("prefix_cache_queries_total")
+    h = rd.counters.get("prefix_cache_hits_total")
+    savings, source = None, ""
+    if q and h is not None and q > 0:
+        savings, source = h / q, "prefix_cache_hits_total / prefix_cache_queries_total"
+    cached = rd.counters.get("prompt_tokens_cached_total")
+    prompt = rd.counters.get("prompt_tokens_total")
+    cached_savings = (cached / prompt if cached is not None and prompt else None)
+    if savings is None:
+        if cached_savings is None:
+            return None
+        savings, source = cached_savings, "prompt_tokens_cached_total / prompt_tokens_total"
+    if mean_prompt is None or mean_prompt <= 0:
+        return None
+    c = mean_prompt
+    f_given_t = (((1.0 - savings) * c - turn_tokens) / (c - turn_tokens)
+                 if c > turn_tokens else None)
+    t_given_f = (c * (1.0 - savings - miss_rate) / (1.0 - miss_rate)
+                 if miss_rate < 1.0 else None)
+    if f_given_t is not None and not 0.0 <= f_given_t <= 1.0:
+        f_given_t = None
+    if t_given_f is not None and t_given_f < 0.0:
+        t_given_f = None
+    return CacheReadings(savings=savings, savings_source=source,
+                         mean_prompt_tokens=c, assumed_turn_tokens=turn_tokens,
+                         miss_rate_given_turn=f_given_t,
+                         assumed_miss_rate=miss_rate,
+                         turn_tokens_given_miss=t_given_f,
+                         cached_savings=cached_savings)
+
+
+# ===========================================================================
+# the estimate
+# ===========================================================================
+@dataclass(frozen=True)
+class WorkloadEstimate:
+    """Everything `ws workload` derives, with units and formulas.
+
+    hours                window length, HOURS. None from a single dump.
+    n_requests           requests that FINISHED in the window
+                         (`request_success_total`, summed over
+                         `finished_reason`; falls back to the observation
+                         count of any per-finished-request histogram).
+    req_rate_s           n_requests / window seconds, REQUESTS/SECOND, over
+                         EVERY class (this is the model's `lam_total`). Over a
+                         bursty multi-day range this is the 24/7 mean and is
+                         several times below the office-hours rate.
+    prompt               log-normal fit to `request_prompt_tokens` — over ALL
+                         requests, main-user and subagent together, because
+                         that histogram has no request-class label. Reported
+                         as `prompt_median_all` / `prompt_sigma_all`. It is
+                         NOT the config's `user_prompt_*`, which name one
+                         component of a mixture the model then re-mixes with
+                         `subagent_*` on top; assigning the aggregate there
+                         describes a wider distribution than the one measured.
+                         `--single-class` asserts the mixture is degenerate
+                         and unlocks the assignment.
+    output               log-normal fit to `request_generation_tokens`.
+    output_mean_tokens   that histogram's _sum/_count, TOKENS/REQUEST. This,
+                         not the fit, is what the config's `max_output_tokens`
+                         is set from — the study prices a mean.
+    mean_running         mean `num_requests_running` over the window,
+                         REQUESTS. Concurrent requests IN EXECUTION BATCHES.
+    p95_running          the 95th percentile of the same gauge, REQUESTS: the
+                         peak count of requests IN EXECUTION. A DIAGNOSTIC
+                         only. It is not a session count and does not bound
+                         one in either direction — it is a high quantile of an
+                         instantaneous count, while a cycle needs the
+                         time-average population, and a fleet that works in
+                         bursts and parks reads high on the p95 while
+                         averaging far less. Nothing is derived from it.
+    little_w_s           Little's law on the executing set, SECONDS:
+                         L = lambda * W, so W = mean_running / req_rate_s.
+                         Mean seconds a request spends being executed.
+    e2e_mean_s           mean end-to-end request latency R, SECONDS, from the
+                         e2e histogram's _sum/_count. Includes queueing;
+                         `little_w_s` does not, so R - W is the queue share.
+                         When `queue_mean_s` is also exported the two are
+                         compared and the verdict lands in `caveats`.
+    queue_mean_s         mean queue time, SECONDS, from `queue_time_hist`.
+                         Read only as the cross-check above.
+    sessions             the concurrent-SESSION count the cycle is computed
+                         at. NOT observable and NOT defaulted: it is whatever
+                         `--sessions` said, or None, and with None there is no
+                         cycle and no think time.
+    subagent_ratio       the `r` the cycle used, and where it came from. Also
+                         not observable; it scales the cycle by (1 + r).
+    cycle_s              sessions * (1 + subagent_ratio) / req_rate_s, SECONDS
+                         per session per turn — the closed-loop cycle, matched
+                         to `model.closed_request_rate`'s population identity
+                         `users = lam_total (Z + R) / (1 + r)`. The (1 + r) is
+                         there because `req_rate_s` counts EVERY request and a
+                         session's turn spawns r subagent calls alongside its
+                         own.
+    think_time_s         Z = cycle_s - e2e_mean_s, SECONDS: the same quantity
+                         scripts/think_time_trace.py derives from a request
+                         trace (Z = waiting per request, cycle = Z + R). Zero
+                         is a valid answer — a fully autonomous fleet has no
+                         think time — and only a negative one is refused.
+    cache                the prefix-cache readings, see `CacheReadings`.
+    unobservable         field name -> why these metrics cannot answer it.
+    caveats              everything a reader has to know before quoting a
+                         number from this run.
+    """
+
+    provenance: Provenance
+    hours: float | None
+    n_requests: float | None
+    n_requests_source: str
+    req_rate_s: float | None
+    prompt: LogNormalFit | None
+    output: LogNormalFit | None
+    output_mean_tokens: float | None
+    mean_running: float | None
+    p95_running: float | None
+    little_w_s: float | None
+    e2e_mean_s: float | None
+    queue_mean_s: float | None
+    sessions: float | None
+    cycle_s: float | None
+    think_time_s: float | None
+    cache: CacheReadings | None
+    gaps: int
+    resets: dict[str, str]
+    unobservable: dict[str, str]
+    caveats: list[str]
+    single_class: bool = False
+    subagent_ratio: float = DEFAULT_SUBAGENT_RATIO
+    subagent_ratio_source: str = "the config default"
+
+    @property
+    def prompt_assignable(self) -> bool:
+        """Whether the aggregate prompt fit may be written to the config's
+        `user_prompt_*`: only when the caller asserted a single request
+        class, since those keys name one component of a mixture."""
+        return self.prompt is not None and self.single_class
+
+    def to_dict(self) -> dict:
+        return {
+            "provenance": self.provenance.to_dict(),
+            "window": {"hours": _r(self.hours, 3), "gaps": self.gaps,
+                       "counter_resets": dict(self.resets)},
+            "requests": {"n": _r(self.n_requests, 3),
+                         "source": self.n_requests_source,
+                         "rate_per_s": _r(self.req_rate_s, 2)},
+            # named `_all` throughout: this is every request the window held,
+            # not the config's main-user class
+            "prompt_tokens_all_requests": None if self.prompt is None else {
+                "prompt_median_all": _tok(self.prompt.median_tokens),
+                "prompt_sigma_all": round(self.prompt.sigma, 2),
+                "single_class_asserted": self.single_class,
+                "assignable_to_user_prompt": self.prompt_assignable,
+                **_round_fit(self.prompt)},
+            "output_tokens": {
+                "mean": _r(self.output_mean_tokens, 3),
+                "fit": None if self.output is None else _round_fit(self.output)},
+            "concurrency": {"mean_running": _r(self.mean_running, 3),
+                            "p95_running_diagnostic": _r(self.p95_running, 3),
+                            "little_w_s": _sec(self.little_w_s),
+                            "e2e_mean_s": _sec(self.e2e_mean_s),
+                            "queue_mean_s": _sec(self.queue_mean_s)},
+            "cycle": {"sessions": _r(self.sessions, 3),
+                      "sessions_source": ("--sessions" if self.sessions is not None
+                                          else "not observable"),
+                      "subagent_ratio": self.subagent_ratio,
+                      "subagent_ratio_source": self.subagent_ratio_source,
+                      "cycle_s": _sec(self.cycle_s),
+                      "think_time_s": None if self.think_time_s is None
+                      else round(self.think_time_s, 1)},
+            "prefix_cache": None if self.cache is None else _round_cache(self.cache),
+            "not_observable": dict(self.unobservable),
+            "caveats": list(self.caveats),
+        }
+
+
+# Every `[workload]` key this command cannot derive, and why. Printed instead
+# of a default, so a reader never mistakes a dataclass default for a
+# measurement.
+UNOBSERVABLE: dict[str, str] = {
+    "system_prefix_tokens":
+        "the prefix-cache counters report how many tokens HIT, not which "
+        "tokens form a shared system prefix; nothing on this surface "
+        "attributes a hit to a prompt position",
+    "subagent_ratio":
+        "vLLM exports no request-class label, so the main/subagent split is "
+        "the study's model of the client, not something /metrics distinguishes",
+    "subagent_median_tokens":
+        "same: no request-class label, so the subagent prompt distribution "
+        "cannot be separated out of the single request_prompt_tokens histogram",
+    "subagent_sigma":
+        "same: no request-class label to split the prompt histogram by",
+    "subagent_prefix_tokens":
+        "same: no request-class label, and no per-position hit attribution",
+    "sub_shares_prefix":
+        "a client-side fact about how subagent prompts are built; the server "
+        "sees tokens, not who assembled them",
+}
+
+
+def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
+             miss_rate: float = DEFAULT_MISS_RATE,
+             sessions: float | None = None, single_class: bool = False,
+             subagent_ratio: float = DEFAULT_SUBAGENT_RATIO,
+             subagent_ratio_source: str = "the config default") -> WorkloadEstimate:
+    """Turn one `Reading` into the workload numbers, or into refusals.
+
+    `turn_tokens` and `miss_rate` are the two ASSUMPTIONS the prefix-cache
+    identity needs, one each.
+
+    `sessions` is the concurrent-session count the think-time cycle is
+    computed at. There is no default: nothing on this surface counts sessions
+    (see `WorkloadEstimate.sessions`), so with no value there is no cycle and
+    no think time.
+
+    `single_class` asserts that every request in the window is a main-user
+    request. Only then is the prompt fit assignable to the config's
+    `user_prompt_*`, which name ONE class of a mixture (see
+    `WorkloadEstimate.prompt`).
+
+    `subagent_ratio` is the model's `r` in `users = lam_total (Z + R) /
+    (1 + r)`; the counters see `lam_total` and the config's population is per
+    SESSION, so the cycle needs it. It is not observable either, so the value
+    used and where it came from are printed.
+    """
+    unobs: dict[str, str] = dict(UNOBSERVABLE)
+    unobs.update(rd.unobservable)         # what THIS SOURCE additionally cannot say
+    caveats = list(rd.caveats)
+    seconds = rd.seconds
+
+    # ---- requests and rate ---------------------------------------------
+    hp = rd.histograms.get("request_prompt_tokens_hist")
+    hg = rd.histograms.get("request_generation_tokens_hist")
+    he = rd.histograms.get("e2e_hist")
+    n = rd.counters.get("request_success_total")
+    src = "request_success_total"
+    if n is None:
+        # Every one of these histograms takes one observation per FINISHED
+        # request, so any of them counts requests. A server exporting the
+        # latency families but not the success counter is not a server whose
+        # request count is unknowable.
+        fallbacks = [(name, h.observations) for name, h in
+                     (("request_prompt_tokens", hp),
+                      ("request_generation_tokens", hg),
+                      ("e2e_request_latency_seconds", he))
+                     if h is not None and h.observations]
+        if fallbacks:
+            n = max(v for _, v in fallbacks)
+            src = (f"{'/'.join(k for k, _ in fallbacks)} observation count "
+                   f"(request_success_total absent)")
+            spread = max(v for _, v in fallbacks) - min(v for _, v in fallbacks)
+            if spread > 0.01 * n:
+                caveats.append(
+                    "the finished-request histograms disagree on how many "
+                    "requests the window holds ("
+                    + ", ".join(f"{k} {v:,.0f}" for k, v in fallbacks)
+                    + "); the largest was taken, and every per-request figure "
+                      "carries that spread.")
+    if n is None:
+        src = "not observable"
+        unobs["n_requests"] = ("no request_success_total, and none of the "
+                               "per-finished-request histograms "
+                               "(request_prompt_tokens, "
+                               "request_generation_tokens, "
+                               "e2e_request_latency_seconds) is exported here")
+    rate = (n / seconds if n is not None and seconds and seconds > 0 else None)
+    if rate is None and n is not None:
+        unobs["request_rate"] = ("the window length is unknown: a single "
+                                 "/metrics dump carries no duration")
+
+    # ---- distributions ---------------------------------------------------
+    prompt = output = None
+    try:
+        prompt = fit_lognormal(hp, "prompt length")
+    except NotObservable as e:
+        unobs["prompt_median_all"] = str(e)
+        unobs["user_prompt_median_tokens"] = str(e)
+        unobs["user_prompt_sigma"] = str(e)
+    if prompt is not None and not single_class:
+        # `request_prompt_tokens` is EVERY request. The config's
+        # `user_prompt_*` are the MAIN-USER component of a mixture whose other
+        # component (`subagent_*`) the model re-adds on top, so assigning the
+        # aggregate fit to them describes a different distribution than the
+        # one measured -- and one whose spread the config then widens again.
+        # Recovering the components needs a mixture deconvolution the bucket
+        # layout does not support, so the aggregate is reported under its own
+        # name and the class-specific keys are refused.
+        why = (f"request_prompt_tokens mixes main-user and subagent requests, "
+               f"and vLLM exports no request-class label to split them. The "
+               f"aggregate fit is reported as prompt_median_all / "
+               f"prompt_sigma_all (median "
+               f"{_tok(prompt.median_tokens):,}, sigma {prompt.sigma:.2f}); "
+               f"assigning it here would hand the model a mixture it then "
+               f"re-mixes with subagent_* on top. Pass --single-class if this "
+               f"deployment really serves one request class")
+        unobs["user_prompt_median_tokens"] = why
+        unobs["user_prompt_sigma"] = why
+    try:
+        output = fit_lognormal(hg, "output length")
+    except NotObservable as e:
+        unobs["output_distribution"] = str(e)
+    out_mean = hg.mean() if hg is not None else None
+    if out_mean is None:
+        g = rd.counters.get("generation_tokens_total")
+        if g is not None and n:
+            out_mean = g / n
+            caveats.append("mean output tokens came from generation_tokens_total "
+                           "/ requests, not from the request_generation_tokens "
+                           "histogram: an E[X]/E[Y] ratio over the window.")
+    if out_mean is None:
+        unobs["max_output_tokens"] = ("no request_generation_tokens histogram "
+                                      "and no generation_tokens_total to divide")
+
+    # Censoring makes the fit UNCERTAIN, not biased in a known direction. The
+    # fit sees only the interior edges, and a heavy tail that overflows pulls
+    # the upper interior edges apart, so the recovered sigma can come out
+    # either side of the truth (a 46% sigma has been recovered as 99%).
+    # Calling it a lower bound would license reading it as conservative.
+    for label, f in (("prompts", prompt), ("outputs", output)):
+        if f is not None and f.censored:
+            caveats.append(
+                f"{f.censored_fraction:.1%} of {label} exceeded the largest "
+                f"finite bucket ({f.top_finite_bound:,.0f} tokens). The tail is "
+                f"counted but not located, so the fit rests on the interior "
+                f"edges alone: both the median and the sigma carry extra "
+                f"uncertainty, in NEITHER direction preferentially.")
+    for label, f in (("prompt", prompt), ("output", output)):
+        if f is not None and f.n_points <= 3:
+            caveats.append(
+                f"the {label} log-normal was fitted through only {f.n_points} "
+                f"bucket edges: with two, a straight line fits exactly and the "
+                f"residual is meaningless as evidence. Treat its median and "
+                f"sigma as indicative and check them against the mean.")
+
+    # ---- concurrency, Little's law, think time ---------------------------
+    mean_run = float(np.mean(rd.running)) if rd.running else None
+    p95_run = (float(np.percentile(np.asarray(rd.running, dtype=float), 95))
+               if rd.running else None)
+    if mean_run is None and "concurrency" not in unobs:
+        # not clobbered when the SOURCE already said why (a single dump
+        # exports the gauge perfectly well and still has no window of it)
+        unobs["concurrency"] = ("num_requests_running is not exported (or, "
+                                "under DP>1 with no --engine, could not be "
+                                "combined)")
+    little_w = (mean_run / rate if mean_run is not None and rate else None)
+    e2e = he.mean() if he is not None else None
+    if e2e is None:
+        unobs["e2e_mean_s"] = "the server exports no e2e_request_latency histogram"
+    hq = rd.histograms.get("queue_time_hist")
+    queue = hq.mean() if hq is not None else None
+
+    # There is NO fallback for the session count. The p95 of concurrent
+    # decoders was one, on the argument that a decoding request implies a
+    # session and a thinking session is invisible, so the p95 could only
+    # under-count. That argument is wrong: the p95 is a HIGH quantile of an
+    # instantaneous count, and the cycle needs the TIME-AVERAGE population.
+    # Ten sessions that work for 100 s and then park for 900 s put the p95 at
+    # 10 while averaging one, and `p95 / lambda` then reports a cycle -- and a
+    # think time -- several times the truth, in the UNSAFE direction. So the
+    # p95 stays a diagnostic and only an explicit --sessions yields a cycle.
+    sess = sessions
+    if sess is None:
+        unobs["sessions"] = (
+            "nothing on this surface counts sessions. num_requests_running is "
+            "an instantaneous count of requests IN EXECUTION, and no quantile "
+            "of it bounds the time-average session population in either "
+            "direction (a bursty fleet reads high, a fleet with several "
+            "outstanding requests per session reads high again). Pass "
+            "--sessions N to compute a cycle at a population you can defend")
+    else:
+        unobs.pop("sessions", None)
+        unobs.pop("users", None)
+
+    # The model's closed population is `users = lam_total (Z + R) / (1 + r)`
+    # (model.closed_request_rate): a session's cycle carries (1 + r) requests,
+    # its own plus the subagent calls it spawns, and `rate` here counts every
+    # one of them. Dividing sessions by the total rate would price the cycle
+    # as if each session issued a single stream.
+    one_r = 1.0 + max(0.0, subagent_ratio)
+    cycle = (sess * one_r / rate if sess is not None and rate else None)
+    think = None
+    if cycle is not None and e2e is not None:
+        think = cycle - e2e
+        # Z = 0 is a real answer: a fully autonomous fleet issues its next
+        # request the instant the last one lands. Only a NEGATIVE Z is
+        # impossible, and float arithmetic can produce a tiny one at exactly
+        # zero think time.
+        if think < -1e-9 * max(1.0, cycle):
+            unobs["think_time_s"] = (
+                f"the given session count ({sess:,.0f}) implies a cycle of "
+                f"{cycle:,.1f} s, shorter than the {e2e:,.1f} s mean service "
+                f"time: no non-negative think time is consistent with it. Pass "
+                f"a larger --sessions, or narrow --range to the busy period")
+            think = None
+        else:
+            think = max(0.0, think)
+    elif cycle is None:
+        unobs["think_time_s"] = (
+            "Z = sessions (1 + r) / lambda - R needs a session count and a "
+            "request rate; " + ("--sessions was not given"
+                                if sess is None else
+                                "the window length is unknown, so there is no "
+                                "rate"))
+    elif e2e is None:
+        unobs["think_time_s"] = ("Z = cycle - R needs the mean service time R, "
+                                 "and no e2e_request_latency histogram is "
+                                 "exported here")
+    if cycle is not None:
+        caveats.append(
+            f"the cycle is sessions x (1 + r) / lambda with r = "
+            f"{subagent_ratio:g} taken from {subagent_ratio_source}, matching "
+            f"the model's closed population users = lambda_total (Z + R) / "
+            f"(1 + r). r is not observable from these metrics, and the cycle "
+            f"scales with (1 + r): at r = 0 this Z would read "
+            f"{cycle / one_r - (e2e or 0.0):,.1f} s.")
+    if p95_run is not None:
+        caveats.append(
+            f"num_requests_running p95 is {p95_run:,.0f}: the peak count of "
+            f"requests IN EXECUTION, a diagnostic and NOT a session count. It "
+            f"bounds the session population in neither direction, so nothing "
+            f"here is derived from it.")
+    unobs["sessions_in_cache"] = (
+        "no vLLM metric counts distinct sessions resident in the KV cache; "
+        "kv_cache_usage_perc is an occupancy fraction and num_requests_running "
+        "counts requests in execution batches, not warm sessions")
+    # `users` is the config's closed-loop operating point, the number `ws
+    # predict` prices a deployment at, and it is a SESSION count. Only an
+    # explicit --sessions writes it.
+    if sess is None:
+        bound = (f"; num_requests_running p95 is {p95_run:,.0f}, which is peak "
+                 f"requests in execution and bounds a session count in neither "
+                 f"direction. Pass --sessions N to write both it and a "
+                 f"matching think_time_s"
+                 if p95_run is not None else "")
+        unobs["users"] = (unobs.get("users") or
+                          "the config's `users` is the closed-loop SESSION "
+                          "count, and no metric counts sessions") + bound
+
+    if rate is not None and seconds and seconds > 3 * 3600:
+        caveats.append(
+            f"the rate is the 24/7 mean over {seconds / 3600:.1f} h. An "
+            f"office-hours workload is bursty, so the peak rate is several "
+            f"times this; narrow --range to the busy period for an operating "
+            f"point rather than an average.")
+    if little_w is not None and e2e is not None and e2e > 0:
+        why = ("the gap is queueing, which the running gauge does not count "
+               "and the e2e histogram does"
+               if little_w <= e2e else
+               "W above R means the gauge's mean is higher than the finished-"
+               "request rate can explain: the window mixes idle and busy "
+               "stretches, or requests were running that never finished inside "
+               "it. Narrow --range to a homogeneous period")
+        caveats.append(
+            f"Little's law W = L / lambda = {little_w:,.2f} s against a mean "
+            f"e2e R of {e2e:,.2f} s: {why}.")
+        # The promised cross-check, actually run: R - W is time a request
+        # spent NOT executing, and the queue histogram measures exactly that.
+        # Agreement is evidence both readings are of the same population.
+        if queue is not None:
+            implied = e2e - little_w
+            gap = abs(implied - queue)
+            verdict = ("consistent" if gap <= 0.25 * max(queue, 0.1) + 0.1
+                       else "NOT consistent: the two are measured over "
+                            "different populations (the gauge is sampled at "
+                            "--step, the histograms cover finished requests "
+                            "only), so treat W as the softer of the two")
+            caveats.append(
+                f"R - W = {implied:,.2f} s against a measured mean queue time "
+                f"of {queue:,.2f} s: {verdict}.")
+
+    # ---- prefix cache ----------------------------------------------------
+    mean_prompt = None
+    if hp is not None and hp.mean() is not None:
+        mean_prompt = hp.mean()
+    elif rd.counters.get("prompt_tokens_total") is not None and n:
+        mean_prompt = rd.counters["prompt_tokens_total"] / n
+    cache = _cache_readings(rd, mean_prompt, turn_tokens, miss_rate)
+    if cache is None:
+        unobs["miss_rate"] = ("no prefix-cache counters (a vLLM V0 server "
+                              "exports only a decaying hit-rate gauge, from "
+                              "which no window rate is recoverable) or no mean "
+                              "prompt length to price them against")
+        unobs["warm_turn_tokens"] = unobs["miss_rate"]
+    else:
+        caveats.append(
+            f"prefix-cache savings {cache.savings:.1%} is ONE observable over "
+            f"TWO unknowns: the miss rate and the warm-turn size cannot be "
+            f"separated from these counters (research/workload_agentic_poc.md "
+            f"section 3). Each reading here carries the assumption it needs.")
+        if (cache.cached_savings is not None
+                and abs(cache.cached_savings - cache.savings) > 0.01
+                and cache.savings_source.startswith("prefix_cache")):
+            caveats.append(
+                f"prompt_tokens_cached_total / prompt_tokens_total reads "
+                f"{cache.cached_savings:.1%} against the prefix-cache counters' "
+                f"{cache.savings:.1%}; the two count different things at the "
+                f"block boundary, and the gap is the uncertainty on savings.")
+        # The identity prices the savings against a mean prompt C. That is
+        # only legitimate if the cache counters saw the same prompts the
+        # histogram did: queries/request must be C. Same window, same
+        # requests -- unless the deployment routes some traffic past the
+        # prefix cache, or the two counters cover different label sets.
+        q_tot = rd.counters.get("prefix_cache_queries_total")
+        if q_tot and n and cache.mean_prompt_tokens > 0:
+            per_req = q_tot / n
+            rel = abs(per_req - cache.mean_prompt_tokens) / cache.mean_prompt_tokens
+            if rel > 0.03:
+                caveats.append(
+                    f"prefix_cache_queries_total / requests reads "
+                    f"{per_req:,.0f} tokens against a mean prompt of "
+                    f"{cache.mean_prompt_tokens:,.0f} from "
+                    f"request_prompt_tokens ({rel:.1%} apart). The miss-rate "
+                    f"and warm-turn readings price the savings against that "
+                    f"mean, so they carry that discrepancy: the two counters "
+                    f"are not seeing the same requests.")
+    if rd.resets:
+        caveats.append(
+            "series went backwards or changed layout inside the window: "
+            + "; ".join(f"{k} ({why})" for k, why in sorted(rd.resets.items()))
+            + ". A restart inside a FITTED histogram "
+              "(request_prompt_tokens, request_generation_tokens) mixes a "
+              "pre- and a post-restart shape, so its median and sigma "
+              "describe a distribution that never existed; pick a window that "
+              "does not span the restart.")
+
+    return WorkloadEstimate(
+        provenance=rd.provenance, hours=rd.hours, n_requests=n,
+        n_requests_source=src, req_rate_s=rate, prompt=prompt, output=output,
+        output_mean_tokens=out_mean, mean_running=mean_run, p95_running=p95_run,
+        little_w_s=little_w, e2e_mean_s=e2e, queue_mean_s=queue, sessions=sess,
+        cycle_s=cycle, think_time_s=think, cache=cache,
+        gaps=rd.gaps, resets=dict(rd.resets), unobservable=unobs,
+        caveats=caveats, single_class=single_class,
+        subagent_ratio=subagent_ratio,
+        subagent_ratio_source=subagent_ratio_source)
+
+
+# ===========================================================================
+# rounding — the firewall's arithmetic
+# ===========================================================================
+def _sig(x: float | None, n: int) -> float | None:
+    """`x` to `n` significant figures. The ONLY numbers this command emits.
+
+    Rounding is the firewall: a rounded aggregate cannot be walked back to a
+    scrape, and no emitted number is ever a raw series value.
+    """
+    if x is None or not math.isfinite(x):
+        return None
+    if x == 0:
+        return 0.0
+    return round(x, n - 1 - int(math.floor(math.log10(abs(x)))))
+
+
+def _r(x: float | None, n: int) -> float | None:
+    return _sig(x, n)
+
+
+def _tok(x: float | None) -> int | None:
+    """A token count: 3 significant figures, as an int."""
+    v = _sig(x, 3)
+    return None if v is None else int(round(v))
+
+
+def _rate(x: float | None) -> float | None:
+    """A rate: 2 significant figures."""
+    return _sig(x, 2)
+
+
+def _sec(x: float | None) -> float | None:
+    """A duration in seconds: 3 significant figures. Not a rate — 2 figures
+    would round a 18.7 s mean latency to 19 s and lose the comparison with
+    the Little's-law residence time it exists to be checked against."""
+    return _sig(x, 3)
+
+
+def _frac(x: float | None) -> float | None:
+    """A fraction in [0, 1]: 3 decimals (0.1 percentage-point resolution)."""
+    return None if x is None else round(x, 3)
+
+
+def _think(x: float | None) -> float | None:
+    """A think time: 1 decimal second."""
+    return None if x is None else round(x, 1)
+
+
+def _round_fit(f: LogNormalFit) -> dict:
+    d = f.to_dict()
+    d["median_tokens"] = _tok(d["median_tokens"])
+    d["fit_mean_tokens"] = _tok(d["fit_mean_tokens"])
+    d["mean_tokens"] = _tok(d["mean_tokens"])
+    d["top_finite_bound_tokens"] = _tok(d["top_finite_bound_tokens"])
+    d["observations"] = _tok(d["observations"])
+    d["sigma"] = round(d["sigma"], 2)
+    d["mu_ln"] = round(d["mu_ln"], 3)
+    d["residual_ln"] = round(d["residual_ln"], 4)
+    d["max_residual_ln"] = round(d["max_residual_ln"], 4)
+    d["residual_pct"] = round(d["residual_pct"], 4)
+    d["censored_fraction"] = _frac(d["censored_fraction"])
+    return d
+
+
+def _round_cache(c: CacheReadings) -> dict:
+    d = c.to_dict()
+    d["savings"] = _frac(d["savings"])
+    d["cached_tokens_savings"] = _frac(d["cached_tokens_savings"])
+    d["mean_prompt_tokens"] = _tok(d["mean_prompt_tokens"])
+    d["assumed_turn_tokens"] = _tok(d["assumed_turn_tokens"])
+    d["miss_rate_given_turn"] = _frac(d["miss_rate_given_turn"])
+    d["assumed_miss_rate"] = _frac(d["assumed_miss_rate"])
+    d["turn_tokens_given_miss"] = _tok(d["turn_tokens_given_miss"])
+    return d
+
+
+# ===========================================================================
+# emitters
+# ===========================================================================
+def _wrap_comment(text: str, width: int = 74, indent: str = "#   ",
+                  cont: str | None = None) -> list[str]:
+    """Wrap `text`, prefixing the first line with `indent` and the rest with
+    `cont` (default: `indent` blanked out, so a bullet's marker is not
+    repeated on every continuation line)."""
+    if cont is None:
+        # keep the comment marker, blank the bullet: "#   - " -> "#     "
+        cont = ("#" + " " * (len(indent) - 1) if indent.lstrip().startswith("#")
+                else " " * len(indent))
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        pre = indent if not lines else cont
+        if cur and len(pre) + len(cur) + 1 + len(w) > width:
+            lines.append(pre + cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        lines.append((indent if not lines else cont) + cur)
+    return lines
+
+
+def _provenance_comments(est: WorkloadEstimate) -> list[str]:
+    p = est.provenance
+    head = f"measured by `ws workload` from {p.source} {p.target}"
+    if p.range:
+        head += f", range {p.range}"
+    if p.selector:
+        head += f", selector {p.selector}"
+    if p.engine is not None:
+        head += f", engine {p.engine}"
+    out = _wrap_comment(head, indent="# ")
+    facts = []
+    if est.n_requests is not None:
+        facts.append(f"{_tok(est.n_requests):,} requests")
+    if est.hours is not None:
+        facts.append(f"{est.hours:.1f} h")
+    if est.req_rate_s is not None:
+        facts.append(f"{_rate(est.req_rate_s):g} req/s (window mean)")
+    if est.gaps:
+        facts.append(f"{est.gaps} scrape gap(s)")
+    if facts:
+        out += _wrap_comment(" | ".join(facts), indent="# ")
+    return out
+
+
+def emit_toml(est: WorkloadEstimate, preserve: dict[str, Any] | None = None) -> str:
+    """A `[workload]` block, ready to paste or to `--into` an existing config.
+
+    Only DERIVED keys are assigned. Everything else is a comment saying
+    "not observable from these metrics: <reason>" — a key omitted from a TOML
+    block reads back as the dataclass default, and a reader has to be able to
+    tell a default from a measurement.
+
+    `preserve` carries the keys an EXISTING `[workload]` already set that this
+    run did not measure. They are written back verbatim, because a splice that
+    dropped them would silently reset a hand-tuned `subagent_ratio` or
+    `system_prefix_tokens` to a dataclass default — a measurement command
+    quietly editing values it never measured.
+    """
+    lines = ["[workload]"]
+    lines += _provenance_comments(est)
+    lines.append("#")
+    assigned: set[str] = set()
+
+    def put(key: str, value, comment: str = "") -> None:
+        if value is None:
+            return
+        assigned.add(key)
+        v = ("true" if value is True else "false" if value is False
+             else repr(value))
+        lines.append(f"{key} = {v}" + (f"  # {comment}" if comment else ""))
+
+    if est.prompt_assignable:
+        censored = (" (tail censored: see the caveats)" if est.prompt.censored
+                    else "")
+        put("user_prompt_median_tokens", _tok(est.prompt.median_tokens),
+            f"log-normal fit over ALL requests, asserted single-class by "
+            f"--single-class; {est.prompt.n_points} bucket edges, residual "
+            f"{est.prompt.residual_pct:.2%}{censored}")
+        put("user_prompt_sigma", round(est.prompt.sigma, 2), "same fit")
+    put("max_output_tokens", _tok(est.output_mean_tokens),
+        "mean of request_generation_tokens")
+    if est.cache is not None and est.cache.miss_rate_given_turn is not None:
+        put("miss_rate", _frac(est.cache.miss_rate_given_turn),
+            f"EFFECTIVE total-miss rate, and only under warm_turn_tokens = "
+            f"{_tok(est.cache.assumed_turn_tokens):,}")
+        put("warm_turn_tokens", _tok(est.cache.assumed_turn_tokens),
+            "ASSUMED, not measured (see the two readings below)")
+    put("think_time_s", _think(est.think_time_s),
+        f"Z = sessions (1 + r) / lambda - mean e2e, at the "
+        f"{est.sessions:,.0f} sessions given and r = {est.subagent_ratio:g}"
+        if est.sessions is not None else "")
+    put("users", None if est.sessions is None else int(round(est.sessions)),
+        "as given by --sessions")
+
+    carried = {k: v for k, v in (preserve or {}).items() if k not in assigned}
+    if carried:
+        lines.append("#")
+        lines += _wrap_comment(
+            "carried over unchanged from the previous [workload]: this run "
+            "did not measure these, and a measurement command must not reset "
+            "what it cannot see.", indent="# ")
+        for k in sorted(carried):
+            put(k, carried[k], "preserved, not measured")
+
+    lines.append("#")
+    if est.prompt is not None and not est.prompt_assignable:
+        lines += _wrap_comment(
+            f"prompt_median_all = {_tok(est.prompt.median_tokens):,}, "
+            f"prompt_sigma_all = {est.prompt.sigma:.2f} "
+            f"({_tok(est.prompt.observations):,} requests, "
+            f"{est.prompt.n_points} bucket edges, residual "
+            f"{est.prompt.residual_pct:.2%}) -- the fit over ALL requests. "
+            f"NOT assigned to user_prompt_*: see below.", indent="# ")
+        lines.append("#")
+    if est.cache is not None:
+        lines += _wrap_comment(
+            f"prefix-cache savings {est.cache.savings:.1%} over a mean prompt of "
+            f"{_tok(est.cache.mean_prompt_tokens):,} tokens. ONE observable, TWO "
+            f"unknowns:", indent="# ")
+        if est.cache.miss_rate_given_turn is not None:
+            lines += _wrap_comment(
+                f"miss rate {est.cache.miss_rate_given_turn:.1%} IF the warm turn "
+                f"is {_tok(est.cache.assumed_turn_tokens):,} tokens", indent="#   - ")
+        if est.cache.turn_tokens_given_miss is not None:
+            lines += _wrap_comment(
+                f"warm turn {_tok(est.cache.turn_tokens_given_miss):,} tokens IF the "
+                f"miss rate is {est.cache.assumed_miss_rate:.1%}", indent="#   - ")
+        lines += _wrap_comment(
+            "these cannot be separated by any counter vLLM exports "
+            "(research/workload_agentic_poc.md section 3).", indent="#   ")
+        lines.append("#")
+    for key, why in sorted(est.unobservable.items()):
+        lines += _wrap_comment(f"{key}: not observable from these metrics: {why}",
+                               indent="# ", cont="#     ")
+    if est.caveats:
+        lines.append("#")
+        lines.append("# caveats:")
+        for c in est.caveats:
+            lines += _wrap_comment(c, indent="#   - ")
+    return "\n".join(lines) + "\n"
+
+
+def emit_json(est: WorkloadEstimate) -> str:
+    return json.dumps(est.to_dict(), indent=2, allow_nan=False) + "\n"
+
+
+def _row(label: str, value: str, unit: str = "") -> str:
+    return f"  {label:<34} {value:>16}  {unit}".rstrip()
+
+
+def emit_table(est: WorkloadEstimate) -> str:
+    """The human view: the derived numbers, then every refusal, then caveats."""
+    p = est.provenance
+    out: list[str] = []
+    head = f"{p.source}: {p.target}" if p.target else p.source
+    if p.range:
+        head += f"  range {p.range}" + (f" step {p.step}" if p.step else "")
+    if p.selector:
+        head += f"  selector {p.selector}"
+    if p.engine is not None:
+        head += f"  engine {p.engine}"
+    out.append(head)
+    window = ("unknown (cumulative since server start)" if est.hours is None
+              else f"{est.hours:.1f} h")
+    line = f"  window {window}"
+    if est.n_requests is not None:
+        line += f"  |  {_tok(est.n_requests):,} requests ({est.n_requests_source})"
+    out.append(line)
+    if est.gaps:
+        out.append(f"  {est.gaps} gap(s) in the gauge series")
+    out.append("")
+    out.append("  derived")
+    if est.prompt is not None:
+        klass = ("single-class, assignable to user_prompt_*"
+                 if est.single_class else "ALL requests: main + subagent mixed")
+        out.append(_row("prompt_median_all",
+                        f"{_tok(est.prompt.median_tokens):,}",
+                        f"tokens; {klass}"))
+        out.append(_row("prompt_sigma_all", f"{est.prompt.sigma:.2f}",
+                        f"fit over {est.prompt.n_points} edges, residual "
+                        f"{est.prompt.residual_pct:.2%}"
+                        + (", TAIL CENSORED" if est.prompt.censored else "")))
+        if est.prompt.mean_tokens is not None:
+            out.append(_row("prompt mean (histogram sum)",
+                            f"{_tok(est.prompt.mean_tokens):,}", "tokens"))
+    if est.output_mean_tokens is not None:
+        out.append(_row("output mean", f"{_tok(est.output_mean_tokens):,}",
+                        "tokens/request"))
+    if est.output is not None:
+        out.append(_row("output median (log-normal)",
+                        f"{_tok(est.output.median_tokens):,}",
+                        f"tokens, sigma {est.output.sigma:.2f}"
+                        + (", TAIL CENSORED" if est.output.censored else "")))
+    if est.req_rate_s is not None:
+        out.append(_row("request rate", f"{_rate(est.req_rate_s):g}",
+                        "req/s (window mean)"))
+    if est.mean_running is not None:
+        out.append(_row("num_requests_running mean",
+                        f"{_r(est.mean_running, 3):g}", "requests in execution"))
+    if est.p95_running is not None:
+        out.append(_row("num_requests_running p95",
+                        f"{_r(est.p95_running, 3):g}",
+                        "peak requests in execution (DIAGNOSTIC; not a "
+                        "session count)"))
+    if est.little_w_s is not None:
+        out.append(_row("Little's law W = L / lambda",
+                        f"{_sec(est.little_w_s):g}", "s in execution"))
+    if est.e2e_mean_s is not None:
+        out.append(_row("mean e2e latency R", f"{_sec(est.e2e_mean_s):g}", "s"))
+    if est.queue_mean_s is not None:
+        out.append(_row("mean queue time", f"{_sec(est.queue_mean_s):g}", "s"))
+    if est.cycle_s is not None:
+        out.append(_row("cycle = sessions (1+r) / lambda",
+                        f"{_sec(est.cycle_s):g}",
+                        f"s at {int(round(est.sessions)):,} sessions, "
+                        f"r = {est.subagent_ratio:g} "
+                        f"({est.subagent_ratio_source})"))
+    if est.think_time_s is not None:
+        out.append(_row("think time Z = cycle - R", f"{_think(est.think_time_s):g}", "s"))
+
+    if est.cache is not None:
+        c = est.cache
+        out.append("")
+        out.append("  prefix cache (ONE observable, TWO unknowns)")
+        out.append(_row("savings (tokens hit / queried)", f"{c.savings:.1%}",
+                        c.savings_source))
+        out.append(_row("mean prompt", f"{_tok(c.mean_prompt_tokens):,}", "tokens"))
+        if c.miss_rate_given_turn is not None:
+            out.append(_row("miss rate", f"{c.miss_rate_given_turn:.1%}",
+                            f"IF the warm turn is "
+                            f"{_tok(c.assumed_turn_tokens):,} tokens"))
+        if c.turn_tokens_given_miss is not None:
+            out.append(_row("warm turn",
+                            f"{_tok(c.turn_tokens_given_miss):,}",
+                            f"tokens IF the miss rate is {c.assumed_miss_rate:.1%}"))
+        out.append("  these two cannot be separated by any counter vLLM exports.")
+
+    out.append("")
+    out.append("  not observable from these metrics")
+    for key, why in sorted(est.unobservable.items()):
+        out.append(f"    {key}:")
+        out += _wrap_comment(why, indent="      ")
+    if est.caveats:
+        out.append("")
+        out.append("  caveats")
+        for c in est.caveats:
+            out += _wrap_comment(c, indent="    - ")
+    return "\n".join(out) + "\n"
+
+
+# ===========================================================================
+# merging into an existing config
+# ===========================================================================
+_TABLE = re.compile(r"^\s*\[")
+
+
+def existing_workload(path: str | Path) -> dict[str, Any]:
+    """The `[workload]` table a config already carries, or `{}`."""
+    try:
+        raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    block = raw.get("workload")
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def merge_into(path: str | Path, est: WorkloadEstimate) -> str:
+    """Rewrite ONLY the `[workload]` table of a TOML config.
+
+    Two things this must not do, both of which it used to.
+
+    It must not reformat the rest of the file. A whole-file round trip through
+    a TOML writer would drop the comments the study's configs carry and make
+    the diff unreviewable, so this is a line splice: the `[workload]` header
+    through the line before the next table is replaced and every other line
+    survives byte for byte, LINE ENDINGS INCLUDED. A run of comments sitting
+    immediately above the next table header belongs to that table, so it is
+    excluded from the replaced span rather than swallowed with the old block.
+
+    And it must not silently reset what it did not measure. `ws workload`
+    derives a handful of the eleven `[workload]` keys; the rest — a hand-set
+    `subagent_ratio`, a measured `system_prefix_tokens`, an operating point
+    someone chose — were being dropped, which reads back as the dataclass
+    default. Every key the estimate does not assign is carried over verbatim
+    and labelled `preserved, not measured`.
+
+    The result is parsed AND validated before it is returned, so a config this
+    would not be able to price fails here rather than in the next `ws
+    predict`.
+    """
+    p = Path(path)
+    # newline="": no universal-newline translation, so a CRLF config comes
+    # back as CRLF and `_splice_workload` can put it back as it found it.
+    with open(p, "r", encoding="utf-8", newline="") as f:
+        original = f.read()
+    block = emit_toml(est, preserve=existing_workload(p))
+    return _splice_workload(original, block)
+
+
+def _splice_workload(original: str, block: str) -> str:
+    """The pure text half of `merge_into`, so it can be tested on strings."""
+    nl = "\r\n" if "\r\n" in original else "\n"
+    lines = original.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.strip().startswith("[workload]")), None)
+    new = block.rstrip("\n").split("\n")
+    if start is None:
+        out = lines + ([""] if lines and lines[-1].strip() else []) + new + [""]
+    else:
+        end = next((j for j in range(start + 1, len(lines))
+                    if _TABLE.match(lines[j])), len(lines))
+        # a comment block immediately above the next table introduces THAT
+        # table; walk back over it (and the blank line before it) so it is
+        # kept rather than replaced along with the old [workload].
+        keep = end
+        while keep > start + 1 and (lines[keep - 1].lstrip().startswith("#")
+                                    or not lines[keep - 1].strip()):
+            keep -= 1
+        out = lines[:start] + new + [""] + lines[keep:]
+    text = nl.join(out).rstrip("\r\n") + nl
+    parsed = tomllib.loads(text)          # refuses to write a file that won't read
+    from .config import RunConfig
+    cfg = RunConfig.from_dict(parsed)     # and refuses a key the schema lacks
+    cfg.validate()                        # and one the model would not price
+    return text
+
+
+# ===========================================================================
+# CLI
+# ===========================================================================
+def _headers(args) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for h in getattr(args, "auth_header", None) or []:
+        if ":" not in h:
+            raise ValueError(f"--auth-header must be 'Name: value', got {h!r}")
+        k, v = h.split(":", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def _verify(args) -> bool | str:
+    if getattr(args, "ca_bundle", None):
+        return args.ca_bundle
+    return not getattr(args, "insecure", False)
+
+
+def cmd_workload(args) -> int:
+    n_src = sum(bool(x) for x in (args.prometheus, args.jsonl, args.metrics_text))
+    if n_src != 1:
+        raise ValueError("pick exactly one source: --prometheus URL, "
+                         "--jsonl FILE, or --metrics-text FILE")
+    if args.sessions is not None and args.sessions < 0:
+        raise ValueError(f"--sessions must be >= 0, got {args.sessions!r}: a "
+                         f"negative population is not a workload, and it would "
+                         f"be written into the config as `users`")
+    if not 0.0 <= args.assume_miss_rate <= 1.0:
+        raise ValueError(f"--assume-miss-rate must be in [0, 1], got "
+                         f"{args.assume_miss_rate!r}")
+    if args.assume_turn_tokens < 0:
+        raise ValueError(f"--assume-turn-tokens must be >= 0, got "
+                         f"{args.assume_turn_tokens!r}")
+
+    # `r` scales the closed-loop cycle by (1 + r) and is not observable here,
+    # so the config being written to is the best available source for it.
+    ratio, ratio_src = args.subagent_ratio, "--subagent-ratio"
+    if ratio is None and args.into:
+        found = existing_workload(args.into).get("subagent_ratio")
+        ratio, ratio_src = ((float(found), f"the [workload] in {Path(args.into).name}")
+                            if isinstance(found, (int, float))
+                            else (None, ratio_src))
+    if ratio is None:
+        ratio, ratio_src = DEFAULT_SUBAGENT_RATIO, "the config default"
+    if ratio < 0:
+        raise ValueError(f"--subagent-ratio must be >= 0, got {ratio!r}")
+
+    if args.prometheus:
+        try:
+            rd = read_prometheus(args.prometheus, range=args.range, step=args.step,
+                                 selector=args.selector or "", engine=args.engine,
+                                 headers=_headers(args), verify=_verify(args),
+                                 timeout=args.timeout)
+        except httpx.HTTPError as e:
+            # a transport or status failure is a user-facing message about the
+            # endpoint, not a traceback about httpx
+            raise ValueError(f"prometheus {args.prometheus}: {e}") from e
+    elif args.jsonl:
+        rd = read_jsonl(args.jsonl, engine=args.engine)
+    else:
+        rd = read_metrics_text(args.metrics_text, engine=args.engine)
+
+    est = estimate(rd, turn_tokens=args.assume_turn_tokens,
+                   miss_rate=args.assume_miss_rate, sessions=args.sessions,
+                   single_class=args.single_class, subagent_ratio=ratio,
+                   subagent_ratio_source=ratio_src)
+
+    emit = "json" if args.json else args.emit
+    preserve = existing_workload(args.into) if args.into else None
+    if args.into:
+        text = merge_into(args.into, est)
+        # newline="": the splice already chose the file's own line ending;
+        # the default would translate it again on the way out
+        Path(args.into).write_text(text, encoding="utf-8", newline="")
+        # stderr, so `--emit json --into cfg.toml | jq` still parses
+        print(f"rewrote the [workload] block of {args.into}", file=sys.stderr)
+    if emit == "toml":
+        # the same block that was written, carried-over keys and all
+        print(emit_toml(est, preserve=preserve), end="")
+    elif emit == "json":
+        print(emit_json(est), end="")
+    else:
+        print(emit_table(est), end="")
+    return 0
+
+
+def add_subparser(sub) -> None:
+    """Attach `ws workload` to the top-level subparsers object."""
+    p = sub.add_parser(
+        "workload", help="characterise the workload, emit the [workload] block",
+        description=__doc__,
+        epilog="Examples:\n"
+               "  ws workload --prometheus http://prom:9090 --range 7d \\\n"
+               "      --selector 'model_name=\"Qwen/Qwen3-27B\"' --emit toml\n"
+               "  ws workload --jsonl run.jsonl --emit toml "
+               "--into workingset.toml\n"
+               "  ws workload --metrics-text metrics.txt --json\n"
+               "\nEvery emitted number is a ROUNDED AGGREGATE (tokens to 3\n"
+               "significant figures, rates to 2, think time to 0.1 s). No raw\n"
+               "series value and no timestamp leaves this command.\n",
+        formatter_class=__import__("argparse").RawDescriptionHelpFormatter)
+
+    g = p.add_argument_group(
+        "sources (pick exactly one)",
+        "each answers a different set of questions; a source that cannot "
+        "answer one prints 'not observable from these metrics' and why")
+    g.add_argument("--prometheus", metavar="URL",
+                   help="Prometheus base URL. PromQL over the HTTP API: "
+                        "increase() over the whole --range for counters and "
+                        "histogram buckets, query_range at --step for the "
+                        "num_requests_running gauge. Answers everything.")
+    g.add_argument("--jsonl", metavar="FILE",
+                   help="a `ws metrics tail --out` archive, delta'd whole-log. "
+                        "Answers everything the archive's --keep retained; "
+                        "counter resets and bucket-layout changes are reported, "
+                        "never bridged.")
+    g.add_argument("--metrics-text", metavar="FILE", dest="metrics_text",
+                   help="one raw /metrics dump. Its counters are CUMULATIVE "
+                        "SINCE SERVER START: distributions and ratios are "
+                        "usable, every RATE (request rate, Little's law, think "
+                        "time) is not observable, because the dump carries no "
+                        "duration.")
+
+    g = p.add_argument_group("prometheus options")
+    g.add_argument("--range", default="7d",
+                   help="window ending now, e.g. 7d / 12h / 90m (default 7d)")
+    g.add_argument("--step", default="5m",
+                   help="query_range step for the gauge series (default 5m). "
+                        "Steps carrying no sample are counted as scrape gaps.")
+    g.add_argument("--selector", default="",
+                   help="extra PromQL label matcher, e.g. "
+                        "'model_name=\"Qwen/Qwen3-27B\"'. Passed through "
+                        "verbatim and echoed in the provenance.")
+    g.add_argument("--auth-header", action="append", metavar="'Name: value'",
+                   help="extra request header; repeatable. Prefer this over a "
+                        "key in the URL, which lands in shell history.")
+    g.add_argument("--ca-bundle", help="CA bundle to verify TLS against (the "
+                                       "right fix for an interception proxy)")
+    g.add_argument("--insecure", action="store_true",
+                   help="skip TLS verification (internal endpoints only)")
+    g.add_argument("--timeout", type=float, default=30.0,
+                   help="per-query timeout, seconds (default 30)")
+
+    g = p.add_argument_group(
+        "assumptions",
+        "the prefix-cache savings is ONE observable over TWO unknowns; each "
+        "of these fixes one so the other can be read off, and both readings "
+        "are always printed with the assumption they needed")
+    g.add_argument("--assume-turn-tokens", type=float,
+                   default=DEFAULT_TURN_TOKENS, metavar="N",
+                   help=f"warm-turn size, tokens (default "
+                        f"{DEFAULT_TURN_TOKENS:.0f}, the study's): fixes it so "
+                        f"the effective miss rate can be read off")
+    g.add_argument("--assume-miss-rate", type=float, default=DEFAULT_MISS_RATE,
+                   metavar="F",
+                   help=f"miss rate in [0, 1] (default {DEFAULT_MISS_RATE}, the "
+                        f"config's): fixes it so the warm-turn size can be read "
+                        f"off")
+    g.add_argument("--sessions", type=float, metavar="N",
+                   help="concurrent sessions the think-time cycle is computed "
+                        "at. NO DEFAULT: nothing on this surface counts "
+                        "sessions, and num_requests_running is an "
+                        "instantaneous count of requests in execution whose "
+                        "quantiles bound the time-average population in "
+                        "neither direction. Without it there is no cycle, no "
+                        "think_time_s and no users.")
+    g.add_argument("--subagent-ratio", type=float, metavar="R",
+                   help="subagent requests per main-user request, the model's "
+                        "`r`. The closed population is users = lambda_total "
+                        "(Z + R) / (1 + r), so the cycle scales with (1 + r). "
+                        "Not observable here; defaults to the value in the "
+                        f"--into config, else {DEFAULT_SUBAGENT_RATIO}. The "
+                        "value used is always printed.")
+    g.add_argument("--single-class", action="store_true",
+                   help="assert that EVERY request in the window is a "
+                        "main-user request. request_prompt_tokens has no "
+                        "request-class label, so its fit describes the "
+                        "main+subagent mixture; the config's user_prompt_* "
+                        "name one component of that mixture and the model "
+                        "re-mixes subagent_* on top. Without this the "
+                        "aggregate is reported as prompt_median_all / "
+                        "prompt_sigma_all and the class-specific keys are "
+                        "refused.")
+
+    g = p.add_argument_group("output")
+    g.add_argument("--emit", choices=("table", "toml", "json"), default="table",
+                   help="table (default): the derived numbers, every refusal "
+                        "and every caveat. toml: a [workload] block ready to "
+                        "paste. json: the full estimate with provenance, fit "
+                        "residuals and caveats.")
+    g.add_argument("--json", action="store_true", help="shorthand for --emit json")
+    g.add_argument("--into", metavar="workingset.toml",
+                   help="rewrite just the [workload] block of this config, "
+                        "leaving every other block's lines and comments as "
+                        "they were. Keys of [workload] this run did not "
+                        "measure are carried over unchanged rather than reset "
+                        "to a default, and the completed config is validated "
+                        "before it is written.")
+    p.add_argument("--engine", help="engine index to select under DP>1 "
+                                    "(default: sum every engine)")
+    p.set_defaults(fn=cmd_workload)
