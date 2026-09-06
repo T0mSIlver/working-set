@@ -1,0 +1,63 @@
+# The model and its mirror, on every push and pull request.
+#
+#   pytest        the Python package's own tests (src/workingset/**)
+#   golden        scripts/golden.py --check regenerates tests/golden/vectors.json
+#                 from src/workingset/model.py and fails if the committed file
+#                 differs, so the fixture cannot go stale behind a model change
+#   mirror        tests/js/golden.test.mjs replays every vector through
+#                 interactive/src/*.js and fails on any disagreement that is not
+#                 in tests/golden/known_disagreements.json
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: install (dev group)
+        run: uv sync --group dev
+      - name: pytest
+        run: uv run pytest -q
+
+  golden:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # 24 is what the golden test was developed and verified against locally
+      # (node --version -> v24.18.0) — the only version verified end to end,
+      # so it is what CI runs. The structural floor is module.register (20.6):
+      # tests/js/loader.mjs stamps format "module" on the explorer's .js
+      # sources itself, so the load does NOT rely on Node's ESM syntax
+      # detection (22.x) even though the repo has no package.json.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: install (dev group)
+        run: uv sync --group dev
+      # regenerate from the Python model and compare against what is committed
+      - name: golden vectors are current
+        run: uv run scripts/golden.py --check
+      # ...then hold the JS mirror to them. No npm install: the test imports
+      # interactive/src/*.js directly and node's own test runner does the rest.
+      - name: JS mirror agrees with the Python model
+        run: node --import ./tests/js/register.mjs --test tests/js/golden.test.mjs

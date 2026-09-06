@@ -2053,6 +2053,21 @@ def request_rate(users: float, think_time_s: float = THINK_TIME_S,
     return users * (1.0 + sub_ratio) / think_time_s
 
 
+def warm_draw(model: Model, topo: Topology) -> int:
+    """Requests per warm fill: enough to exhaust this pool's budget.
+
+    warm_capacity REFUSES a censored draw rather than under-counting, so the
+    caller has to size it. One session costs at least a shared-prefix-sized
+    remainder plus its recurrent state, so a pool of P tokens holds O(P/8000)
+    of them on the study's workload; the flat 4,000 covers the small-pool end.
+    Extracted from max_users_cache so a caller that ALSO wants the which="all"
+    or which="gpu" arm of the same fill can ask for the same draw instead of
+    restating the rule — two draw rules that must stay equal is a drift bug
+    waiting to happen (the same reason AVG_OUT_TOK is an alias).
+    """
+    return int(4000 + kv_pool_tokens(model, topo) / 8000)
+
+
 def max_users_cache(model: Model, topo: Topology, wl: Workload, ram_gib=0,
                     n_iter: int = 400, draw: int = None, seed: int = 0) -> float:
     """Users whose sessions fit warm in the pool — warm p5, USER-class only.
@@ -2062,7 +2077,7 @@ def max_users_cache(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     exact count the explorer approximates as warm x (1 - p_sub)).
     """
     if draw is None:
-        draw = int(4000 + kv_pool_tokens(model, topo) / 8000)
+        draw = warm_draw(model, topo)
     return float(warm_capacity(model, topo, wl, ram_gib=ram_gib, n_iter=n_iter,
                                draw=draw, seed=seed, which="user")[0])
 
