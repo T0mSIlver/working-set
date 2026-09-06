@@ -118,6 +118,11 @@ class FakeProm:
         q = request.url.params.get("query", "")
         self.queries.append((q, request.url.params.get("time")))
         if q == "time()":
+            # the REAL shape: a `scalar` result is the bare pair [t, "v"],
+            # not a list of {metric, value} series
+            return self._ok({"resultType": "scalar",
+                             "result": [self.now, repr(self.now)]})
+        if q == "vector(time())":
             return self._vector([({}, self.now)])
         m = _NAME.search(q)
         if m is None:
@@ -308,6 +313,36 @@ def test_promql_names_come_from_the_adapter_not_from_literals():
         assert base in set(resolved.values())
 
 
+def test_a_scalar_result_does_not_crash_the_run():
+    """`time()` returns Prometheus's `scalar` shape — the bare pair
+    [t, "v"] — and reading it as a vector used to raise AttributeError on a
+    float, uncaught, out of a helper."""
+    from workingset.workload import _scalar
+    assert _scalar([1_700_000_000.0, "1700000000"]) == pytest.approx(1.7e9)
+    assert _scalar([{"metric": {}, "value": [0, "42"]}]) == 42.0
+    assert _scalar([]) is None
+    assert _scalar([{"metric": {}}]) is None
+    assert _scalar(["nonsense", 3]) is None
+
+
+def test_the_clock_is_asked_for_a_vector_and_the_run_survives_a_scalar():
+    """End to end against a fake that answers `time()` with the real scalar
+    shape: whichever form the query takes, the window still resolves."""
+    prom = study_prom()
+    rd = read_prometheus("http://prom.test", range="7d", step="5m",
+                         client=prom.client())          # no `now=`: asks the server
+    assert "vector(time())" in prom.promql
+    assert prom.windows == [(prom.now - 604800.0, prom.now)]
+    assert estimate(rd).hours == pytest.approx(168.0)
+
+    # and a server that only understands the bare form is still usable
+    from workingset.workload import PrometheusClient
+    pc = PrometheusClient("http://prom.test", client=prom.client())
+    assert pc.query("time()") == [prom.now, repr(prom.now)]
+    from workingset.workload import _scalar as s
+    assert s(pc.query("time()")) == pytest.approx(prom.now)
+
+
 def test_parse_duration():
     assert parse_duration("7d") == 604800.0
     assert parse_duration("90m") == 5400.0
@@ -407,6 +442,73 @@ def test_fit_reports_censoring_when_the_top_bucket_overflows():
     assert g.censored_fraction == 0.0
 
 
+def test_censoring_is_uncertainty_not_a_direction():
+    """Censoring was described as making sigma a LOWER bound, which would
+    license reading it as conservative. It is not a bound in either
+    direction: the fit rests on the interior edges alone, and a workload
+    whose long-context tail is heavier than log-normal — which is what
+    agentic traffic looks like — fits WIDER than its body while overflowing
+    the top bucket. Body sigma 0.46, fitted 0.8+."""
+    rng = np.random.default_rng(7)
+    n = 40_000
+    body = rng.lognormal(math.log(30_000.0), 0.46, int(n * 0.8))
+    tail = 60_000.0 * (rng.pareto(0.6, int(n * 0.2)) + 1)
+    x = np.concatenate([body, tail])
+    cum = {float(b): float((x <= b).sum()) for b in SIZE_BOUNDS}
+    cum[math.inf] = float(n)
+    h = Histogram("h", {}, cum, float(n), float(x.sum()))
+
+    f = fit_lognormal(h)
+    assert f.censored and f.censored_fraction > 0.05
+    assert f.sigma > 0.46 * 1.5, "the reproduction: sigma came back HIGH"
+
+    est = estimate(Reading(provenance=Provenance("test", "t"), seconds=3600.0,
+                           counters={"request_success_total": float(n)},
+                           histograms={"request_prompt_tokens_hist": h}))
+    note = [c for c in est.caveats if "exceeded the largest finite bucket" in c]
+    assert len(note) == 1
+    assert "NEITHER direction" in note[0]
+    for text in (emit_toml(est), emit_table(est), emit_json(est)):
+        assert "sigma is a LOWER bound" not in text
+        assert "sigma is a lower bound" not in text
+        assert "a lower bound when the tail is censored" not in text
+
+
+def test_finished_request_histograms_can_count_the_requests():
+    """A server exporting the latency families but not request_success_total
+    is not a server whose request count is unknowable: each of these takes one
+    observation per FINISHED request."""
+    hg = lognormal_hist(1_234, 300.0, 0.8)
+    he = Histogram("e", {}, lognormal_buckets(1_234, 9.0, 1.1, E2E_BOUNDS),
+                   1_234.0, 18.0 * 1_234)
+    est = estimate(Reading(provenance=Provenance("test", "t"), seconds=1_234.0,
+                           counters={"generation_tokens_total": 500_000.0},
+                           histograms={"request_generation_tokens_hist": hg,
+                                       "e2e_hist": he}))
+    assert est.n_requests == pytest.approx(1_234)
+    assert "request_generation_tokens" in est.n_requests_source
+    assert est.req_rate_s == pytest.approx(1.0)
+    assert "n_requests" not in est.unobservable
+
+
+def test_disagreeing_request_counts_are_reported():
+    hg = lognormal_hist(1_000, 300.0, 0.8)
+    he = Histogram("e", {}, lognormal_buckets(1_500, 9.0, 1.1, E2E_BOUNDS),
+                   1_500.0, 18.0 * 1_500)
+    est = estimate(Reading(provenance=Provenance("test", "t"), seconds=1_000.0,
+                           histograms={"request_generation_tokens_hist": hg,
+                                       "e2e_hist": he}))
+    assert est.n_requests == 1_500              # the largest
+    assert any("disagree on how many requests" in c for c in est.caveats)
+
+
+def test_no_finished_request_series_at_all_is_still_a_refusal():
+    est = estimate(Reading(provenance=Provenance("test", "t"), seconds=100.0,
+                           counters={"prompt_tokens_total": 5.0}))
+    assert est.n_requests is None
+    assert "no request_success_total" in est.unobservable["n_requests"]
+
+
 def test_fit_refuses_rather_than_guessing():
     with pytest.raises(NotObservable, match="no such histogram"):
         fit_lognormal(None, "prompt length")
@@ -430,6 +532,68 @@ def test_fit_mean_and_histogram_mean_are_separate_readings():
 # ===========================================================================
 # the Prometheus source, end to end
 # ===========================================================================
+def mixture_hist(n: int, ratio: float, main=(50_000.0, 0.5),
+                 sub=(5_000.0, 0.5)) -> Histogram:
+    """A prompt histogram from a MIXTURE of two request classes, which is what
+    `request_prompt_tokens` actually accumulates."""
+    nd = statistics.NormalDist()
+    p_sub = ratio / (1.0 + ratio)
+    cum: dict[float, float] = {}
+    for b in SIZE_BOUNDS:
+        f_main = nd.cdf((math.log(b) - math.log(main[0])) / main[1])
+        f_sub = nd.cdf((math.log(b) - math.log(sub[0])) / sub[1])
+        cum[float(b)] = float(round(n * ((1 - p_sub) * f_main + p_sub * f_sub)))
+    cum[math.inf] = float(n)
+    mean = ((1 - p_sub) * main[0] * math.exp(main[1] ** 2 / 2)
+            + p_sub * sub[0] * math.exp(sub[1] ** 2 / 2))
+    return Histogram("h", {}, cum, float(n), mean * n)
+
+
+def test_a_mixed_prompt_histogram_is_not_the_configs_user_prompt():
+    """`request_prompt_tokens` has no request-class label, so its fit is over
+    main-user AND subagent requests. The config's `user_prompt_*` name ONE
+    component of that mixture, and the model re-mixes `subagent_*` on top:
+    assigning the aggregate hands it a distribution wider than the one
+    measured, then widens it again. An equal mixture of 50k and 5k prompts at
+    sigma 0.5 fits as a single log-normal near median 15k, sigma > 1.2 —
+    neither component."""
+    prom = study_prom()
+    prom.hists["vllm:request_prompt_tokens"] = mixture_hist(int(N_REQ), 1.0)
+    est, _ = study_estimate(prom)
+
+    assert est.prompt is not None                    # the aggregate is reported
+    assert est.prompt.median_tokens == pytest.approx(15_200, rel=0.15)
+    assert est.prompt.sigma > 1.1
+    assert not (0.45 < est.prompt.sigma < 0.55)      # neither component's sigma
+    assert est.prompt_assignable is False
+
+    block = emit_toml(est)
+    body = tomllib.loads(block)["workload"]
+    assert "user_prompt_median_tokens" not in body
+    assert "user_prompt_sigma" not in body
+    assert "prompt_median_all" in block and "prompt_sigma_all" in block
+    for key in ("user_prompt_median_tokens", "user_prompt_sigma"):
+        assert "mixes main-user and subagent requests" in est.unobservable[key]
+        assert "--single-class" in est.unobservable[key]
+    blob = json.loads(emit_json(est))["prompt_tokens_all_requests"]
+    assert blob["prompt_median_all"] == _round3(est.prompt.median_tokens)
+    assert blob["assignable_to_user_prompt"] is False
+
+
+def _round3(x: float) -> int:
+    return int(round(float(f"{x:.3g}")))
+
+
+def test_single_class_asserts_the_mixture_away_and_unlocks_the_assignment():
+    est, _ = study_estimate(**{"single_class": True})
+    assert est.prompt_assignable is True
+    body = tomllib.loads(emit_toml(est))["workload"]
+    assert body["user_prompt_median_tokens"] == pytest.approx(47_400, rel=0.02)
+    assert body["user_prompt_sigma"] == pytest.approx(0.81, rel=0.02)
+    assert "user_prompt_median_tokens" not in est.unobservable
+    assert "asserted single-class by --single-class" in emit_toml(est)
+
+
 def test_prometheus_estimate_recovers_the_synthetic_workload():
     est, _ = study_estimate()
     assert est.provenance.source == "prometheus"
@@ -451,40 +615,87 @@ def test_littles_law_on_a_scripted_series():
     est, _ = study_estimate()
     mean_running = sum(RUNNING) / len(RUNNING)
     assert est.mean_running == pytest.approx(mean_running)
-    assert est.p95_running == pytest.approx(
-        float(__import__("numpy").percentile(RUNNING, 95)))
+    assert est.p95_running == pytest.approx(float(np.percentile(RUNNING, 95)))
     assert est.little_w_s == pytest.approx(mean_running / est.req_rate_s)
-    # the cycle is the session count over the rate; Z is what is left of it
-    assert est.sessions == pytest.approx(est.p95_running)
-    assert est.sessions_assumed is True
-    assert est.cycle_s == pytest.approx(est.sessions / est.req_rate_s)
-    assert est.think_time_s == pytest.approx(est.cycle_s - est.e2e_mean_s)
+
+
+def test_the_decoder_p95_is_a_diagnostic_and_nothing_is_derived_from_it():
+    """A high quantile of an instantaneous execution count does not bound the
+    time-average SESSION population in either direction: ten sessions working
+    100 s and parked 900 s put the p95 at ten while averaging one, and
+    `p95 / lambda` would then report a cycle — and a think time — several
+    times the truth, in the unsafe direction."""
+    est, _ = study_estimate()
+    assert est.p95_running is not None            # still reported
+    assert est.sessions is None
+    assert est.cycle_s is None
+    assert est.think_time_s is None
+    assert "no quantile of it bounds" in est.unobservable["sessions"]
+    assert "--sessions N" in est.unobservable["sessions"]
+    for raw in (emit_toml(est), emit_table(est)):
+        text = " ".join(raw.split())          # both wrap prose at 74 columns
+        assert "think_time_s =" not in text
+        assert ("bounds a session count in neither direction" in text
+                or "bounds the session population in neither direction" in text)
+    # and the diagnostic says what it is, wherever it is printed
+    assert "DIAGNOSTIC" in emit_table(est)
+    assert "p95_running_diagnostic" in emit_json(est)
 
 
 def test_sessions_override_changes_the_cycle_not_the_rate():
     est, _ = study_estimate(**{"sessions": 249.0})
     assert est.sessions == 249.0
-    assert est.sessions_assumed is False
-    assert est.cycle_s == pytest.approx(249.0 / est.req_rate_s)
+    assert est.cycle_s == pytest.approx(249.0 * 1.10 / est.req_rate_s)
 
 
-def test_an_assumed_session_count_never_writes_the_config_users():
-    """`users` is the closed-loop operating point `ws predict` prices. The
-    decoder p95 is a LOWER BOUND on it, so writing it would under-price the
-    deployment silently — the module's own "a default is not a measurement"
-    rule, applied to its own fallback."""
+def test_the_cycle_carries_the_subagent_ratio_the_model_defines():
+    """`model.closed_request_rate` fixes `users = lam_total (Z + R) / (1 + r)`.
+    The counters see lam_total over every class, so a cycle per SESSION is
+    sessions x (1 + r) / lam_total; dividing by the raw rate would price each
+    session as a single request stream."""
+    from workingset import model as M
+
+    base, _ = study_estimate(**{"sessions": 100.0, "subagent_ratio": 0.0})
+    assert base.cycle_s == pytest.approx(100.0 / base.req_rate_s)
+
+    est, _ = study_estimate(**{"sessions": 100.0, "subagent_ratio": 0.35,
+                               "subagent_ratio_source": "--subagent-ratio"})
+    assert est.cycle_s == pytest.approx(base.cycle_s * 1.35)
+    assert est.think_time_s == pytest.approx(est.cycle_s - est.e2e_mean_s)
+    # the model's own identity, run forwards on what we emitted
+    lam_total = est.req_rate_s
+    assert lam_total * (est.think_time_s + est.e2e_mean_s) / 1.35 == \
+        pytest.approx(100.0)
+    # and the assumption is printed wherever the number goes
+    for text in (emit_toml(est), emit_table(est), emit_json(est)):
+        assert "0.35" in text
+        assert "--subagent-ratio" in text
+    assert M.Workload().sub_ratio == pytest.approx(0.10)   # the module default
+
+
+def test_a_zero_think_time_is_an_answer_not_a_refusal():
+    """A fully autonomous fleet issues its next request the instant the last
+    one lands; only a NEGATIVE Z is impossible."""
     est, _ = study_estimate()
-    assert est.sessions_assumed is True
+    exact = est.e2e_mean_s * est.req_rate_s / 1.10        # cycle == R
+    est, _ = study_estimate(**{"sessions": exact})
+    assert est.think_time_s == pytest.approx(0.0, abs=1e-6)
+    assert "think_time_s" not in est.unobservable
+    assert tomllib.loads(emit_toml(est))["workload"]["think_time_s"] == 0.0
+
+
+def test_no_session_count_writes_no_config_users():
+    """`users` is the closed-loop operating point `ws predict` prices, and it
+    is a SESSION count nothing here measures."""
+    est, _ = study_estimate()
     block = emit_toml(est)
     body = tomllib.loads(block)["workload"]
     assert "users" not in body
+    assert "think_time_s" not in body
     assert "# users: not observable from these metrics" in block
-    assert "LOWER BOUND" in block and "--sessions" in block
-    # the bound itself is still reported, as a comment naming the number
+    assert "--sessions" in block
+    # the diagnostic is still reported, as a comment naming the number
     assert f"{est.p95_running:,.0f}" in block
-    # think time, derived at that same assumed count, is labelled with it
-    assert "think_time_s" in body
-    assert re.search(r"think_time_s = [\d.]+\s+# .*LOWER BOUND", block)
 
 
 def test_an_explicit_session_count_does_write_users():
@@ -492,7 +703,7 @@ def test_an_explicit_session_count_does_write_users():
     block = emit_toml(est)
     assert tomllib.loads(block)["workload"]["users"] == 249
     assert "as given by --sessions" in block
-    assert not re.search(r"think_time_s = [\d.]+\s+# .*LOWER BOUND", block)
+    assert "sessions given" in block
 
 
 def test_an_emitted_block_never_under_prices_a_config_by_default(tmp_path):
@@ -501,9 +712,9 @@ def test_an_emitted_block_never_under_prices_a_config_by_default(tmp_path):
     p = _config(tmp_path)
     before = tomllib.loads(p.read_text(encoding="utf-8"))["workload"]["users"]
     est, _ = study_estimate()
-    p.write_text(merge_into(p, emit_toml(est)), encoding="utf-8")
+    p.write_text(merge_into(p, est), encoding="utf-8")
     after = tomllib.loads(p.read_text(encoding="utf-8"))["workload"]
-    assert "users" not in after            # the dataclass default stands
+    assert after["users"] == before        # carried over, not reset
     assert load_config(p).workload.users == before
 
 
@@ -691,12 +902,36 @@ def test_jsonl_archive_delta_matches_the_fixture(tmp_path):
 
 
 def test_jsonl_archive_emits_a_readable_workload_block(tmp_path):
-    est = estimate(read_jsonl(_archive(tmp_path)))
+    est = estimate(read_jsonl(_archive(tmp_path)), single_class=True)
     block = emit_toml(est)
     parsed = tomllib.loads(block)["workload"]
     assert parsed["user_prompt_median_tokens"] > 0
     assert parsed["max_output_tokens"] > 0
     assert "warm_turn_tokens" in parsed
+
+
+def test_jsonl_resets_carry_no_raw_counter_readings(tmp_path):
+    """`WindowDelta.invalid` is written for a terminal and quotes the counter
+    on both sides of the jump; those are raw series values, and the
+    classification is all a reader needs."""
+    lo = Snapshot(t_sent=0.0, rtt=0.0, samples=parse_text(DUMP),
+                  lines=DUMP.splitlines())
+    restarted = DUMP.replace("} 1835.0", "} 11.0").replace(
+        "vllm:prompt_tokens_total{engine=\"0\",model_name=\"Qwen/Qwen3-27B\"} ",
+        "vllm:prompt_tokens_total{engine=\"0\",model_name=\"Qwen/Qwen3-27B\"} 7.0 #")
+    hi = Snapshot(t_sent=3600.0, rtt=0.0, samples=parse_text(restarted),
+                  lines=restarted.splitlines())
+    p = tmp_path / "reset.jsonl"
+    p.write_text("\n".join(s.to_json() for s in (lo, hi)) + "\n", encoding="utf-8")
+
+    est = estimate(read_jsonl(p))
+    assert est.resets, "the archive spans a restart"
+    joined = " ".join(est.resets.values())
+    assert "counter reset" in joined
+    assert not re.search(r"\d{3,}", joined), f"a raw reading leaked: {joined}"
+    for text in (emit_toml(est), emit_json(est), emit_table(est)):
+        for raw in ("1835.0", "11.0", "58657565"):
+            assert raw not in text
 
 
 def test_jsonl_archive_needs_two_snapshots(tmp_path):
@@ -733,8 +968,9 @@ def test_one_scrape_is_not_a_window_of_the_gauge():
     assert est.p95_running is None
     assert est.sessions is None
     assert est.cycle_s is None
-    for key in ("concurrency", "sessions", "users"):
+    for key in ("concurrency", "users"):
         assert "one INSTANT of the gauge" in est.unobservable[key]
+    assert "sessions" in est.unobservable
     block = emit_toml(est)
     assert "users" not in tomllib.loads(block)["workload"]
     assert "# users: not observable from these metrics" in block
@@ -779,7 +1015,7 @@ def test_the_unobservable_are_reasons_never_defaults():
 # rounding
 # ===========================================================================
 def test_every_emitted_number_is_rounded():
-    est, _ = study_estimate()
+    est, _ = study_estimate(**{"single_class": True, "sessions": 249.0})
     body = tomllib.loads(emit_toml(est))["workload"]
     # tokens: 3 significant figures, as an integer
     for key in ("user_prompt_median_tokens", "max_output_tokens",
@@ -789,8 +1025,7 @@ def test_every_emitted_number_is_rounded():
         assert v == int(float(f"{v:.3g}")), f"{key}={v} is not 3 s.f."
     assert body["user_prompt_sigma"] == round(body["user_prompt_sigma"], 2)
     assert body["think_time_s"] == round(body["think_time_s"], 1)
-    given, _ = study_estimate(**{"sessions": 249.0})
-    assert isinstance(tomllib.loads(emit_toml(given))["workload"]["users"], int)
+    assert isinstance(body["users"], int)
     blob = json.loads(emit_json(est))
     rate = blob["requests"]["rate_per_s"]
     assert rate == float(f"{rate:.2g}")           # rates: 2 significant figures
@@ -845,6 +1080,27 @@ def test_no_raw_series_value_or_timestamp_is_emitted():
                 assert repr(v) not in text, f"{name} leaked"
 
 
+def test_the_endpoint_hostname_never_reaches_an_emitted_block():
+    """The Prometheus URL is the deployment's identity, and an emitted block
+    is meant to be pasted into a config other people read. What the user
+    typed into --selector is theirs to repeat; what this command learned by
+    dialling is used and then forgotten."""
+    url = "https://prometheus.ml-inference-prod.corp.example.internal:9090"
+    prom = study_prom()
+    rd = read_prometheus(url, range="7d", step="5m",
+                         selector='model_name="Qwen/Qwen3-27B"',
+                         now=prom.now, client=prom.client())
+    est = estimate(rd)
+    assert est.provenance.target == ""
+    for text in (emit_toml(est), emit_json(est), emit_table(est)):
+        assert "prometheus.ml-inference-prod" not in text
+        assert "corp.example.internal" not in text
+        assert "9090" not in text
+        assert "prometheus" in text            # the SOURCE KIND still shows
+        assert "7d" in text                    # and so does what was asked for
+    assert json.loads(emit_json(est))["provenance"]["target"] == ""
+
+
 def test_a_local_file_path_is_not_echoed_into_a_shared_block(tmp_path):
     """An emitted block is meant to be pasted into a config other people
     read; the archive's name identifies it, /home/<someone>/... does not."""
@@ -877,16 +1133,60 @@ def _config(tmp_path: Path) -> Path:
     return p
 
 
+# A config whose [workload] is HAND-TUNED, no key at its dataclass default.
+# Starting a preservation test from the defaults proves nothing: a dropped
+# key and a preserved one read back the same.
+TUNED = """\
+schema_version = 1
+
+[deployment]
+model = "27B"
+gpu = "H200"
+tensor_parallel = 4
+max_model_len = 180000
+
+# the workload the team measured by hand in August
+[workload]
+system_prefix_tokens = 54321
+user_prompt_median_tokens = 41000
+user_prompt_sigma = 0.77
+warm_turn_tokens = 3500
+think_time_s = 42.5
+subagent_ratio = 0.7
+subagent_median_tokens = 9100
+subagent_sigma = 0.95
+subagent_prefix_tokens = 3300
+sub_shares_prefix = true
+miss_rate = 0.05
+max_output_tokens = 640
+users = 249
+
+# the SLO the team committed to
+[slo]
+ttft_budget_s = 8.0
+percentile = 99
+
+[calibration]
+mfu = 0.42
+"""
+
+
+def _tuned(tmp_path: Path, text: str = TUNED) -> Path:
+    p = tmp_path / "tuned.toml"
+    p.write_text(text, encoding="utf-8", newline="")   # no CRLF translation
+    return p
+
+
 def test_into_rewrites_only_the_workload_block(tmp_path):
     p = _config(tmp_path)
     before = p.read_text(encoding="utf-8")
-    est, _ = study_estimate()
-    after = merge_into(p, emit_toml(est))
+    est, _ = study_estimate(**{"single_class": True})
+    after = merge_into(p, est)
     p.write_text(after, encoding="utf-8")
 
+    # whole surrounding blocks, compared textually
     for block in ("[deployment]", "[slo]", "[endpoint]", "[calibration]"):
-        i, j = before.index(block), after.index(block)
-        assert before[i:i + 200].split("[")[1] == after[j:j + 200].split("[")[1]
+        assert _block_text(before, block) == _block_text(after, block)
     old, new = tomllib.loads(before), tomllib.loads(after)
     for block in ("deployment", "slo", "endpoint", "calibration"):
         assert old[block] == new[block]
@@ -894,24 +1194,107 @@ def test_into_rewrites_only_the_workload_block(tmp_path):
     assert new["workload"] != old["workload"]
     assert new["workload"]["user_prompt_median_tokens"] == pytest.approx(
         47_400, rel=0.02)
-    # and the result is still a config the package can read and price
     load_config(p).validate()
+
+
+def _block_text(text: str, header: str) -> str:
+    """From a table header to the line before the next one, verbatim."""
+    lines = text.splitlines()
+    i = next(k for k, ln in enumerate(lines) if ln.strip() == header)
+    j = next((k for k in range(i + 1, len(lines))
+              if lines[k].lstrip().startswith("[")), len(lines))
+    return "\n".join(lines[i:j]).rstrip()
+
+
+def test_into_preserves_workload_keys_this_run_did_not_measure(tmp_path):
+    """A command that derives four of the eleven [workload] keys must not
+    reset the other seven: an omitted key reads back as the dataclass
+    default, so dropping a hand-set 0.7 subagent ratio silently rewrites it
+    to 0.1."""
+    p = _tuned(tmp_path)
+    old = tomllib.loads(p.read_text(encoding="utf-8"))["workload"]
+    est, _ = study_estimate()                    # no --sessions, no --single-class
+    p.write_text(merge_into(p, est), encoding="utf-8")
+    new = tomllib.loads(p.read_text(encoding="utf-8"))["workload"]
+
+    # every key this run could not observe survives with its tuned value
+    for key in ("system_prefix_tokens", "subagent_ratio", "subagent_median_tokens",
+                "subagent_sigma", "subagent_prefix_tokens", "sub_shares_prefix",
+                "users", "user_prompt_median_tokens", "user_prompt_sigma",
+                "think_time_s"):
+        assert new[key] == old[key], key
+    assert new["system_prefix_tokens"] == 54321
+    assert new["subagent_ratio"] == 0.7
+    assert new["users"] == 249
+    # and the measured ones did move
+    assert new["max_output_tokens"] != old["max_output_tokens"]
+    assert new["miss_rate"] != old["miss_rate"]
+    assert "preserved, not measured" in p.read_text(encoding="utf-8")
+    load_config(p).validate()
+
+
+def test_into_keeps_the_comment_that_introduces_the_next_table(tmp_path):
+    p = _tuned(tmp_path)
+    est, _ = study_estimate()
+    after = merge_into(p, est)
+    assert "# the SLO the team committed to" in after
+    assert _block_text(after, "[slo]") == _block_text(TUNED, "[slo]")
+
+
+def test_into_keeps_the_files_line_endings(tmp_path):
+    p = _tuned(tmp_path, TUNED.replace("\n", "\r\n"))
+    est, _ = study_estimate()
+    after = merge_into(p, est)
+    assert "\r\n" in after
+    assert "\n" not in after.replace("\r\n", "")
+    assert tomllib.loads(after)["workload"]["subagent_ratio"] == 0.7
+
+
+def test_into_takes_the_subagent_ratio_from_the_config_it_writes(tmp_path,
+                                                                 capsys):
+    """`r` scales the cycle by (1 + r) and is not observable here, so the
+    config being written to is the best source for it."""
+    p = _tuned(tmp_path)
+    assert ws_main(["workload", "--metrics-text", str(FIXTURE), "--json",
+                    "--sessions", "100", "--into", str(p)]) == 0
+    blob = json.loads(capsys.readouterr().out)
+    assert blob["cycle"]["subagent_ratio"] == 0.7
+    assert "tuned.toml" in blob["cycle"]["subagent_ratio_source"]
 
 
 def test_into_appends_when_there_is_no_workload_block(tmp_path):
     p = tmp_path / "partial.toml"
     p.write_text('schema_version = 1\n\n[deployment]\nmodel = "27B"\n',
                  encoding="utf-8")
-    est, _ = study_estimate()
-    text = merge_into(p, emit_toml(est))
+    est, _ = study_estimate(**{"single_class": True})
+    text = merge_into(p, est)
     assert tomllib.loads(text)["deployment"]["model"] == "27B"
     assert "user_prompt_median_tokens" in tomllib.loads(text)["workload"]
 
 
 def test_into_refuses_a_block_the_schema_would_reject(tmp_path):
-    p = _config(tmp_path)
+    from workingset.workload import _splice_workload
+    base = _config(tmp_path).read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="unknown key workload"):
-        merge_into(p, "[workload]\nnot_a_field = 1\n")
+        _splice_workload(base, "[workload]\nnot_a_field = 1\n")
+
+
+def test_into_refuses_a_config_the_model_could_not_price(tmp_path):
+    """`from_dict` accepts `users = -1`; only `validate()` rejects it, and a
+    file this command wrote must be one `ws predict` can read."""
+    from workingset.workload import _splice_workload
+    base = _config(tmp_path).read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="users must be >= 0"):
+        _splice_workload(base, "[workload]\nusers = -1\n")
+
+
+def test_a_negative_session_count_is_refused_at_the_flag(capsys, tmp_path):
+    p = _config(tmp_path)
+    assert ws_main(["workload", "--metrics-text", str(FIXTURE),
+                    "--sessions", "-1", "--into", str(p)]) == 2
+    assert "--sessions must be >= 0" in capsys.readouterr().err
+    # and the config was not touched on the way to the refusal
+    assert p.read_text(encoding="utf-8") == RunConfig().dumps("toml")
 
 
 # ===========================================================================
@@ -953,10 +1336,15 @@ def test_cli_help_documents_every_source_and_the_caveats(capsys):
                  "--assume-turn-tokens", "--assume-miss-rate", "--sessions",
                  "--emit", "--into", "--engine"):
         assert flag in help_text
+    for flag in ("--single-class", "--subagent-ratio"):
+        assert flag in help_text
     for caveat in ("CUMULATIVE SINCE SERVER START",
                    "ONE observable over TWO unknowns",
-                   "sessions-in-cache is not observable from these metrics",
-                   "LOWER BOUND", "ROUNDED AGGREGATES",
+                   "NO DEFAULT: nothing on this surface counts sessions",
+                   "bound the time-average population in neither direction",
+                   "users = lambda_total (Z + R) / (1 + r)",
+                   "carried over unchanged rather than reset",
+                   "ROUNDED AGGREGATES",
                    "increase() over the whole --range"):
         assert caveat in help_text, caveat
 
