@@ -43,6 +43,17 @@ class Predictions:
     ttft_hit_s: float
     bstar_misses: float
     replicas: int
+    # --- the steady-decode / inter-token-gap block ------------------------
+    # Present only where the steady point is REAL (prefill duty < 1 and the
+    # decode demand lands on the sampled axis); None otherwise, and every
+    # hypothesis that quotes them degrades to "not established". Mirrors the
+    # explorer's `harnessPredictions` guard (interactive/src/harness.js).
+    steady_decode_seqs: float | None = None    # sequences decoding at the load
+    steady_decode_tok_s: float | None = None   # per-user decode at THAT batch
+    itl_normal_ms: float | None = None         # gap with no prefill in the pass
+    itl_worst_freeze_ms: float | None = None   # last chunk of a cold re-prefill
+    itl_freeze_lo_ms: float | None = None      # MFU 55% — the bracket's low edge
+    itl_freeze_hi_ms: float | None = None      # MFU 35% — the bracket's high edge
 
     def to_dict(self) -> dict:
         """JSON-safe: non-finite floats become None (strict JSON has no inf)."""
@@ -114,6 +125,10 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     def _int(x: float) -> int:
         return 999999 if not math.isfinite(x) else int(round(x))
 
+    steady = _steady_block(m, t, wl, rate_total, w.max_output_tokens,
+                           dep.max_model_len, chunk, cal.mfu, duty,
+                           mbu=cal.mbu, n_iter=n_iter, seed=seed)
+
     return Predictions(
         warm_capacity_p5=_int(op["ceilings"]["cache"]),
         cache_ceiling_users=_int(p5_all),
@@ -129,4 +144,70 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         ttft_hit_s=round(ttft_hit, 3) if math.isfinite(ttft_hit) else math.inf,
         bstar_misses=round(bstar, 2),
         replicas=t.replicas or 1,
+        **steady,
     )
+
+
+# ============================================================================
+# the steady-decode / inter-token-gap block
+# ----------------------------------------------------------------------------
+# Formulas transcribed from interactive/src/harness.js (`harnessPredictions`
+# and `freezeMs`), which is the code that generated every `predictions` block
+# a validate_deployment.py ever carried. No new modelling: every term comes
+# from workingset.model.
+#
+#   steady_decode_seqs   steady_decode_point(...)["n"]
+#   steady_decode_tok_s  steady_decode_point(...)["per_user_tok_s"]  (= pu)
+#   itl_normal_ms        1000 x model.mtp / pu
+#                        one decode step, per user, with no prefill in the pass
+#   itl_worst_freeze_ms  1000 x (model.mtp / pu
+#                                + prefill_seconds(step, mfu, prior=cap - step))
+#                        with step = min(chunk, cap). The LAST chunk of a
+#                        full-context cold re-prefill joins the decode batch,
+#                        so every decoder sees one gap of step-time plus
+#                        chunk-time. MARGINAL pricing: the host pass streams
+#                        the weights anyway.
+#   the [lo, hi] bracket the same at MFU_HIGH / MFU_LOW (the study's 35-55%
+#                        band). Higher MFU = shorter freeze, so the HI anchor
+#                        is the bracket's LOW edge.
+#
+# Guard (the explorer's): the block exists only where the steady point is
+# real. Here that means prefill duty < 1 (no steady state upstream otherwise),
+# the steady point not saturated, and pu > 0.
+# ============================================================================
+def freeze_ms(model: M.Model, topo: M.Topology, cap: float, chunk: float,
+              per_user_tok_s: float, mfu: float = M.MFU_DEFAULT) -> float:
+    """Worst inter-token gap behind one chunk of a full-context cold
+    re-prefill, ms. Mirrors `freezeMs` in interactive/src/harness.js."""
+    if per_user_tok_s <= 0:
+        raise ValueError("per_user_tok_s must be > 0")
+    # a chunk larger than the whole context is one cap-sized pass with no
+    # cache behind it — never a full chunk with a negative prior
+    step = min(chunk, cap)
+    return 1e3 * (model.mtp / per_user_tok_s
+                  + M.prefill_seconds(model, topo, step, mfu, prior=cap - step))
+
+
+def _steady_block(m, t, wl, rate_total: float, out_tokens: float, cap: float,
+                  chunk: float, mfu: float, duty: float, mbu: float,
+                  n_iter: int, seed: int) -> dict:
+    empty = {"steady_decode_seqs": None, "steady_decode_tok_s": None,
+             "itl_normal_ms": None, "itl_worst_freeze_ms": None,
+             "itl_freeze_lo_ms": None, "itl_freeze_hi_ms": None}
+    if duty >= 1.0:
+        return empty
+    # the calibration block's MBU, the same one max_users_decode is priced at
+    sp = M.steady_decode_point(m, t, wl, rate_total, out_tokens=out_tokens,
+                               mbu=mbu, n_iter=n_iter, seed=seed)
+    pu = sp["per_user_tok_s"]
+    if sp["saturated"] or not (pu > 0):
+        return empty
+    return {
+        "steady_decode_seqs": round(sp["n"], 2),
+        "steady_decode_tok_s": round(pu),
+        "itl_normal_ms": round(1e3 * m.mtp / pu, 1),
+        "itl_worst_freeze_ms": round(freeze_ms(m, t, cap, chunk, pu, mfu)),
+        # higher MFU = shorter freeze, so the HI anchor is the low edge
+        "itl_freeze_lo_ms": round(freeze_ms(m, t, cap, chunk, pu, M.MFU_HIGH)),
+        "itl_freeze_hi_ms": round(freeze_ms(m, t, cap, chunk, pu, M.MFU_LOW)),
+    }
