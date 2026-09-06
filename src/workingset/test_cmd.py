@@ -245,10 +245,11 @@ def _bracket(rung_dicts) -> list:
 # commands
 # ============================================================================
 def cmd_test(args) -> int:
+    from .cli import _apply_overrides       # deferred: cli imports this module
     from .config import load_config
     from .predict import predict
 
-    cfg = load_config(args.config)
+    cfg = _apply_overrides(load_config(args.config), args)
     # the flag wins; the config's own metrics_url is the fallback
     metrics_url = args.metrics_url or cfg.endpoint.metrics_url
     args.metrics_url = metrics_url

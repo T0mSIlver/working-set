@@ -174,11 +174,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="print the plan, predictions, selected hypotheses and "
                         "the sampler self-check; send nothing")
-    # endpoint overrides
+    # endpoint overrides. `--model` stays the model KEY here, as it is in
+    # `ws predict` and `ws init` — a downloaded harness names only the served
+    # checkpoint, so `ws test harness.py --model 27B` is how you say which
+    # model it is. The served id (what goes in the JSON body) is --model-id.
     p.add_argument("--base-url", help="override the config's endpoint base URL")
-    # the served checkpoint id, not `ws predict`'s model KEY
-    p.add_argument("--model", "--model-id", dest="model_id",
-                   help="override the served model id")
+    p.add_argument("--model-id", "--served-model", dest="model_id",
+                   help="override the served model id sent in the request body")
     p.add_argument("--api-key-env", help="env var NAME holding the API key")
     p.add_argument("--api", choices=("completions", "chat"),
                    help="which OpenAI-compatible route to drive "
@@ -217,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="model Monte-Carlo iterations for the predictions")
     p.add_argument("--predict-seed", type=int, default=0)
     p.add_argument("-o", "--out", help="write the run record here (JSON)")
+    _add_deploy_flags(p)
     p.set_defaults(fn=cmd_test)
 
     p = sub.add_parser("report", help="re-print a run record's report")

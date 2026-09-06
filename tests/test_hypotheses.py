@@ -464,6 +464,26 @@ def test_freeze_ms_matches_the_explorer_formula():
                                               prior=0)))
 
 
+def test_freeze_reproduces_the_reference_harness_block():
+    """The explorer's reference CONFIG (27B / 4xH200 TP4 / chunk 4,096) shipped
+    itl_normal_ms 2.2 and itl_worst_freeze_ms 171 — a prefill term of 168.8 ms
+    behind one chunk of a 180k cold re-prefill.
+
+    Only the PREFILL term is pinned. The mtp/pu term rides on the decode
+    calibration, which moved (MBU 0.22, the 27B's measured mtp) after that
+    block was generated: steady_decode_tok_s is 285 here where the reference
+    said 817, exactly as decode_ceiling_users is 150 where it said 428. The
+    prefill half is the part this port could get wrong, so that is what fails
+    the test."""
+    cfg = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
+                                              "tensor_parallel": 4,
+                                              "max_num_batched_tokens": 4096}})
+    p = predict(cfg, n_iter=300)
+    assert abs((p.itl_worst_freeze_ms - p.itl_normal_ms) - 168.8) < 1.0
+    # the bracket straddles it, low edge = the HIGH MFU anchor
+    assert p.itl_freeze_lo_ms < p.itl_worst_freeze_ms < p.itl_freeze_hi_ms
+
+
 def test_itl_normal_is_one_decode_step():
     p = predict(RunConfig(), n_iter=40)
     m = RunConfig().to_model()
