@@ -24,7 +24,7 @@ class LadderView:
     """The bracket arithmetic every ceiling hypothesis reads, computed once.
 
     Ported from the bracket / failure-mode split in `print_report`
-    (scripts/validate_deployment.py). A partial rung is orientation, never
+    (the retired standalone harness). A partial rung is orientation, never
     evidence, and is excluded here.
     """
     rungs: list = field(default_factory=list)
@@ -83,7 +83,7 @@ class LadderView:
     def _warm_evidence(r) -> bool:
         """Did this rung actually SHOW its hit turns staying warm?
 
-        DEVIATION from scripts/validate_deployment.py, which counted a rung as
+        DEVIATION from the retired standalone harness, which counted a rung as
         held when `evict_frac` was nan — i.e. when there were no forced misses
         to calibrate the cold-TTFT threshold against, so the classifier could
         not run at all. Missing evidence read as evidence: a rung with zero

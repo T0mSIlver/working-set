@@ -1,7 +1,7 @@
 """Measurement primitives that know nothing about hypotheses.
 
 Each probe drives a live OpenAI-compatible endpoint and returns a result
-object; the derived statistics are the ones scripts/validate_deployment.py
+object; the derived statistics are the ones the retired standalone harness
 defines, and the scoring functions (`eval_rung`, `eval_sample`, `eval_burst`)
 are pure so they can be exercised on synthetic traces.
 

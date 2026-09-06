@@ -1,6 +1,6 @@
 """The run report — the text users quote.
 
-Ported from `print_report` in scripts/validate_deployment.py. Same tables,
+Ported from `print_report` in the retired standalone harness. Same tables,
 same warnings, same trailer; the PREDICTED vs MEASURED block is now the
 hypothesis table, one row per H-*, and it prints the four verdict statuses
 instead of three glyphs.

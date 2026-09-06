@@ -2,7 +2,7 @@
 
 `pct` is the harness's percentile verbatim (linear interpolation, nan on
 empty) rather than numpy's: the probes must produce byte-identical statistics
-to scripts/validate_deployment.py, and a percentile convention is exactly the
+to the retired standalone harness, and a percentile convention is exactly the
 kind of thing that drifts silently between two implementations.
 """
 from __future__ import annotations

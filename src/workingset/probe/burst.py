@@ -1,6 +1,6 @@
 """The simultaneous-miss flush probe — B*, the correlated-flush tolerance.
 
-Ported from `run_burst` in scripts/validate_deployment.py. From steady
+Ported from `run_burst` in the retired standalone harness. From steady
 standing load, fire N simultaneous forced misses and time the drain: B*
 predicts the largest N whose LAST first-token still lands inside the TTFT
 budget (`model.spike_tolerance`).

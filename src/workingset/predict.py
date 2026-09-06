@@ -153,7 +153,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 # ----------------------------------------------------------------------------
 # Formulas transcribed from interactive/src/harness.js (`harnessPredictions`
 # and `freezeMs`), which is the code that generated every `predictions` block
-# a validate_deployment.py ever carried. No new modelling: every term comes
+# a downloaded harness ever carried. No new modelling: every term comes
 # from workingset.model.
 #
 #   steady_decode_seqs   steady_decode_point(...)["n"]
