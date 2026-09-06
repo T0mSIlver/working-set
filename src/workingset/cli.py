@@ -51,7 +51,7 @@ def cmd_predict(args) -> int:
     d, w = cfg.deployment, cfg.workload
     print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}), "
           f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}")
-    print(f"operating point: {w.users} users/group, think {w.think_time_s} s, "
+    print(f"operating point: {w.users:g} users/group, think {w.think_time_s} s, "
           f"miss {w.miss_rate:.0%}, {'closed' if args.closed else 'open'} loop")
     print()
     rows = [("cache (warm p5, users)", p.warm_capacity_p5),
@@ -145,7 +145,9 @@ def _add_deploy_flags(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--chunk", type=int, help="max_num_batched_tokens")
     ap.add_argument("--max-model-len", type=int)
     ap.add_argument("--ram-gib", type=float, help="CPU KV offload per group, GiB")
-    ap.add_argument("--users", type=int, help="operating point, users per group")
+    ap.add_argument("--users", type=float,
+                    help="operating point, users per group (fractional is "
+                         "meaningful: it is a load, not a population)")
     ap.add_argument("--miss-rate", type=float)
     ap.add_argument("--think", type=float, help="think time, s")
 

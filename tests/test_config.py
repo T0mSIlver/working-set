@@ -274,14 +274,74 @@ def test_knob_gates_are_refusals_not_no_ops():
                                             "recurrent_state_dtype": "fp32"}}).validate()
 
 
+def test_explorer_emits_the_fractional_per_group_load():
+    """A real download at 35B-A3B / 8xH200 / DP8 / 4 users — the page prices
+    0.5 users per group and the file has to say 0.5, not 1."""
+    p = Path(__file__).resolve().parent / "fixtures" / "explorer_dp8_fractional.toml"
+    cfg = load_config(p)
+    assert cfg.deployment.replicas == 8 and cfg.deployment.tensor_parallel == 1
+    assert cfg.workload.users == 0.5
+    cfg.validate()
+    assert predict(cfg, n_iter=100).operating_point_users == 0.5
+
+
+def test_fractional_per_group_load_is_preserved():
+    """A DP8 deployment carrying 4 users runs half a user per group. That
+    fraction IS the arrival rate, so rounding it to 1 doubles req/s and moves
+    every queue figure with it."""
+    dep = {"model": "35BA3B", "gpu": "H200", "tensor_parallel": 1, "replicas": 8}
+
+    def at(u):
+        return predict(RunConfig.from_dict({"deployment": dep,
+                                            "workload": {"users": u}}), n_iter=100)
+
+    half = at(0.5)                          # the page's 4 users across 8 groups
+    assert half.operating_point_users == 0.5
+    assert at(1).req_rate_main > 1.9 * half.req_rate_main
+    # proportionality, read where the record's 4-decimal rounding is noise
+    lo, hi = at(12.5), at(25)
+    assert hi.req_rate_main == pytest.approx(2 * lo.req_rate_main, rel=1e-3)
+    assert hi.prefill_duty == pytest.approx(2 * lo.prefill_duty, rel=1e-2)
+    assert lo.operating_point_users == 12.5
+    # the ladder is the place a load becomes a population, and only there
+    from workingset.probe.ladder import build_ladder
+    pops = build_ladder(half.predicted_limit_users, "0.5,1",
+                        operating_point_users=half.operating_point_users)
+    assert all(isinstance(p, int) and p >= 1 for p in pops)
+    assert 1 in pops                        # 0.5 users -> one real session
+
+
+def test_zero_users_still_drops_out_of_the_ladder():
+    """`if operating_point_users:` must keep treating 0.0 as "no operating
+    point", not add a rung for it."""
+    from workingset.probe.ladder import build_ladder
+    assert build_ladder(100.0, "1", operating_point_users=0.0) == [100]
+
+
 def test_type_checked_at_the_boundary():
     with pytest.raises(ValueError, match="deployment.tensor_parallel"):
         RunConfig.from_dict({"deployment": {"tensor_parallel": "4"}})
     with pytest.raises(ValueError, match="workload.users"):
-        RunConfig.from_dict({"workload": {"users": 12.5}})
+        RunConfig.from_dict({"workload": {"users": "12.5"}})
     with pytest.raises(ValueError, match="sub_shares_prefix"):
         RunConfig.from_dict({"workload": {"sub_shares_prefix": 1}})
     RunConfig.from_dict({"workload": {"think_time_s": 30}})   # int for a float is fine
+    # users is a LOAD per replica group, so a fraction of one is legal
+    assert RunConfig.from_dict({"workload": {"users": 12.5}}).workload.users == 12.5
+
+
+def test_optional_float_is_type_checked_too():
+    """`float | None` had no _SCALAR entry, so calibration.mtp was unchecked:
+    a bool sailed through and a string reached the model as a TypeError three
+    calls deep instead of a message at the file boundary."""
+    with pytest.raises(ValueError, match="calibration.mtp"):
+        RunConfig.from_dict({"calibration": {"mtp": True}})
+    with pytest.raises(ValueError, match="calibration.mtp"):
+        RunConfig.from_dict({"calibration": {"mtp": "1.7"}})
+    # what it must still accept
+    assert RunConfig.from_dict({"calibration": {"mtp": 1.7}}).calibration.mtp == 1.7
+    assert RunConfig.from_dict({"calibration": {"mtp": 2}}).calibration.mtp == 2
+    assert RunConfig.from_dict({"calibration": {"mtp": None}}).calibration.mtp is None
 
 
 def test_predict_reference_row():

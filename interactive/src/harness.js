@@ -102,7 +102,11 @@ export function workingsetConfig(state, model, topo, wl){
       ['sub_shares_prefix', !!wl.sub_shares_prefix],
       ['miss_rate', flt(wl.invalidation)],
       ['max_output_tokens', int(state.out)],
-      ['users', Math.max(1, Math.round(state.users / reps))],
+      // NOT rounded: this is a load, and the file has to price the same one
+      // the page does. 4 users across 8 replica groups is half a user per
+      // group; rounding it up to 1 would hand `ws predict` twice the arrival
+      // rate and move TTFT, duty and B* with it.
+      ['users', flt(state.users / reps)],
     ]],
     ['slo', [
       ['ttft_budget_s', flt(state.sla)],
@@ -152,8 +156,10 @@ function harnessPredictions(op, model, wl, topo){
     binding_constraint: op.binding,
     predicted_limit_users: perG(op.limit),
     // the load ttft_miss_s and bstar_misses are computed AT — a run ladders
-    // through it and reads those verdicts there, not at the limit
-    operating_point_users: Math.max(1, perG(op.users)),
+    // through it and reads those verdicts there, not at the limit. Unrounded,
+    // and the same number the emitted config carries: a DP deployment can
+    // carry a fraction of a user per group, and that fraction IS the load.
+    operating_point_users: op.users / reps,
     ttft_miss_s: Math.round(op.ttftMiss * 10) / 10,
     bstar_misses: Math.round(op.bstar * 10) / 10,
   };
@@ -171,6 +177,9 @@ function harnessPredictions(op, model, wl, topo){
 }
 function harnessHypotheses(P, model, topo, wl, reps){
   const grp = reps > 1 ? ' (per replica group)' : '';
+  // the per-group load, shown at the precision it actually has: whole users
+  // on a single group, a fraction where DP splits an odd load across groups
+  const opU = n => n % 1 ? fmt(n, 1) : fmt(n, 0);
   const out = [
     `H-cache: >= ${fmt(P.warm_capacity_p5, 0)} user sessions stay warm (p5)${grp}. `
       + `A run bounds this below unless load reaches eviction.`,
@@ -182,9 +191,9 @@ function harnessHypotheses(P, model, topo, wl, reps){
       + `users${grp}; above it the queue has no steady state.`,
     `H-binding: the binding constraint is '${P.binding_constraint}' — measured SLO `
       + `capacity should land near ${fmt(P.predicted_limit_users, 0)} users${grp}.`,
-    `H-ttft-miss: a forced miss's mean TTFT at the ~${fmt(P.operating_point_users, 0)}-user `
+    `H-ttft-miss: a forced miss's mean TTFT at the ~${opU(P.operating_point_users)}-user `
       + `operating point is ~${P.ttft_miss_s} s (read at the ladder rung nearest that load).`,
-    `H-burst (needs --burst): at the ~${fmt(P.operating_point_users, 0)}-user standing load, `
+    `H-burst (needs --burst): at the ~${opU(P.operating_point_users)}-user standing load, `
       + `a simultaneous flush of <= ${Math.floor(P.bstar_misses)} misses (B* = ${P.bstar_misses}) `
       + `drains inside the TTFT budget; a larger one does not.`,
   ];
@@ -212,7 +221,7 @@ function harnessHypotheses(P, model, topo, wl, reps){
          / coldRequestSeconds(model, topo, wl, lastCS, PREFILL_CHUNK) - 1) * 100
       : 0;
     out.push(
-      `H-steady: at the ~${fmt(P.operating_point_users, 0)}-user operating point the `
+      `H-steady: at the ~${opU(P.operating_point_users)}-user operating point the `
         + `decode batch holds ~${P.steady_decode_seqs} sequences at `
         + `~${fmt(P.steady_decode_tok_s, 0)} tok/s each — NOT the whole warm pool at `
         + `the stress figure. Read against the measured concurrent-decode count, `

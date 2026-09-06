@@ -102,7 +102,16 @@ class WorkloadCfg:
     sub_shares_prefix: bool = False
     miss_rate: float = 0.01
     max_output_tokens: int = M.OUT_TOKENS_DEFAULT
-    users: int = M.REF_USERS             # the operating point (per replica group)
+    # The operating point, PER REPLICA GROUP — and therefore fractional
+    # whenever the load does not divide by the replica count. It is a LOAD, not
+    # a population: everything downstream reads it as an arrival rate
+    # (users / think_time_s), which is perfectly well defined at 0.5. Rounding
+    # it here would double the rate a DP8 deployment is priced at when the page
+    # shows 4 users across 8 groups. The two places that need a whole number of
+    # sessions round it themselves, at the point they build one: the load
+    # ladder (probe/ladder.build_ladder) and the burst's standing load
+    # (hypotheses/context.RunContext._burst_pop).
+    users: float = M.REF_USERS
 
 
 @dataclass(frozen=True)
@@ -247,7 +256,8 @@ class RunConfig:
 
 
 _SCALAR = {"int": (int,), "float": (int, float), "bool": (bool,), "str": (str,),
-           "int | None": (int, type(None)), "str | None": (str, type(None))}
+           "int | None": (int, type(None)), "str | None": (str, type(None)),
+           "float | None": (int, float, type(None))}
 
 
 def _reject_unknown(block: dict, typ, name: str) -> None:
@@ -347,6 +357,6 @@ def _legacy_to_schema(raw: dict) -> dict:
     # predictions block; it is the operating point, not a prediction
     preds = raw.get("predictions") or {}
     if "users" not in wl and "operating_point_users" in preds:
-        wl["users"] = int(preds["operating_point_users"])
+        wl["users"] = float(preds["operating_point_users"])
     raw["workload"] = wl
     return raw

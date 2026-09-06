@@ -36,8 +36,8 @@ uv run scripts/golden.py --jobs 1    # same bytes, one process
 Byte-reproducible: every draw is seeded, every float is rounded to 12
 significant digits, the JSON separators are fixed, and the work is split across
 processes only for speed — the output does not depend on `--jobs`. `--check`
-regenerates in memory and diffs, the way `scripts/sync_harness.py --check`
-does; CI runs it, so the fixture cannot drift behind the model.
+regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
+the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
 (821 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
