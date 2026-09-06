@@ -1,6 +1,9 @@
 """`ws` — the workingset command line.
 
     ws predict CONFIG [--closed] [--json]      price a configuration
+    ws test CONFIG [H-key ...] [--exclusive]   test predictions on an endpoint
+    ws report RUN.json                         re-print a run's report
+    ws hypotheses                              list the H-* and what they need
     ws init [--model KEY --gpu PART --tp N ...] write a starter config
     ws models                                  list model / GPU keys
     ws selfcheck                               run the model's self-checks
@@ -17,6 +20,7 @@ from . import __version__
 from . import model as M
 from .config import RunConfig, load_config
 from .predict import predict
+from .test_cmd import cmd_hypotheses, cmd_report, cmd_test
 
 
 def _fmt(x) -> str:
@@ -147,6 +151,80 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     _add_deploy_flags(p)
     p.set_defaults(fn=cmd_init)
+
+    p = sub.add_parser(
+        "test", help="test the predictions against a live endpoint",
+        description="Put a configuration's predictions to a live "
+                    "OpenAI-compatible endpoint, one hypothesis at a time.",
+        epilog="Examples:\n"
+               "  ws test workingset.toml --dry-run\n"
+               "  ws test workingset.toml --all --exclusive --out run.json\n"
+               "  ws test workingset.toml H-ttft-miss H-itl-mean\n"
+               "  ws test workingset.toml --exclusive --burst 8\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("config", help="workingset.toml / .json / a harness .py")
+    p.add_argument("keys", nargs="*", metavar="H-key",
+                   help="hypotheses to test (default: all; see `ws hypotheses`)")
+    p.add_argument("--all", action="store_true",
+                   help="every hypothesis (the default when no key is given)")
+    p.add_argument("--exclusive", action="store_true",
+                   help="this run OWNS the endpoint and may generate the "
+                        "population it measures. Without it, hypotheses that "
+                        "need to are listed as skipped, never silently run.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the plan, predictions, selected hypotheses and "
+                        "the sampler self-check; send nothing")
+    # endpoint overrides
+    p.add_argument("--base-url", help="override the config's endpoint base URL")
+    # the served checkpoint id, not `ws predict`'s model KEY
+    p.add_argument("--model", "--model-id", dest="model_id",
+                   help="override the served model id")
+    p.add_argument("--api-key-env", help="env var NAME holding the API key")
+    p.add_argument("--api", choices=("completions", "chat"),
+                   help="which OpenAI-compatible route to drive "
+                        "(default: completions, as the harness does)")
+    p.add_argument("--metrics-url", help="vLLM /metrics, for server-side "
+                                         "covariates and window deltas")
+    # probe knobs
+    p.add_argument("--rungs", help="ladder multipliers of predicted_limit_users")
+    p.add_argument("--max-users", type=int, help="hard cap on any rung")
+    p.add_argument("--ramp-s", type=float, help="per-rung ramp, s")
+    p.add_argument("--measure-s", type=float, help="per-rung measure window, s")
+    p.add_argument("--turns-per-user", type=int,
+                   help="cap turns per session, 0 = unlimited in the window")
+    p.add_argument("--burst", type=int, metavar="N",
+                   help="fire N simultaneous forced misses (enables H-burst)")
+    p.add_argument("--burst-users", type=int,
+                   help="standing load for the burst (default: operating point)")
+    p.add_argument("--sample-requests", type=int,
+                   help="sessions the cheap probe opens (default 8)")
+    p.add_argument("--chars-per-token", type=float,
+                   help="synthetic-text calibration (default 4.0)")
+    p.add_argument("--context-cap-tokens", type=int,
+                   help="cap on sampled contexts (default: max_model_len)")
+    p.add_argument("--request-timeout-s", type=float,
+                   help="per-request read timeout; keep well above the TTFT "
+                        "budget so breaches are measured, not dropped")
+    p.add_argument("--freeze-threshold-ms", type=float, metavar="MS",
+                   help="a gap at or above this counts as a FREEZE "
+                        "(default 100). Keep it BELOW the smaller predicted "
+                        "freeze; the freeze ladder is threshold-free.")
+    p.add_argument("--seed", type=int, help="probe RNG seed")
+    p.add_argument("--no-ignore-eos", action="store_true",
+                   help="drop the vLLM ignore_eos extension (strict OpenAI "
+                        "endpoints); decode tok/s then depends on natural EOS")
+    p.add_argument("--n-iter", type=int, default=400,
+                   help="model Monte-Carlo iterations for the predictions")
+    p.add_argument("--predict-seed", type=int, default=0)
+    p.add_argument("-o", "--out", help="write the run record here (JSON)")
+    p.set_defaults(fn=cmd_test)
+
+    p = sub.add_parser("report", help="re-print a run record's report")
+    p.add_argument("record", help="run.json written by `ws test --out`")
+    p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("hypotheses", help="list the H-* and what they need")
+    p.set_defaults(fn=cmd_hypotheses)
 
     p = sub.add_parser("models", help="list model and GPU keys")
     p.set_defaults(fn=cmd_models)

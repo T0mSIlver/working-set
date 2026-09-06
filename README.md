@@ -31,11 +31,24 @@ source of truth; the explorer's JS mirrors it). It ships a CLI:
 uv run ws init --model Q38FN --gpu B300 --tp 8 --weight-dtype nvfp4   # writes workingset.toml
 uv run ws predict workingset.toml        # the four ceilings, which one binds, the operating point
 uv run ws predict workingset.toml --json # the same as a run record
+uv run ws hypotheses                     # the H-* and what each one needs
+uv run ws test workingset.toml --dry-run # the plan, the sampler self-check, no requests
+uv run ws test workingset.toml --exclusive --out run.json   # measure it
+uv run ws report run.json                # re-print the verdicts
 uv run ws models                         # model / GPU keys
 uv run pytest                            # self-checks + config round-trips
 ```
 
 `ws predict` also reads a downloaded `validate_deployment.py` (its CONFIG block).
+
+`ws test` puts the predictions to a live endpoint, one falsifiable hypothesis
+at a time. Without `--exclusive` it runs only the hypotheses that need a
+handful of requests (miss TTFT, the inter-token gap distribution, the steady
+decode point) and lists the rest as skipped — a hypothesis that has to
+generate its own population is never measured against someone else's load.
+With `--exclusive` it drives the geometric load ladder that
+`scripts/validate_deployment.py` drives, once, and every ceiling reads from
+it. `--burst N` adds the correlated-flush probe (B*).
 
 ## Contents
 
