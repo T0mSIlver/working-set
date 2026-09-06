@@ -527,8 +527,12 @@ def test_metrics_covariates_land_on_the_trace():
             ep = EndpointSpec(base_url="http://x/v1", model="m")
             tr = RequestTrace(uid=1, kind="hit")
             await send_request(c, ep, small_opts(), "x", tr, 4, metrics=m)
+        # `t` rides along with the gauges: it is the SNAPSHOT's instant, not
+        # the send's, and a consumer needs it to know how stale the reading is
         assert tr.covariates == {"requests_running": 3, "requests_waiting": 1,
-                                 "kv_cache_usage": 0.42}
+                                 "kv_cache_usage": 0.42,
+                                 "t": tr.covariates["t"]}
+        assert tr.covariates["t"] == pytest.approx(time.time(), abs=5.0)
         assert m.at_calls == 1
     asyncio.run(go())
 

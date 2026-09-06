@@ -203,7 +203,12 @@ def sampler_now(metrics) -> float:
     return float(t) if isinstance(t, (int, float)) else time.time()
 
 
-COVARIATE_KEYS = ("requests_running", "requests_waiting", "kv_cache_usage")
+# `t` rides along with the three gauges: it is the instant the SNAPSHOT was
+# taken, not the instant of the send, and a consumer needs it to know how
+# stale the reading is and which of its own requests the gauge can possibly
+# contain.
+COVARIATE_KEYS = ("requests_running", "requests_waiting", "kv_cache_usage",
+                  "t")
 
 
 def _covariates(metrics, t: float) -> dict | None:
@@ -228,9 +233,16 @@ def _covariates(metrics, t: float) -> dict | None:
     fn = getattr(metrics, "gauges_at", None)
     if fn is not None:
         try:
-            return _plain(fn(t), COVARIATE_KEYS)
+            got = _plain(fn(t), COVARIATE_KEYS)
+            if got:
+                return got
         except Exception:                   # noqa: BLE001
-            return None
+            pass
+        # FALL THROUGH rather than give up: a sampler can offer `gauges_at`
+        # and still fail it (an adapter that resolved nothing from a truncated
+        # scrape, say) while `at` returns something a caller can read. A
+        # reading refused here disarms the safety rails downstream, so the
+        # cheaper spelling is worth trying before reporting nothing.
     try:
         snap = metrics.at(t)
     except Exception:

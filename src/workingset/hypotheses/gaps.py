@@ -23,22 +23,29 @@ limit of what they can then conclude, and this module is strict about it:
       point's EXPECTED running/waiting is a reading at the point the
       prediction is about — no longer a different experiment, but an
       extrapolation from the probed load to the predicted one, whose distance
-      is stated. Four gates, all of which must pass, or the row stays
+      is stated. Six gates, all of which must pass, or the row stays
       `not_established` and says which one failed:
 
         1. the covariates exist at all (a run without --metrics-url has none,
            so nothing changes for it — the old cap holds exactly)
         2. `n` clears three observations per fitted coefficient
-        3. the design matrix is not rank-deficient and its condition number
-           is under 1e8 — the load and the prompt length must have varied
+        3. the design matrix is not rank-deficient, no regressor's variance
+           inflation factor exceeds 10, and the STANDARDISED condition number
+           is under 1e4 — the load and the prompt length must have varied
            INDEPENDENTLY, or the coefficients are not separable
         4. the operating point sits no more than `--max-extrapolation`
            observed standard deviations outside the probed range of every
            regressor
+        5. ...and no more than `--max-extrapolation-requests` REQUESTS
+           outside it, so a noisy background cannot buy a wider absolute
+           licence than a quiet one
+        6. the verdict survives the fitted value's own standard error: it
+           must not change within +/- `--verdict-sigmas` se (see
+           `_fit_verdict`)
 
       The raw prevailing-load number is still recorded; what the verdict is
       computed from is the fitted value at the operating point, and the row
-      prints the extrapolation distance next to it.
+      prints the standard error and the extrapolation distance next to it.
 
 When a ladder IS being run (an exclusive run that also selected a ceiling
 hypothesis), they read the rung nearest the operating point instead, exactly
@@ -113,12 +120,16 @@ async def _fit(ctx, which: str) -> dict | None:
 def _fit_note(r: dict) -> str:
     at = r.get("at") or {}
     fit = r.get("fit") or {}
-    return (f"read off the covariate fit at the configured operating point "
+    note = (f"read off the covariate fit at the configured operating point "
             f"(running {_g(at.get('running'))}, waiting "
             f"{_g(at.get('waiting'))}) over n={r.get('n', 0)} stamped "
-            f"requests, residual sd {_g(fit.get('residual_std'))}, "
-            f"extrapolation {r.get('extrapolation', float('nan')):.2f} sd "
+            f"requests, se {_g(r.get('se'))}, residual sd "
+            f"{_g(fit.get('residual_std'))}, extrapolation "
+            f"{r.get('extrapolation', float('nan')):.2f} sd "
             f"(max {r.get('max_extrapolation', float('nan')):g})")
+    if r.get("upward_bias"):
+        note += f". NOTE {r['upward_bias']}"
+    return note
 
 
 def _g(x) -> str:
@@ -137,12 +148,29 @@ def _steady_pair(v: Verdict, pred_seqs) -> tuple:
             "the extrapolation gate, not by a measured batch mean")
 
 
-def _fit_verdict(m: Measurement, make) -> Verdict:
-    """Shared mode's verdict rule: `make()` is the ordinary comparison, and it
-    is allowed to stand ONLY when the fit behind the measurement passed every
-    gate. Otherwise the row is `not_established` carrying the gate's own
+def _fit_verdict(m: Measurement, make, se_gate: bool = True) -> Verdict:
+    """Shared mode's verdict rule: `make(value)` is the ordinary comparison,
+    and it is allowed to stand ONLY when the fit behind the measurement passed
+    every gate. Otherwise the row is `not_established` carrying the gate's own
     reason, which is the same honesty the plain cap gave — with a diagnosis
-    attached instead of a shrug."""
+    attached instead of a shrug.
+
+    THE UNCERTAINTY GATE. A fitted value is an estimate with a standard error,
+    and the comparison bands are narrow (0.7-1.3x for `ratio_verdict`), so a
+    point estimate sitting inside a band says nothing when the estimate's own
+    spread is comparable to the band's width. The verdict therefore has to
+    SURVIVE its own uncertainty: `make` is evaluated at the point estimate and
+    at +/- `verdict_sigmas` standard errors, and unless all three agree the
+    row is `not_established` — equivalently, the estimate must sit at least
+    `verdict_sigmas` standard errors clear of the nearest verdict boundary. A
+    non-finite standard error fails the gate outright: an estimate whose
+    spread is unknown cannot be shown to clear anything.
+
+    `se_gate=False` is for a row whose MEASURED value is not the fit's
+    prediction — H-itl-spike measures a spike p95 and only uses the fit to
+    characterise the load — where the fit's standard error is the uncertainty
+    of a different quantity and gating on it would be a category error.
+    """
     r = m.data.get("fit")
     if not r:
         return Verdict(NOT_ESTABLISHED,
@@ -152,7 +180,24 @@ def _fit_verdict(m: Measurement, make) -> Verdict:
         return Verdict(NOT_ESTABLISHED,
                        f"measured {PREVAILING}; not corrected to it because "
                        f"{r.get('reason', 'the covariate fit was refused')}")
-    v = make()
+    v = make(m.value)
+    if not se_gate:
+        return Verdict(v.status, f"{v.text} — {_fit_note(r)}")
+    se, k = r.get("se"), r.get("verdict_sigmas", 3.0)
+    if se is None or not _fin(se):
+        return Verdict(NOT_ESTABLISHED,
+                       "the fitted value has no usable standard error, so it "
+                       f"cannot be shown to clear a verdict boundary — "
+                       f"{_fit_note(r)}")
+    lo, hi = make(m.value - k * se), make(m.value + k * se)
+    if lo.status != v.status or hi.status != v.status:
+        return Verdict(
+            NOT_ESTABLISHED,
+            f"{v.text} at the point estimate, but +/-{k:g} se spans "
+            f"{m.value - k * se:.4g} to {m.value + k * se:.4g} "
+            f"{m.unit.strip() or ''}".rstrip() + f", which straddles a verdict "
+            f"boundary ({lo.status} to {hi.status}) — the fit is not sharp "
+            f"enough to separate them. {_fit_note(r)}")
     return Verdict(v.status, f"{v.text} — {_fit_note(r)}")
 
 
@@ -259,7 +304,7 @@ class HTtftMiss(Hypothesis):
                            m.data.get("reason", "no forced-miss samples"))
         if src == "shared":
             return _fit_verdict(
-                m, lambda: ratio_verdict(m.value, pred.value, "forced-miss"))
+                m, lambda v: ratio_verdict(v, pred.value, "forced-miss"))
         v = ratio_verdict(m.value, pred.value, "forced-miss")
         if src == "sample":
             return _cap(v, src)
@@ -347,8 +392,8 @@ class HSteady(Hypothesis):
                            m.data.get("reason", "no decode samples"))
         src = m.data.get("source")
         if src == "shared":
-            return _fit_verdict(m, lambda: Verdict(
-                *_steady_pair(ratio_verdict(m.value, pred.value, "decode"),
+            return _fit_verdict(m, lambda v: Verdict(
+                *_steady_pair(ratio_verdict(v, pred.value, "decode"),
                               m.data.get("predicted_seqs"))))
         v = ratio_verdict(m.value, pred.value, "decode")
         seqs, pred_seqs = m.data.get("seqs"), m.data.get("predicted_seqs")
@@ -498,7 +543,11 @@ class HItlSpike(Hypothesis):
                                    f"{side} the MFU bracket [{lo:g}-{hi:g}] "
                                    f"— {caveat}")
         if src == "shared":
-            return _fit_verdict(m, lambda: out)
+            # se_gate off: `out` scores the SPIKE p95, and the fit's standard
+            # error belongs to the load reading that gated the row, not to
+            # that measurement. Gating one quantity on another's uncertainty
+            # would be a category error.
+            return _fit_verdict(m, lambda _v: out, se_gate=False)
         return _cap(out, src)
 
 
@@ -570,6 +619,6 @@ class HItlMean(Hypothesis):
                                 "per-token prediction — compare freezes/ktok "
                                 "instead"), src)
         if src == "shared":
-            return _fit_verdict(m, lambda: ratio_verdict(
-                m.value, pred.value, "inter-token gap"))
+            return _fit_verdict(m, lambda v: ratio_verdict(
+                v, pred.value, "inter-token gap"))
         return _cap(ratio_verdict(m.value, pred.value, "inter-token gap"), src)

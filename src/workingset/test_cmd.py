@@ -56,6 +56,7 @@ def build_budget(args) -> ProbeBudget:
     for flag, field_ in (("max_extra_load", "max_extra_load"),
                          ("abort_if_waiting", "abort_if_waiting"),
                          ("abort_if_kv_above", "abort_if_kv_above"),
+                         ("max_metrics_gaps", "max_metrics_gaps"),
                          ("max_probe_tokens", "max_probe_tokens"),
                          ("canary_every_s", "canary_every_s"),
                          ("canary_baseline_s", "canary_baseline_s"),
@@ -79,6 +80,9 @@ def build_shared(args) -> SharedOptions:
                          ("shared_warm_turns", "warm_turns"),
                          ("shared_duration_s", "duration_s"),
                          ("max_extrapolation", "max_extrapolation"),
+                         ("max_extrapolation_requests",
+                          "max_extrapolation_requests"),
+                         ("verdict_sigmas", "verdict_sigmas"),
                          ("seed", "seed")):
         v = getattr(args, flag, None)
         if v is not None:
@@ -148,10 +152,19 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
       f"per-user p50 decode >= {slo.itl_floor_tok_s:g} tok/s")
     w(f"probes   : {', '.join(sorted(pl.probes)) or 'none'}")
 
+    # the sampler is CONSTRUCTED, never started: --dry-run still sends
+    # nothing, and its scrape interval is what makes the rails' detection lag
+    # a number rather than a shrug
+    sampler = None
+    if args.metrics_url:
+        try:
+            sampler = open_metrics(args.metrics_url)
+        except SystemExit:
+            sampler = True          # unreachable module: the rails still bind
     w("\nPROBE BUDGET — the rails this run may not cross"
       + ("" if args.exclusive else " (conservative by default; every one of "
                                    "these is a flag)"))
-    for line in budget.describe(bool(args.metrics_url)):
+    for line in budget.describe(sampler):
         w(f"  {line}")
     if not args.exclusive:
         w("  any rail that trips aborts the run, writes a record carrying the "
