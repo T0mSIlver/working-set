@@ -16,6 +16,7 @@ import tomllib
 from pathlib import Path
 
 import httpx
+import numpy as np
 import pytest
 
 from workingset.cli import main as ws_main
@@ -23,10 +24,10 @@ from workingset.config import RunConfig, load_config
 from workingset.metrics.parse import Histogram, parse_text
 from workingset.metrics.sampler import Snapshot
 from workingset.workload import (PROMQL, NotObservable, PrometheusClient,
-                                 emit_json, emit_table, emit_toml, estimate,
-                                 fit_lognormal, merge_into, parse_duration,
-                                 promql, read_jsonl, read_metrics_text,
-                                 read_prometheus)
+                                 Provenance, Reading, emit_json, emit_table,
+                                 emit_toml, estimate, fit_lognormal,
+                                 merge_into, parse_duration, promql,
+                                 read_jsonl, read_metrics_text, read_prometheus)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vllm_metrics_v1.txt"
 DUMP = FIXTURE.read_text(encoding="utf-8")
@@ -65,12 +66,26 @@ def lognormal_hist(n: int, median: float, sigma: float,
 _NAME = re.compile(r"\b((?:vllm|sglang):[a-zA-Z0-9_:]*)")
 
 
-class FakeProm:
-    """Answers the five query shapes `PROMQL` builds, and nothing else.
+# the identifying labels a real deployment's series carry. Every response
+# below wears them, so the firewall test can assert that none of them — nor
+# any raw value they hang off — reaches an emitted block.
+LABELS = {"instance": "vllm-prod-7.internal.example:8000",
+          "pod": "vllm-qwen3-27b-tp4-847d9c6b5-x2knq",
+          "model_name": "Qwen/Qwen3-27B",
+          "job": "vllm-serving-prod",
+          "namespace": "ml-inference-prod"}
 
-    Every query it is asked is recorded in `.queries`, so a test can assert
-    the PromQL that was actually built rather than the PromQL it expected to
-    be built.
+
+class FakeProm:
+    """Answers the query shapes `PROMQL` builds, and nothing else.
+
+    Every query is recorded in `.queries` as `(query, time param)` and every
+    range window in `.windows`, so a test can assert the PromQL that was
+    actually built and the instant it was evaluated at, rather than the ones
+    it expected to be built.
+
+    `resets` is keyed by the SERIES a reset query names, so a counter is
+    `vllm:request_success_total` and a histogram is its `_count` member.
     """
 
     def __init__(self, *, names: set[str], counters: dict[str, float],
@@ -84,11 +99,16 @@ class FakeProm:
         self.resets = resets or {}
         self.now = now
         self.step_s = step_s
-        self.queries: list[str] = []
+        self.queries: list[tuple[str, str | None]] = []
+        self.windows: list[tuple[float, float]] = []
 
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self._handle),
                             base_url="http://prom.test")
+
+    @property
+    def promql(self) -> list[str]:
+        return [q for q, _ in self.queries]
 
     # ---- the handler --------------------------------------------------
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -96,7 +116,7 @@ class FakeProm:
         if path.endswith("/label/__name__/values"):
             return self._ok(sorted(self.names))
         q = request.url.params.get("query", "")
-        self.queries.append(q)
+        self.queries.append((q, request.url.params.get("time")))
         if q == "time()":
             return self._vector([({}, self.now)])
         m = _NAME.search(q)
@@ -109,14 +129,15 @@ class FakeProm:
                 base = base[: -len(suffix)]
                 break
         if path.endswith("/query_range"):
+            start = float(request.url.params["start"])
+            self.windows.append((start, float(request.url.params["end"])))
             vals = self.gauge.get(base)
             if vals is None:
                 return self._matrix([])
-            start = float(request.url.params["start"])
             return self._matrix([(start + i * self.step_s, v)
                                  for i, v in enumerate(vals)])
-        if q.startswith("max(resets("):
-            v = self.resets.get(base)
+        if "resets(" in q:
+            v = self.resets.get(raw)
             return self._vector([] if v is None else [({}, v)])
         h = self.hists.get(base)
         if "by (le)" in q and h is not None:
@@ -136,13 +157,13 @@ class FakeProm:
 
     def _vector(self, pairs) -> httpx.Response:
         return self._ok({"resultType": "vector",
-                         "result": [{"metric": lbl,
+                         "result": [{"metric": {**LABELS, **lbl},
                                      "value": [self.now, repr(float(v))]}
                                     for lbl, v in pairs]})
 
     def _matrix(self, points) -> httpx.Response:
         return self._ok({"resultType": "matrix",
-                         "result": [{"metric": {},
+                         "result": [{"metric": dict(LABELS),
                                      "values": [[t, repr(float(v))]
                                                 for t, v in points]}]})
 
@@ -217,7 +238,43 @@ def test_promql_shapes_carry_the_selector_and_the_engine():
         '{model_name="m",engine="0"}[7d]))')
     assert q.gauge("vllm:num_requests_running") == (
         'sum(vllm:num_requests_running{model_name="m",engine="0"})')
-    assert q.resets("vllm:request_success_total").startswith("max(resets(")
+
+
+def test_resets_are_summed_over_engines_not_maxed():
+    """Two engines restarting once each is two restarts in the totals; `max`
+    would report one and hide half a data-parallel deployment's damage."""
+    q = PROMQL(range="7d")
+    assert q.resets("vllm:request_success_total") == (
+        "sum(resets(vllm:request_success_total[7d]))")
+    assert "max(" not in q.resets("vllm:request_success_total")
+
+
+def test_histograms_get_a_reset_query_too():
+    """A restart inside a FITTED family corrupts the fit; `resets()` needs a
+    plain counter, and the family's `_count` is one."""
+    q = PROMQL(range="7d")
+    assert q.hist_resets("vllm:request_prompt_tokens") == (
+        "sum(resets(vllm:request_prompt_tokens_count[7d]))")
+
+
+def test_matcher_strips_one_brace_pair_not_every_brace():
+    braced = PROMQL(selector='{model_name="m"}').gauge("vllm:x")
+    bare = PROMQL(selector='model_name="m"').gauge("vllm:x")
+    assert braced == bare == 'sum(vllm:x{model_name="m"})'
+    # a selector whose own value ends in a brace keeps it
+    assert PROMQL(selector='model_name=~"m\\{2\\}"').gauge("vllm:x") == (
+        'sum(vllm:x{model_name=~"m\\{2\\}"})')
+
+
+@pytest.mark.parametrize("selector", ['engine="0"', 'model_name="m",engine="1"',
+                                      'engine=~"[01]"', '{engine!="2"}'])
+def test_engine_twice_is_refused_locally_not_by_a_400(selector):
+    """`{engine="1",engine="0"}` is not a narrower selection, it is invalid
+    PromQL; the error belongs here, not three round trips later."""
+    with pytest.raises(ValueError, match="already constrains `engine`"):
+        PROMQL(selector=selector, engine="0").gauge("vllm:x")
+    # without --engine the same selector is perfectly fine
+    assert "engine" in PROMQL(selector=selector).gauge("vllm:x")
 
 
 def test_promql_omits_an_empty_matcher():
@@ -238,7 +295,7 @@ def test_promql_names_come_from_the_adapter_not_from_literals():
     assert resolved["prefix_cache_hits_total"] == "vllm:prefix_cache_hits_total"
     exported = {n.rsplit("_bucket", 1)[0].rsplit("_sum", 1)[0].rsplit("_count", 1)[0]
                 for n in prom.names}
-    for q in prom.queries:
+    for q in prom.promql:
         m = _NAME.search(q)
         if m is None:                       # `time()` carries no metric name
             continue
@@ -276,6 +333,65 @@ def test_fit_recovers_known_lognormal_parameters(median, sigma, n):
     assert f.sigma == pytest.approx(sigma, rel=0.02)
     assert f.residual_ln < 0.02          # a straight line, as a log-normal is
     assert f.n_points >= 5
+
+
+def sampled_hist(seed: int, n: int, median: float, sigma: float) -> Histogram:
+    """A histogram accumulated from actual DRAWS, not from the exact CDF: the
+    bucket counts carry real sampling noise, which is the only thing the
+    weighting exists to handle."""
+    rng = np.random.default_rng(seed)
+    x = rng.lognormal(math.log(median), sigma, n)
+    cum = {float(b): float((x <= b).sum()) for b in SIZE_BOUNDS}
+    cum[math.inf] = float(n)
+    return Histogram("h", {}, cum, float(n), float(x.sum()))
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+def test_fit_recovers_a_noisily_sampled_lognormal(seed):
+    """The exact-CDF test above cannot see a weighting bug: every point sits
+    on the line by construction. These buckets come from 40,000 random draws,
+    so the extreme edges (F ~ 5e-5, where one request moves the quantile a
+    long way) are wrong by exactly as much as sampling makes them."""
+    f = fit_lognormal(sampled_hist(seed, 40_000, 47_400.0, 0.81))
+    assert f.median_tokens == pytest.approx(47_400.0, rel=0.01)
+    assert f.sigma == pytest.approx(0.81, rel=0.02)
+
+
+def test_the_fit_weights_the_edges_by_how_much_they_know():
+    """Unweighted, the sparsest edge votes as loudly as the median and the
+    recovered sigma wanders; weighted, it does not."""
+    def unweighted(h):
+        nd = statistics.NormalDist()
+        xs, ys = [], []
+        for b in SIZE_BOUNDS:
+            p = h.buckets[float(b)] / h.observations
+            if 0.0 < p < 1.0:
+                xs.append(math.log(b))
+                ys.append(nd.inv_cdf(p))
+        slope, _ = np.polyfit(np.asarray(ys), np.asarray(xs), 1)
+        return float(slope)
+
+    worst_w = worst_u = 0.0
+    for seed in range(12):
+        h = sampled_hist(seed, 40_000, 47_400.0, 0.81)
+        worst_w = max(worst_w, abs(fit_lognormal(h).sigma / 0.81 - 1))
+        worst_u = max(worst_u, abs(unweighted(h) / 0.81 - 1))
+    assert worst_w < worst_u
+    assert worst_w < 0.02
+
+
+def test_a_fit_through_too_few_edges_says_so():
+    """Two edges make a line that fits exactly; the residual is then not
+    evidence of anything."""
+    h = Histogram("h", {}, {100.0: 10.0, 1000.0: 60.0, 10000.0: 95.0,
+                            math.inf: 100.0}, 100.0, 100_000.0)
+    est = estimate(Reading(provenance=Provenance("test", "t"),
+                           histograms={"request_prompt_tokens_hist": h},
+                           counters={"request_success_total": 100.0},
+                           seconds=3600.0))
+    assert est.prompt.n_points == 3
+    assert any("only 3 bucket edges" in c or "only 3 " in c for c in est.caveats)
+    assert any("fitted through only" in c for c in est.caveats)
 
 
 def test_fit_reports_censoring_when_the_top_bucket_overflows():
@@ -352,6 +468,45 @@ def test_sessions_override_changes_the_cycle_not_the_rate():
     assert est.cycle_s == pytest.approx(249.0 / est.req_rate_s)
 
 
+def test_an_assumed_session_count_never_writes_the_config_users():
+    """`users` is the closed-loop operating point `ws predict` prices. The
+    decoder p95 is a LOWER BOUND on it, so writing it would under-price the
+    deployment silently — the module's own "a default is not a measurement"
+    rule, applied to its own fallback."""
+    est, _ = study_estimate()
+    assert est.sessions_assumed is True
+    block = emit_toml(est)
+    body = tomllib.loads(block)["workload"]
+    assert "users" not in body
+    assert "# users: not observable from these metrics" in block
+    assert "LOWER BOUND" in block and "--sessions" in block
+    # the bound itself is still reported, as a comment naming the number
+    assert f"{est.p95_running:,.0f}" in block
+    # think time, derived at that same assumed count, is labelled with it
+    assert "think_time_s" in body
+    assert re.search(r"think_time_s = [\d.]+\s+# .*LOWER BOUND", block)
+
+
+def test_an_explicit_session_count_does_write_users():
+    est, _ = study_estimate(**{"sessions": 249.0})
+    block = emit_toml(est)
+    assert tomllib.loads(block)["workload"]["users"] == 249
+    assert "as given by --sessions" in block
+    assert not re.search(r"think_time_s = [\d.]+\s+# .*LOWER BOUND", block)
+
+
+def test_an_emitted_block_never_under_prices_a_config_by_default(tmp_path):
+    """The end-to-end shape of the same rule: `--into` without `--sessions`
+    leaves the config's own `users` alone rather than lowering it."""
+    p = _config(tmp_path)
+    before = tomllib.loads(p.read_text(encoding="utf-8"))["workload"]["users"]
+    est, _ = study_estimate()
+    p.write_text(merge_into(p, emit_toml(est)), encoding="utf-8")
+    after = tomllib.loads(p.read_text(encoding="utf-8"))["workload"]
+    assert "users" not in after            # the dataclass default stands
+    assert load_config(p).workload.users == before
+
+
 def test_a_session_count_too_small_for_the_service_time_refuses():
     est, _ = study_estimate(**{"sessions": 0.001})
     assert est.think_time_s is None
@@ -386,6 +541,43 @@ def test_the_two_readings_are_each_labelled_with_their_assumption():
                for c in json.loads(blob)["caveats"])
 
 
+def test_the_identity_checks_that_both_counters_saw_the_same_requests():
+    """The savings is priced against the mean prompt C, which is only
+    legitimate if the cache counters queried C tokens per request."""
+    est, _ = study_estimate()
+    assert not any("not seeing the same requests" in c for c in est.caveats)
+
+    prom = study_prom()
+    prom.counters["vllm:prefix_cache_queries_total"] *= 0.7    # some traffic bypassed it
+    prom.counters["vllm:prefix_cache_hits_total"] *= 0.7
+    est, _ = study_estimate(prom)
+    note = [c for c in est.caveats if "not seeing the same requests" in c]
+    assert len(note) == 1
+    assert "prefix_cache_queries_total / requests" in note[0]
+    assert "request_prompt_tokens" in note[0]
+
+
+def test_the_queue_cross_check_is_actually_run():
+    """R - W is time spent not executing, and the queue histogram measures
+    exactly that; the docstring promised the comparison, so make it."""
+    est, _ = study_estimate()
+    assert est.queue_mean_s is None            # not exported by the fake
+
+    prom = study_prom()
+    prom.names.update({"vllm:request_queue_time_seconds_bucket",
+                       "vllm:request_queue_time_seconds_sum",
+                       "vllm:request_queue_time_seconds_count"})
+    # W - R is large and negative here, so any plausible queue time disagrees
+    prom.hists["vllm:request_queue_time_seconds"] = Histogram(
+        "q", {}, lognormal_buckets(int(N_REQ), 0.4, 0.9, E2E_BOUNDS),
+        N_REQ, 0.5 * N_REQ)
+    est, _ = study_estimate(prom)
+    assert est.queue_mean_s == pytest.approx(0.5)
+    note = [c for c in est.caveats if "against a measured mean queue time" in c]
+    assert len(note) == 1
+    assert "NOT consistent" in note[0]
+
+
 def test_a_server_without_prefix_cache_counters_says_so():
     prom = study_prom()
     for k in ("vllm:prefix_cache_queries_total", "vllm:prefix_cache_hits_total",
@@ -412,8 +604,45 @@ def test_counter_resets_are_reported_not_hidden():
     prom = study_prom(resets={"vllm:request_success_total": 2.0})
     est, _ = study_estimate(prom)
     assert "request_success_total" in est.resets
-    assert "lower bound" in est.resets["request_success_total"]
+    assert "LOWER bound" in est.resets["request_success_total"]
     assert any("went backwards" in c for c in est.caveats)
+
+
+def test_a_reset_inside_a_fitted_histogram_is_reported():
+    """The prompt and generation families are the two this command FITS: a
+    restart inside one mixes two distributions into one bucket CDF."""
+    prom = study_prom(resets={"vllm:request_prompt_tokens_count": 1.0})
+    est, _ = study_estimate(prom)
+    assert "sum(resets(vllm:request_prompt_tokens_count" in " ".join(prom.promql)
+    assert "request_prompt_tokens_hist" in est.resets
+    assert any("FITTED histogram" in c for c in est.caveats)
+    # and every fitted family is asked, not just the one that answered
+    for base in ("vllm:request_prompt_tokens", "vllm:request_generation_tokens"):
+        assert f"sum(resets({base}_count" in " ".join(prom.promql)
+
+
+def test_nothing_is_queried_that_nothing_consumes():
+    """A fetched-and-unused series costs a round trip and, worse, shows up in
+    `missing` as though its absence mattered."""
+    _, prom = study_estimate()
+    joined = " ".join(prom.promql)
+    assert "time_to_first_token" not in joined
+    assert "num_requests_waiting" not in joined
+    est, _ = study_estimate()
+    assert "ttft_hist" not in est.provenance.missing
+    assert "requests_waiting" not in est.provenance.missing
+
+
+def test_every_query_is_evaluated_at_the_same_instant():
+    """Left to Prometheus's own `now`, each round trip pushes the next
+    query's window later and the aggregates stop describing one window."""
+    _, prom = study_estimate()
+    instant = [(q, t) for q, t in prom.queries
+               if "increase(" in q or "resets(" in q]
+    assert len(instant) > 10
+    assert {t for _, t in instant} == {repr(prom.now)}
+    # and the gauge's range ends at that same instant
+    assert prom.windows == [(prom.now - 604800.0, prom.now)]
 
 
 # ===========================================================================
@@ -494,6 +723,40 @@ def test_metrics_text_gives_shape_but_refuses_every_rate():
     assert any("CUMULATIVE SINCE SERVER START" in c for c in est.caveats)
 
 
+def test_one_scrape_is_not_a_window_of_the_gauge():
+    """The fixture's `num_requests_running` reads 24. One reading of a gauge
+    is the concurrency at that instant, not a mean, a p95 or a session count —
+    and `users = 24` in a config would be exactly the invented number this
+    command refuses to produce."""
+    est = estimate(read_metrics_text(FIXTURE))
+    assert est.mean_running is None
+    assert est.p95_running is None
+    assert est.sessions is None
+    assert est.cycle_s is None
+    for key in ("concurrency", "sessions", "users"):
+        assert "one INSTANT of the gauge" in est.unobservable[key]
+    block = emit_toml(est)
+    assert "users" not in tomllib.loads(block)["workload"]
+    assert "# users: not observable from these metrics" in block
+    # and no caveat bounding a session count that was never used
+    assert not any("sessions defaults to" in c for c in est.caveats)
+
+
+def test_one_scrape_still_refuses_when_sessions_is_given():
+    """`--sessions` supplies the population, but the rate it would be divided
+    by still does not exist here."""
+    est = estimate(read_metrics_text(FIXTURE), sessions=249.0)
+    assert est.cycle_s is None
+    assert est.think_time_s is None
+    assert "think_time_s" in est.unobservable
+    # the population was asserted by the caller, so the block records it
+    # rather than assigning it AND calling it unobservable in the same breath
+    block = emit_toml(est)
+    assert tomllib.loads(block)["workload"]["users"] == 249
+    assert "# users: not observable" not in block
+    assert "concurrency: not observable" in block
+
+
 # ===========================================================================
 # what is never observable, whatever the source
 # ===========================================================================
@@ -526,7 +789,8 @@ def test_every_emitted_number_is_rounded():
         assert v == int(float(f"{v:.3g}")), f"{key}={v} is not 3 s.f."
     assert body["user_prompt_sigma"] == round(body["user_prompt_sigma"], 2)
     assert body["think_time_s"] == round(body["think_time_s"], 1)
-    assert isinstance(body["users"], int)
+    given, _ = study_estimate(**{"sessions": 249.0})
+    assert isinstance(tomllib.loads(emit_toml(given))["workload"]["users"], int)
     blob = json.loads(emit_json(est))
     rate = blob["requests"]["rate_per_s"]
     assert rate == float(f"{rate:.2g}")           # rates: 2 significant figures
@@ -546,11 +810,20 @@ def test_an_unrounded_number_never_reaches_the_output():
 # ===========================================================================
 def test_no_raw_series_value_or_timestamp_is_emitted():
     """The employer-data firewall: every emitted number is an aggregate that
-    has been rounded, so no timestamp-value pair from the source survives."""
+    has been rounded, so no timestamp-value pair from the source survives —
+    and no label off the series it was read from."""
     est, prom = study_estimate()
     outputs = (emit_toml(est), emit_json(est), emit_table(est))
     for text in outputs:
-        # raw gauge readings, verbatim and rounded to more digits than we emit
+        # the identifying labels every real series carries. `model_name` is
+        # the exception and only because the USER typed it into --selector;
+        # nothing reaches the output by having been read off a series.
+        for label, value in LABELS.items():
+            if label == "model_name":
+                continue
+            assert value not in text, f"the {label} label leaked"
+            assert label not in text
+        # raw gauge readings, verbatim and to more digits than we emit
         for v in RUNNING:
             assert repr(v) not in text, f"raw gauge value {v} leaked"
         assert "41.2718" not in text
@@ -559,13 +832,31 @@ def test_no_raw_series_value_or_timestamp_is_emitted():
         assert str(int(prom.now)) not in text
         for i in range(len(RUNNING)):
             assert repr(prom.now - 604800.0 + i * prom.step_s) not in text
-        # raw counter totals and bucket counts
+        # raw counter totals, histogram sums and bucket counts
         assert repr(N_REQ) not in text
-        prompt = prom.hists["vllm:request_prompt_tokens"]
-        assert repr(prompt.sum) not in text
-        for count in prompt.buckets.values():
-            if count > 1000:                       # 0.0/1.0 are not identifying
-                assert repr(count) not in text
+        for name, h in prom.hists.items():
+            assert repr(h.sum) not in text, f"{name} _sum leaked"
+            assert repr(h.count) not in text, f"{name} _count leaked"
+            for count in h.buckets.values():
+                if count > 1000:                   # 0.0/1.0 are not identifying
+                    assert repr(count) not in text
+        for name, v in prom.counters.items():
+            if v > 1000:
+                assert repr(v) not in text, f"{name} leaked"
+
+
+def test_a_local_file_path_is_not_echoed_into_a_shared_block(tmp_path):
+    """An emitted block is meant to be pasted into a config other people
+    read; the archive's name identifies it, /home/<someone>/... does not."""
+    p = _archive(tmp_path)
+    est = estimate(read_jsonl(p))
+    assert est.provenance.target == "tail.jsonl"
+    for text in (emit_toml(est), emit_json(est), emit_table(est)):
+        assert str(tmp_path) not in text
+        assert "tail.jsonl" in text
+    est = estimate(read_metrics_text(FIXTURE))
+    assert est.provenance.target == "vllm_metrics_v1.txt"
+    assert str(FIXTURE.parent) not in emit_json(est)
 
 
 def test_provenance_carries_no_time_at_all():
@@ -670,6 +961,16 @@ def test_cli_help_documents_every_source_and_the_caveats(capsys):
         assert caveat in help_text, caveat
 
 
+def test_cli_refuses_a_double_engine_before_dialling(capsys):
+    """The matcher is validated before the first socket, so the message is
+    about the flags rather than about DNS."""
+    assert ws_main(["workload", "--prometheus", "http://127.0.0.1:1/",
+                    "--selector", 'engine="0"', "--engine", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "already constrains `engine`" in err
+    assert "Name or service" not in err and "Connect" not in err
+
+
 def test_cli_reports_a_dead_prometheus_as_a_message(capsys):
     assert ws_main(["workload", "--prometheus", "http://127.0.0.1:1/",
                     "--range", "1h"]) == 2
@@ -727,5 +1028,49 @@ def test_non_monotone_increase_buckets_are_made_cumulative():
     result = [{"metric": {"le": "10.0"}, "value": [0, "100.0"]},
               {"metric": {"le": "20.0"}, "value": [0, "99.5"]},
               {"metric": {"le": "+Inf"}, "value": [0, "120.0"]}]
-    got = _bucket_result(result)
-    assert got == {10.0: 100.0, 20.0: 100.0, math.inf: 120.0}
+    buckets, adjust = _bucket_result(result)
+    assert buckets == {10.0: 100.0, 20.0: 100.0, math.inf: 120.0}
+    assert adjust == pytest.approx(0.5)     # how far it had to be pushed up
+    # a clean series reports no adjustment at all
+    clean = [{"metric": {"le": "10.0"}, "value": [0, "100.0"]},
+             {"metric": {"le": "+Inf"}, "value": [0, "120.0"]}]
+    assert _bucket_result(clean)[1] == 0.0
+
+
+def test_the_monotonisation_caveat_appears_only_when_it_did_something():
+    """A correction that only ever raises counts, applied silently, is a
+    number the reader cannot see; one that never fired is noise."""
+    est, _ = study_estimate()
+    assert not any("made cumulative by running maximum" in c for c in est.caveats)
+
+    prom = study_prom()
+    h = prom.hists["vllm:request_prompt_tokens"]
+    dipped = dict(h.buckets)
+    dipped[50_000.0] = dipped[20_000.0] - 37.0        # a dip increase() can make
+    prom.hists["vllm:request_prompt_tokens"] = Histogram(
+        "h", {}, dipped, h.count, h.sum)
+    est, _ = study_estimate(prom)
+    note = [c for c in est.caveats if "made cumulative by running maximum" in c]
+    assert len(note) == 1
+    assert "37.0 observations" in note[0]
+    assert "request_prompt_tokens_hist" in note[0]
+
+
+def test_count_and_the_inf_bucket_are_cross_checked():
+    """`increase()` extrapolates the two independently and the fit divides one
+    by the other, so a disagreement between them is not a detail."""
+    prom = study_prom()
+    h = prom.hists["vllm:request_generation_tokens"]
+    prom.hists["vllm:request_generation_tokens"] = Histogram(
+        "h", {}, dict(h.buckets), h.count * 1.20, h.sum)
+    est, _ = study_estimate(prom)
+    note = [c for c in est.caveats if "against a +Inf bucket of" in c]
+    assert len(note) == 1
+    assert "request_generation_tokens" in note[0]
+    # a 1% wobble is what extrapolation explains, and stays quiet
+    prom = study_prom()
+    h = prom.hists["vllm:request_generation_tokens"]
+    prom.hists["vllm:request_generation_tokens"] = Histogram(
+        "h", {}, dict(h.buckets), h.count * 1.005, h.sum)
+    est, _ = study_estimate(prom)
+    assert not any("against a +Inf bucket of" in c for c in est.caveats)

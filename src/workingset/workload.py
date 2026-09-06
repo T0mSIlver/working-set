@@ -22,7 +22,8 @@ Three sources behind one interface, all producing a `Reading`:
     --metrics-text FILE
         one raw `/metrics` dump. Its counters are CUMULATIVE SINCE SERVER
         START, so distributions and ratios are available but every RATE is
-        not: there is no duration to divide by.
+        not: there is no duration to divide by, and one reading of a gauge
+        is not a mean or a p95 of it either.
 
 What comes out (`WorkloadEstimate`, every field's units and formula in its
 docstring):
@@ -41,7 +42,11 @@ rate and the warm-turn size). Fixing either yields the other; nothing in
 assumption it needs.
 
 Anything the metrics cannot answer is printed as
-"not observable from these metrics: <reason>" and never as a default.
+"not observable from these metrics: <reason>" and never as a default. That
+includes the config's own `users`: with no `--sessions` the best this surface
+offers is the p95 of concurrent DECODERS, a lower bound, and a lower bound
+written into a capacity input under-prices the deployment silently. The bound
+is reported; the key is not assigned.
 """
 from __future__ import annotations
 
@@ -77,28 +82,48 @@ DEFAULT_MISS_RATE = 0.01          # the config's `miss_rate` default
 
 # Semantic keys this command reads. Everything else in the adapter's
 # vocabulary is irrelevant to a workload characterisation and is not queried,
-# which keeps the Prometheus round trips down to one per key.
+# which keeps the Prometheus round trips down to one per key. A key is on
+# this list only if something downstream CONSUMES it: a series fetched and
+# never used costs a round trip and, worse, appears in `missing` as though
+# its absence mattered.
 COUNTER_KEYS = ("prompt_tokens_total", "prompt_tokens_cached_total",
                 "generation_tokens_total", "prefix_cache_queries_total",
                 "prefix_cache_hits_total", "request_success_total")
 HIST_KEYS = ("request_prompt_tokens_hist", "request_generation_tokens_hist",
-             "e2e_hist", "queue_time_hist", "ttft_hist")
-GAUGE_KEYS = ("requests_running", "requests_waiting")
+             "e2e_hist", "queue_time_hist")
+GAUGE_KEYS = ("requests_running",)
 
 
 # ===========================================================================
 # PromQL, built from the adapter's metric names
 # ===========================================================================
+_ENGINE_LABEL = re.compile(r"(?:^|[,{\s])engine\s*(?:=~|!~|!=|=)")
+
+
 def _matcher(selector: str, engine: str | None) -> str:
     """The `{...}` label matcher, or `""` when nothing is selected.
 
-    `selector` is passed through verbatim (it is PromQL the user typed);
+    `selector` is passed through verbatim (it is PromQL the user typed), less
+    ONE wrapping pair of braces so both `model_name="m"` and `{model_name="m"}`
+    are accepted. Exactly one pair: `.strip("{}")` would eat the braces of a
+    selector that legitimately ends in one.
+
     `engine` is appended as `engine="N"`, the label vLLM V1 puts on every
-    per-engine series.
+    per-engine series. Appending it to a selector that ALREADY constrains
+    `engine` builds `{engine="1",engine="0"}` — not a narrower selection but
+    invalid PromQL, and a 400 three queries later is a worse place to learn
+    it than here.
     """
-    parts = [p for p in (selector.strip().strip("{}").strip() if selector else "",)
-             if p]
+    s = (selector or "").strip()
+    if s.startswith("{") and s.endswith("}"):
+        s = s[1:-1].strip()
+    parts = [s] if s else []
     if engine is not None:
+        if _ENGINE_LABEL.search(s):
+            raise ValueError(
+                f"--selector already constrains `engine` ({s!r}) and --engine "
+                f"{engine!r} would append a second matcher for the same label, "
+                f"which is invalid PromQL. Drop one of the two.")
         parts.append(f'engine="{engine}"')
     return "{" + ",".join(parts) + "}" if parts else ""
 
@@ -126,8 +151,23 @@ class PROMQL:
         return f"sum(increase({name}{self.m}[{self.range}]))"
 
     def resets(self, name: str) -> str:
-        """How many times this counter went backwards inside the range."""
-        return f"max(resets({name}{self.m}[{self.range}]))"
+        """How many times this counter went backwards inside the range.
+
+        SUMMED, not maxed: two data-parallel engines restarting once each is
+        two restarts in the window's totals, and `max` would report one.
+        """
+        return f"sum(resets({name}{self.m}[{self.range}]))"
+
+    def hist_resets(self, name: str) -> str:
+        """Restarts inside a HISTOGRAM family, via its `_count` member.
+
+        A histogram is not exempt from a restart, and the two families this
+        command FITS are exactly the ones a silent reset would corrupt: the
+        bucket CDF would mix a pre- and a post-restart shape and the fit would
+        report a confident median for a distribution that never existed.
+        `resets()` needs a plain counter, and `_count` is the family's.
+        """
+        return f"sum(resets({name}_count{self.m}[{self.range}]))"
 
     def buckets(self, name: str) -> str:
         """Histogram bucket increase, keyed by `le` — the bucket-wise delta
@@ -238,9 +278,19 @@ class PrometheusClient:
                 pass
         return set(self._get("label/__name__/values", {}))
 
-    def query(self, q: str) -> list[dict]:
-        """Instant query -> the `result` list (empty when nothing matched)."""
-        return list(self._get("query", {"query": q}).get("result") or [])
+    def query(self, q: str, at: float | None = None) -> list[dict]:
+        """Instant query -> the `result` list (empty when nothing matched).
+
+        `at` pins the evaluation instant. Every query of one run passes the
+        SAME instant, so the counter totals, the histogram buckets and the
+        gauge range all describe one window; left to Prometheus's own "now"
+        each query would land a round trip later than the last and the
+        aggregates would span slightly different windows.
+        """
+        params: dict[str, Any] = {"query": q}
+        if at is not None:
+            params["time"] = repr(at)
+        return list(self._get("query", params).get("result") or [])
 
     def query_range(self, q: str, start: float, end: float, step: str) -> list[dict]:
         """Range query -> the `result` list of `{metric, values:[[t, "v"], ...]}`."""
@@ -263,14 +313,18 @@ def _scalar(result: list[dict]) -> float | None:
     return None
 
 
-def _bucket_result(result: list[dict]) -> dict[float, float] | None:
-    """`sum by (le) (increase(..._bucket[...]))` -> a `le` -> count mapping.
+def _bucket_result(result: list[dict]) -> tuple[dict[float, float], float] | None:
+    """`sum by (le) (increase(..._bucket[...]))` -> (`le` -> count, adjustment).
 
-    `increase()` extrapolates at the range edges, so the counts are floats
-    and can come back very slightly NON-monotone across `le`. A cumulative
-    histogram that dips is not one, so the series is made monotone by running
-    maximum; the distortion is bounded by the extrapolation and is recorded
-    as a caveat by the caller.
+    `increase()` extrapolates each bucket series INDEPENDENTLY at the range
+    edges, so the counts are floats and can come back very slightly
+    NON-monotone across `le`. A cumulative histogram that dips is not one, so
+    the series is made monotone by running maximum.
+
+    That correction is silent and only ever pushes counts UP, so the size of
+    the largest one is returned alongside: the caller reports it, and reports
+    nothing when it was zero. A large adjustment is not a rounding artefact —
+    it means the buckets disagree by more than extrapolation explains.
     """
     raw: dict[float, float] = {}
     for series in result:
@@ -288,11 +342,13 @@ def _bucket_result(result: list[dict]) -> dict[float, float] | None:
     if not raw:
         return None
     out: dict[float, float] = {}
-    run = 0.0
+    run, adjust = 0.0, 0.0
     for b in sorted(raw):
+        if raw[b] < run:
+            adjust = max(adjust, run - raw[b])
         run = max(run, raw[b])
         out[b] = run
-    return out
+    return out, adjust
 
 
 # ===========================================================================
@@ -304,7 +360,11 @@ class Provenance:
     everything here is either something the user typed or a metric name."""
 
     source: str                       # "prometheus" | "jsonl" | "metrics-text"
-    target: str                       # URL or file path, as given
+    # the URL as typed, or a file's BASENAME. The full path is a local
+    # directory layout, and an emitted block is meant to be pasted into a
+    # config other people read; the name identifies the archive, the leading
+    # /home/<someone>/... does not.
+    target: str
     range: str | None = None          # "7d", or None for a file source
     step: str | None = None
     selector: str = ""
@@ -332,6 +392,10 @@ class Reading:
                 (a single `/metrics` dump has no duration)
     gaps        scrape/step gaps observed inside the window
     resets      semantic key -> why no delta exists, or how many resets
+    unobservable  quantity -> why THIS SOURCE cannot answer it, on top of
+                whatever the metrics themselves cannot answer. A single
+                `/metrics` dump exports `num_requests_running` perfectly
+                well and still cannot produce a mean or a p95 of it.
     """
 
     provenance: Provenance
@@ -341,6 +405,7 @@ class Reading:
     seconds: float | None = None
     gaps: int = 0
     resets: dict[str, str] = field(default_factory=dict)
+    unobservable: dict[str, str] = field(default_factory=dict)
     caveats: list[str] = field(default_factory=list)
 
     @property
@@ -368,16 +433,23 @@ def read_prometheus(url: str, *, range: str = "7d", step: str = "5m",
     (a mean for Little's law, a p95 for the peak), so it is pulled as a
     `query_range` at `step` and reduced to two numbers here, in memory.
 
-    `now` overrides the evaluation instant (tests pin it); the default is the
-    server's own idea of now, which is what `time()` in PromQL would use.
+    Every query — instant and range alike — is evaluated at the SAME instant,
+    resolved once before the first of them. Otherwise each round trip pushes
+    the next query's window a little later and the aggregates stop describing
+    one window.
+
+    `now` overrides that instant (tests pin it); the default is Prometheus's
+    own clock, which is what `time()` in PromQL would report.
     """
     q = PROMQL(selector=selector, engine=engine, range=range)
+    q.m                                   # refuse a bad matcher before dialling
     seconds = parse_duration(range)
     step_s = parse_duration(step)
     owned = client is None
     pc = PrometheusClient(url, headers=headers, verify=verify, timeout=timeout,
                           client=client)
     try:
+        end = float(now if now is not None else _server_now(pc))
         names = pc.metric_names(match='{__name__=~"(vllm|sglang):.*"}')
         bases = {n[: -len("_bucket")] for n in names if n.endswith("_bucket")}
         resolved = resolve_aliases(names, ALIASES, bases)
@@ -386,34 +458,53 @@ def read_prometheus(url: str, *, range: str = "7d", step: str = "5m",
                           missing=tuple(k for k in COUNTER_KEYS + HIST_KEYS
                                         + GAUGE_KEYS if k not in resolved))
         rd = Reading(provenance=prov, seconds=seconds)
+        adjusted: dict[str, float] = {}
+
+        def resets_for(key: str, query: str, kind: str) -> None:
+            n_reset = _scalar(pc.query(query, at=end))
+            if n_reset:
+                rd.resets[key] = (
+                    f"{n_reset:.0f} {kind} reset(s) inside the range (summed "
+                    f"over engines); increase() bridges each one, so the total "
+                    f"is a LOWER bound and a fitted shape mixes the two runs")
 
         for key in COUNTER_KEYS:
             name = resolved.get(key)
             if name is None:
                 rd.counters[key] = None
                 continue
-            rd.counters[key] = _scalar(pc.query(q.counter(name)))
-            n_reset = _scalar(pc.query(q.resets(name)))
-            if n_reset:
-                rd.resets[key] = (f"{n_reset:.0f} counter reset(s) inside the "
-                                  f"range; increase() bridges them, the total "
-                                  f"is a lower bound")
+            rd.counters[key] = _scalar(pc.query(q.counter(name), at=end))
+            resets_for(key, q.resets(name), "counter")
 
         for key in HIST_KEYS:
             name = resolved.get(key)
             if name is None:
                 rd.histograms[key] = None
                 continue
-            buckets = _bucket_result(pc.query(q.buckets(name)))
-            if buckets is None:
+            got = _bucket_result(pc.query(q.buckets(name), at=end))
+            if got is None:
                 rd.histograms[key] = None
                 continue
-            total = _scalar(pc.query(q.hist_sum(name)))
-            count = _scalar(pc.query(q.hist_count(name)))
+            buckets, adjust = got
+            if adjust > 0:
+                adjusted[key] = adjust
+            total = _scalar(pc.query(q.hist_sum(name), at=end))
+            count = _scalar(pc.query(q.hist_count(name), at=end))
+            # `_count` and the `+Inf` bucket are the same quantity, extrapolated
+            # independently. The fit divides one by the other, so a real
+            # disagreement between them is not a detail.
+            inf = buckets.get(math.inf)
+            if count and inf is not None and abs(count - inf) > 0.01 * abs(count):
+                rd.caveats.append(
+                    f"{name}: _count reads {count:,.0f} against a +Inf bucket of "
+                    f"{inf:,.0f} ({abs(count - inf) / abs(count):.1%} apart). "
+                    f"increase() extrapolates the two independently, so a small "
+                    f"gap is expected and this one is not: the CDF the fit "
+                    f"divides by is uncertain to about that much.")
             rd.histograms[key] = Histogram(name=name, buckets=buckets,
                                            count=count, sum=total)
+            resets_for(key, q.hist_resets(name), "histogram")
 
-        end = float(now if now is not None else _server_now(pc))
         name = resolved.get("requests_running")
         if name is not None:
             series = pc.query_range(q.gauge(name), end - seconds, end, step)
@@ -430,7 +521,14 @@ def read_prometheus(url: str, *, range: str = "7d", step: str = "5m",
         rd.caveats.append(
             "Prometheus increase() extrapolates to the range edges, so counter "
             "totals and bucket counts are fractional and accurate to about one "
-            "scrape interval at each end; bucket counts were made monotone.")
+            "scrape interval at each end.")
+        if adjusted:
+            worst = max(adjusted.items(), key=lambda kv: kv[1])
+            rd.caveats.append(
+                f"{len(adjusted)} histogram(s) came back non-monotone across "
+                f"`le` and were made cumulative by running maximum, which only "
+                f"raises counts; the largest correction was {worst[1]:,.1f} "
+                f"observations on {worst[0]}.")
         return rd
     finally:
         if owned:
@@ -489,7 +587,7 @@ def read_jsonl(path: str | Path, *, engine: str | None = None) -> Reading:
     w = window_from_snapshots(snaps, None, None, engine=engine)
     adapter = detect_adapter(w.hi.samples, engine=engine)
     res = adapter.resolution()
-    prov = Provenance(source="jsonl", target=str(path), selector="",
+    prov = Provenance(source="jsonl", target=Path(path).name, selector="",
                       engine=engine, resolved=dict(res.resolved),
                       missing=tuple(k for k in COUNTER_KEYS + HIST_KEYS
                                     + GAUGE_KEYS if k not in res.resolved))
@@ -533,7 +631,7 @@ def read_metrics_text(path: str | Path, *, engine: str | None = None) -> Reading
     samples = parse_text(text)
     adapter = detect_adapter(samples, engine=engine)
     res = adapter.resolution()
-    prov = Provenance(source="metrics-text", target=str(path), engine=engine,
+    prov = Provenance(source="metrics-text", target=Path(path).name, engine=engine,
                       resolved=dict(res.resolved),
                       missing=tuple(k for k in COUNTER_KEYS + HIST_KEYS
                                     + GAUGE_KEYS if k not in res.resolved))
@@ -542,8 +640,19 @@ def read_metrics_text(path: str | Path, *, engine: str | None = None) -> Reading
         rd.counters[key] = adapter.counter(samples, key)
     for key in HIST_KEYS:
         rd.histograms[key] = adapter.histogram(samples, key)
-    g = adapter.gauge(samples, "requests_running")
-    rd.running = [] if g is None else [g]
+    # `num_requests_running` is exported here and is still not usable: ONE
+    # reading of a gauge is the concurrency at the instant of the scrape, and
+    # a mean, a p95 and a session count are all statistics OF A WINDOW. Taking
+    # the single value for all three would write `users = <whatever the engine
+    # happened to be doing>` into a config, which is precisely the invented
+    # number this command exists not to produce.
+    rd.running = []
+    why = ("a single /metrics dump is one INSTANT of the gauge, not a window "
+           "of it: a mean and a p95 do not exist over one sample")
+    rd.unobservable["concurrency"] = why
+    rd.unobservable["sessions"] = why + ", so there is no session count to "\
+                                        "compute a cycle at"
+    rd.unobservable["users"] = rd.unobservable["sessions"]
     rd.caveats.append(
         "a single /metrics dump is CUMULATIVE SINCE SERVER START: these totals "
         "cover the server's whole uptime, not a window you chose, and no rate "
@@ -560,11 +669,13 @@ class LogNormalFit:
 
     The fit: a log-normal has Phi^-1(F(b)) = (ln b - mu) / sigma, so plotting
     `ln b` against `Phi^-1(F(b))` over the histogram's bucket edges is a
-    straight line whose SLOPE is sigma and whose INTERCEPT is mu. Ordinary
-    least squares on those points gives both at once, and `residual_ln` is
-    the RMS distance from the line in ln-token units — a straight-line fit
-    with a small residual is evidence the distribution really is log-normal,
-    which the study assumes and had never checked against buckets.
+    straight line whose SLOPE is sigma and whose INTERCEPT is mu. Weighted
+    least squares on those points gives both at once (`fit_lognormal` has the
+    weights and why they are needed), and `residual_ln` is the WEIGHTED RMS
+    distance from the line in ln-token units — a straight-line fit with a
+    small residual is evidence the distribution really is log-normal, which
+    the study assumes and had never checked against buckets. `n_points` is
+    how many edges voted: three or fewer is a line through almost nothing.
 
         median_tokens = exp(mu)
         fit_mean_tokens = exp(mu + sigma^2 / 2)
@@ -611,7 +722,21 @@ class NotObservable(ValueError):
 
 
 def fit_lognormal(h: Histogram | None, what: str = "distribution") -> LogNormalFit:
-    """Least-squares log-normal over a cumulative histogram's bucket edges.
+    """Weighted least-squares log-normal over a cumulative histogram's edges.
+
+    The regression is `ln b = mu + sigma * Phi^-1(F(b))` over the bucket
+    edges, and it is WEIGHTED, because the edges are not equally informative.
+    The empirical CDF at an edge crossed by k of n observations has variance
+    F(1-F)/n; mapped onto the quantile scale that is
+
+        var(y) = F(1-F) / (n * phi(y)^2),   w = 1 / sqrt(var(y))
+
+    (the unknown `sigma` that converts a y-error into an x-error is common to
+    every point, and a common factor does not change a weighted fit). Without
+    this an edge crossed by 2 of 40,000 requests — F ~ 5e-5, where phi is
+    tiny and one more or one fewer request moves `y` by a lot — casts the
+    same vote as the edge at the median. vLLM's size buckets are decades
+    wide, so the extreme edges are always present and always the noisiest.
 
     Raises `NotObservable` with the reason when there is nothing to fit:
     the histogram is absent, it holds no observation in the window, or fewer
@@ -632,13 +757,17 @@ def fit_lognormal(h: Histogram | None, what: str = "distribution") -> LogNormalF
     top_cum = h.buckets[top]
     censored_frac = max(0.0, (n - top_cum) / n)
 
-    xs, ys = [], []
+    nd = statistics.NormalDist()
+    xs, ys, ws = [], [], []
     for b in bounds:
         f = h.buckets[b] / n
         if not 0.0 < f < 1.0:
             continue
+        y = nd.inv_cdf(f)
+        phi = math.exp(-0.5 * y * y) / math.sqrt(2.0 * math.pi)
         xs.append(math.log(b))
-        ys.append(statistics.NormalDist().inv_cdf(f))
+        ys.append(y)
+        ws.append(phi * math.sqrt(n / (f * (1.0 - f))))
     if len(xs) < 2:
         raise NotObservable(
             f"{what}: only {len(xs)} bucket edge(s) fall strictly inside the "
@@ -647,9 +776,13 @@ def fit_lognormal(h: Histogram | None, what: str = "distribution") -> LogNormalF
 
     x = np.asarray(xs, dtype=float)
     y = np.asarray(ys, dtype=float)
-    sigma, mu = np.polyfit(y, x, 1)          # x = mu + sigma * y
+    w = np.asarray(ws, dtype=float)
+    sigma, mu = np.polyfit(y, x, 1, w=w)     # x = mu + sigma * y
     resid = x - (mu + sigma * y)
-    rms = float(np.sqrt(float(np.mean(resid ** 2))))
+    # the WEIGHTED RMS: the quantity actually minimised, so it says how well
+    # the line fits where the data is, not how far a two-observation edge sits
+    # from it. `max_residual_ln` stays unweighted and reports that worst edge.
+    rms = float(np.sqrt(float(np.sum((w * resid) ** 2) / np.sum(w ** 2))))
     if not math.isfinite(sigma) or sigma <= 0:
         raise NotObservable(f"{what}: the bucket CDF is not monotone enough to "
                             f"fit (slope {sigma:.3g})")
@@ -779,16 +912,25 @@ class WorkloadEstimate:
                          Mean seconds a request spends being executed.
     e2e_mean_s           mean end-to-end request latency R, SECONDS, from the
                          e2e histogram's _sum/_count. Includes queueing;
-                         `little_w_s` does not, so R - W is the queue share
-                         (cross-checked against `queue_time_hist` when the
-                         server exports it).
+                         `little_w_s` does not, so R - W is the queue share.
+                         When `queue_mean_s` is also exported the two are
+                         compared and the verdict lands in `caveats`.
+    queue_mean_s         mean queue time, SECONDS, from `queue_time_hist`.
+                         Read only as the cross-check above.
     sessions             the concurrent-SESSION count the cycle is computed
-                         at. NOT observable: defaults to `p95_running`, which
-                         counts DECODING requests and is therefore a LOWER
-                         BOUND on sessions (a session thinking between turns
-                         is not decoding and is invisible here).
+                         at. NOT observable: with no `--sessions` it falls
+                         back to `p95_running`, which counts DECODING requests
+                         and is therefore a LOWER BOUND on sessions (a session
+                         thinking between turns is not decoding and is
+                         invisible here). Because it is a lower bound and the
+                         config's `users` is a capacity input, an assumed
+                         value is never written to a config — see `emit_toml`.
     cycle_s              sessions / req_rate_s, SECONDS per session per
-                         request — the closed-loop cycle.
+                         request — the closed-loop cycle. Assumes ONE
+                         outstanding request per session: a session that
+                         fires two subagent calls at once contributes two to
+                         `num_requests_running` and one to the population,
+                         and this ratio would read the cycle short.
     think_time_s         Z = cycle_s - e2e_mean_s, SECONDS: the same quantity
                          scripts/think_time_trace.py derives from a request
                          trace (Z = waiting per request, cycle = Z + R).
@@ -884,6 +1026,7 @@ def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
     p95, a lower bound — see `WorkloadEstimate.sessions`).
     """
     unobs: dict[str, str] = dict(UNOBSERVABLE)
+    unobs.update(rd.unobservable)         # what THIS SOURCE additionally cannot say
     caveats = list(rd.caveats)
     seconds = rd.seconds
 
@@ -936,12 +1079,21 @@ def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
             f"{output.censored_fraction:.1%} of outputs exceeded the largest "
             f"finite bucket ({output.top_finite_bound:,.0f} tokens): the output "
             f"sigma is a lower bound.")
+    for label, f in (("prompt", prompt), ("output", output)):
+        if f is not None and f.n_points <= 3:
+            caveats.append(
+                f"the {label} log-normal was fitted through only {f.n_points} "
+                f"bucket edges: with two, a straight line fits exactly and the "
+                f"residual is meaningless as evidence. Treat its median and "
+                f"sigma as indicative and check them against the mean.")
 
     # ---- concurrency, Little's law, think time ---------------------------
     mean_run = float(np.mean(rd.running)) if rd.running else None
     p95_run = (float(np.percentile(np.asarray(rd.running, dtype=float), 95))
                if rd.running else None)
-    if mean_run is None:
+    if mean_run is None and "concurrency" not in unobs:
+        # not clobbered when the SOURCE already said why (a single dump
+        # exports the gauge perfectly well and still has no window of it)
         unobs["concurrency"] = ("num_requests_running is not exported (or, "
                                 "under DP>1 with no --engine, could not be "
                                 "combined)")
@@ -954,8 +1106,18 @@ def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
     queue = hq.mean() if hq is not None else None
 
     sess, assumed = sessions, sessions is None
-    if sess is None:
+    if not assumed:
+        # the population was GIVEN. A source that cannot measure it no longer
+        # refuses it for this run — otherwise the block would assign `users`
+        # and carry a comment saying `users` is not observable.
+        unobs.pop("sessions", None)
+        unobs.pop("users", None)
+    if sess is None and "sessions" not in unobs:
         sess = p95_run
+    if sess is None and "sessions" not in unobs:
+        unobs["sessions"] = ("no session count: --sessions was not given and "
+                             "num_requests_running has no window to take a p95 "
+                             "over here")
     cycle = (sess / rate if sess is not None and rate else None)
     think = None
     if cycle is not None and e2e is not None:
@@ -977,18 +1139,35 @@ def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
                                  "and no e2e_request_latency histogram is "
                                  "exported here")
 
-    if sess is not None and assumed:
+    # The caveat exists to bound a number that was USED. With no cycle there
+    # is nothing bounded, and printing it anyway makes a refusal read like a
+    # measurement carrying a warning.
+    if cycle is not None and assumed:
         caveats.append(
             "sessions defaults to the num_requests_running p95, which counts "
             "concurrent DECODING requests. A session thinking between turns is "
-            "not decoding, so this is a LOWER BOUND on the population and the "
-            "derived cycle and think time are lower bounds with it. "
+            "not decoding, so this is a LOWER BOUND on the population, and the "
+            "cycle and think time derived from it are lower bounds with it "
+            "(the cycle also assumes ONE outstanding request per session). "
             "Sessions-in-cache is NOT observable from these metrics: the KV "
             "pool's occupancy is a fraction, not a session count.")
     unobs["sessions_in_cache"] = (
         "no vLLM metric counts distinct sessions resident in the KV cache; "
         "kv_cache_usage_perc is an occupancy fraction and num_requests_running "
         "counts requests in execution batches, not warm sessions")
+    # `users` is the config's closed-loop operating point, the number `ws
+    # predict` prices a deployment at. The decoder p95 is a LOWER BOUND on it,
+    # so writing it into a config would under-price the deployment silently —
+    # the same "a default is not a measurement" rule the rest of this module
+    # follows. Only an explicit --sessions writes it.
+    if assumed:
+        bound = (f"; num_requests_running p95 is {p95_run:,.0f}, a LOWER BOUND "
+                 f"(concurrent decoders, not sessions). Pass --sessions N to "
+                 f"write both it and a matching think_time_s"
+                 if p95_run is not None else "")
+        unobs["users"] = (unobs.get("users") or
+                          "the config's `users` is the closed-loop SESSION "
+                          "count, and no metric counts sessions") + bound
 
     if rate is not None and seconds and seconds > 3 * 3600:
         caveats.append(
@@ -1007,6 +1186,20 @@ def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
         caveats.append(
             f"Little's law W = L / lambda = {little_w:,.2f} s against a mean "
             f"e2e R of {e2e:,.2f} s: {why}.")
+        # The promised cross-check, actually run: R - W is time a request
+        # spent NOT executing, and the queue histogram measures exactly that.
+        # Agreement is evidence both readings are of the same population.
+        if queue is not None:
+            implied = e2e - little_w
+            gap = abs(implied - queue)
+            verdict = ("consistent" if gap <= 0.25 * max(queue, 0.1) + 0.1
+                       else "NOT consistent: the two are measured over "
+                            "different populations (the gauge is sampled at "
+                            "--step, the histograms cover finished requests "
+                            "only), so treat W as the softer of the two")
+            caveats.append(
+                f"R - W = {implied:,.2f} s against a measured mean queue time "
+                f"of {queue:,.2f} s: {verdict}.")
 
     # ---- prefix cache ----------------------------------------------------
     mean_prompt = None
@@ -1035,10 +1228,33 @@ def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
                 f"{cache.cached_savings:.1%} against the prefix-cache counters' "
                 f"{cache.savings:.1%}; the two count different things at the "
                 f"block boundary, and the gap is the uncertainty on savings.")
+        # The identity prices the savings against a mean prompt C. That is
+        # only legitimate if the cache counters saw the same prompts the
+        # histogram did: queries/request must be C. Same window, same
+        # requests -- unless the deployment routes some traffic past the
+        # prefix cache, or the two counters cover different label sets.
+        q_tot = rd.counters.get("prefix_cache_queries_total")
+        if q_tot and n and cache.mean_prompt_tokens > 0:
+            per_req = q_tot / n
+            rel = abs(per_req - cache.mean_prompt_tokens) / cache.mean_prompt_tokens
+            if rel > 0.03:
+                caveats.append(
+                    f"prefix_cache_queries_total / requests reads "
+                    f"{per_req:,.0f} tokens against a mean prompt of "
+                    f"{cache.mean_prompt_tokens:,.0f} from "
+                    f"request_prompt_tokens ({rel:.1%} apart). The miss-rate "
+                    f"and warm-turn readings price the savings against that "
+                    f"mean, so they carry that discrepancy: the two counters "
+                    f"are not seeing the same requests.")
     if rd.resets:
-        caveats.append("counters went backwards or changed layout inside the "
-                       "window: " + "; ".join(f"{k} ({why})"
-                                              for k, why in sorted(rd.resets.items())))
+        caveats.append(
+            "series went backwards or changed layout inside the window: "
+            + "; ".join(f"{k} ({why})" for k, why in sorted(rd.resets.items()))
+            + ". A restart inside a FITTED histogram "
+              "(request_prompt_tokens, request_generation_tokens) mixes a "
+              "pre- and a post-restart shape, so its median and sigma "
+              "describe a distribution that never existed; pick a window that "
+              "does not span the restart.")
 
     return WorkloadEstimate(
         provenance=rd.provenance, hours=rd.hours, n_requests=n,
@@ -1197,7 +1413,7 @@ def emit_toml(est: WorkloadEstimate) -> str:
     if est.prompt is not None:
         put("user_prompt_median_tokens", _tok(est.prompt.median_tokens),
             f"log-normal fit, {est.prompt.n_points} bucket edges, "
-            f"residual {est.prompt.residual_pct:.1%}"
+            f"residual {est.prompt.residual_pct:.2%}"
             + (" (TAIL CENSORED)" if est.prompt.censored else ""))
         put("user_prompt_sigma", round(est.prompt.sigma, 2),
             "same fit; a lower bound when the tail is censored"
@@ -1211,10 +1427,16 @@ def emit_toml(est: WorkloadEstimate) -> str:
         put("warm_turn_tokens", _tok(est.cache.assumed_turn_tokens),
             "ASSUMED, not measured (see the two readings below)")
     put("think_time_s", _think(est.think_time_s),
-        "Z = sessions / rate - mean e2e")
-    put("users", None if est.sessions is None else int(round(est.sessions)),
-        "num_requests_running p95: concurrent DECODERS, a LOWER BOUND on users"
-        if est.sessions_assumed else "as given by --sessions")
+        f"Z = sessions / rate - mean e2e; LOWER BOUND, derived at an ASSUMED "
+        f"{est.sessions:,.0f} sessions"
+        if est.sessions_assumed and est.sessions is not None
+        else "Z = sessions / rate - mean e2e, at the --sessions given")
+    # `users` only when it was GIVEN. The p95-of-decoders fallback is a lower
+    # bound, and a lower bound written into the capacity input silently
+    # under-prices the deployment; the reason goes in the comment block below
+    # instead, along with the bound itself.
+    put("users", None if est.sessions_assumed or est.sessions is None
+        else int(round(est.sessions)), "as given by --sessions")
 
     lines.append("#")
     if est.cache is not None:
@@ -1354,14 +1576,16 @@ _TABLE = re.compile(r"^\s*\[")
 
 
 def merge_into(path: str | Path, block: str) -> str:
-    """Rewrite ONLY the `[workload]` table of a TOML config, byte-for-byte
-    elsewhere.
+    """Rewrite ONLY the `[workload]` table of a TOML config.
 
     A whole-file round trip through a TOML writer would reformat every other
     block, drop the comments the study's configs carry, and make the diff
     unreviewable. So this is a line splice: the `[workload]` header through
-    the line before the next table header is replaced, and nothing else in
-    the file is touched. An absent `[workload]` block is appended.
+    the line before the next table header is replaced, every other block
+    keeps its lines and its comments exactly, and an absent `[workload]` is
+    appended. Not byte-for-byte, quite: the blank line separating the new
+    block from the next table is normalised to one, and a trailing newline is
+    ensured. Every other line of every other block survives unchanged.
 
     The result is parsed before it is returned, so a block that would not
     read back fails here rather than in the next `ws predict`.
@@ -1530,7 +1754,9 @@ def add_subparser(sub) -> None:
     g.add_argument("--json", action="store_true", help="shorthand for --emit json")
     g.add_argument("--into", metavar="workingset.toml",
                    help="rewrite just the [workload] block of this config, "
-                        "leaving every other block byte-for-byte as it was")
+                        "leaving every other block's lines and comments as "
+                        "they were (only the blank line before the next table "
+                        "is normalised)")
     p.add_argument("--engine", help="engine index to select under DP>1 "
                                     "(default: sum every engine)")
     p.set_defaults(fn=cmd_workload)
