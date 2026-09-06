@@ -12,8 +12,10 @@ import { cssv, fmt } from './svg.js';
                constant, band 0.45–0.75)
      idle      the remainder, at warm-idle watts
    d_p and d_d PARTITION time (no double counting): d_d is the decode demand
-   the load implies against the decode capacity at the 40 tok/s floor, capped
-   at whatever prefill leaves. P_total = n_gpu x (P_gpu + host) x PUE.
+   the load implies against the decode capacity at decodeFloor() — 40 tok/s by
+   default, and the decode-floor slider moves it, on this side and on
+   model.power_draw's `decode_floor` alike — capped at whatever prefill
+   leaves. P_total = n_gpu x (P_gpu + host) x PUE.
    -------------------------------------------------------------------------- */
 // AVG_OUT_TOK (declared with the decode constants) is the REFERENCE output
 // length; the live figure is state.out, which the Output-per-response slider
