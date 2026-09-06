@@ -42,7 +42,9 @@ class Endpoint:
 
 @dataclass(frozen=True)
 class Deployment:
-    model: str = "27B"                   # key into workingset.model.MODELS
+    # key into workingset.model.MODELS. None = not stated (a legacy harness
+    # CONFIG names only the served checkpoint): to_model() refuses to guess.
+    model: str | None = "27B"
     gpu: str = "H200"                    # key into workingset.model.GPUS
     tensor_parallel: int = 1
     replicas: int = 1                    # data-parallel replica groups
@@ -50,6 +52,7 @@ class Deployment:
     kv_dtype: str = "fp8"                # fp8 | fp16
     max_num_batched_tokens: int = M.CHUNK_DEFAULT
     max_model_len: int = 180_000
+    ram_gib: float = 0.0                 # CPU KV offload per replica group (explorer's RAM knob)
 
     @property
     def gpus(self) -> str:
@@ -98,6 +101,10 @@ class RunConfig:
     # ---- model objects -------------------------------------------------
     def to_model(self) -> M.Model:
         d = self.deployment
+        if d.model is None:
+            raise ValueError("deployment.model is not set (a downloaded harness "
+                             "names only the served checkpoint): pass --model KEY, "
+                             f"one of {sorted(M.MODELS)}")
         if d.model not in M.MODELS:
             raise KeyError(f"unknown model key {d.model!r}; known: {sorted(M.MODELS)}")
         m = M.MODELS[d.model]
@@ -132,6 +139,8 @@ class RunConfig:
             raise ValueError(f"kv_dtype must be one of {M.KV_DTYPES}")
         if self.workload.users < 0:
             raise ValueError("workload.users must be >= 0")
+        if self.deployment.ram_gib < 0:
+            raise ValueError("deployment.ram_gib must be >= 0")
 
     # ---- (de)serialisation --------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -166,11 +175,23 @@ class RunConfig:
         raise ValueError(f"unknown format {fmt!r}")
 
 
+_SCALAR = {"int": (int,), "float": (int, float), "bool": (bool,), "str": (str,),
+           "int | None": (int, type(None)), "str | None": (str, type(None))}
+
+
 def _reject_unknown(block: dict, typ, name: str) -> None:
-    known = {f.name for f in fields(typ)}
-    for k in block:
+    """Unknown keys and wrong scalar types fail HERE, at the file boundary,
+    not three calls deep inside the model with a numpy error."""
+    known = {f.name: f.type for f in fields(typ)}
+    for k, v in block.items():
         if k not in known:
             raise ValueError(f"unknown key {name}.{k}; known: {sorted(known)}")
+        want = _SCALAR.get(str(known[k]))
+        if want is None:
+            continue
+        ok = isinstance(v, want) and not (isinstance(v, bool) and bool not in want)
+        if not ok:
+            raise ValueError(f"{name}.{k}: expected {known[k]}, got {v!r}")
 
 
 def _toml_scalar(v: Any) -> str:
@@ -184,6 +205,10 @@ def _toml_scalar(v: Any) -> str:
 
 
 def _dump_toml(d: dict[str, Any]) -> str:
+    if d["deployment"].get("model") is None:
+        # an omitted key would read back as the dataclass default: a guess
+        raise ValueError("deployment.model is not set; a config file cannot "
+                         "be written without a model key")
     out = [f"schema_version = {d['schema_version']}", ""]
     for block in ("deployment", "workload", "slo", "endpoint", "calibration"):
         out.append(f"[{block}]")
@@ -209,11 +234,25 @@ def load_config(path: str | Path) -> RunConfig:
 
 
 def _config_from_harness(src: str) -> dict:
+    """The CONFIG between the harness's BEGIN/END markers: either the
+    explorer's json.loads(r\"\"\"...\"\"\") form or the committed template's
+    dict literal (comments and 4_096 underscores are fine for the AST)."""
+    import ast
     import re
     m = re.search(r'CONFIG = json\.loads\(r"""\n([\s\S]*?)\n"""\)', src)
+    if m:
+        return json.loads(m.group(1))
+    m = re.search(r"# --- BEGIN CONFIG[^\n]*\n([\s\S]*?)# --- END CONFIG", src)
     if not m:
         raise ValueError("no explorer CONFIG block found in this harness file")
-    return json.loads(m.group(1))
+    body = m.group(1)
+    i = body.find("CONFIG = ")
+    if i < 0:
+        raise ValueError("CONFIG assignment not found inside the CONFIG block")
+    try:
+        return ast.literal_eval(body[i + len("CONFIG = "):].strip())
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"could not parse the harness CONFIG literal: {e}") from e
 
 
 def _legacy_to_schema(raw: dict) -> dict:
@@ -223,9 +262,9 @@ def _legacy_to_schema(raw: dict) -> dict:
     raw = dict(raw)
     dep = dict(raw.get("deployment", {}) or {})
     if "model" not in dep:
-        # the harness block names the served checkpoint, not the model key;
-        # the caller has to say which key it is
-        dep.setdefault("model", "27B")
+        # the harness block names the served checkpoint, not the model key.
+        # None makes to_model()/validate() refuse until --model says which.
+        dep["model"] = None
     if "gpu" not in dep and "gpus" in dep:
         dep["gpu"] = str(dep["gpus"]).split("x", 1)[-1]
     dep.pop("gpus", None)
@@ -233,5 +272,10 @@ def _legacy_to_schema(raw: dict) -> dict:
     wl = dict(raw.get("workload", {}) or {})
     if "context_cap_tokens" in wl:
         dep.setdefault("max_model_len", wl.pop("context_cap_tokens"))
+    # the load the harness's predictions were computed at lives only in its
+    # predictions block; it is the operating point, not a prediction
+    preds = raw.get("predictions") or {}
+    if "users" not in wl and "operating_point_users" in preds:
+        wl["users"] = int(preds["operating_point_users"])
     raw["workload"] = wl
     return raw

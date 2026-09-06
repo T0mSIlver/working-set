@@ -15,7 +15,7 @@ from dataclasses import replace
 
 from . import __version__
 from . import model as M
-from .config import Deployment, RunConfig, WorkloadCfg, load_config
+from .config import RunConfig, load_config
 from .predict import predict
 
 
@@ -39,7 +39,7 @@ def cmd_predict(args) -> int:
         out = {"config": cfg.to_dict(), "predictions": p.to_dict(),
                "system": p.system(), "mode": "closed" if args.closed else "open",
                "workingset": __version__}
-        print(json.dumps(out, indent=2, default=lambda v: "inf"))
+        print(json.dumps(out, indent=2, allow_nan=False))
         return 0
     d, w = cfg.deployment, cfg.workload
     print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}), "
@@ -69,7 +69,8 @@ def _apply_overrides(cfg: RunConfig, args) -> RunConfig:
                              ("weight_dtype", args.weight_dtype),
                              ("kv_dtype", args.kv_dtype),
                              ("max_num_batched_tokens", args.chunk),
-                             ("max_model_len", args.max_model_len)) if v is not None}
+                             ("max_model_len", args.max_model_len),
+                             ("ram_gib", args.ram_gib)) if v is not None}
     wl = {k: v for k, v in (("users", args.users), ("miss_rate", args.miss_rate),
                             ("think_time_s", args.think)) if v is not None}
     if dep:
@@ -118,6 +119,7 @@ def _add_deploy_flags(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--kv-dtype", choices=M.KV_DTYPES)
     ap.add_argument("--chunk", type=int, help="max_num_batched_tokens")
     ap.add_argument("--max-model-len", type=int)
+    ap.add_argument("--ram-gib", type=float, help="CPU KV offload per group, GiB")
     ap.add_argument("--users", type=int, help="operating point, users per group")
     ap.add_argument("--miss-rate", type=float)
     ap.add_argument("--think", type=float, help="think time, s")
@@ -131,7 +133,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("predict", help="price a configuration")
     p.add_argument("config", help="workingset.toml / .json / a harness .py")
-    p.add_argument("--closed", action="store_true", help="closed-loop conversion")
+    p.add_argument("--closed", action="store_true",
+                   help="closed-loop conversion (think_time_s is then the WAITING "
+                        "time Z per request; the model supplies the service time)")
     p.add_argument("--json", action="store_true")
     p.add_argument("--n-iter", type=int, default=400)
     p.add_argument("--seed", type=int, default=0)
@@ -154,7 +158,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        # a config or model refusal is a user-facing message, not a traceback
+        print(f"ws: {e.args[0] if e.args else e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

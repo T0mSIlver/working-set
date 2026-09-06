@@ -1,5 +1,6 @@
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -79,17 +80,58 @@ def test_legacy_harness_config_block(tmp_path):
     assert cfg.deployment.max_model_len == 180000
     assert cfg.workload.miss_rate == 0.01
     assert cfg.endpoint.base_url == "http://x/v1"
+    # the harness names only the served checkpoint: no model key is guessed
+    assert cfg.deployment.model is None
+    with pytest.raises(ValueError, match="pass --model"):
+        cfg.validate()
+    with pytest.raises(ValueError, match="model"):
+        cfg.dumps("toml")
+    # the load the predictions were computed at is the operating point
+    block["predictions"]["operating_point_users"] = 400
+    p.write_text('CONFIG = json.loads(r"""\n' + json.dumps(block, indent=4) + '\n""")\n')
+    assert load_config(p).workload.users == 400
+
+
+def test_committed_harness_template_loads():
+    """scripts/validate_deployment.py carries a dict-literal CONFIG (comments,
+    4_096 underscores): the reference example must load and, given the model
+    key, price."""
+    src = Path(__file__).resolve().parent.parent / "scripts" / "validate_deployment.py"
+    cfg = load_config(src)
+    assert cfg.deployment.model is None
+    assert cfg.deployment.tensor_parallel == 4
+    assert cfg.deployment.max_num_batched_tokens == 4096
+    from dataclasses import replace
+    cfg = replace(cfg, deployment=replace(cfg.deployment, model="27B"))
+    cfg.validate()
+
+
+def test_type_checked_at_the_boundary():
+    with pytest.raises(ValueError, match="deployment.tensor_parallel"):
+        RunConfig.from_dict({"deployment": {"tensor_parallel": "4"}})
+    with pytest.raises(ValueError, match="workload.users"):
+        RunConfig.from_dict({"workload": {"users": 12.5}})
+    with pytest.raises(ValueError, match="sub_shares_prefix"):
+        RunConfig.from_dict({"workload": {"sub_shares_prefix": 1}})
+    RunConfig.from_dict({"workload": {"think_time_s": 30}})   # int for a float is fine
 
 
 def test_predict_reference_row():
-    """27B / 4xH200 TP4 at the measured workload: the explorer's reference
-    example (harness CONFIG comment) says cache binds near 403 users."""
+    """27B / 4xH200 TP4 / chunk 4096 at the measured workload: the explorer's
+    reference example (the harness template's predictions block) — cache 403,
+    latency 499, saturation 509, miss TTFT 0.92 s, B* 9.8. These are the
+    explorer's per-pass-overhead convention; pinned so a convention drift
+    (roofline vs explorer) fails here, not in a user's report."""
     cfg = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
                                               "tensor_parallel": 4,
                                               "max_num_batched_tokens": 4096}})
     p = predict(cfg, n_iter=300)
-    assert p.binding_constraint in ("cache", "decode")
-    assert 350 <= p.warm_capacity_p5 <= 460
+    assert p.binding_constraint == "decode"        # at the measured MBU 0.22
+    assert 395 <= p.warm_capacity_p5 <= 411        # 403, Monte Carlo
+    assert p.latency_ceiling_users == 499
+    assert p.saturation_ceiling_users == 509
+    assert abs(p.ttft_miss_s - 0.916) < 0.005
+    assert abs(p.bstar_misses - 9.82) < 0.02
     assert p.predicted_limit_users == min(p.warm_capacity_p5, p.decode_ceiling_users,
                                           p.latency_ceiling_users,
                                           p.saturation_ceiling_users)
@@ -105,3 +147,36 @@ def test_predict_dp_system_multiplies():
     p = predict(cfg, n_iter=200)
     assert p.replicas == 2
     assert p.system()["warm_capacity_p5"] == 2 * p.warm_capacity_p5
+
+
+def test_predict_closed_uses_configured_think():
+    base = {"deployment": {"model": "27B", "gpu": "H200", "tensor_parallel": 4}}
+    fast = predict(RunConfig.from_dict({**base, "workload": {"think_time_s": 5.0}}),
+                   closed=True, n_iter=100)
+    slow = predict(RunConfig.from_dict({**base, "workload": {"think_time_s": 120.0}}),
+                   closed=True, n_iter=100)
+    assert fast.req_rate_main > 3 * slow.req_rate_main
+    assert fast.saturation_ceiling_users < slow.saturation_ceiling_users
+
+
+def test_predict_zero_users_and_json_safe():
+    cfg = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
+                                              "tensor_parallel": 4},
+                               "workload": {"users": 0}})
+    p = predict(cfg, n_iter=100)
+    assert p.operating_point_users == 0 and p.req_rate_main == 0
+    hot = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
+                                              "tensor_parallel": 4},
+                               "workload": {"users": 5000}})
+    q = predict(hot, n_iter=100)
+    assert q.prefill_duty >= 1 and not math.isfinite(q.ttft_miss_s)
+    assert q.to_dict()["ttft_miss_s"] is None
+    json.dumps(q.to_dict(), allow_nan=False)
+
+
+def test_ram_offload_raises_cache_ceiling():
+    base = {"deployment": {"model": "27B", "gpu": "H200", "tensor_parallel": 4}}
+    dry = predict(RunConfig.from_dict(base), n_iter=200)
+    ram = predict(RunConfig.from_dict({"deployment": {**base["deployment"],
+                                                      "ram_gib": 512}}), n_iter=200)
+    assert ram.cache_ceiling_users > dry.cache_ceiling_users
