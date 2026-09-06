@@ -172,17 +172,121 @@ class RequestTrace:
             self.clean_decode_tps = (n_tok - 1) / clean
 
 
+def sampler_now(metrics) -> float:
+    """THE INSTANT TO HAND A METRICS SAMPLER, in its own time base.
+
+    Every probe times its own work with `time.monotonic()` — `t_send`, spans,
+    inter-token gaps — because that clock cannot step backwards mid-stream. A
+    sampler stamps its snapshots with a DIFFERENT clock: `MetricsSampler.now()`,
+    a wall-clock reading anchored to `time.monotonic()` so it is monotonic AND
+    comparable with `time.time()`. The two bases differ by the unix epoch.
+
+    Handing a monotonic instant to `at()` or `window()` therefore asks about a
+    moment ~55 years before the series began: `at()` silently returns the
+    FIRST snapshot (so every request carried the same covariates) and
+    `window()` raises `WindowNotCovered` (so every rung's `server` was None).
+    Both failures are silent, which is why this is one function and not a
+    convention.
+
+    Duck-typed, like the rest of the sampler seam: a sampler exposing `now()`
+    is asked for it, and anything else falls back to `time.time()`.
+    """
+    if metrics is None:
+        return time.time()
+    fn = getattr(metrics, "now", None)
+    if fn is None:
+        return time.time()
+    try:
+        t = fn()
+    except Exception:                       # noqa: BLE001 -- a clock, not data
+        return time.time()
+    return float(t) if isinstance(t, (int, float)) else time.time()
+
+
+COVARIATE_KEYS = ("requests_running", "requests_waiting", "kv_cache_usage")
+
+
 def _covariates(metrics, t: float) -> dict | None:
-    """Duck-typed read of a metrics sampler: `at(t) -> snapshot-like`. The
-    sampler is built by another module; nothing here touches its internals."""
+    """The server's load as of `t`, in the SAMPLER's time base (`sampler_now`).
+
+    Two spellings of the same seam, tried in order:
+
+      `gauges_at(t)`  the SEMANTIC gauges, already resolved. This is what a
+          real `MetricsSampler` offers, and it is required rather than merely
+          convenient: its `at(t)` returns a raw `Snapshot` — a list of parsed
+          `/metrics` lines under their ENGINE-SPECIFIC names — so reading
+          `requests_running` off it found nothing and produced an empty
+          covariate set, silently, because a snapshot had been returned.
+      `at(t)`         a snapshot-like object that already carries the semantic
+          names as attributes or dict keys. This is the shape a test double
+          takes, and the shape the duck type was first written against.
+
+    Nothing here imports the sampler; both spellings are duck-typed.
+    """
     if metrics is None:
         return None
+    fn = getattr(metrics, "gauges_at", None)
+    if fn is not None:
+        try:
+            return _plain(fn(t), COVARIATE_KEYS)
+        except Exception:                   # noqa: BLE001
+            return None
     try:
         snap = metrics.at(t)
     except Exception:
         return None
-    return _plain(snap, ("requests_running", "requests_waiting",
-                         "kv_cache_usage"))
+    return _plain(snap, COVARIATE_KEYS)
+
+
+async def sampler_window(metrics, t0: float, t1: float) -> dict | None:
+    """Duck-typed window delta over [t0, t1] IN THE SAMPLER'S TIME BASE.
+
+    One more tick is awaited first: a window's enclosing HIGH endpoint does
+    not exist until a scrape STARTS after t1, so calling `window()` the
+    instant load stops raises `WindowNotCovered` rather than answering. That
+    await is part of the pattern `metrics/sampler.py` documents, not a
+    nicety.
+
+    Returns None when there is no sampler, or when the window could not be
+    covered — a probe result carries no `server` block rather than one
+    measured over a different stretch of time.
+    """
+    if metrics is None:
+        return None
+    tick = getattr(metrics, "next_tick", None)
+    if tick is not None:
+        try:
+            r = tick()
+            if asyncio.iscoroutine(r):
+                await r
+        except Exception:                   # noqa: BLE001
+            pass
+    try:
+        return window_dict(metrics.window(t0, t1))
+    except Exception:                       # noqa: BLE001
+        return None
+
+
+def window_dict(w) -> dict | None:
+    """A window delta as a JSON-safe dict.
+
+    `WindowDelta.to_dict()` is already JSON-safe AND nested — counters,
+    gauges and histogram quantiles all live one level down. `_plain` keeps
+    only top-level scalars, so routing a delta through it threw away
+    everything a `server` block exists to carry and left `dt_s` behind. It is
+    the fallback for a sampler double that has no `to_dict`.
+    """
+    if w is None:
+        return None
+    fn = getattr(w, "to_dict", None)
+    if fn is not None:
+        try:
+            d = fn()
+            if isinstance(d, dict):
+                return d
+        except Exception:                   # noqa: BLE001
+            pass
+    return _plain(w)
 
 
 def _plain(obj, keys=None) -> dict | None:
@@ -279,7 +383,10 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
 
     t0 = time.monotonic()
     trace.t_send = t0
-    trace.covariates = _covariates(metrics, t0)
+    # the SAMPLER's clock for the sampler, monotonic for the trace: `t_send`
+    # does span arithmetic and must not step backwards, while `at()` indexes a
+    # series stamped in a different base. See `sampler_now`.
+    trace.covariates = _covariates(metrics, sampler_now(metrics))
     t_first = t_last = None
     n_chunks, text, usage = 0, [], None
     gaps: list[float] = []
