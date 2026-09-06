@@ -19,8 +19,9 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 
-from .population import _window, spike_evidence, user_loop
-from .request import EndpointSpec, RequestTrace, send_request
+from .population import spike_evidence, user_loop
+from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_window,
+                      send_request)
 from .session import Prefixes, draw_session_tokens, make_text
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
 
@@ -130,7 +131,10 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
         prefixes=prefixes, traces=traces, stop=stop,
         stagger_s=rng.uniform(0, max(opts.ramp_s, 1.0)), metrics=metrics))
         for i in range(pop + n_sub)]
-    t_start = time.monotonic()
+    # the SAMPLER's base, not monotonic: the traces below keep their own
+    # monotonic timestamps for span arithmetic, and the two differ by the
+    # unix epoch (see probe.request.sampler_now)
+    w_start = sampler_now(metrics)
     try:
         await asyncio.sleep(opts.ramp_s)
 
@@ -159,6 +163,6 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    server = _window(metrics, t_start, time.monotonic())
+    server = await sampler_window(metrics, w_start, sampler_now(metrics))
     return eval_burst(n, pop, burst_traces, traces, t_fire, server,
                       cap_tokens=opts.context_cap_tokens)

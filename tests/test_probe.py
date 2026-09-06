@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import random
+import time
 from dataclasses import replace
 
 import httpx
@@ -710,3 +711,121 @@ def test_eval_sample_on_synthetic_traces():
     assert s.decode_p50 == pytest.approx(100.0)
     assert s.cached_frac == pytest.approx(1.0)
     assert s.ptok_ratio == pytest.approx(1.0)
+
+
+# ============================================================================
+# the sampler seam: two clocks, one conversion
+# ----------------------------------------------------------------------------
+# A probe times ITSELF with time.monotonic() -- t_send, spans, inter-token
+# gaps -- because that clock cannot step backwards mid-stream. A MetricsSampler
+# stamps its snapshots with MetricsSampler.now(), a wall-clock reading anchored
+# to the monotonic clock. The two bases differ by the unix epoch, and handing
+# a monotonic instant to at() or window() fails SILENTLY: at() returns the
+# first snapshot in the series, window() raises WindowNotCovered and the
+# probe's `server` block comes back None. These tests pin the conversion.
+# ============================================================================
+def test_sampler_now_reads_the_samplers_clock_not_ours():
+    from workingset.metrics import MetricsSampler
+    from workingset.probe import sampler_now
+
+    s = MetricsSampler("http://fake/metrics")
+    assert sampler_now(s) == pytest.approx(s.now(), abs=0.05)
+    # ...and that is nowhere near the monotonic clock the traces use
+    assert abs(sampler_now(s) - time.monotonic()) > 1e6
+
+
+def test_sampler_now_falls_back_for_a_double_without_a_clock():
+    from workingset.probe import sampler_now
+
+    class NoClock:
+        def at(self, t):
+            return {}
+
+    assert sampler_now(None) == pytest.approx(time.time(), abs=1.0)
+    assert sampler_now(NoClock()) == pytest.approx(time.time(), abs=1.0)
+
+
+def _rung_against_a_live_sampler(pop=2):
+    """One rung driven with a REAL MetricsSampler over a fake /metrics whose
+    counters advance one step per scrape."""
+    from test_metrics import FakeServer, _until
+
+    from workingset.metrics import MetricsSampler
+
+    cfg, opts = small_cfg(), small_opts(ramp_s=0.05, measure_s=0.25)
+    srv = FakeServer()
+
+    async def go():
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            # a few scrapes BEFORE the rung, so "the window covering the rung"
+            # and "the first snapshot" are different answers
+            await _until(lambda: len(s) >= 4)
+            first = s._sorted_ok()[0]
+            async with client_for(fake_server()) as client:
+                r = await run_population(
+                    client, EndpointSpec(base_url="http://x/v1", model="m"),
+                    cfg, opts, pop,
+                    build_prefixes(cfg.workload, opts.chars_per_token), s)
+            return r, first, s
+
+    return asyncio.run(go())
+
+
+def test_a_rungs_server_window_covers_the_rung_not_the_first_snapshot():
+    r, first, s = _rung_against_a_live_sampler()
+    assert r.server is not None, "the rung's metrics window was not covered"
+    # the window was asked for in the SAMPLER's base, so its endpoints sit
+    # inside the series rather than 55 years before it
+    assert r.server["requested"]["t0"] > first.t
+    assert r.server["endpoints"]["lo"] >= first.t
+    # and it is a LATER pair than the first one: the rung began several
+    # scrapes in, which is exactly what the monotonic bug could not express
+    assert r.server["endpoints"]["lo"] > first.t
+    assert r.server["endpoints"]["hi"] > r.server["endpoints"]["lo"]
+    # the delta is over the rung, and the fake advances 100 generated tokens
+    # per scrape, so a covered window cannot be empty
+    assert r.server["counters"]["generation_tokens_total"] > 0
+    assert r.server["gauges"]["requests_running"]["n"] >= 2
+
+
+def test_a_rungs_traces_carry_their_own_covariates_not_the_first_scrape():
+    """`at(t)` falls back to the first snapshot when `t` precedes the series.
+    With the wrong clock EVERY request read that one snapshot, so the whole
+    rung shared one `requests_running` value and decode_batch was a constant."""
+    r, first, s = _rung_against_a_live_sampler(pop=3)
+    seen = [t.covariates.get("requests_running") for t in r.traces
+            if t.covariates]
+    assert len(seen) >= 4
+    assert len(set(seen)) > 1, f"every request read the same snapshot: {seen}"
+    # the fake's gauge counts scrapes, so a covariate below the first
+    # snapshot's would mean the lookup landed before the series
+    ad_first = first.samples
+    from workingset.metrics.vllm import detect_adapter
+    base = detect_adapter(ad_first).gauge(ad_first, "requests_running")
+    assert min(seen) >= base
+
+
+def test_run_sample_and_the_shared_probe_agree_on_the_clock():
+    """The cheap probe takes the same seam; without it `server` was None on
+    every shared run too."""
+    from test_metrics import FakeServer, _until
+
+    from workingset.metrics import MetricsSampler
+
+    cfg, opts = small_cfg(), small_opts(sample_requests=2, sample_warm_turns=1)
+
+    async def go():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            await _until(lambda: len(s) >= 3)
+            async with client_for(fake_server()) as client:
+                return await run_sample(
+                    client, EndpointSpec(base_url="http://x/v1", model="m"),
+                    cfg, opts,
+                    build_prefixes(cfg.workload, opts.chars_per_token), s)
+
+    smp = asyncio.run(go())
+    assert smp.server is not None
+    assert smp.server["counters"]["generation_tokens_total"] > 0
