@@ -156,7 +156,7 @@ can be gated on the **cause** rather than on a model name.
 | `_duty` | prefill duty; `1/(1-rho)` amplifies every queue figure as it approaches 1 |
 | `_sla_headroom` | `1 - E[S\|miss]/SLA`; the latency ceiling's `k = 2(SLA - c)` vanishes at 0 and goes negative past it |
 | `_sla10_headroom` | the same against the 10 s budget `spikeMetrics` hard-wires — use this one for the `*_sla10` quantities |
-| `_sla_f_unreachable` | 1 where `sla_miss_rate` returned its `hi` clamp: the SLA survives an all-cold stream, so there is no root in `[0, 1]` to compare |
+| `_sla_f_unreachable` | 1 where `sla_miss_rate` returned its `hi` clamp: the SLA survives an all-cold stream, so the latency constraint is not reached at any miss rate. Both sides clamp there now, so no entry currently uses it |
 | `_warm_p5` | the warm count in sessions — one session either way is 33% of three |
 | `_decode_ceiling` | same, for the decode bisection |
 | `_ctx_cv2` | squared coefficient of variation of the context length; `E[S^2\|miss]` runs on `L^4`, so its sampling variance scales with this |
@@ -197,28 +197,17 @@ is a sampled quantity, and every entry in the allowlist is one of these:
    `state.burst`. The vectors price Python at the same 10 and 32 so the two
    answer the same question; the hard-wire itself is recorded here, not
    silently absorbed.
-2. **A hard-wired constant on Python's side.** `power_draw` uses
-   `DECODE_FLOOR_TOKS` where `cost.js` reads the live floor, so the decode duty
-   comes out **exactly 40/floor** apart — 8x at a 5 tok/s floor. That exact
-   factor holds *before* `d_d`'s `min(1 - d_p, ...)` clip and only where the
-   two sides' decode ceilings agree; where either fails it is approximate. It
-   carries into the per-GPU watts, the kW and the electricity line (but not
-   the monthly total, which the hardware line dominates). A Python bug.
-3. **A genuine algorithmic difference.** `steady_decode_point` bisects integer
+2. **A genuine algorithmic difference.** `steady_decode_point` bisects integer
    `n` out to 4,096, redrawing at each probe; `steadyDecodePoint` inverts the
    interpolated aggregate of the sweep the page already drew, whose widest `n`
    is 1.15 x the warm p95. Where the load runs past that axis
    (`_steady_nmax_ratio >= 1`) the mirror reports `saturated` and Python
    resolves a point — two answers to different questions, not a numeric
    disagreement. Below the axis end the same difference is bounded at ~18%.
-   `sla_miss_rate` is the second of these: Python bisects `f` over `[0, 1]` and
-   clamps to it, the explorer solves the closed form and clamps only at zero,
-   and their "no load meets this" tests differ (Python compares the whole TTFT
-   at `f = 0`, the explorer the miss's own prefill alone).
-4. **A standing approximation.** `max_users_cache`: the explorer scales the
+3. **A standing approximation.** `max_users_cache`: the explorer scales the
    whole warm p5 by `(1 - p_sub)`, where Python counts user-class sessions
    inside each fill. Invisible at ordinary counts, visible at three sessions.
-5. **A sign-stable sampler-structure bias.** `decode_p50_n1` reads 5-7% *low*
+4. **A sign-stable sampler-structure bias.** `decode_p50_n1` reads 5-7% *low*
    on the mirror, consistently, and hardest under FP16 KV where the sampled KV
    term dominates the step. `decodeCurves` draws one context pool per iteration
    and reads it cumulatively (common random numbers across `n`), where
@@ -226,17 +215,38 @@ is a sampled quantity, and every entry in the allowlist is one of these:
    draw count show. `decode_p50_n8` and `_n64` — the same estimator where the
    average over `n` contexts washes it out — stay inside their bands, which is
    the evidence for the reading.
-6. **Ill-conditioned estimators**, which are not disagreements about the model
+5. **Ill-conditioned estimators**, which are not disagreements about the model
    at all: the latency ceiling where a miss already eats its whole TTFT budget
    (`k = 2(SLA - c)` is then a difference of two nearly equal sampled numbers),
-   the Pollaczek-Khinchine wait at `rho -> 1`, `E[S^2|miss]` on a heavy-tailed
-   context distribution, warm counts of two or three sessions, a decode ceiling
-   of one. Each is allowlisted by the condition that makes it ill-conditioned,
-   never by model name.
+   the miss rate `f_sla` at the same cliff, the Pollaczek-Khinchine wait at
+   `rho -> 1`, `E[S^2|miss]` on a heavy-tailed context distribution, warm
+   counts of two or three sessions, a decode ceiling of one or three. Each is
+   allowlisted by the condition that makes it ill-conditioned, never by model
+   name.
 
-(2) and the two hard-wires in (1) are bugs. (3) is a modelling difference.
-Fixing any of them is a separate change: **this fixture measures, it does not
-repair.**
+The two hard-wires in (1) are bugs. (2) is a modelling difference. Fixing
+either is a separate change: **this fixture measures, it does not repair.**
+
+**What the first repair pass removed.** The fixture's first run also found two
+differences that *were* repaired, in the change that trimmed their entries
+away. They are recorded here because the taxonomy above is otherwise a list of
+what survived scrutiny, not of what the fixture caught:
+
+- **A hard-wired constant on Python's side.** `power_draw` used
+  `DECODE_FLOOR_TOKS` where `cost.js` reads the live floor, so the decode duty
+  came out *exactly 40/floor* apart — 8x at a 5 tok/s floor — and that carried
+  into the per-GPU watts, the kW and the electricity line. `decode_floor` is
+  now a parameter of `power_draw`, defaulted to `DECODE_FLOOR_TOKS` so no
+  published number moved, and `scripts/golden.py` passes the floor the decode
+  ceiling was sized at. 799 comparisons came off the allowlist; the 28 that
+  remain are the two sides' separate integer bisections of a decode ceiling of
+  a few dozen sequences, and `d_d`'s clamp at `rho -> 1`.
+- **An unclamped closed form on the mirror's side.** `spikeMetrics().fsla`
+  solved the same linear equation as `sla_miss_rate` but clamped only at zero,
+  so it reported miss *rates* of 41 and 55, and its zero test read the miss's
+  own prefill where Python reads the whole TTFT at `f = 0`. `prefill.js` now
+  clamps to `[0, 1]` and runs Python's zero test. 407 comparisons came off; the
+  20 that remain sit within 1.3% of the cliff the shared test now turns on.
 
 ## The rule
 
