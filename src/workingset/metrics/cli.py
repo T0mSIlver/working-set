@@ -20,7 +20,7 @@ import signal
 import sys
 import time
 
-from .adapter import KEY_KIND, KEY_UNITS, SEMANTIC_KEYS
+from .adapter import KEY_AGG, KEY_KIND, KEY_UNITS, SEMANTIC_KEYS
 from .sampler import MetricsSampler, keep_filter, load_jsonl, window_from_snapshots
 
 __all__ = ["add_subparser", "cmd_probe", "cmd_tail", "cmd_window"]
@@ -162,7 +162,18 @@ def cmd_tail(args) -> int:
                 n = seen
                 if args.count and n >= args.count:
                     break
+                if s.error is not None:
+                    break
             print(f"{n} snapshots, {s.n_failed} failed", file=sys.stderr)
+            if s.error is not None:
+                print(f"ws: sampling stopped: {s.error}", file=sys.stderr)
+                return 1
+            # Scraping nothing at all is a failed run, not a quiet one: the
+            # endpoint was wrong, or down, for the whole window.
+            if n and s.n_failed == n:
+                print(f"ws: every scrape failed -- nothing was measured",
+                      file=sys.stderr)
+                return 1
         return 0
 
     return asyncio.run(run())
@@ -187,23 +198,29 @@ def cmd_window(args) -> int:
     if len(snaps) < 2:
         print(f"{args.log}: {len(snaps)} snapshots, need >= 2", file=sys.stderr)
         return 1
-    t0 = _parse_t(args.frm, snaps) if args.frm else snaps[0].t
-    t1 = _parse_t(args.to, snaps) if args.to else snaps[-1].t
-    w = window_from_snapshots(snaps, t0, t1)
+    # No bound given means "the whole log", whose endpoints ARE the first and
+    # last snapshots -- there is nothing outside them to enclose with, and
+    # None says so rather than asking for coverage that cannot exist.
+    t0 = _parse_t(args.frm, snaps) if args.frm else None
+    t1 = _parse_t(args.to, snaps) if args.to else None
+    w = window_from_snapshots(snaps, t0, t1, engine=args.engine)
     if args.json:
         print(json.dumps(w.to_dict(), indent=2, default=str))
         return 0
 
-    print(f"{args.log}: window [{t0:.3f}, {t1:.3f}] -> endpoints "
-          f"[{w.lo.t:.3f}, {w.hi.t:.3f}]  (nearest snapshots OUTSIDE the ask)")
+    ask = ("the whole log" if t0 is None and t1 is None
+           else f"[{'start' if t0 is None else f'{t0:.3f}'}, "
+                f"{'end' if t1 is None else f'{t1:.3f}'}]")
+    print(f"{args.log}: window {ask} -> endpoints "
+          f"[{w.lo.t:.3f}, {w.hi.t:.3f}]  (snapshots ENCLOSING the ask)")
     print(f"  dt {w.dt:.3f} s  +/- {w.dt_uncertainty * 1e3:.0f} ms from scrape "
           f"round trips  |  {w.n_snapshots} snapshots, {w.n_failed} failed  "
           f"|  {w.version_hint}")
-    if w.counter_resets:
-        print(f"  COUNTER RESET inside this window (the engine restarted): "
-              f"{', '.join(w.counter_resets)}")
-        print(f"  those keys are unmeasurable here -- pick a window that does "
-              f"not span the restart")
+    if w.invalid:
+        print("  NOT MEASURABLE in this window:")
+        for k, why in sorted(w.invalid.items()):
+            print(f"    {k:<38} {why}")
+        print("  pick a window that does not span the restart")
     print()
     print("  counters (delta over the window)")
     for k, kind in KEY_KIND.items():
@@ -217,6 +234,9 @@ def cmd_window(args) -> int:
     print("  gauges (over the window)")
     for k, g in w.gauges.items():
         if not g.n:
+            if KEY_AGG.get(k) == "fraction" and not args.engine:
+                print(f"    {k:<38} unavailable: an occupancy fraction cannot "
+                      f"be summed across engines; pass --engine N")
             continue
         print(f"    {k:<38} mean {_fmt(g.mean, 3):>10}  max {_fmt(g.max, 3):>10}"
               f"  (n={g.n})")
@@ -283,5 +303,8 @@ def add_subparser(sub) -> None:
     q.add_argument("log", metavar="FILE.jsonl")
     q.add_argument("--from", dest="frm", help="unix time, or +S from log start")
     q.add_argument("--to", help="unix time, or -S from log end")
+    q.add_argument("--engine", help="engine index to select under DP>1; must "
+                                    "match the `tail --engine` that recorded "
+                                    "the log, or the replay sums every engine")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=cmd_window)

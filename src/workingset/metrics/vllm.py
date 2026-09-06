@@ -41,8 +41,10 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from .adapter import (KEY_KIND, SEMANTIC_KEYS, Resolution, group_by_position,
-                      histogram_bases, pick_histogram, resolve_aliases, sum_samples)
+from .adapter import (KEY_KIND, SEMANTIC_KEYS, Resolution, _is_engine,
+                      combine_gauge, group_by_position, histogram_bases,
+                      pick_histogram, resolve_aliases, series_histograms,
+                      series_samples, sum_samples)
 from .parse import Histogram, Sample, group_histograms
 
 __all__ = ["VLLMAdapter", "ALIASES", "detect_adapter", "adapter_for"]
@@ -70,12 +72,18 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "request_success_total": ("vllm:request_success_total",),
     # ---- latency histograms (seconds) -----------------------------------
     "ttft_hist": ("vllm:time_to_first_token_seconds",),
-    # ITL: one observation per emitted token, per engine iteration.
+    # ITL: one observation per output EVENT, not per token. stats.py appends
+    # a single interval per (request, engine step) that emitted anything, so
+    # a spec-decode step accepting 3 tokens records ONE observation covering
+    # all three -- this histogram reads seconds-per-step, high. The first
+    # output of a request goes to TTFT instead, so
+    #   count = (output events) - (requests that produced output).
     "tpot_hist": ("vllm:inter_token_latency_seconds",
                   "vllm:time_per_output_token_seconds"),
-    # the per-REQUEST mean of the above: one observation per finished
-    # request. A different distribution, so it gets its own key rather than
-    # silently standing in for `tpot_hist`.
+    # The per-REQUEST mean, one observation per finished request, computed
+    # as decode_time / (generation_tokens - 1) -- a TRUE per-token average
+    # that stays correct under spec decode. A different distribution, so it
+    # gets its own key rather than silently standing in for `tpot_hist`.
     "request_tpot_hist": ("vllm:request_time_per_output_token_seconds",),
     "e2e_hist": ("vllm:e2e_request_latency_seconds",),
     "prefill_time_hist": ("vllm:request_prefill_time_seconds",),
@@ -179,17 +187,78 @@ class VLLMAdapter:
             return None
         return sum_samples(samples, name, self.engine)
 
-    # gauges and counters read identically; the split is for the caller's
-    # arithmetic (deltas vs. levels), not for the wire format.
-    gauge = counter
+    def gauge(self, samples: list[Sample], key: str) -> float | None:
+        """Gauge value, combined per `KEY_AGG[key]`. Units: `KEY_UNITS[key]`.
+
+        vLLM's gauges need no rescaling (`kv_cache_usage_perc` is already a
+        fraction), so this differs from `counter` only in how it COMBINES:
+        request counts add across engines, occupancy cannot, and an
+        unweightable fraction spanning several engines returns None.
+        """
+        return combine_gauge(self.series(samples, key), key,
+                             engine_selected=self.engine is not None)
+
+    def series(self, samples: list[Sample], key: str) -> dict | None:
+        """Per-label-set values for a counter or gauge, before aggregation."""
+        name = self._resolved.get(key)
+        if name is None:
+            return None
+        return series_samples(samples, name, self.engine)
 
     def histogram(self, samples: list[Sample], key: str) -> Histogram | None:
         """Cumulative histogram for a `*_hist` key, label sets summed."""
         name = self._resolved.get(key)
         if name is None:
             return None
+        return pick_histogram(self._families(samples), name, self.engine)
+
+    def histogram_series(self, samples: list[Sample], key: str) -> dict | None:
+        """Per-label-set histograms for a `*_hist` key, before aggregation."""
+        name = self._resolved.get(key)
+        if name is None:
+            return None
+        return series_histograms(self._families(samples), name, self.engine)
+
+    @staticmethod
+    def _families(samples: list[Sample]) -> dict[str, list[Histogram]]:
         types = {b: "histogram" for b in histogram_bases(samples)}
-        return pick_histogram(group_histograms(samples, types), name, self.engine)
+        return group_histograms(samples, types)
+
+    # ---- bulk reads ------------------------------------------------------
+    # Reset detection walks every retained snapshot, so the per-key accessors
+    # above would re-group the same dump once per key -- 11 histogram keys x
+    # 600 snapshots of a 10-minute run was 3.1 s of pure regrouping. These do
+    # one pass and hand back every key at once.
+    def all_series(self, samples: list[Sample]) -> dict[str, dict]:
+        """Per-label-set values for every counter/gauge key, in one pass."""
+        wanted = {name: key for key, name in self._resolved.items()
+                  if KEY_KIND.get(key) in ("counter", "gauge")}
+        out: dict[str, dict] = {}
+        for s in samples:
+            key = wanted.get(s.name)
+            if key is None:
+                continue
+            if self.engine is not None and not _is_engine(s.labels, self.engine):
+                continue
+            bucket = out.setdefault(key, {})
+            lk = s.label_key()
+            bucket[lk] = bucket.get(lk, 0.0) + s.value
+        return out
+
+    def all_histogram_series(self, samples: list[Sample]) -> dict[str, dict]:
+        """Per-label-set histograms for every histogram key, in one pass."""
+        fams = self._families(samples)
+        out: dict[str, dict] = {}
+        for key, kind in KEY_KIND.items():
+            if kind != "histogram":
+                continue
+            name = self._resolved.get(key)
+            if name is None:
+                continue
+            g = series_histograms(fams, name, self.engine)
+            if g:
+                out[key] = g
+        return out
 
     def by_position(self, samples: list[Sample], key: str) -> dict[int, float] | None:
         """`position`-labelled counter as {draft position: tokens accepted}.
@@ -210,6 +279,8 @@ class VLLMAdapter:
             return self.histogram(samples, key)
         if kind == "counter_by_position":
             return self.by_position(samples, key)
+        if kind == "gauge":
+            return self.gauge(samples, key)
         return self.counter(samples, key)
 
 

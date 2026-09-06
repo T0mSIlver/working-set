@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from pathlib import Path
 
 import httpx
@@ -17,7 +18,9 @@ import pytest
 
 from workingset.cli import main as ws_main
 from workingset.metrics import (SEMANTIC_KEYS, GaugeStats, Histogram,
-                                MetricsSampler, Sample, Snapshot, VLLMAdapter,
+                                HistogramMismatch, HistogramReset,
+                                MetricsSampler, Sample, SamplerStopped,
+                                Snapshot, VLLMAdapter, WindowNotCovered,
                                 adapter_for, detect_adapter, load_jsonl,
                                 parse_families, parse_text, parse_types,
                                 window_from_snapshots)
@@ -93,9 +96,62 @@ def test_histogram_family_grouping_respects_type():
     assert fams["vllm:prompt_tokens_total"].type in ("counter", "untyped")
 
 
-def test_fixture_is_internally_consistent():
-    """The fixture is hand-written, so the identities a real engine would
-    satisfy are asserted here rather than trusted."""
+def _sum_bounds(h):
+    """What a cumulative histogram's `_sum` is allowed to be.
+
+    Every observation in bucket (lower, upper] contributes at least `lower`
+    and at most `upper`, so
+        SUM_i count_i * lower_i  <=  sum  <=  SUM_i count_i * upper_i
+    with the +Inf bucket removing the upper bound. Violating the lower bound
+    is not a rounding slip: it means the buckets and the sum describe
+    different data, which is how the first version of this fixture claimed a
+    5.2M token sum under buckets needing at least 14.9M.
+    """
+    lo = hi = 0.0
+    prev_b, prev_c = 0.0, 0.0
+    unbounded = False
+    for b in h.bounds:
+        c = h.buckets[b] - prev_c
+        lo += c * prev_b
+        if math.isinf(b):
+            unbounded = unbounded or c > 0
+        else:
+            hi += c * b
+        prev_b, prev_c = b, h.buckets[b]
+    return lo, (math.inf if unbounded else hi)
+
+
+HIST_KEYS = ("ttft_hist", "tpot_hist", "request_tpot_hist", "e2e_hist",
+             "prefill_time_hist", "decode_time_hist", "queue_time_hist",
+             "inference_time_hist", "iteration_tokens_hist",
+             "request_prompt_tokens_hist", "request_generation_tokens_hist")
+
+
+def test_every_fixture_histogram_has_a_feasible_sum():
+    ad = adapter_for(DUMP)
+    s = parse_text(DUMP)
+    for key in HIST_KEYS:
+        h = ad.histogram(s, key)
+        assert h is not None, key
+        lo, hi = _sum_bounds(h)
+        assert lo <= h.sum <= hi, (
+            f"{key}: _sum={h.sum:,.3f} outside the feasible "
+            f"[{lo:,.3f}, {hi:,.3f}] implied by its own buckets")
+
+
+def test_fixture_histograms_are_well_formed():
+    ad = adapter_for(DUMP)
+    s = parse_text(DUMP)
+    for key in HIST_KEYS:
+        h = ad.histogram(s, key)
+        assert h.buckets[math.inf] == h.count, key
+        assert all(h.buckets[a] <= h.buckets[b]
+                   for a, b in zip(h.bounds, h.bounds[1:])), key
+
+
+def test_fixture_cross_family_identities():
+    """The identities a real engine would satisfy, asserted rather than
+    trusted -- the fixture is generated, and a regeneration must keep them."""
     ad = adapter_for(DUMP)
     s = parse_text(DUMP)
     prompt = ad.counter(s, "prompt_tokens_total")
@@ -107,30 +163,46 @@ def test_fixture_is_internally_consistent():
     assert by_source["local_cache_hit"] == pytest.approx(cached)
     assert ad.counter(s, "prefix_cache_queries_total") == pytest.approx(prompt)
     assert ad.counter(s, "prefix_cache_hits_total") == pytest.approx(cached)
-    # one ITL observation per generated token
-    assert ad.histogram(s, "tpot_hist").observations == pytest.approx(gen)
+    # the per-request size histograms total the counters
+    assert ad.histogram(s, "request_prompt_tokens_hist").sum == pytest.approx(prompt)
+    assert ad.histogram(s, "request_generation_tokens_hist").sum == pytest.approx(gen)
     # an engine step processes uncached prompt tokens plus generated tokens
     assert ad.histogram(s, "iteration_tokens_hist").sum == pytest.approx(
         by_source["local_compute"] + gen)
-    # prefill + decode = inference, per phase accounting
-    assert (ad.histogram(s, "prefill_time_hist").sum
-            + ad.histogram(s, "decode_time_hist").sum) == pytest.approx(
-        ad.histogram(s, "inference_time_hist").sum)
-    # spec decode: per-position acceptance sums to the total, and the total
-    # accounts for every generated token
+    # phase accounting: queue + inference = e2e, prefill + decode = inference
+    pre = ad.histogram(s, "prefill_time_hist").sum
+    dec = ad.histogram(s, "decode_time_hist").sum
+    inf = ad.histogram(s, "inference_time_hist").sum
+    que = ad.histogram(s, "queue_time_hist").sum
+    assert pre + dec == pytest.approx(inf)
+    assert que + inf == pytest.approx(ad.histogram(s, "e2e_hist").sum)
+    # spec decode: per-position acceptance sums to the total, and one verify
+    # step per output event means drafts + accepted = generated tokens
     pos = ad.by_position(s, "spec_decode_accepted_per_pos")
     accepted = ad.counter(s, "spec_decode_num_accepted_tokens_total")
     drafts = ad.counter(s, "spec_decode_num_drafts_total")
     assert sum(pos.values()) == pytest.approx(accepted)
     assert drafts + accepted == pytest.approx(gen)
-    # every histogram's +Inf bucket equals its _count
-    for key in ("ttft_hist", "e2e_hist", "iteration_tokens_hist", "tpot_hist",
-                "prefill_time_hist", "decode_time_hist", "queue_time_hist"):
-        h = ad.histogram(s, key)
-        assert h.buckets[math.inf] == h.count, key
-        assert h.bounds == sorted(h.bounds)
-        assert all(h.buckets[a] <= h.buckets[b]
-                   for a, b in zip(h.bounds, h.bounds[1:])), key
+
+
+def test_itl_count_is_output_events_not_generated_tokens():
+    """vLLM appends ONE inter-token latency per output EVENT (stats.py: the
+    append is outside any per-token loop), so a spec-decode step accepting
+    3 tokens records one observation, and the first output of a request
+    books a TTFT instead. Asserting count == generation_tokens, as an
+    earlier version of this test did, is wrong on both counts."""
+    ad = adapter_for(DUMP)
+    s = parse_text(DUMP)
+    gen = ad.counter(s, "generation_tokens_total")
+    events = ad.counter(s, "spec_decode_num_drafts_total")   # one per event
+    requests = ad.counter(s, "request_success_total")
+    itl = ad.histogram(s, "tpot_hist").observations
+    assert itl == pytest.approx(events - requests)
+    assert itl < gen                       # strictly fewer, under spec decode
+    # the per-request mean is observed once per finished request instead
+    assert ad.histogram(s, "request_tpot_hist").observations == pytest.approx(
+        requests)
+    assert ad.histogram(s, "e2e_hist").observations == pytest.approx(requests)
 
 
 # ---------------------------------------------------------------------------
@@ -177,23 +249,61 @@ def test_mean_is_sum_over_count():
 
 
 def test_fixture_ttft_quantiles_match_hand_computation():
+    """The interpolation, recomputed by hand from the fixture's OWN buckets
+    rather than against a frozen literal -- so regenerating the fixture
+    cannot quietly invalidate the arithmetic this is here to check."""
     ad = adapter_for(DUMP)
     h = ad.histogram(parse_text(DUMP), "ttft_hist")
     assert h.observations == 1900.0
-    assert h.mean() == pytest.approx(1383.2 / 1900.0)
-    # p50: rank 950 lands in the (0.25, 0.5] bucket, which spans 487 -> 1024
-    expected = 0.25 + (950 - 487) / (1024 - 487) * 0.25
+    assert h.mean() == pytest.approx(h.sum / 1900.0)
+
+    target = 0.5 * h.observations
+    lower, prev_c = 0.0, 0.0
+    for b in h.bounds:                       # the bucket holding rank 950
+        c = h.buckets[b]
+        if c >= target:
+            break
+        lower, prev_c = b, c
+    expected = lower + (target - prev_c) / (c - prev_c) * (b - lower)
     assert h.quantile(0.5) == pytest.approx(expected)
+    # and it lands inside the bucket that holds the median
+    assert lower <= h.quantile(0.5) <= b
 
 
-def test_histogram_subtraction_is_bucketwise_and_clamps():
+def test_histogram_subtraction_is_bucketwise():
     a = _hist({1.0: 10.0, 2.0: 20.0, math.inf: 25.0}, count=25.0, total=30.0)
     b = _hist({1.0: 4.0, 2.0: 6.0, math.inf: 8.0}, count=8.0, total=9.0)
     d = a - b
     assert d.buckets == {1.0: 6.0, 2.0: 14.0, math.inf: 17.0}
     assert d.count == 17.0 and d.sum == 21.0
-    # a counter reset (b > a) clamps rather than reporting a negative rank
-    assert (b - a).buckets == {1.0: 0.0, 2.0: 0.0, math.inf: 0.0}
+
+
+def test_histogram_subtraction_refuses_a_reset():
+    """Going backwards is a restart, not a small negative to clamp away."""
+    a = _hist({1.0: 10.0, math.inf: 25.0}, count=25.0, total=30.0)
+    b = _hist({1.0: 4.0, math.inf: 8.0}, count=8.0, total=9.0)
+    with pytest.raises(HistogramReset):
+        _ = b - a
+    # a reset visible only in _sum (buckets and count flat) is still caught
+    x = _hist({1.0: 4.0, math.inf: 8.0}, count=8.0, total=9.0)
+    y = _hist({1.0: 4.0, math.inf: 8.0}, count=8.0, total=2.0)
+    with pytest.raises(HistogramReset):
+        _ = y - x
+
+
+def test_histogram_subtraction_refuses_a_changed_bucket_layout():
+    """Zero-filling a boundary only one side exported invents observations:
+    the delta would claim every observation fell in the smallest bucket."""
+    full = _hist({1.0: 100.0, 2.0: 118.0, 8.0: 120.0, math.inf: 120.0},
+                 count=120.0, total=182.0)
+    truncated = _hist({1.0: 100.0, 2.0: 100.0}, count=100.0, total=50.0)
+    with pytest.raises(HistogramMismatch):
+        _ = full - truncated
+    # and the nonsense it would otherwise have produced: 20 observations all
+    # <= 2 s, whose mean of 6.6 s does not fit inside them
+    naive_count = 120.0 - 100.0
+    naive_mean = (182.0 - 50.0) / naive_count
+    assert naive_mean > 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -302,8 +412,54 @@ def test_engine_selector_applies_to_histograms_and_positions():
 
 def test_per_position_acceptance_keeps_the_label_as_the_measurement():
     ad = adapter_for(DUMP)
-    pos = ad.by_position(parse_text(DUMP), "spec_decode_accepted_per_pos")
-    assert pos == {0: 928000.0, 1: 696000.0, 2: 335000.0}
+    s = parse_text(DUMP)
+    pos = ad.by_position(s, "spec_decode_accepted_per_pos")
+    assert sorted(pos) == [0, 1, 2]          # the label IS the measurement
+    # acceptance decays with draft position -- that is what makes the
+    # 1 + a + a^2 geometric model testable
+    assert pos[0] > pos[1] > pos[2] > 0
+    assert sum(pos.values()) == pytest.approx(
+        ad.counter(s, "spec_decode_num_accepted_tokens_total"))
+
+
+def test_gauge_aggregation_is_metric_specific():
+    """Request counts add across engines; an occupancy FRACTION cannot --
+    summing two engines at 0.7 would report the pool 140% full."""
+    two = parse_text('vllm:num_requests_running{engine="0"} 8\n'
+                     'vllm:num_requests_running{engine="1"} 5\n'
+                     'vllm:kv_cache_usage_perc{engine="0"} 0.7\n'
+                     'vllm:kv_cache_usage_perc{engine="1"} 0.7\n')
+    both = VLLMAdapter(two)
+    assert both.gauge(two, "requests_running") == 13.0     # extensive: sums
+    assert both.gauge(two, "kv_cache_usage") is None       # intensive: cannot
+    # selecting an engine makes the fraction answerable again
+    one = VLLMAdapter(two, engine="1")
+    assert one.gauge(two, "kv_cache_usage") == pytest.approx(0.7)
+    assert one.gauge(two, "requests_running") == 5.0
+    # a single-engine deployment is unaffected
+    solo = parse_text('vllm:kv_cache_usage_perc{engine="0"} 0.64\n')
+    assert VLLMAdapter(solo).gauge(solo, "kv_cache_usage") == pytest.approx(0.64)
+
+
+def test_gauges_go_through_gauge_not_counter():
+    """An adapter may combine or rescale a gauge differently from a counter
+    (SGLang reports occupancy as a percent). Callers must dispatch on kind."""
+    class PercentAdapter(VLLMAdapter):
+        def gauge(self, samples, key):
+            v = super().gauge(samples, key)
+            if v is not None and key == "kv_cache_usage":
+                return v / 100.0            # this engine reports 0..100
+            return v
+
+    s = parse_text('vllm:kv_cache_usage_perc{engine="0"} 64.0\n'
+                   'vllm:num_requests_running{engine="0"} 4\n')
+    ad = PercentAdapter(s)
+    assert ad.counter(s, "kv_cache_usage") == 64.0          # raw
+    assert ad.gauge(s, "kv_cache_usage") == pytest.approx(0.64)
+    assert ad.read(s, "kv_cache_usage") == pytest.approx(0.64)
+    snaps = [Snapshot(0.0, 0.01, s), Snapshot(2.0, 0.01, s)]
+    w = window_from_snapshots(snaps, 0.5, 1.5, adapter=ad)
+    assert w.kv_usage.mean == pytest.approx(0.64)
 
 
 def test_detect_adapter_and_the_protocol():
@@ -388,9 +544,37 @@ def test_window_endpoints_carry_their_scrape_uncertainty():
     assert w.dt_uncertainty == pytest.approx(0.02)
 
 
-def test_window_clamped_to_the_series_when_the_ask_overhangs():
+def test_an_uncovered_ask_raises_instead_of_answering_a_different_question():
+    """Snapshots at 0..4 cannot answer "what happened during [10, 20]". The
+    old behaviour clamped to the series and returned those numbers."""
     snaps = _series()
-    w = window_from_snapshots(snaps, -100.0, 100.0)
+    with pytest.raises(WindowNotCovered, match="high side"):
+        window_from_snapshots(snaps, 10.0, 20.0)
+    with pytest.raises(WindowNotCovered, match="low side"):
+        window_from_snapshots(snaps, -100.0, 2.0)
+    with pytest.raises(WindowNotCovered, match="high side"):
+        window_from_snapshots(snaps, 1.0, 100.0)
+
+
+def test_endpoints_must_enclose_not_merely_neighbour():
+    """lo's scrape must have COMPLETED before t0 and hi's must have STARTED
+    after t1; the round trip is not a point."""
+    # t_sent=1.0, rtt=0.5 -> this scrape is only known to be as-of [1.0, 1.5]
+    snaps = [Snapshot(1.0, 0.5, parse_text(_dump(gen=10.0))),
+             Snapshot(3.0, 0.5, parse_text(_dump(gen=90.0)))]
+    # t0=1.2 falls INSIDE the first scrape's round trip: not covered
+    with pytest.raises(WindowNotCovered, match="low side"):
+        window_from_snapshots(snaps, 1.2, 2.0)
+    # t0=1.5 is exactly when it completed: covered
+    w = window_from_snapshots(snaps, 1.5, 2.0)
+    assert (w.lo.t_sent, w.hi.t_sent) == (1.0, 3.0)
+    assert w.tokens_out == pytest.approx(80.0)
+
+
+def test_whole_log_needs_no_coverage():
+    """An open end asks about the log itself, whose limit IS its endpoint."""
+    snaps = _series()
+    w = window_from_snapshots(snaps, None, None)
     assert (w.lo.t, w.hi.t) == (0.0, 4.0)
     assert w.tokens_out == pytest.approx(1000.0)
 
@@ -453,7 +637,7 @@ def test_spec_decode_is_none_when_the_server_does_not_export_it():
     text = 'vllm:generation_tokens_total{engine="0"} 5\n'
     snaps = [Snapshot(0.0, 0.01, parse_text(text)),
              Snapshot(1.0, 0.01, parse_text(text))]
-    w = window_from_snapshots(snaps, 0.0, 1.0)
+    w = window_from_snapshots(snaps, 0.5, 0.9)
     assert w.alpha is None and w.mean_accepted_len is None
     assert w.prefix_hit_rate is None and w.miss_rate is None
 
@@ -478,7 +662,7 @@ def test_window_histogram_delta_gives_window_quantiles():
 
     snaps = [Snapshot(0.0, 0.01, parse_text(dump(100, 50.0, 100))),
              Snapshot(1.0, 0.01, parse_text(dump(120, 82.0, 100)))]
-    w = window_from_snapshots(snaps, 0.0, 1.0)
+    w = window_from_snapshots(snaps, 0.5, 0.9)
     h = w.ttft
     # the 20 requests that finished IN the window all landed in (1, 2]
     assert h.observations == 20.0
@@ -520,6 +704,93 @@ def test_a_counter_reset_is_reported_not_reported_as_a_negative_rate():
     assert clean.tokens_out == pytest.approx(400.0)
 
 
+def test_a_reset_that_recovers_between_the_endpoints_is_still_caught():
+    """100 -> 10 -> 150 across three ticks: the two ENDPOINTS show a
+    plausible +50, and only comparing consecutive snapshots sees the dip."""
+    snaps = [_snap(0.0, gen=100.0), _snap(1.0, gen=10.0), _snap(2.0, gen=150.0)]
+    w = window_from_snapshots(snaps, 0.5, 1.5)
+    assert (w.lo.t, w.hi.t) == (0.0, 2.0)
+    assert "generation_tokens_total" in w.invalid
+    assert w.tokens_out is None            # not the bogus +50
+    assert w.output_tok_s is None
+
+
+def test_a_reset_hidden_inside_an_engine_sum_is_still_caught():
+    """Engine 0 advancing while engine 1 restarts gives a RISING sum. Only
+    a per-label-set comparison, before aggregation, can see the restart."""
+    def dump(a, b):
+        return (f'vllm:generation_tokens_total{{engine="0"}} {a}\n'
+                f'vllm:generation_tokens_total{{engine="1"}} {b}\n')
+
+    snaps = [Snapshot(0.0, 0.01, parse_text(dump(2_900_000, 700_000))),
+             Snapshot(1.0, 0.01, parse_text(dump(4_200_000, 20_000))),
+             Snapshot(2.0, 0.01, parse_text(dump(5_800_000, 90_000)))]
+    # the naive endpoint sum looks fine: 3.6M -> 5.89M, a positive delta
+    assert (5_800_000 + 90_000) - (2_900_000 + 700_000) > 0
+    w = window_from_snapshots(snaps, 0.5, 1.5)
+    assert "generation_tokens_total" in w.invalid
+    assert w.tokens_out is None
+    # engine 0 alone never restarted, so selecting it recovers the window
+    w0 = window_from_snapshots(snaps, 0.5, 1.5, engine="0")
+    assert w0.invalid == {}
+    assert w0.tokens_out == pytest.approx(2_900_000.0)
+
+
+def test_a_histogram_reset_visible_only_in_sum_is_caught():
+    """Buckets and _count flat while _sum drops: still a restart."""
+    def dump(count, total):
+        return (f'vllm:time_to_first_token_seconds_bucket{{le="1.0"}} {count}\n'
+                f'vllm:time_to_first_token_seconds_bucket{{le="+Inf"}} {count}\n'
+                f'vllm:time_to_first_token_seconds_count {count}\n'
+                f'vllm:time_to_first_token_seconds_sum {total}\n')
+
+    snaps = [Snapshot(0.0, 0.01, parse_text(dump(50, 30.0))),
+             Snapshot(1.0, 0.01, parse_text(dump(50, 4.0))),
+             Snapshot(2.0, 0.01, parse_text(dump(50, 9.0)))]
+    w = window_from_snapshots(snaps, 0.5, 1.5)
+    assert "ttft_hist" in w.invalid
+    assert w.ttft is None
+
+
+def test_a_changed_bucket_layout_invalidates_rather_than_zero_fills():
+    full = ('vllm:time_to_first_token_seconds_bucket{le="1.0"} 100\n'
+            'vllm:time_to_first_token_seconds_bucket{le="2.0"} 118\n'
+            'vllm:time_to_first_token_seconds_bucket{le="8.0"} 120\n'
+            'vllm:time_to_first_token_seconds_bucket{le="+Inf"} 120\n'
+            'vllm:time_to_first_token_seconds_count 120\n'
+            'vllm:time_to_first_token_seconds_sum 182.0\n')
+    truncated = ('vllm:time_to_first_token_seconds_bucket{le="1.0"} 100\n'
+                 'vllm:time_to_first_token_seconds_bucket{le="+Inf"} 100\n'
+                 'vllm:time_to_first_token_seconds_count 100\n'
+                 'vllm:time_to_first_token_seconds_sum 50.0\n')
+    snaps = [Snapshot(0.0, 0.01, parse_text(truncated)),
+             Snapshot(2.0, 0.01, parse_text(full))]
+    w = window_from_snapshots(snaps, 0.5, 1.5)
+    assert "ttft_hist" in w.invalid
+    assert "bucket layout" in w.invalid["ttft_hist"]
+    assert w.ttft is None                  # not a 20-observation fiction
+
+
+def test_reset_detection_works_without_the_bulk_read_fast_path():
+    """The one-pass `all_series` is an optimisation; an adapter that only
+    implements the per-key accessors must still get reset detection."""
+    class SlowAdapter(VLLMAdapter):
+        all_series = None                    # hide the fast path
+        all_histogram_series = None
+
+        def __getattribute__(self, name):
+            if name in ("all_series", "all_histogram_series"):
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+    snaps = [_snap(0.0, gen=100.0), _snap(1.0, gen=10.0), _snap(2.0, gen=150.0)]
+    ad = SlowAdapter(snaps[0].samples)
+    assert not hasattr(ad, "all_series")
+    w = window_from_snapshots(snaps, 0.5, 1.5, adapter=ad)
+    assert "generation_tokens_total" in w.invalid
+    assert w.tokens_out is None
+
+
 def test_per_position_reset_is_reported_too():
     snaps = [_snap(0.0, accepted=0.0), _snap(1.0, accepted=0.0)]
     text_a = ('vllm:spec_decode_num_accepted_tokens_per_pos_total'
@@ -528,7 +799,7 @@ def test_per_position_reset_is_reported_too():
               '{engine="0",position="0"} 12\n')
     snaps = [Snapshot(0.0, 0.01, parse_text(text_a)),
              Snapshot(1.0, 0.01, parse_text(text_b))]
-    w = window_from_snapshots(snaps, 0.0, 1.0)
+    w = window_from_snapshots(snaps, 0.5, 0.9)
     assert "spec_decode_accepted_per_pos" in w.counter_resets
     assert w.per_position is None
 
@@ -615,8 +886,7 @@ def test_sampler_collects_raw_snapshots():
         srv = FakeServer()
         async with MetricsSampler("http://fake/metrics", interval=0.01,
                                   client=srv.client()) as s:
-            while len(s) < 5:
-                await asyncio.sleep(0.005)
+            await _until(lambda: len(s) >= 5)
             return list(s.snapshots), s
 
     snaps, s = asyncio.run(run())
@@ -637,8 +907,7 @@ def test_sampler_window_and_at():
         srv = FakeServer()
         async with MetricsSampler("http://fake/metrics", interval=0.01,
                                   client=srv.client()) as s:
-            while len(s) < 6:
-                await asyncio.sleep(0.005)
+            await _until(lambda: len(s) >= 6)
             t_lo = s.snapshots[1].t
             t_hi = s.snapshots[4].t
             return s.window(t_lo + 0.001, t_hi - 0.001), s.at(t_hi), s.snapshots
@@ -655,8 +924,7 @@ def test_sampler_retains_failures_as_snapshots():
         srv = FakeServer(fail_every=2)
         async with MetricsSampler("http://fake/metrics", interval=0.01,
                                   client=srv.client()) as s:
-            while len(s) < 6:
-                await asyncio.sleep(0.005)
+            await _until(lambda: len(s) >= 6)
             return list(s.snapshots), s.n_failed
 
     snaps, n_failed = asyncio.run(run())
@@ -675,13 +943,12 @@ def test_sampler_writes_jsonl_that_replays(tmp_path):
         srv = FakeServer()
         async with MetricsSampler("http://fake/metrics", interval=0.01,
                                   out=str(out), client=srv.client()) as s:
-            while len(s) < 4:
-                await asyncio.sleep(0.005)
+            await _until(lambda: len(s) >= 4)
 
     asyncio.run(run())
     snaps = load_jsonl(out)
     assert len(snaps) >= 4
-    w = window_from_snapshots(snaps, snaps[0].t, snaps[-1].t)
+    w = window_from_snapshots(snaps, None, None)
     assert w.tokens_out == pytest.approx(100.0 * (len(snaps) - 1))
 
 
@@ -690,8 +957,7 @@ def test_sampler_keep_filter_shrinks_the_record():
         srv = FakeServer()
         async with MetricsSampler("http://fake/metrics", interval=0.01,
                                   keep=keep, client=srv.client()) as s:
-            while len(s) < 2:
-                await asyncio.sleep(0.005)
+            await _until(lambda: len(s) >= 2)
             return s.snapshots[0]
 
     full = asyncio.run(run(None))
@@ -721,14 +987,210 @@ def test_sampler_live_line():
         srv = FakeServer()
         async with MetricsSampler("http://fake/metrics", interval=0.01,
                                   client=srv.client()) as s:
-            while len(s) < 3:
-                await asyncio.sleep(0.005)
+            await _until(lambda: len(s) >= 3)
             return s.live()
 
     v = asyncio.run(run())
     assert v["running"] is not None
     assert v["tok_s"] is not None and v["tok_s"] > 0
     assert v["hit_rate"] == pytest.approx(0.9)
+
+
+async def _until(pred, timeout=5.0, tick=0.005):
+    """Wait for a condition, bounded. An unbounded `while ...: await sleep`
+    hangs the whole suite when the thing under test stops advancing."""
+    async with asyncio.timeout(timeout):
+        while not pred():
+            await asyncio.sleep(tick)
+
+
+def test_a_dying_loop_surfaces_to_the_consumer():
+    """An --out writer that starts failing must not look like a quiet run:
+    the consumer waits on a snapshot count that will never rise again."""
+    class Exploding:
+        def __init__(self):
+            self.n = 0
+
+        def write(self, _s):
+            self.n += 1
+            if self.n > 2:
+                raise OSError(28, "No space left on device")
+
+        def close(self):
+            pass
+
+    async def run():
+        srv = FakeServer()
+        s = MetricsSampler("http://fake/metrics", interval=0.01,
+                           client=srv.client())
+        s._out = Exploding()
+        await s.start()
+        try:
+            await _until(lambda: s.error is not None)
+        finally:
+            await s.aclose()
+        return s
+
+    s = asyncio.run(run())
+    assert s.error is not None and "No space left" in s.error
+    with pytest.raises(SamplerStopped, match="No space left"):
+        s.window(0.0, 1.0)
+    # and cleanup still ran despite the failure
+    assert s._task is None and s._out is None
+
+
+def test_aclose_is_idempotent_and_releases_everything():
+    async def run():
+        srv = FakeServer()
+        s = MetricsSampler("http://fake/metrics", interval=0.01,
+                           client=srv.client())
+        await s.start()
+        await _until(lambda: len(s) >= 2)
+        await s.aclose()
+        await s.aclose()               # second call must be a no-op, not a raise
+        return s
+
+    s = asyncio.run(run())
+    assert s._task is None and s._out is None
+
+
+def test_a_truncated_first_scrape_does_not_latch_a_poor_adapter():
+    """Latching on scrape #1 would read the whole run through a half-resolved
+    vocabulary, reporting keys as missing that the server exports."""
+    class Ramping:
+        """First response is truncated to two series, then the full dump."""
+        def __init__(self):
+            self.n = 0
+
+        def handle(self, request):
+            self.n += 1
+            if self.n == 1:
+                return httpx.Response(200, text=(
+                    'vllm:num_requests_running{engine="0"} 1\n'
+                    'vllm:prompt_tokens_total{engine="0"} 5\n'))
+            return httpx.Response(200, text=DUMP)
+
+    async def run():
+        r = Ramping()
+        client = httpx.AsyncClient(transport=httpx.MockTransport(r.handle))
+        async with MetricsSampler("http://fake/metrics", interval=0.01,
+                                  client=client) as s:
+            await _until(lambda: len(s) >= 1)
+            first = len(s.adapter.resolution().resolved)
+            await _until(lambda: len(s.adapter.resolution().resolved) > first)
+            return first, s.adapter.resolution()
+
+    first, res = asyncio.run(run())
+    assert first == 2                       # the truncated view
+    assert "ttft_hist" in res.resolved       # the richer one won
+    assert len(res.resolved) > first
+
+
+def test_probe_keeps_the_resolution_it_computed():
+    async def run():
+        srv = FakeServer(dump=DUMP)
+        s = MetricsSampler("http://fake/metrics", client=srv.client())
+        try:
+            _, res = await s.probe()
+            return s.adapter, res
+        finally:
+            await s.aclose()
+
+    adapter, res = asyncio.run(run())
+    assert adapter is not None               # not discarded
+    assert adapter.resolution().resolved == res.resolved
+
+
+def test_wait_first_ignores_failed_scrapes():
+    """A failed scrape is not an endpoint, so releasing `wait_first` on one
+    hands the caller a sampler it cannot build a window from."""
+    async def run():
+        srv = FakeServer(fail_every=1)       # every scrape fails
+        async with MetricsSampler("http://fake/metrics", interval=0.01,
+                                  client=srv.client()) as s:
+            await _until(lambda: len(s) >= 3)
+            return await s.wait_first(timeout=0.05)
+
+    assert asyncio.run(run()) is False
+
+
+def test_next_tick_is_what_makes_a_live_window_coverable():
+    """The documented pattern: t1 = now; await next_tick(); window(t0, t1)."""
+    async def run():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            assert await s.wait_first(timeout=2.0)
+            t0 = s.snapshots[0].t_sent + s.snapshots[0].rtt
+            await _until(lambda: len(s) >= 2)
+            t1 = time.time()
+            # before the next tick lands there is no enclosing hi endpoint
+            with pytest.raises(WindowNotCovered):
+                s.window(t0, t1 + 0.05)
+            assert await s.next_tick(timeout=2.0)
+            return s.window(t0, t1)
+
+    w = asyncio.run(run())
+    assert w.tokens_out is not None and w.tokens_out > 0
+
+
+def test_max_snapshots_trims_the_ring():
+    async def run():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.01,
+                                  max_snapshots=3, client=srv.client()) as s:
+            await _until(lambda: srv.n >= 6)
+            return list(s.snapshots)
+
+    snaps = asyncio.run(run())
+    assert len(snaps) <= 3
+    # it is the OLDEST that are dropped: counters rise across what remains
+    ad = detect_adapter(snaps[0].samples)
+    vals = [ad.counter(x.samples, "generation_tokens_total") for x in snaps]
+    assert vals == sorted(vals)
+
+
+def test_an_injected_client_still_honours_the_samplers_timeout():
+    seen = {}
+
+    def handle(request):
+        seen["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, text=DUMP)
+
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        s = MetricsSampler("http://fake/metrics", timeout=0.123, client=client)
+        try:
+            await s.scrape_once()
+        finally:
+            await s.aclose()
+
+    asyncio.run(run())
+    assert seen["timeout"]["read"] == pytest.approx(0.123)
+    assert seen["timeout"]["connect"] == pytest.approx(0.123)
+
+
+def test_scrape_times_ignore_a_wall_clock_step(monkeypatch):
+    """`time.time()` can jump backwards (NTP), which would put the series out
+    of order and make every bisect meaningless. Timestamps are anchored to
+    `time.monotonic()` instead, so a step cannot reach them."""
+    s = MetricsSampler("http://fake/metrics")
+    before = s._now()
+    monkeypatch.setattr(time, "time", lambda: 0.0)   # the clock lurches back
+    after = s._now()
+    assert after >= before
+    assert abs(after - before) < 1.0                 # and barely moved
+
+
+def test_window_sorts_snapshots_it_is_handed():
+    """A replayed log can be concatenated out of order; the bisect must not
+    be handed an unsorted list."""
+    snaps = _series()
+    shuffled = [snaps[3], snaps[0], snaps[4], snaps[1], snaps[2]]
+    w = window_from_snapshots(shuffled, 1.4, 2.6)
+    assert (w.lo.t, w.hi.t) == (1.0, 3.0)
+    assert w.tokens_out == pytest.approx(500.0)
+    assert w.dt > 0
 
 
 def test_sampler_rejects_a_nonpositive_interval():
@@ -821,13 +1283,107 @@ def test_cli_metrics_window_table(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "generation_tokens_total" in out
     assert "output tok/s" in out
-    assert "nearest snapshots OUTSIDE" in out
+    assert "snapshots ENCLOSING" in out
+
+
+def test_cli_metrics_window_whole_log_table(tmp_path, capsys):
+    """No --from/--to prints the table rather than tripping over the open
+    bounds it passes down as None."""
+    p = tmp_path / "log.jsonl"
+    p.write_text("\n".join(s.to_json() for s in _series()) + "\n")
+    assert ws_main(["metrics", "window", str(p)]) == 0
+    out = capsys.readouterr().out
+    assert "the whole log" in out
+    assert "ENCLOSING" in out
+    assert "generation_tokens_total" in out
+
+
+def test_cli_metrics_window_uncovered_ask_is_a_clean_error(tmp_path, capsys):
+    p = tmp_path / "log.jsonl"
+    p.write_text("\n".join(s.to_json() for s in _series()) + "\n")
+    # main() turns a ValueError into `ws: <message>` and exit 2
+    assert ws_main(["metrics", "window", str(p), "--from", "+100",
+                    "--to", "+200"]) == 2
+    assert "not covered" in capsys.readouterr().err
 
 
 def test_cli_metrics_window_needs_two_snapshots(tmp_path, capsys):
     p = tmp_path / "log.jsonl"
     p.write_text(_snap(0.0).to_json() + "\n")
     assert ws_main(["metrics", "window", str(p)]) == 1
+
+
+def _dp_log(tmp_path):
+    """A two-engine archive: engine 0 emits 10 tokens, engine 1 emits 100."""
+    def dump(a, b):
+        return (f'vllm:generation_tokens_total{{engine="0"}} {a}\n'
+                f'vllm:generation_tokens_total{{engine="1"}} {b}\n'
+                f'vllm:num_requests_running{{engine="0"}} 2\n'
+                f'vllm:num_requests_running{{engine="1"}} 7\n')
+
+    snaps = [Snapshot(0.0, 0.01, parse_text(dump(0, 0)),
+                      lines=dump(0, 0).splitlines()),
+             Snapshot(2.0, 0.01, parse_text(dump(10, 100)),
+                      lines=dump(10, 100).splitlines())]
+    p = tmp_path / "dp.jsonl"
+    p.write_text("\n".join(x.to_json() for x in snaps) + "\n")
+    return p, snaps
+
+
+def test_window_engine_selector_changes_the_answer(tmp_path):
+    _, snaps = _dp_log(tmp_path)
+    assert window_from_snapshots(snaps, None, None,
+                                 engine="0").tokens_out == pytest.approx(10.0)
+    assert window_from_snapshots(snaps, None,
+                                 None).tokens_out == pytest.approx(110.0)
+
+
+def test_cli_window_engine_selector_matches_the_live_reading(tmp_path, capsys):
+    """A `tail --engine 0` archive must replay as engine 0, not as the sum of
+    every engine -- the same log otherwise reports 110 tokens where the live
+    sampler reported 10."""
+    p, _ = _dp_log(tmp_path)
+    assert ws_main(["metrics", "window", str(p), "--engine", "0", "--json"]) == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["counters"]["generation_tokens_total"] == pytest.approx(10.0)
+    assert d["gauges"]["requests_running"]["mean"] == pytest.approx(2.0)
+
+
+def test_cli_tail_exits_nonzero_when_every_scrape_failed(monkeypatch, capsys):
+    """Three connection errors and rc 0 reads as a successful run."""
+    srv = FakeServer(fail_every=1)
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda *a, **kw: real(*a, transport=srv.transport(),
+                                              **{k: v for k, v in kw.items()
+                                                 if k != "verify"}))
+    rc = ws_main(["metrics", "tail", "http://fake/metrics",
+                  "--interval", "0.01", "--count", "3"])
+    assert rc == 1
+    assert "every scrape failed" in capsys.readouterr().err
+
+
+def test_cli_probe_reports_a_declared_but_idle_family(fake_http, capsys):
+    """`# TYPE` with no samples means exported-and-idle, which is not the
+    same as not exported -- the distinction probe exists to draw."""
+    fams = parse_families(DUMP)
+    assert "vllm:corrupted_requests" in fams
+    assert fams["vllm:corrupted_requests"].samples == []
+    assert fams["vllm:corrupted_requests"].type == "counter"
+
+
+def test_parse_families_keeps_declared_empty_families():
+    text = ("# HELP some_metric A metric with no samples right now.\n"
+            "# TYPE some_metric counter\n"
+            "# HELP other_metric Has one.\n"
+            "# TYPE other_metric gauge\n"
+            'other_metric{a="b"} 3\n')
+    fams = parse_families(text)
+    assert set(fams) == {"some_metric", "other_metric"}
+    assert fams["some_metric"].samples == []
+    assert fams["some_metric"].type == "counter"
+    assert fams["some_metric"].help == "A metric with no samples right now."
+    assert len(fams["other_metric"].samples) == 1
 
 
 def test_cli_metrics_keep_and_tls_flags_parse():

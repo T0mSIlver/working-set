@@ -21,9 +21,10 @@ from typing import Iterable, Protocol, runtime_checkable
 
 from .parse import Histogram, Sample
 
-__all__ = ["SEMANTIC_KEYS", "KEY_UNITS", "KEY_KIND", "MetricsAdapter",
+__all__ = ["SEMANTIC_KEYS", "KEY_UNITS", "KEY_KIND", "KEY_AGG", "MetricsAdapter",
            "Resolution", "resolve_aliases", "sum_samples", "pick_histogram",
-           "histogram_bases", "group_by_position"]
+           "histogram_bases", "group_by_position", "series_samples",
+           "series_histograms", "LabelKey"]
 
 # ---------------------------------------------------------------------------
 # the vocabulary. Order is presentation order for `ws metrics probe`.
@@ -62,6 +63,22 @@ KEY_KIND: dict[str, str] = {
 
 SEMANTIC_KEYS: tuple[str, ...] = tuple(KEY_KIND)
 
+# How a gauge combines across the engines of a data-parallel deployment.
+#
+#   "sum"       an extensive quantity -- request counts add up, and the total
+#               across engines is the number the deployment is serving.
+#   "fraction"  an INTENSIVE quantity in [0, 1]. Adding two engines' pool
+#               occupancy gives 1.4 ("140% full"), which is nonsense; a
+#               correct combination is the capacity-weighted mean, and
+#               /metrics does not export the per-engine capacities to weight
+#               by. So with several engines present and none selected, the
+#               honest answer is None -- select an engine to get a number.
+KEY_AGG: dict[str, str] = {
+    "requests_running": "sum",
+    "requests_waiting": "sum",
+    "kv_cache_usage": "fraction",
+}
+
 KEY_UNITS: dict[str, str] = {
     "prompt_tokens_total": "tokens",
     "prompt_tokens_cached_total": "tokens served from cache",
@@ -74,7 +91,7 @@ KEY_UNITS: dict[str, str] = {
     "preemptions_total": "preemption events",
     "request_success_total": "requests",
     "ttft_hist": "seconds",
-    "tpot_hist": "seconds between output tokens",
+    "tpot_hist": "seconds between output EVENTS (not per token under spec decode)",
     "request_tpot_hist": "seconds per output token, per-request mean",
     "e2e_hist": "seconds",
     "prefill_time_hist": "seconds",
@@ -140,10 +157,22 @@ class MetricsAdapter(Protocol):
         """The counter's value, summed over label sets. Units: `KEY_UNITS[key]`."""
 
     def gauge(self, samples: list[Sample], key: str) -> float | None:
-        """The gauge's value, summed over label sets. Units: `KEY_UNITS[key]`."""
+        """The gauge's value, combined per `KEY_AGG[key]`. Units: `KEY_UNITS[key]`.
+
+        Distinct from `counter` on purpose: a gauge combines by its own rule
+        (counts add, fractions cannot), and an adapter may also have to
+        rescale -- an engine reporting occupancy as 0..100 has to divide,
+        while its counters pass through untouched.
+        """
 
     def histogram(self, samples: list[Sample], key: str) -> Histogram | None:
         """The cumulative histogram, summed over label sets."""
+
+    def series(self, samples: list[Sample], key: str) -> dict | None:
+        """A counter's or gauge's value PER LABEL SET, before aggregation."""
+
+    def histogram_series(self, samples: list[Sample], key: str) -> dict | None:
+        """A histogram family PER LABEL SET, before aggregation."""
 
     def by_position(self, samples: list[Sample], key: str) -> dict[int, float] | None:
         """A counter whose `position` label IS the measurement (spec-decode
@@ -200,6 +229,59 @@ def sum_samples(samples: Iterable[Sample], name: str,
 def _is_engine(labels: dict[str, str], engine: str) -> bool:
     eid = labels.get("engine", labels.get("engine_index"))
     return eid is not None and eid == str(engine)
+
+
+LabelKey = tuple[tuple[str, str], ...]
+
+
+def series_samples(samples: Iterable[Sample], name: str,
+                   engine: str | None = None) -> dict[LabelKey, float] | None:
+    """One metric's value PER LABEL SET, unaggregated. None if absent.
+
+    Reset detection has to run here, before any summing: two engines whose
+    counters move in opposite directions (one advancing, one restarting)
+    produce a perfectly plausible positive SUM, and the restart disappears.
+    Only the per-series view can see it.
+    """
+    out: dict[LabelKey, float] = {}
+    for s in samples:
+        if s.name != name:
+            continue
+        if engine is not None and not _is_engine(s.labels, engine):
+            continue
+        out[s.label_key()] = out.get(s.label_key(), 0.0) + s.value
+    return out or None
+
+
+def series_histograms(hists: dict[str, list[Histogram]], base: str,
+                      engine: str | None = None) -> dict[LabelKey, Histogram] | None:
+    """One histogram family PER LABEL SET, uncollapsed. None if absent."""
+    group = hists.get(base)
+    if not group:
+        return None
+    out: dict[LabelKey, Histogram] = {}
+    for h in group:
+        if engine is not None and not _is_engine(h.labels, engine):
+            continue
+        out[tuple(sorted(h.labels.items()))] = h
+    return out or None
+
+
+def combine_gauge(values: dict[LabelKey, float] | None, key: str,
+                  engine_selected: bool) -> float | None:
+    """Collapse one gauge's per-series values per `KEY_AGG[key]`.
+
+    An intensive quantity (a fraction) spanning several engines with none
+    selected returns None: there is no capacity to weight the mean by, and
+    summing occupancies would report "140% full".
+    """
+    if not values:
+        return None
+    if len(values) == 1 or engine_selected:
+        return sum(values.values())
+    if KEY_AGG.get(key, "sum") == "fraction":
+        return None
+    return sum(values.values())
 
 
 def pick_histogram(hists: dict[str, list[Histogram]], base: str,

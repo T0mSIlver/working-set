@@ -23,7 +23,16 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
-__all__ = ["Sample", "Histogram", "MetricFamily", "parse_text", "group_histograms"]
+__all__ = ["Sample", "Histogram", "MetricFamily", "parse_text", "group_histograms",
+           "HistogramMismatch", "HistogramReset"]
+
+
+class HistogramMismatch(ValueError):
+    """Two histograms have different bucket boundaries, so no delta exists."""
+
+
+class HistogramReset(ValueError):
+    """A histogram went backwards: the engine restarted mid-window."""
 
 # name{label="value",...} 1.234 [timestamp]
 # The value is taken as "the rest of the line" and float()-ed, so NaN, +Inf,
@@ -141,17 +150,42 @@ class Histogram:
 
     # ---- arithmetic ----------------------------------------------------
     def __sub__(self, other: "Histogram") -> "Histogram":
-        """Bucket-wise delta. Negative results (a counter reset, or a bound
-        that only one side exported) clamp to 0."""
-        bounds = set(self.buckets) | set(other.buckets)
-        buckets = {b: max(0.0, self.buckets.get(b, 0.0) - other.buckets.get(b, 0.0))
-                   for b in bounds}
+        """Bucket-wise delta over an IDENTICAL bucket layout.
+
+        Raises `HistogramMismatch` when the two sides disagree on their
+        boundaries. Zero-filling a boundary only one side exported invents
+        observations: a truncated scrape missing the tail buckets would
+        otherwise yield a delta claiming every observation fell in the
+        smallest bucket, and the resulting p95 would be confidently wrong.
+        A layout that changed mid-run means the engine was reconfigured, and
+        the two histograms are simply not subtractable.
+
+        Raises `HistogramReset` when any bucket, the count, or the sum went
+        backwards -- the engine restarted, and no delta is recoverable.
+        """
+        if set(self.buckets) != set(other.buckets):
+            raise HistogramMismatch(
+                f"{self.name}: bucket layout changed mid-window "
+                f"({len(other.buckets)} bounds -> {len(self.buckets)}); "
+                f"the delta is not defined")
+        buckets = {}
+        for b in self.buckets:
+            d = self.buckets[b] - other.buckets[b]
+            if d < 0:
+                raise HistogramReset(
+                    f"{self.name}: bucket le={b} went backwards "
+                    f"({other.buckets[b]:g} -> {self.buckets[b]:g})")
+            buckets[b] = d
         count = None
         if self.count is not None and other.count is not None:
-            count = max(0.0, self.count - other.count)
+            count = self.count - other.count
+            if count < 0:
+                raise HistogramReset(f"{self.name}: _count went backwards")
         total = None
         if self.sum is not None and other.sum is not None:
-            total = max(0.0, self.sum - other.sum)
+            total = self.sum - other.sum
+            if total < 0:
+                raise HistogramReset(f"{self.name}: _sum went backwards")
         return Histogram(self.name, dict(self.labels), buckets, count, total)
 
     def __add__(self, other: "Histogram") -> "Histogram":
@@ -284,7 +318,17 @@ def parse_families(text: str) -> dict[str, MetricFamily]:
     holds all three.
     """
     types, helps = parse_types(text), parse_help(text)
-    fams: dict[str, MetricFamily] = {}
+    # Seed from the DECLARATIONS, not from the samples: a family whose every
+    # label set is currently empty still exports `# TYPE` / `# HELP` and is
+    # a real thing the server can measure. Dropping it makes "declared but
+    # idle" indistinguishable from "not exported at all", which is exactly
+    # the distinction `ws metrics probe` exists to draw.
+    fams: dict[str, MetricFamily] = {
+        name: MetricFamily(name, typ, helps.get(name, ""))
+        for name, typ in types.items()}
+    for name, doc in helps.items():
+        if name not in fams:
+            fams[name] = MetricFamily(name, "untyped", doc)
     for s in parse_text(text):
         base = _base_name(s.name, types)
         f = fams.get(base)
