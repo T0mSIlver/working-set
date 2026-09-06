@@ -278,18 +278,23 @@ def _cross_block(w, c: dict | None) -> None:
     if c.get("error"):
         w(f"\n  SERVER CROSS-CHECK unavailable: {c['error']}")
         return
-    w("\n  SERVER CROSS-CHECK over the probe window (client - server = the "
-      "proxy, the network and our own event loop)")
-    w(f"    TTFT p50: client {fmt(c.get('client_ttft_p50_s'), 's')} - server "
-      f"{fmt(c.get('server_ttft_p50_s'), 's')} = "
-      f"{fmt(c.get('proxy_overhead_ttft_p50_s'), 's')}  "
-      f"(server n={c.get('server_ttft_n', 0)})")
-    w(f"    TTFT p95: client {fmt(c.get('client_ttft_p95_s'), 's')} - server "
-      f"{fmt(c.get('server_ttft_p95_s'), 's')} = "
-      f"{fmt(c.get('proxy_overhead_ttft_p95_s'), 's')}")
-    w(f"    ITL  p50: client {fmt(c.get('client_itl_p50_ms'), ' ms', 1)} - "
-      f"server {fmt(c.get('server_itl_p50_ms'), ' ms', 1)} = "
-      f"{fmt(c.get('proxy_overhead_itl_p50_ms'), ' ms', 1)}")
+    w("\n  SERVER CROSS-CHECK over the probe window — TWO POPULATIONS, not "
+      "one measurement")
+    w(f"    client: {c.get('n_client_requests', 0)} probe requests | server: "
+      f"{c.get('server_ttft_n', 0)} requests that finished a prefill in the "
+      "window, mostly somebody else's")
+    w(f"    TTFT p50: client {fmt(c.get('client_ttft_p50_s'), 's')} vs server "
+      f"{fmt(c.get('server_ttft_p50_s'), 's')} (difference "
+      f"{fmt(c.get('ttft_p50_client_minus_server_s'), 's')})")
+    w(f"    TTFT p95: client {fmt(c.get('client_ttft_p95_s'), 's')} vs server "
+      f"{fmt(c.get('server_ttft_p95_s'), 's')} (difference "
+      f"{fmt(c.get('ttft_p95_client_minus_server_s'), 's')})")
+    w(f"    ITL  p50: client {fmt(c.get('client_itl_p50_ms'), ' ms', 1)} vs "
+      f"server {fmt(c.get('server_itl_p50_ms'), ' ms', 1)} (difference "
+      f"{fmt(c.get('itl_p50_client_minus_server_ms'), ' ms', 1)})")
+    w("    the difference is UNATTRIBUTED: the two quantiles are over "
+      "different request populations, so it is not a proxy overhead. Reading "
+      "it as one needs matched observations, which only --exclusive gives.")
     w(f"    forced misses confirmed cold: "
       f"{_pct(c.get('forced_miss_clean_frac'))} of "
       f"{c.get('n_miss_with_cached_readback', 0)} with a cached_tokens "

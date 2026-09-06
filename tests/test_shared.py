@@ -32,6 +32,7 @@ from workingset.shared import (LOAD_COLUMNS, TTFT_COLUMNS, BudgetAbort,
                                ladder_model_curve, natural_ladder,
                                operating_point_covariates, run_shared)
 
+from test_metrics import _until
 from test_probe import client_for, fake_server, small_cfg, small_opts
 
 
@@ -111,6 +112,16 @@ def budget(**kw) -> ProbeBudget:
     return ProbeBudget.conservative(**base)
 
 
+def _gauges(**kw) -> dict:
+    """A complete, fresh gauge reading — every rail's gauge present and a
+    timestamp the freshness check accepts."""
+    base = {"requests_running": 2.0, "requests_waiting": 0.0,
+            "kv_cache_usage": 0.2, "age_s": 0.0, "stale": False,
+            "n_engines": 1}
+    base.update(kw)
+    return base
+
+
 def synth_rows(n: int, c, noise: float = 0.0, seed: int = 0,
                running=None, kind: str = "miss") -> list[dict]:
     """Rows drawn from a KNOWN quadratic-in-L, linear-in-load surface."""
@@ -132,10 +143,21 @@ def synth_rows(n: int, c, noise: float = 0.0, seed: int = 0,
 # the budget rails
 # ============================================================================
 def test_budget_describe_says_the_gauge_rails_need_metrics():
-    lines = " ".join(budget(canary=True).describe(metrics=False))
+    lines = " ".join(budget(canary=True).describe(metrics=None))
     assert "NOT ENFORCEABLE" in lines and "--metrics-url" in lines
     assert "NOT ENFORCEABLE" not in " ".join(
         budget(canary=True).describe(metrics=True))
+
+
+def test_a_sampler_that_has_not_scraped_yet_still_enables_the_rails():
+    """`MetricsSampler.__len__` is its snapshot count, so a freshly built one
+    is FALSEY — and --dry-run builds one without starting it. Truthiness here
+    declared the rails unenforceable on every run that had --metrics-url."""
+    from workingset.metrics import MetricsSampler
+
+    s = MetricsSampler("http://fake/metrics")
+    assert len(s) == 0 and not s          # falsey, and still a sampler
+    assert "NOT ENFORCEABLE" not in " ".join(budget().describe(s))
 
 
 def test_exclusive_budget_takes_every_rail_off():
@@ -606,10 +628,16 @@ def test_reading_refuses_an_operating_point_beyond_the_probed_load():
     assert not loose["available"]
     assert "requests outside the probed range" in loose["reason"]
     assert "--max-extrapolation-requests" in loose["reason"]
-    # raising BOTH lets exactly the same fit through, which is the point of
-    # the thresholds being flags rather than constants
+    # raising BOTH distance gates STILL does not let it through: there is no
+    # evidence near the point, which is a different objection (see the
+    # local-support gate) and the one that actually protects the reading
     both = _result(fits, far, max_extrapolation=99)
     both.max_extrapolation_requests = 1e6
+    local = both.reading("ttft_miss")
+    assert not local["available"]
+    assert "--min-local-n" in local["reason"]
+    # ...and with that relaxed too, the same fit finally reports
+    both.min_local_n = 0
     assert both.reading("ttft_miss")["available"]
 
 
@@ -689,14 +717,21 @@ def _traces_for_cross():
     return out
 
 
-def test_cross_check_reports_client_minus_server_as_the_proxy_overhead():
+def test_cross_check_reports_two_populations_not_one_overhead():
+    """The client quantile is over the probe's requests; the server histogram
+    is over everything that finished a prefill in the window, mostly somebody
+    else's. Their difference is a difference, not a proxy overhead."""
     m = ScriptedMetrics(window=FakeWindow(ttft_p50=0.40, tpot_s=0.020))
     c = asyncio.run(cross_check(m, 10.0, 20.0, _traces_for_cross()))
     assert c["server_ttft_p50_s"] == pytest.approx(0.40)
     assert c["client_ttft_p50_s"] == pytest.approx(0.66)
-    assert c["proxy_overhead_ttft_p50_s"] == pytest.approx(0.26)
+    assert c["ttft_p50_client_minus_server_s"] == pytest.approx(0.26)
     assert c["server_itl_p50_ms"] == pytest.approx(20.0)
-    assert c["proxy_overhead_itl_p50_ms"] == pytest.approx(5.0)
+    assert c["itl_p50_client_minus_server_ms"] == pytest.approx(5.0)
+    # the populations are named, and the mismatch is recorded
+    assert c["populations_matched"] is False
+    assert c["n_client_requests"] == 3
+    assert "proxy_overhead_ttft_p50_s" not in c
 
 
 def test_cross_check_confirms_forced_misses_from_the_cached_tokens_readback():
@@ -819,15 +854,19 @@ def test_h_itl_mean_and_h_steady_gate_on_their_own_fits():
         assert "covariate fit" in v.text
 
 
-def test_h_steady_says_what_carries_the_batch_half_of_its_claim():
+def test_h_steady_stays_capped_because_the_batch_half_is_untestable():
+    """The claim is a PAIR. A shared run never sets the load, so it cannot
+    show that this configuration's load PRODUCES the predicted batch — and
+    the fit only ever evaluates the speed AT a stipulated batch."""
     cfg = RunConfig()
     res = _shared_result_for(cfg, 12.0, 2.0)
     h = REGISTRY.get("H-steady")
     ctx = _ctx(cfg, res)
     v = h.verdict(h.predict(cfg, ctx.predictions),
                   asyncio.run(h.measure(ctx)))
-    assert "predicted decode batch" in v.text
-    assert "extrapolation gate" in v.text
+    assert v.status == NOT_ESTABLISHED
+    assert "speed reading only" in v.text
+    assert "Only an exclusive run closes the pair" in v.text
 
 
 def test_h_itl_spike_needs_the_spike_evidence_as_well_as_the_fit():
@@ -1269,7 +1308,7 @@ def test_extrapolating_downward_carries_no_upward_bias_note():
 # --- MAJOR 4: metrics loss fails CLOSED -----------------------------------
 def test_a_sampler_that_dies_mid_run_aborts_rather_than_probing_blind():
     gov = ProbeGovernor(budget(max_metrics_gaps=2), metrics_expected=True)
-    gov.observe({"requests_waiting": 0, "kv_cache_usage": 0.2})   # it worked
+    gov.observe(_gauges())                                        # it worked
     assert gov.metrics_armed
     gov.observe(None)
     gov.observe(None)
@@ -1283,10 +1322,10 @@ def test_a_sampler_that_dies_mid_run_aborts_rather_than_probing_blind():
 
 def test_a_recovered_sampler_resets_the_gap_count():
     gov = ProbeGovernor(budget(max_metrics_gaps=2), metrics_expected=True)
-    gov.observe({"requests_waiting": 0})
+    gov.observe(_gauges())
     gov.observe(None)
     gov.observe(None)
-    gov.observe({"requests_waiting": 0})       # back
+    gov.observe(_gauges())                     # back
     gov.observe(None)
     gov.observe(None)
     assert gov.aborted is None
@@ -1548,3 +1587,370 @@ def test_the_report_prints_vifs_and_the_centre(capsys):
     assert "VIF " in out and "variance inflation" in out
     assert "L centred on" in out and "scaled cond" in out
     assert "the in-flight cap" in out
+
+
+# ============================================================================
+# review round 2: one regression per finding
+# ============================================================================
+def _hyperbolic(levels, n=120, seed=0, noise=0.02, a=1.0, b=12.0, pole=11.0):
+    """The reviewer's design: a response HYPERBOLIC in load, sampled at
+    `levels` only. y = a + b / (pole - running)."""
+    rng = random.Random(seed)
+    rows = []
+    for i in range(n):
+        r = float(levels[i % len(levels)])
+        L = 5.0 + 35.0 * rng.random()
+        rows.append({"kind": "miss", "L_ktok": L, "running": r,
+                     "waiting": 2.0 * rng.random(),
+                     "y": a + b / (pole - r) + rng.gauss(0.0, noise)})
+    return rows
+
+
+def _point(fit, running, waiting=1.0):
+    return {"L_ktok": fit.centre, "L_ktok2": fit.centre ** 2 + 100.0,
+            "running": running, "waiting": waiting}
+
+
+def _op_at(fit, cfg, running, waiting=1.0):
+    op = operating_point_covariates(cfg, predict(cfg, n_iter=64), n_iter=4_000)
+    return replace(op, running=running, waiting=waiting,
+                   L_ktok=fit.centre, L2_ktok2=fit.centre ** 2 + 100.0)
+
+
+# --- MAJOR 1: a sparse design has no local evidence -----------------------
+def test_a_two_level_design_passes_every_global_gate_and_still_lies():
+    """The reviewer's reproduction, as a pin on the FAILURE, not the fix: at
+    running=5 the truth is 3.00 s and the chord through running=0 and 10 reads
+    7.54 s, while extrapolation, VIF, condition number and se all look
+    immaculate. Global statistics cannot see a gap in the middle."""
+    fit = fit_covariates(_hyperbolic([0, 10]), TTFT_COLUMNS, unit="s")
+    assert fit.usable, fit.refused
+    point = _point(fit, 5.0)
+    assert fit.extrapolation(point)[0] == 0.0        # inside the range
+    assert max(fit.vif.values()) < 1.5               # no collinearity
+    assert fit.scaled_condition_number < 2           # well conditioned
+    assert fit.predict_se(point) < 0.01              # and apparently sharp
+    # ...and 2.5x wrong
+    assert fit.predict(point) > 2.0 * (1.0 + 12.0 / (11.0 - 5.0))
+
+
+def test_the_local_support_gate_refuses_that_design():
+    cfg = RunConfig()
+    fits = {"ttft_miss": fit_covariates(_hyperbolic([0, 10]), TTFT_COLUMNS,
+                                        unit="s")}
+    fit = fits["ttft_miss"]
+    r = _result(fits, _op_at(fit, cfg, 5.0)).reading("ttft_miss")
+    assert not r["available"]
+    assert r["local_n"] == 0
+    assert "--min-local-n" in r["reason"]
+    assert "chord" in r["reason"]
+
+
+def test_the_curvature_gate_refuses_a_response_that_is_not_straight():
+    """Three levels give local support AND an identifiable quadratic: the
+    linear reading is still 2x wrong, and comparing it against the curved
+    refit is what says so."""
+    cfg = RunConfig()
+    fits = {"ttft_miss": fit_covariates(_hyperbolic([0, 5, 10]), TTFT_COLUMNS,
+                                        unit="s")}
+    fit = fits["ttft_miss"]
+    res = _result(fits, _op_at(fit, cfg, 5.0))
+    r = res.reading("ttft_miss")
+    assert r["local_n"] >= res.min_local_n           # local support is fine
+    assert not r["available"]
+    assert "adding curvature" in r["reason"]
+    assert r["curvature_gap"] > r["curvature_band"]
+
+
+def test_two_levels_make_the_curvature_unidentifiable_and_say_so():
+    cfg = RunConfig()
+    fits = {"ttft_miss": fit_covariates(_hyperbolic([0, 10]), TTFT_COLUMNS,
+                                        unit="s")}
+    fit = fits["ttft_miss"]
+    res = _result(fits, _op_at(fit, cfg, 5.0))
+    res.min_local_n = 0                               # skip past gate 3
+    r = res.reading("ttft_miss")
+    assert not r["available"]
+    assert "unidentifiable" in r["reason"]
+    gap, band, note = fit.curvature_disagreement(_point(fit, 5.0))
+    assert math.isnan(gap) and "too few distinct values" in note
+
+
+def test_a_genuinely_linear_response_still_passes_both_new_gates():
+    """The gates must not swallow everything: a response that IS linear over
+    the probed range reports, with curvature found and dismissed."""
+    cfg = RunConfig()
+    rng = random.Random(71)
+    rows = [{"kind": "miss", "L_ktok": 5.0 + 35.0 * rng.random(),
+             "running": (i % 12) * 10 / 11, "waiting": 2.0 * rng.random(),
+             "y": 1.0 + 0.30 * ((i % 12) * 10 / 11) + rng.gauss(0, 0.01)}
+            for i in range(120)]
+    fits = {"ttft_miss": fit_covariates(rows, TTFT_COLUMNS, unit="s")}
+    fit = fits["ttft_miss"]
+    r = _result(fits, _op_at(fit, cfg, 5.0)).reading("ttft_miss")
+    assert r["available"], r["reason"]
+    assert r["local_n"] >= 3
+    assert r["curvature_gap"] <= 3.0 * r["curvature_band"]
+    assert r["value"] == pytest.approx(1.0 + 0.30 * 5.0, abs=0.05)
+
+
+# --- MAJOR 2: a stale snapshot is not a reading ---------------------------
+def test_a_real_sampler_going_down_is_seen_as_lost_not_healthy():
+    """The reviewer's reproduction: one good scrape then 503s. `at()` keeps
+    handing back the last good snapshot forever, so the reading stayed
+    non-empty, the gap counter kept resetting and nothing ever fired."""
+    from test_metrics import _dump
+
+    from workingset.metrics import MetricsSampler
+
+    state = {"n": 0}
+
+    def handle(request):
+        state["n"] += 1
+        if state["n"] > 1:
+            return httpx.Response(503, text="down")
+        return httpx.Response(200, text=_dump(running=3.0, waiting=0.0,
+                                              kv=0.2, gen=100.0))
+
+    async def go():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        async with MetricsSampler("http://fake/metrics", interval=0.01,
+                                  client=client) as s:
+            await _until(lambda: s.n_failed >= 6)
+            return s.gauges_at(s.now()), s.n_failed
+
+    reading, n_failed = asyncio.run(go())
+    assert n_failed >= 6
+    # the gauges are still there — that is the trap — but they are OLD, and
+    # the reading says so
+    assert reading["requests_running"] == 3.0
+    assert reading["age_s"] > 0 and reading["stale"] is True
+    assert reading["n_failed"] >= 6
+    # and a governor holding that reading counts it as a gap, not a pass
+    gov = ProbeGovernor(budget(max_metrics_gaps=2), metrics_expected=True)
+    gov.observe(_gauges())                       # a fresh one arms it
+    for _ in range(2):
+        gov.observe(reading)
+    assert gov.aborted is None
+    with pytest.raises(BudgetAbort) as e:
+        gov.observe(reading)
+    assert "metrics_lost" in e.value.reason
+    assert "old" in e.value.reason
+
+
+def test_a_missing_gauge_for_an_enabled_rail_counts_as_a_gap():
+    """A rail that is ON but whose gauge is absent has not passed — it could
+    not be evaluated."""
+    gov = ProbeGovernor(budget(max_metrics_gaps=1, abort_if_kv_above=0.9),
+                        metrics_expected=True)
+    gov.observe(_gauges())
+    partial = _gauges()
+    partial["kv_cache_usage"] = None
+    gov.observe(partial)
+    with pytest.raises(BudgetAbort) as e:
+        gov.observe(partial)
+    assert "kv_cache_usage is not readable" in e.value.reason
+
+
+def test_an_explicit_max_gauge_age_overrides_the_samplers_own_rule():
+    gov = ProbeGovernor(budget(max_metrics_gaps=1, max_gauge_age_s=0.5),
+                        metrics_expected=True)
+    gov.observe(_gauges())
+    old = _gauges(age_s=2.0, stale=False)     # the sampler thinks it is fine
+    gov.observe(old)
+    with pytest.raises(BudgetAbort) as e:
+        gov.observe(old)
+    assert "2.0s old" in e.value.reason
+
+
+# --- MAJOR 3: the request under measurement is not part of its own arrival -
+def test_the_ttft_covariate_excludes_the_request_being_measured():
+    """A tagged arrival sees the time-average state WITHOUT itself (PASTA),
+    and the operating point it is compared against is exactly that stationary
+    average. Counting itself added one running request to every row."""
+    cfg, opts = small_cfg(), small_opts()
+    metrics = ScriptedMetrics(
+        [{"requests_running": 4, "requests_waiting": 0, "kv_cache_usage": 0.2,
+          "t": 1_000_000.0}] * 500)
+    res = _run_shared(fake_server(), cfg, opts,
+                      shared_opts(rounds=2, lengths="0.5", warm_turns=1),
+                      budget(abort_if_waiting=None, abort_if_kv_above=None,
+                             max_metrics_gaps=0, canary=False), metrics)
+    cov = [t.covariates for t in res.sample.traces if t.covariates]
+    assert cov
+    # the probe is sequential and the canary is off, so nothing else of ours
+    # is open: the adjustment is zero and `running` is the gauge itself
+    assert all(c["probe_open_after_scrape"] == 0 for c in cov)
+    assert all(c["running_adjusted"] == 4.0 for c in cov)
+    # ...and the decode-side covariate is one higher, because a decoding
+    # request IS one of the sequences sharing the batch
+    assert all(c["running_adjusted_incl_self"] == 5.0 for c in cov)
+
+
+def test_the_decode_fit_regresses_on_the_batch_including_this_request():
+    t = RequestTrace(kind="hit", ttft=1.0, ptok_achieved=1_000)
+    t.itl_p50, t.clean_decode_tps = 0.05, 100.0
+    t.covariates = {"requests_running": 3, "requests_waiting": 0,
+                    "running_adjusted": 3.0,
+                    "running_adjusted_incl_self": 4.0}
+    row = covariate_rows([t])[0]
+    assert row["running"] == 3.0 and row["running_decode"] == 4.0
+    fits = build_fits([dict(row, y=1.0) for _ in range(40)])
+    # the load fits see the incl-self column; both refuse here (no variation),
+    # but the RANGE they refuse over is the decode one
+    assert fits["decode"].ranges.get("running", {}).get("max") in (4.0, None)
+
+
+# --- MAJOR 4: engines ------------------------------------------------------
+def _two_engine_dump(kv_a=0.2, kv_b=0.99, run_a=2.0, run_b=8.0) -> str:
+    return (f'vllm:num_requests_running{{engine="0"}} {run_a}\n'
+            f'vllm:num_requests_running{{engine="1"}} {run_b}\n'
+            f'vllm:num_requests_waiting{{engine="0"}} 0.0\n'
+            f'vllm:num_requests_waiting{{engine="1"}} 0.0\n'
+            f'vllm:kv_cache_usage_perc{{engine="0"}} {kv_a}\n'
+            f'vllm:kv_cache_usage_perc{{engine="1"}} {kv_b}\n')
+
+
+def _two_engine_sampler(engine=None):
+    from workingset.metrics import MetricsSampler
+
+    def handle(request):
+        return httpx.Response(200, text=_two_engine_dump())
+
+    async def go():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        async with MetricsSampler("http://fake/metrics", interval=0.01,
+                                  client=client, engine=engine) as s:
+            await _until(lambda: len(s) >= 2)
+            return s.gauges_at(s.now())
+
+    return asyncio.run(go())
+
+
+def test_an_unselected_multi_engine_dump_sums_requests_and_drops_kv():
+    """The reviewer's reproduction: two engines at 2/8 running and 20%/99% KV
+    read as running=10 and kv=None, so the KV rail silently disabled."""
+    r = _two_engine_sampler()
+    assert r["n_engines"] == 2
+    assert r["requests_running"] == 10.0          # a SUM, not a replica group
+    assert r["kv_cache_usage"] is None            # cannot combine fractions
+    assert r["kv_cache_usage_max"] == pytest.approx(0.99)
+
+
+def test_the_kv_rail_binds_on_the_worst_engine_when_none_is_selected():
+    gov = ProbeGovernor(budget(abort_if_waiting=None, abort_if_kv_above=0.9),
+                        metrics_expected=True)
+    with pytest.raises(BudgetAbort) as e:
+        gov.observe(_two_engine_sampler())
+    assert "99.0%" in e.value.reason
+    assert "worst of several engines" in e.value.reason
+
+
+def test_selecting_an_engine_gives_a_replica_group_and_a_combined_kv():
+    r = _two_engine_sampler(engine="1")
+    assert r["requests_running"] == 8.0
+    assert r["kv_cache_usage"] == pytest.approx(0.99)
+    assert r["engine_selected"] == "1"
+
+
+def test_the_fit_refuses_an_unselected_multi_engine_endpoint():
+    cfg = RunConfig()
+    fits = build_fits(synth_rows(120, TRUE, noise=0.02, seed=81))
+    res = _result(fits, _at_centre(fits, cfg))
+    res.n_engines, res.engine_selected = 2, None
+    r = res.reading("ttft_miss")
+    assert not r["available"]
+    assert "2 engines" in r["reason"] and "--engine" in r["reason"]
+    # selecting one restores it
+    res.engine_selected = "0"
+    assert res.reading("ttft_miss")["available"]
+
+
+# --- MAJOR 5: H-steady's pair ---------------------------------------------
+@pytest.mark.parametrize("seqs", [None, 2.0, 20.0, 200.0])
+def test_h_steady_is_capped_whatever_the_measured_batch(seqs):
+    """Batches of None, 2 and 200 against a predicted ~17 all used to read
+    `supported`, because the shared branch scored only the speed."""
+    cfg = RunConfig()
+    res = _shared_result_for(cfg, 12.0, 2.0)
+    h = REGISTRY.get("H-steady")
+    ctx = _ctx(cfg, res)
+    m = asyncio.run(h.measure(ctx))
+    m = Measurement(value=m.value, unit=m.unit, text=m.text,
+                    data={**m.data,
+                          "seqs": float("nan") if seqs is None else seqs})
+    v = h.verdict(h.predict(cfg, ctx.predictions), m)
+    assert v.status == NOT_ESTABLISHED
+    assert "speed reading only" in v.text
+
+
+def test_h_steady_still_prints_the_speed_reading_it_did_establish():
+    cfg = RunConfig()
+    res = _shared_result_for(cfg, 12.0, 2.0)
+    h = REGISTRY.get("H-steady")
+    ctx = _ctx(cfg, res)
+    v = h.verdict(h.predict(cfg, ctx.predictions),
+                  asyncio.run(h.measure(ctx)))
+    assert "predicted" in v.text          # the ratio is still quoted
+    assert "covariate fit" in v.text      # and where it came from
+
+
+# --- MINOR -----------------------------------------------------------------
+def test_the_probe_uses_the_runs_own_predictions_not_a_cheaper_rerun():
+    """A second `predict()` at n_iter=64 put the operating point somewhere the
+    rest of the report was never scored against (16.79 vs 16.48 seqs)."""
+    cfg, opts = small_cfg(), small_opts()
+    preds = predict(RunConfig(), n_iter=400, seed=0)
+    metrics = ScriptedMetrics(
+        [{"requests_running": 1 + (i % 9), "requests_waiting": (i * 3) % 5,
+          "kv_cache_usage": 0.2, "t": 1_000_000.0} for i in range(200)])
+
+    async def go():
+        async with client_for(fake_server()) as client:
+            return await run_shared(
+                client, EndpointSpec(base_url="http://x/v1", model="m"),
+                RunConfig(), opts,
+                build_prefixes(cfg.workload, opts.chars_per_token),
+                budget(abort_if_waiting=None), shared_opts(rounds=2), metrics,
+                predictions=preds)
+
+    res = asyncio.run(go())
+    assert res.op.steady_decode_seqs == pytest.approx(preds.steady_decode_seqs)
+    assert res.op.running == pytest.approx(preds.steady_decode_seqs
+                                           + preds.prefill_duty)
+
+
+def test_the_first_warm_turn_is_marked_establishing_not_a_hit():
+    """Every request before it carried a salt AHEAD of the prefix, so the
+    prefix has never been cached and that request is a cold prefill."""
+    cfg, opts = small_cfg(), small_opts()
+    res = _run_shared(fake_server(), cfg, opts,
+                      shared_opts(rounds=2, lengths="0.5", warm_turns=2),
+                      budget(canary=False, abort_if_waiting=None,
+                             abort_if_kv_above=None, max_metrics_gaps=0))
+    kinds = [t.kind for t in res.sample.traces]
+    assert kinds.count("first") == 1          # exactly the run's opening warm
+    assert kinds[1] == "first" and kinds[2] == "hit"
+    # ...and it is in neither TTFT fit
+    rows = covariate_rows(res.sample.traces)
+    miss = [r for r in rows if r["kind"] == "miss"]
+    hit = [r for r in rows if r["kind"] == "hit"]
+    assert len(miss) + len(hit) == len(rows) - 1
+
+
+def test_verdict_sigmas_round_trips_into_the_report(capsys):
+    """It was read back with a hard-coded default of 3, so a run configured
+    with a different value printed a gate it had not used."""
+    cfg = RunConfig()
+    fits = build_fits(synth_rows(120, TRUE, noise=0.02, seed=91))
+    res = _result(fits, _at_centre(fits, cfg))
+    res.verdict_sigmas = 2.5
+    d = res.to_dict()
+    assert d["verdict_sigmas"] == 2.5
+    assert d["min_local_n"] == res.min_local_n
+    rec = RunRecord.new("0.0.0", mode="shared", config=cfg.to_dict(),
+                        predictions=predict(cfg, n_iter=64).to_dict(),
+                        options=small_opts().to_dict(),
+                        shared=json.loads(json.dumps(d)))
+    print_report(rec)
+    assert "+/-2.5 standard errors" in capsys.readouterr().out

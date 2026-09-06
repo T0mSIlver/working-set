@@ -259,6 +259,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="abort when KV occupancy exceeds this fraction "
                         f"({_b('abort_if_kv_above', 'g')}). Needs "
                         "--metrics-url")
+    g.add_argument("--max-gauge-age-s", type=float, metavar="S",
+                   help="a gauge reading older than S seconds is treated as a "
+                        "failed read (default: the sampler's own staleness "
+                        "rule, 3 scrape intervals + one timeout). Without "
+                        "this a dead sampler keeps handing back its last good "
+                        "snapshot and the rails never notice")
     g.add_argument("--max-metrics-gaps", type=int, metavar="N",
                    help="abort after N consecutive failed gauge reads once "
                         f"the sampler has been working ({_b('max_metrics_gaps')}"
@@ -317,6 +323,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a fitted verdict must not change within +/- K "
                         "standard errors of the fitted value, or the row stays "
                         f"not_established ({_s('verdict_sigmas', 'g')})")
+    g.add_argument("--min-local-n", type=int, metavar="N",
+                   help="observations required within --local-radius of the "
+                        "operating point in the load covariates "
+                        f"({_s('min_local_n')}). Without this a design that "
+                        "only ever saw two load levels can report the chord "
+                        "of a curve it never sampled the middle of")
+    g.add_argument("--local-radius", type=float, metavar="SD",
+                   help="radius of that neighbourhood, in standardised units "
+                        f"({_s('local_radius', 'g')})")
+    g.add_argument("--engine", metavar="ID",
+                   help="select ONE engine from a multi-engine /metrics dump. "
+                        "Required for a fit when several are exported: "
+                        "otherwise the request gauges are sums across engines "
+                        "while the operating point is per replica group, and "
+                        "KV occupancy cannot be combined at all")
     p.add_argument("--seed", type=int, help="probe RNG seed")
     p.add_argument("--no-ignore-eos", action="store_true",
                    help="drop the vLLM ignore_eos extension (strict OpenAI "

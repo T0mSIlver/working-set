@@ -62,7 +62,8 @@ def build_budget(args) -> ProbeBudget:
                          ("canary_baseline_s", "canary_baseline_s"),
                          ("canary_window_s", "canary_window_s"),
                          ("canary_drift", "canary_drift"),
-                         ("canary_min_n", "canary_min_n")):
+                         ("canary_min_n", "canary_min_n"),
+                         ("max_gauge_age_s", "max_gauge_age_s")):
         v = getattr(args, flag, None)
         if v is not None:
             kw[field_] = v
@@ -83,6 +84,8 @@ def build_shared(args) -> SharedOptions:
                          ("max_extrapolation_requests",
                           "max_extrapolation_requests"),
                          ("verdict_sigmas", "verdict_sigmas"),
+                         ("min_local_n", "min_local_n"),
+                         ("local_radius", "local_radius"),
                          ("seed", "seed")):
         v = getattr(args, flag, None)
         if v is not None:
@@ -99,7 +102,7 @@ def build_endpoint(args, cfg) -> EndpointSpec:
         api_key_env=getattr(args, "api_key_env", None))
 
 
-def open_metrics(url: str | None):
+def open_metrics(url: str | None, engine: str | None = None):
     """Duck-typed hand-off to `workingset.metrics.MetricsSampler`, built by a
     separate module. Only `at(t)` and `window(t0, t1)` are relied on; start /
     stop are called when they exist, and the constructor is tried positionally
@@ -110,10 +113,18 @@ def open_metrics(url: str | None):
         from .metrics import MetricsSampler        # type: ignore
     except Exception as e:
         raise SystemExit(f"--metrics-url needs workingset.metrics: {e}")
+    # `engine` picks ONE engine out of a multi-engine dump. Without it the
+    # request gauges are SUMS across engines while the operating point is per
+    # replica group, and occupancy cannot be combined at all -- see
+    # `SharedResult.reading`, which refuses the fit rather than compare two
+    # different units.
     try:
-        return MetricsSampler(url)
+        return MetricsSampler(url, engine=engine)
     except TypeError:
-        return MetricsSampler(url=url)
+        try:
+            return MetricsSampler(url=url, engine=engine)
+        except TypeError:
+            return MetricsSampler(url)
 
 
 async def _maybe(obj, *names):
@@ -158,7 +169,8 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
     sampler = None
     if args.metrics_url:
         try:
-            sampler = open_metrics(args.metrics_url)
+            sampler = open_metrics(args.metrics_url,
+                                   getattr(args, 'engine', None))
         except SystemExit:
             sampler = True          # unreachable module: the rails still bind
     w("\nPROBE BUDGET — the rails this run may not cross"
@@ -424,7 +436,7 @@ def cmd_test(args) -> int:
             print(f"  {h.key:<14} {reason}", file=sys.stderr)
         return 2
 
-    metrics = open_metrics(args.metrics_url)
+    metrics = open_metrics(args.metrics_url, getattr(args, 'engine', None))
     budget, sopts = build_budget(args), build_shared(args)
     try:
         rows, cached, bracket, interrupted, aborted = asyncio.run(

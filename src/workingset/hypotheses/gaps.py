@@ -136,16 +136,32 @@ def _g(x) -> str:
     return "-" if x is None or not _fin(x) else f"{x:.3g}"
 
 
-def _steady_pair(v: Verdict, pred_seqs) -> tuple:
-    """H-steady's shared-mode text. The speed half is the fitted decode rate
-    against the prediction; the BATCH half is not a separately measured mean
-    here — it is the extrapolation gate, which refuses the whole row unless
-    the endpoint was observed at ~the predicted concurrency."""
-    seqs = "-" if pred_seqs is None else f"{pred_seqs:g}"
-    return (v.status,
-            f"decode {v.text}, evaluated at the predicted decode batch "
-            f"(~{seqs} sequences); the batch half of the claim is carried by "
-            "the extrapolation gate, not by a measured batch mean")
+def _steady_capped(v: Verdict, pred_seqs, seqs) -> Verdict:
+    """H-steady in shared mode: the speed reading is PRINTED, the hypothesis
+    stays `not_established`.
+
+    The claim is a PAIR — "at this operating point the batch holds ~N
+    sequences AND each runs at ~V tok/s" — and the fit only ever tests the
+    second half, conditional on the first. It evaluates the decode rate AT a
+    stipulated N; it cannot show that the configured load PRODUCES N, because
+    a shared run never sets the load. An earlier version claimed the
+    extrapolation gate carried that half. It does not: the gate asks whether
+    the endpoint was ever OBSERVED near N, which is a different question from
+    whether this configuration's load would generate N, and it left the
+    measured batch out of the comparison entirely — batches of None, 2 and 200
+    against a predicted 20 all read `supported`.
+
+    So the row is capped, and says which half is missing and why.
+    """
+    want = "-" if pred_seqs is None else f"{pred_seqs:g}"
+    got = "not measured" if not _fin(seqs) else f"{seqs:.2f} measured"
+    return Verdict(
+        NOT_ESTABLISHED,
+        f"speed reading only: decode {v.text} when evaluated AT the predicted "
+        f"batch of ~{want} sequences ({got}). The other half of the claim — "
+        "that this load PRODUCES that batch — is not established: a shared run "
+        "does not set the load, so the batch it observed is the endpoint's, "
+        "not this configuration's. Only an exclusive run closes the pair")
 
 
 def _fit_verdict(m: Measurement, make, se_gate: bool = True) -> Verdict:
@@ -392,9 +408,15 @@ class HSteady(Hypothesis):
                            m.data.get("reason", "no decode samples"))
         src = m.data.get("source")
         if src == "shared":
-            return _fit_verdict(m, lambda v: Verdict(
-                *_steady_pair(ratio_verdict(v, pred.value, "decode"),
-                              m.data.get("predicted_seqs"))))
+            # the speed half still has to clear every fit gate before it is
+            # even printed as a number; the pair stays not_established either
+            # way (see `_steady_capped`)
+            inner = _fit_verdict(
+                m, lambda v: ratio_verdict(v, pred.value, "decode"))
+            if inner.status == NOT_ESTABLISHED:
+                return inner
+            return _steady_capped(inner, m.data.get("predicted_seqs"),
+                                  m.data.get("seqs"))
         v = ratio_verdict(m.value, pred.value, "decode")
         seqs, pred_seqs = m.data.get("seqs"), m.data.get("predicted_seqs")
         # a batch size is HALF the claim: without one, the run has tested the

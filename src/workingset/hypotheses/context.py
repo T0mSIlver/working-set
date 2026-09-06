@@ -289,7 +289,12 @@ class RunContext:
                 self.client, self.ep, self.cfg, self.opts, self.prefixes,
                 self.budget or ProbeBudget.conservative(),
                 self.shared_opts or SharedOptions(), self.metrics,
-                on_progress=self.on_progress)
+                on_progress=self.on_progress,
+                # THE RUN's predictions, priced with the operator's own
+                # --n-iter / --predict-seed. Re-deriving them inside the probe
+                # put the fit's operating point somewhere the rest of the
+                # report was never scored against.
+                predictions=self.predictions)
         return self._cache[key]
 
     async def shared_sample(self):

@@ -208,7 +208,7 @@ def sampler_now(metrics) -> float:
 # stale the reading is and which of its own requests the gauge can possibly
 # contain.
 COVARIATE_KEYS = ("requests_running", "requests_waiting", "kv_cache_usage",
-                  "t")
+                  "kv_cache_usage_max", "t", "age_s", "stale", "n_engines")
 
 
 def _covariates(metrics, t: float) -> dict | None:

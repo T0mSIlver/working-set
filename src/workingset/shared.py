@@ -120,6 +120,27 @@ MIN_OBS_FLOOR = 8
 MAX_VIF = 10.0
 MAX_SCALED_CONDITION = 1e4
 
+# LOCAL SUPPORT. Every gate above is about the design as a whole; none of them
+# asks whether there is evidence NEAR the point being evaluated. A two-level
+# design -- `running` only ever 0 or 10, 120 observations of a response that is
+# hyperbolic in load -- passes all of them (extrapolation 0 sd, max VIF 1.05,
+# scaled cond 1.26, se 0.002) and reads 7.54 s where the truth at running=5 is
+# 3.00 s. A straight line through the two ends of a convex curve is a chord,
+# and nothing global can see that.
+#
+#   MIN_LOCAL_N / LOCAL_RADIUS_SD  at least this many observations within this
+#       standardised radius of the evaluation point, measured over the LOAD
+#       columns only. The two-level design has 0 within 0.75 sd; a three-level
+#       one has 18 and a continuous one 22, so the gate separates them by more
+#       than an order of magnitude.
+#
+# The length columns are deliberately excluded from that neighbourhood: the
+# probe DESIGNS them (a deliberate ladder) and models their nonlinearity
+# explicitly with the quadratic, while the load columns are observational and
+# their curvature is exactly what is unmodelled.
+MIN_LOCAL_N = 3
+LOCAL_RADIUS_SD = 0.75
+
 # regressors measured in REQUESTS, where an extrapolation has an absolute
 # meaning as well as a relative one (see `CovariateFit.extrapolation`)
 REQUEST_COLUMNS = ("running", "waiting")
@@ -173,6 +194,8 @@ class SharedOptions:
     max_extrapolation: float = 1.0
     max_extrapolation_requests: float = MAX_EXTRAPOLATION_REQUESTS
     verdict_sigmas: float = 3.0
+    min_local_n: int = MIN_LOCAL_N
+    local_radius: float = LOCAL_RADIUS_SD
     seed: int = 0
 
     def length_fractions(self) -> list[float]:
@@ -231,6 +254,9 @@ class ProbeBudget:
     abort_if_waiting: float | None = 0.0
     abort_if_kv_above: float | None = 0.90
     max_metrics_gaps: int = 3
+    # None = trust the sampler's own `stale` flag, which it computes from its
+    # scrape interval; a number overrides it in seconds
+    max_gauge_age_s: float | None = None
     max_probe_tokens: int = 4_000_000
     canary: bool = True
     canary_every_s: float = 10.0
@@ -255,7 +281,8 @@ class ProbeBudget:
         trespass. The token budget and the canary go with them."""
         base = dict(max_extra_load=0, abort_if_waiting=None,
                     abort_if_kv_above=None, max_metrics_gaps=0,
-                    max_probe_tokens=0, canary=False, exclusive=True)
+                    max_gauge_age_s=None, max_probe_tokens=0, canary=False,
+                    exclusive=True)
         base.update(kw)
         return cls(**base)
 
@@ -279,8 +306,9 @@ class ProbeBudget:
                     "queue / KV     : not enforced",
                     "prompt tokens  : uncapped",
                     "canary         : off"]
-        gauge = ("" if metrics else "  [NOT ENFORCEABLE: no --metrics-url, so "
-                                    "the server's gauges are unreadable]")
+        gauge = ("" if _have_metrics(metrics)
+                 else "  [NOT ENFORCEABLE: no --metrics-url, so the server's "
+                      "gauges are unreadable]")
         tok = (f"{self.max_probe_tokens:,} intended prompt tokens for the "
                "whole run" if self.max_probe_tokens else "uncapped")
         return [
@@ -317,7 +345,8 @@ class ProbeBudget:
         scrape interval old. So the worst-case lag is the poll period plus the
         scrape interval, and the probe may send during it.
         """
-        iv = getattr(metrics, "interval", None) if metrics else None
+        iv = (getattr(metrics, "interval", None)
+              if _have_metrics(metrics) else None)
         if not isinstance(iv, (int, float)):
             return (f"gauges are read before each send and every "
                     f"{self.gauge_poll_s:g}s; the reading is up to one scrape "
@@ -375,8 +404,10 @@ class ProbeGovernor:
         # "lost" implies we had it, and a sampler's first scrape has not
         # landed when the probe's first request goes out.
         self.metrics_armed = False
-        self.metrics_gaps = 0             # consecutive failed reads
+        self.metrics_gaps = 0             # consecutive unusable reads
         self.max_metrics_gaps_seen = 0
+        self.last_metrics_gap = ""
+        self.n_engines = 0
         # our OWN in-flight requests, by the sampler-base instant each was
         # sent at. What the server's gauge says about them depends on whether
         # the scrape behind it predates them, which is what `own_after` uses
@@ -460,11 +491,45 @@ class ProbeGovernor:
         that never had metrics at all.
         """
         if not covariates:
-            self._note_metrics_gap()
+            self._note_metrics_gap("the sampler returned no reading")
+            return
+        # A STALE READING IS NOT A READING. `at()` hands back the last
+        # SUCCESSFUL snapshot however old it is, so a server that stops
+        # answering keeps producing a plausible-looking dict forever: the
+        # gap counter never advanced, the rails never fired, and a run with
+        # six consecutive failed scrapes recorded zero gaps.
+        age, lim = covariates.get("age_s"), self.budget.max_gauge_age_s
+        stale = bool(covariates.get("stale"))
+        if lim is not None and _fin(age):
+            stale = age > lim
+        if stale:
+            self._note_metrics_gap(
+                f"the newest snapshot is {age:.1f}s old" if _fin(age)
+                else "the newest snapshot is stale")
+            return
+        # a rail that is ON but whose gauge is absent is not a rail that
+        # passed — it is a rail that could not be evaluated
+        missing = [name for name, on, key in
+                   (("requests_waiting", self.budget.abort_if_waiting,
+                     "requests_waiting"),
+                    ("kv_cache_usage", self.budget.abort_if_kv_above,
+                     "kv_cache_usage"))
+                   if on is not None
+                   and covariates.get(key) is None
+                   and covariates.get(key + "_max") is None]
+        if missing:
+            self._note_metrics_gap(
+                f"{', '.join(missing)} is not readable, so the rail keyed on "
+                "it cannot be evaluated"
+                + (" (several engines are exported and none was selected — "
+                   "pass --engine)" if (covariates.get("n_engines") or 0) > 1
+                   else ""))
             return
         self.metrics_armed = True
         self.metrics_gaps = 0
         self.n_gauge_checks += 1
+        self.n_engines = max(self.n_engines,
+                             int(covariates.get("n_engines") or 0))
         w = covariates.get("requests_waiting")
         if w is not None and math.isfinite(w):
             self.peak_waiting = w if self.peak_waiting is None \
@@ -476,34 +541,54 @@ class ProbeGovernor:
                     f"(--abort-if-waiting {lim:g}): somebody else is already "
                     "queueing behind this endpoint",
                     requests_waiting=w, limit=lim)
+        # PER ENGINE, worst first. An unselected multi-engine dump cannot
+        # combine occupancy into one number at all (`combine_gauge` returns
+        # None for a fraction across engines, deliberately — summing them
+        # would report "140% full"), so keying the rail on the combined gauge
+        # disabled it exactly where it was most needed: two engines at 20%
+        # and 99% read as None and nothing fired.
         kv = covariates.get("kv_cache_usage")
-        if kv is not None and math.isfinite(kv):
-            self.peak_kv = kv if self.peak_kv is None else max(self.peak_kv, kv)
+        kv_max = covariates.get("kv_cache_usage_max")
+        worst = max((v for v in (kv, kv_max)
+                     if v is not None and math.isfinite(v)), default=None)
+        if worst is not None:
+            self.peak_kv = worst if self.peak_kv is None \
+                else max(self.peak_kv, worst)
             lim = self.budget.abort_if_kv_above
-            if lim is not None and kv > lim:
+            if lim is not None and worst > lim:
+                per_engine = ("" if kv is not None else
+                              " (the worst of several engines; the combined "
+                              "gauge is undefined without --engine)")
                 self._abort(
-                    f"KV occupancy reached {kv:.1%} (--abort-if-kv-above "
-                    f"{lim:.1%}): the pool is close to evicting somebody "
-                    "else's session",
-                    kv_cache_usage=kv, limit=lim)
+                    f"KV occupancy reached {worst:.1%}{per_engine} "
+                    f"(--abort-if-kv-above {lim:.1%}): the pool is close to "
+                    "evicting somebody else's session",
+                    kv_cache_usage=worst, limit=lim)
 
-    def _note_metrics_gap(self) -> None:
-        """A gauge read that came back with nothing, when one was expected."""
+    def _note_metrics_gap(self, why: str = "") -> None:
+        """A gauge read that could not be USED, when one was expected.
+
+        Not just an empty dict: a stale snapshot and an unreadable rail gauge
+        are both readings the rails cannot act on, and counting only the empty
+        case is what let a dead sampler look healthy.
+        """
         if not self.metrics_expected or not self.metrics_armed:
             return
         self.metrics_gaps += 1
         self.max_metrics_gaps_seen = max(self.max_metrics_gaps_seen,
                                          self.metrics_gaps)
+        if why:
+            self.last_metrics_gap = why
         limit = self.budget.max_metrics_gaps
         if limit and self.metrics_gaps > limit:
             self._abort(
                 f"metrics_lost: {self.metrics_gaps} consecutive gauge reads "
-                f"failed after the sampler had been working "
-                f"(--max-metrics-gaps {limit}). The queue and KV rails cannot "
-                "fire without it, so the probe stops rather than run blind on "
-                "somebody else's endpoint",
+                f"were unusable after the sampler had been working "
+                f"({why or 'no reading'}; --max-metrics-gaps {limit}). The "
+                "queue and KV rails cannot fire without them, so the probe "
+                "stops rather than run blind on somebody else's endpoint",
                 consecutive_failures=self.metrics_gaps, limit=limit,
-                kind="metrics_lost")
+                detail_why=why, kind="metrics_lost")
 
     # ---- the canary ------------------------------------------------------
     def note_canary(self, t_send: float, ttft: float | None) -> None:
@@ -572,6 +657,8 @@ class ProbeGovernor:
                 "metrics_expected": self.metrics_expected,
                 "metrics_armed": self.metrics_armed,
                 "max_consecutive_metrics_gaps": self.max_metrics_gaps_seen,
+                "last_metrics_gap": self.last_metrics_gap,
+                "n_engines": self.n_engines,
                 "peak_requests_waiting": self.peak_waiting,
                 "peak_kv_cache_usage": self.peak_kv,
                 "peak_probe_in_flight": self.peak_in_flight,
@@ -634,6 +721,12 @@ class CovariateFit:
     ranges: dict = field(default_factory=dict)
     refused: str | None = None
     _cov: tuple = field(default=(), repr=False)      # (X'X)^-1, row-major
+    # the design AS FITTED, kept so the local-support and curvature checks can
+    # ask questions about the neighbourhood of an evaluation point. Excluded
+    # from `to_dict`: the traces are already in the record and this is a
+    # derived view of them.
+    _X: tuple = field(default=(), repr=False)        # row-major
+    _y: tuple = field(default=(), repr=False)
 
     # ---- use -------------------------------------------------------------
     @property
@@ -758,6 +851,90 @@ class CovariateFit:
             out[c] = {"sd": sd_d, "absolute": dist, "above": over > 0,
                       "value": v}
         return out
+
+    # ---- is there evidence NEAR the point? -------------------------------
+    def _design(self) -> np.ndarray | None:
+        if not self._X:
+            return None
+        return np.array(self._X, dtype=float).reshape(self.n, len(self.columns))
+
+    def local_support(self, point: dict,
+                      radius: float = LOCAL_RADIUS_SD) -> int:
+        """Observations within `radius` standardised units of `point`, over the
+        LOAD columns only.
+
+        Euclidean in the standardised load space. Zero means the fit has no
+        evidence at all about the neighbourhood it is being asked to report
+        on, whatever its global statistics say.
+        """
+        X = self._design()
+        if X is None:
+            return 0
+        idx = [(i, c) for i, c in enumerate(self.columns)
+               if c in REQUEST_COLUMNS]
+        if not idx:
+            return self.n
+        want = self._row(point)
+        d2 = np.zeros(X.shape[0])
+        for i, c in idx:
+            sd = (self.ranges.get(c) or {}).get("sd") or 0.0
+            if sd <= 0:
+                return 0
+            d2 += ((X[:, i] - want[i]) / sd) ** 2
+        return int((d2 <= radius * radius).sum())
+
+    def curvature_disagreement(self, point: dict) -> tuple:
+        """(|linear - curved| at `point`, the 1-sigma band, note).
+
+        Refits with a QUADRATIC term in each load column and compares the two
+        predictions. The linear model is an approximation to whatever the
+        server's real response is; this asks the data whether that
+        approximation holds where it is being read.
+
+        `note` is non-empty when the comparison could not be made — most
+        importantly when the augmented design is rank-deficient, which is what
+        a two-level load design gives: with `running` taking only two values,
+        `running^2` is an exact linear function of `running`, so the curvature
+        is UNIDENTIFIABLE and a straight line cannot be shown to be right. The
+        honest answer there is "cannot tell", not "no curvature found".
+
+        Returns (nan, nan, note) when it cannot run.
+        """
+        X = self._design()
+        if X is None or not self.usable:
+            return float("nan"), float("nan"), "the fitted design was not kept"
+        load = [i for i, c in enumerate(self.columns) if c in REQUEST_COLUMNS]
+        if not load:
+            return 0.0, float("inf"), ""      # no load axis to bend
+        y = np.array(self._y, dtype=float)
+        x0 = self._row(point)
+        extra = np.column_stack([X[:, i] ** 2 for i in load])
+        Xq = np.hstack([X, extra])
+        xq = np.concatenate([x0, np.array([x0[i] ** 2 for i in load])])
+        k = Xq.shape[1]
+        if np.linalg.matrix_rank(Xq) < k:
+            names = ", ".join(self.columns[i] for i in load)
+            return (float("nan"), float("nan"),
+                    f"curvature in ({names}) is unidentifiable: the probed "
+                    f"load took too few distinct values for a quadratic term "
+                    f"to exist, so a straight line through it cannot be shown "
+                    f"to be the right shape")
+        if len(y) <= k:
+            return (float("nan"), float("nan"),
+                    f"n={len(y)} leaves no residual for a {k}-coefficient "
+                    "curvature check")
+        bq, *_ = np.linalg.lstsq(Xq, y, rcond=None)
+        rq = y - Xq @ bq
+        s2 = float(rq @ rq) / (len(y) - k)
+        try:
+            covq = np.linalg.inv(Xq.T @ Xq)
+        except np.linalg.LinAlgError:
+            return float("nan"), float("nan"), "the curvature refit is singular"
+        seq = math.sqrt(max(s2 * float(xq @ covq @ xq), 0.0))
+        gap = abs(self.predict(point) - float(xq @ bq))
+        se_lin = self.predict_se(point)
+        band = math.sqrt(max(se_lin, 0.0) ** 2 + seq ** 2)
+        return gap, band, ""
 
     def over_absolute(self, point: dict, limit: float) -> dict:
         """Columns measured in REQUESTS whose absolute distance outside the
@@ -960,6 +1137,8 @@ def fit_covariates(rows: list[dict], columns=TTFT_COLUMNS, target: str = "y",
         cov_flat = ()
     return CovariateFit(**base, dof=dof, residual_std=resid_std, r_squared=r2,
                         _cov=cov_flat,
+                        _X=tuple(float(v) for v in X.reshape(-1)),
+                        _y=tuple(float(v) for v in y),
                         coefficients={c: float(b)
                                       for c, b in zip(columns, beta)})
 
@@ -1197,11 +1376,22 @@ async def cross_check(metrics, t0: float, t1: float,
     Returns None with no sampler; a dict with `"error"` when the window could
     not be covered, which is itself the finding.
 
-    PROXY OVERHEAD is `client - server` on the same quantile: the client
-    measures TTFT from POST to first byte on the wire, the server's histogram
-    from admission to first token. The difference is the proxy, the network
-    and the client's own event loop, and it is the number that says whether a
-    client-side TTFT can be read as a server-side one at all.
+    CLIENT AND SERVER QUANTILES ARE OVER DIFFERENT POPULATIONS, and the
+    difference between them is reported as exactly that — not as a per-request
+    overhead. The client quantile is over the probe's own requests; the
+    server's histogram covers every request that finished a prefill in the
+    window, which on a shared endpoint is mostly somebody else's traffic (and
+    our canaries). Calling the gap "proxy overhead" would attribute to the
+    network a difference that is mostly a difference in what was measured: the
+    background mix is not the probe's prompt-length ladder, so the two
+    quantiles are not comparable request-for-request.
+
+    A MATCHED measurement needs the same requests on both sides. The nearest
+    thing available is the canary — one byte-stable 1-token prompt, so its
+    server-side prefill is near-constant — but only in a window containing
+    nothing but canaries, which this probe never produces. `--exclusive` does:
+    there the server histogram IS our traffic, and the difference is a real
+    overhead. That is stated rather than papered over.
 
     FORCED MISSES are confirmed two ways: the window's `prefix_hit_rate`
     (over ALL traffic, ours and theirs — a shared endpoint cannot attribute
@@ -1232,13 +1422,18 @@ async def cross_check(metrics, t0: float, t1: float,
     out["client_ttft_p95_s"] = pct([t.ttft for t in ok], 95)
     out["client_itl_p50_ms"] = pct([t.itl_p50 * 1e3 for t in ok
                                     if t.itl_p50 is not None], 50)
+    # UNATTRIBUTED: the two quantiles are over different request
+    # populations (see the docstring), so the gap is reported as a gap
+    out["n_client_requests"] = len(ok)
+    out["populations_matched"] = False
     for q in ("p50", "p95"):
-        s, c = out.get(f"server_ttft_{q}_s"), out.get(f"client_ttft_{q}_s")
-        out[f"proxy_overhead_ttft_{q}_s"] = (c - s if _fin(s) and _fin(c)
+        sv, cv = out.get(f"server_ttft_{q}_s"), out.get(f"client_ttft_{q}_s")
+        out[f"ttft_{q}_client_minus_server_s"] = (cv - sv if _fin(sv)
+                                                  and _fin(cv)
+                                                  else float("nan"))
+    sv, cv = out.get("server_itl_p50_ms"), out.get("client_itl_p50_ms")
+    out["itl_p50_client_minus_server_ms"] = (cv - sv if _fin(sv) and _fin(cv)
                                              else float("nan"))
-    s, c = out.get("server_itl_p50_ms"), out.get("client_itl_p50_ms")
-    out["proxy_overhead_itl_p50_ms"] = (c - s if _fin(s) and _fin(c)
-                                        else float("nan"))
     # did the forced misses actually miss?
     readback = [t for t in miss
                 if t.cached_tokens is not None and t.ptok_achieved]
@@ -1293,7 +1488,13 @@ class SharedResult:
     max_extrapolation: float = 1.0
     max_extrapolation_requests: float = MAX_EXTRAPOLATION_REQUESTS
     verdict_sigmas: float = 3.0
+    min_local_n: int = MIN_LOCAL_N
+    local_radius: float = LOCAL_RADIUS_SD
     probe_in_flight_bound: int = 0
+    # what the sampler said about the shape of the deployment behind the
+    # gauges; a multi-engine dump with no engine selected is not fittable
+    n_engines: int = 0
+    engine_selected: str | None = None
     ladder: list = field(default_factory=list)
     windows: list = field(default_factory=list)
     cross: dict | None = None
@@ -1321,6 +1522,10 @@ class SharedResult:
                 "max_extrapolation": self.max_extrapolation,
                 "max_extrapolation_requests": self.max_extrapolation_requests,
                 "verdict_sigmas": self.verdict_sigmas,
+                "min_local_n": self.min_local_n,
+                "local_radius": self.local_radius,
+                "local_n": 0, "curvature_gap": float("nan"),
+                "curvature_band": float("nan"),
                 "extrapolating_upward": [], "upward_bias": None,
                 "at": self.op.to_dict(), "fit": None}
         if fit is None:
@@ -1330,6 +1535,19 @@ class SharedResult:
         base["n"] = fit.n
         if not fit.usable:
             base["reason"] = fit.refused
+            return base
+        # GATE 0, units. An unselected multi-engine dump SUMS request counts
+        # across engines, while the operating point is priced PER REPLICA
+        # GROUP: two engines running 2 and 8 stamp `running` = 10 against a
+        # prediction of ~17 for one of them. The regressor and the evaluation
+        # point are then in different units, which no amount of fitting fixes.
+        if self.n_engines > 1 and not self.engine_selected:
+            base["reason"] = (
+                f"the endpoint exports {self.n_engines} engines and none was "
+                "selected, so `running`/`waiting` are SUMS across all of them "
+                "while the operating point is priced per replica group — the "
+                "regressor and the evaluation point are in different units. "
+                "Pass --engine to pick one")
             return base
         if self.op.refused:
             base["reason"] = self.op.refused
@@ -1365,6 +1583,36 @@ class SharedResult:
                 f"--max-extrapolation-requests "
                 f"{self.max_extrapolation_requests:g}")
             return base
+        # GATE 3, local support: every gate so far is about the design as a
+        # WHOLE. None of them asks whether there is evidence near the point
+        # being read — and a design with none can pass all of them while
+        # reporting the chord of a curve it never sampled the middle of.
+        n_local = fit.local_support(point, self.local_radius)
+        base["local_n"], base["local_radius"] = n_local, self.local_radius
+        if n_local < self.min_local_n:
+            base["reason"] = (
+                f"only {n_local} of {fit.n} observations lie within "
+                f"{self.local_radius:g} standardised units of the operating "
+                f"point in ({', '.join(REQUEST_COLUMNS)}), below "
+                f"--min-local-n {self.min_local_n}. The fit is interpolating "
+                "across a gap it never sampled, and a straight line drawn "
+                "between two clusters is a chord, not a reading")
+            return base
+        # GATE 4, is a straight line the right shape here? The linear model is
+        # an approximation; this asks the data whether it holds locally.
+        gap, band, note = fit.curvature_disagreement(point)
+        base["curvature_gap"], base["curvature_band"] = gap, band
+        if note:
+            base["reason"] = note
+            return base
+        if _fin(gap) and _fin(band) and gap > self.verdict_sigmas * band:
+            base["reason"] = (
+                f"adding curvature in the load moves the reading by {gap:.4g} "
+                f"{fit.unit}, more than {self.verdict_sigmas:g}x the "
+                f"{band:.4g} the two fits agree to: over the probed range the "
+                "response is not straight, so a linear reading of it is not a "
+                "measurement of the operating point")
+            return base
         base["available"] = True
         base["value"] = fit.predict(point)
         base["se"] = fit.predict_se(point)
@@ -1386,7 +1634,12 @@ class SharedResult:
                 "operating_point": self.op.to_dict(),
                 "max_extrapolation": self.max_extrapolation,
                 "max_extrapolation_requests": self.max_extrapolation_requests,
+                "verdict_sigmas": self.verdict_sigmas,
+                "min_local_n": self.min_local_n,
+                "local_radius": self.local_radius,
                 "probe_in_flight_bound": self.probe_in_flight_bound,
+                "n_engines": self.n_engines,
+                "engine_selected": self.engine_selected,
                 "natural_ladder": [_clean_row(r) for r in self.ladder],
                 "windows": self.windows, "cross_check": self.cross,
                 "governor": self.governor, "aborted": self.aborted,
@@ -1422,9 +1675,14 @@ def covariate_rows(traces: list) -> list[dict]:
         running = cov.get("running_adjusted")
         if running is None:
             running = cov.get("requests_running")
+        # the decode fits share the batch WITH this request; the TTFT fits are
+        # about what was already there when it arrived (see `_stamp_own_load`)
+        running_decode = cov.get("running_adjusted_incl_self")
+        if running_decode is None:
+            running_decode = running
         rows.append({
             "kind": t.kind, "L_ktok": l_ktok, "L_ktok2": l_ktok * l_ktok,
-            "running": running,
+            "running": running, "running_decode": running_decode,
             "running_reported": cov.get("requests_running"),
             "probe_open_after_scrape": cov.get("probe_open_after_scrape"),
             "waiting": cov.get("requests_waiting"),
@@ -1466,8 +1724,18 @@ def build_fits(rows: list[dict]) -> dict:
                   `running` — which is exactly what the extrapolation gate
                   enforces.
     """
-    miss = [r for r in rows if r["kind"] in ("miss", "first")]
+    # "first" is EXCLUDED from both TTFT fits. The probe's first warm turn is
+    # not a warm turn: every request before it was salted, so the shared
+    # prefix has never been cached at a block boundary and that request is a
+    # cold prefill wearing a "hit" label. It is not a clean forced miss at a
+    # designed length either, so it belongs to neither — while still counting
+    # for the ITL and decode fits, which are about how it streamed, and for
+    # the spike evidence, which is about the prefill it caused.
+    miss = [r for r in rows if r["kind"] == "miss"]
     hit = [r for r in rows if r["kind"] == "hit"]
+    # the decode-side fits regress on the batch this request was PART of
+    load = [{**r, "running": r.get("running_decode", r["running"])}
+            for r in rows]
     fits = {}
     fits["ttft_miss"] = fit_covariates(
         [{**r, "y": r["ttft"]} for r in miss], TTFT_COLUMNS,
@@ -1476,10 +1744,10 @@ def build_fits(rows: list[dict]) -> dict:
         [{**r, "y": r["ttft"]} for r in hit], TTFT_COLUMNS,
         target="warm-hit TTFT", unit="s")
     fits["itl"] = fit_covariates(
-        [{**r, "y": r["itl_ms"]} for r in rows], LOAD_COLUMNS,
+        [{**r, "y": r["itl_ms"]} for r in load], LOAD_COLUMNS,
         target="normal inter-token gap", unit="ms")
     fits["decode"] = fit_covariates(
-        [{**r, "y": r["decode_tok_s"]} for r in rows], LOAD_COLUMNS,
+        [{**r, "y": r["decode_tok_s"]} for r in load], LOAD_COLUMNS,
         target="freeze-excluded decode rate", unit="tok/s")
     return fits
 
@@ -1520,13 +1788,11 @@ async def _one(client, ep, opts, gov: ProbeGovernor, metrics, traces: list,
         tr = RequestTrace(uid=900_001, is_sub=False, kind=kind,
                           t_send=time.monotonic(), ptok_intended=intended)
         traces.append(tr)
+        # BEFORE registering this request, so it does not count ITSELF.
+        # `own` is how many OTHER requests of ours were open and sent after
+        # the snapshot behind the gauge, so the gauge provably missed them.
+        own = gov.own_after(snap.get("t") if snap else None)
         async with gov.in_flight(t_wall):
-            # AT SEND TIME, not after: how many of OUR requests were already
-            # open and sent after the snapshot behind the gauge, so the gauge
-            # provably cannot contain them. Counted here because the set
-            # changes while the request streams; applied to the trace once
-            # `send_request` has stamped its covariates on it.
-            own = gov.own_after(snap.get("t") if snap else None)
             await send_request(client, ep, opts, prompt, tr, max_tokens,
                                metrics)
             _stamp_own_load(tr, own)
@@ -1538,10 +1804,22 @@ def _stamp_own_load(tr: RequestTrace, own: int) -> None:
 
     `running` as the server reports it is background traffic plus however many
     of ours the scrape behind it happened to catch. `own` is the part it
-    provably missed, and `running_adjusted` is the total the request actually
-    faced — a consistently defined regressor, which is what an OLS coefficient
-    needs. The remaining ambiguity is bounded by the in-flight cap and is
-    reported with the fit.
+    provably missed, and the adjusted totals below are consistently defined
+    regressors, which is what an OLS coefficient needs. The residual ambiguity
+    is bounded by the in-flight cap and is reported with the fit.
+
+    TWO adjusted counts, because the two fits ask different questions and the
+    difference is exactly one request — this one:
+
+      `running_adjusted`            EXCLUDES the request being measured. Its
+          TTFT is set by the work already in the server when it ARRIVES, and
+          the operating point it is compared against is a stationary
+          population average, which by PASTA is what an arrival sees and does
+          not include itself. Counting it inflated every TTFT covariate by one
+          request against a prediction that never had it.
+      `running_adjusted_incl_self`  INCLUDES it. A decoding request is one of
+          the sequences sharing the batch, and `steady_decode_point` prices
+          the per-user rate AT a batch of n that the request is part of.
     """
     cov = tr.covariates
     if not cov:
@@ -1550,6 +1828,7 @@ def _stamp_own_load(tr: RequestTrace, own: int) -> None:
     r = cov.get("requests_running")
     if r is not None and _fin(r):
         cov["running_adjusted"] = float(r) + own
+        cov["running_adjusted_incl_self"] = float(r) + own + 1.0
 
 
 async def _canary_loop(client, ep, opts, gov: ProbeGovernor, metrics,
@@ -1587,8 +1866,8 @@ async def _watchdog(gov: ProbeGovernor, metrics, stop: asyncio.Event) -> None:
 
 
 async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
-                     sopts: SharedOptions, metrics=None,
-                     on_progress=None) -> SharedResult:
+                     sopts: SharedOptions, metrics=None, on_progress=None,
+                     predictions=None) -> SharedResult:
     """The shared-endpoint probe: a prompt-length ladder of forced misses and
     warm turns, every request stamped with the load the server was carrying,
     all of it under `budget`.
@@ -1596,6 +1875,12 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
     Raises `BudgetAbort` when a rail trips; the exception carries the partial
     `SharedResult` on `.result`, so the run record can still say what was
     measured before the stop.
+
+    `predictions` is the RUN's own `Predictions`, priced with the settings the
+    operator asked for (`--n-iter`, `--predict-seed`). It is threaded through
+    rather than recomputed: a second `predict()` at a cheaper iteration count
+    put the operating point at a different place from the one every other row
+    in the report was scored against (16.79 vs 16.48 decode sequences).
     """
     on_progress = on_progress or (lambda *_a, **_k: None)
     wl = cfg.workload
@@ -1638,6 +1923,13 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
             # warm turns: the SAME byte-stable prefix and a growing history,
             # so the server's prefix cache is what answers them
             for _ in range(max(0, sopts.warm_turns)):
+                # ...except the FIRST one, and the first after each history
+                # reset: every request before it carried a salt AHEAD of the
+                # prefix, so the prefix has never been cached at a block
+                # boundary and this request is a cold prefill. It ESTABLISHES
+                # the cached run rather than reading it, exactly as a session's
+                # opening turn does, and `eval_sample` and the TTFT fits both
+                # exclude "first" for that reason.
                 if len(warm_history) / cpt > 0.5 * cap:
                     # a --shared-ladder run cycles for minutes; an unbounded
                     # history would walk the warm turn up to the context cap
@@ -1645,9 +1937,11 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
                     # expensive. The session restarts instead, which is also
                     # what a real agentic session does at its cap.
                     warm_history = ""
+                establishing = not warm_history
                 warm_history += "\n" + make_text(rng, wl.warm_turn_tokens, cpt)
                 await _one(client, ep, opts, gov, metrics, traces,
-                           prefixes.user + "\n" + warm_history, "hit",
+                           prefixes.user + "\n" + warm_history,
+                           "first" if establishing else "hit",
                            wl.max_output_tokens, cpt)
             # ONE window per round, over the round's OWN requests: a window
             # is a comparison between the client's view and the server's over
@@ -1679,7 +1973,8 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
     overall = await cross_check(metrics, t_start, sampler_now(metrics),
                                 [t for t in traces if t.kind != "canary"])
     result = _assemble(cfg, opts, sopts, gov, traces, windows, lengths,
-                       overall=overall)
+                       preds=predictions, overall=overall,
+                       engine=getattr(metrics, "engine", None))
     if abort is not None:
         result.aborted = abort.reason
         abort.result = result
@@ -1688,7 +1983,7 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
 
 
 def _assemble(cfg, opts, sopts, gov, traces, windows, lengths, preds=None,
-              overall=None) -> SharedResult:
+              overall=None, engine=None) -> SharedResult:
     """Turn the traces into fits, an operating point, a ladder and a Sample.
 
     Pure apart from `predict`, so a test can hand it synthetic traces.
@@ -1703,6 +1998,9 @@ def _assemble(cfg, opts, sopts, gov, traces, windows, lengths, preds=None,
 
     probe_traces = [t for t in traces if t.kind != "canary"]
     scored = covariate_rows(probe_traces)
+    # the RUN's predictions, not a cheaper re-derivation of them: the
+    # operating point this fit is evaluated at must be the same one the rest
+    # of the report was scored against
     preds = preds if preds is not None else predict(cfg, n_iter=64, seed=0)
     fits = build_fits(scored)
     op = operating_point_covariates(cfg, preds)
@@ -1722,7 +2020,9 @@ def _assemble(cfg, opts, sopts, gov, traces, windows, lengths, preds=None,
         fits=fits, op=op, max_extrapolation=sopts.max_extrapolation,
         max_extrapolation_requests=sopts.max_extrapolation_requests,
         verdict_sigmas=sopts.verdict_sigmas,
+        min_local_n=sopts.min_local_n, local_radius=sopts.local_radius,
         probe_in_flight_bound=gov.budget.max_extra_load,
+        n_engines=gov.n_engines, engine_selected=engine,
         ladder=ladder, windows=windows, governor=gov.to_dict(), cross=overall,
         n_covariate_rows=sum(1 for r in scored
                              if r.get("running") is not None),
@@ -1792,6 +2092,11 @@ def plan_lines(cfg, opts, sopts: SharedOptions, budget: ProbeBudget,
         f"(--max-extrapolation-requests), and must survive "
         f"+/-{sopts.verdict_sigmas:g} standard errors of the fitted value "
         f"(--verdict-sigmas)",
+        f"local gate     : at least {sopts.min_local_n} observation(s) within "
+        f"{sopts.local_radius:g} standardised units of the operating point in "
+        f"({', '.join(REQUEST_COLUMNS)}) (--min-local-n), and adding curvature "
+        "to the load must not move the reading beyond the two fits' agreement "
+        "— a straight line between two clusters is a chord, not a reading",
         f"own load       : the probe adds at most "
         f"{budget.max_extra_load or 'unbounded'} request(s) of its own; the "
         "part of that the server's gauge already counted is resolved against "
@@ -1825,6 +2130,18 @@ def plan_lines(cfg, opts, sopts: SharedOptions, budget: ProbeBudget,
 # ============================================================================
 # small helpers
 # ============================================================================
+def _have_metrics(metrics) -> bool:
+    """Is there a sampler at all?
+
+    NOT plain truthiness. `MetricsSampler.__len__` is its snapshot count, so a
+    sampler that has not scraped yet is FALSEY — and `--dry-run` constructs one
+    without starting it, which made the dry run announce the gauge rails as
+    unenforceable on every run that had `--metrics-url` set. `False` is still
+    accepted as "none", for callers that pass a flag rather than the object.
+    """
+    return metrics is not None and metrics is not False
+
+
 def _fin(x) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool) \
         and math.isfinite(x)
