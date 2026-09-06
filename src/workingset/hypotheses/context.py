@@ -125,7 +125,7 @@ class RunContext:
     def __init__(self, cfg, predictions, opts, ep, client=None, metrics=None,
                  exclusive: bool = False, burst: int = 0,
                  burst_users: int = 0, probes=frozenset(),
-                 on_progress=None):
+                 on_progress=None, budget=None, shared_opts=None):
         self.cfg = cfg
         self.predictions = predictions
         self.opts = opts
@@ -135,6 +135,11 @@ class RunContext:
         self.exclusive = exclusive
         self.burst_n = burst
         self.burst_users = burst_users
+        # shared-endpoint mode: the safety rails and the fit's shape. Built by
+        # `test_cmd` from the flags; defaulted here so a hand-made context
+        # (a test, a replay) still runs.
+        self.budget = budget
+        self.shared_opts = shared_opts
         # THE PLAN's probe set, not a per-hypothesis decision. A hypothesis
         # asks what exists; it never starts a probe the plan did not print.
         self.probes = frozenset(probes)
@@ -188,6 +193,12 @@ class RunContext:
         return ("sample", self._identity(), self.opts.sample_requests,
                 self.opts.sample_warm_turns)
 
+    def _shared_key(self) -> tuple:
+        so = self.shared_opts
+        return ("shared", self._identity(),
+                None if so is None else (so.lengths, so.rounds, so.warm_turns,
+                                         so.ladder, so.duration_s, so.seed))
+
     def _burst_pop(self) -> int:
         """Standing load for the burst. ONE definition: --burst-users, else
         the operating point the B* prediction was priced at, else half the
@@ -201,7 +212,8 @@ class RunContext:
     def _burst_key(self) -> tuple:
         return ("burst", self._identity(), self.burst_n, self._burst_pop())
 
-    def seed(self, rungs=None, sample=None, burst=None) -> "RunContext":
+    def seed(self, rungs=None, sample=None, burst=None,
+             shared=None) -> "RunContext":
         """Pre-fill the cache with probe results measured elsewhere — a replay
         of a stored run, or a synthetic fixture. A seeded probe is never
         re-run."""
@@ -211,6 +223,8 @@ class RunContext:
             self._cache[self._sample_key()] = sample
         if burst is not None:
             self._cache[self._burst_key()] = burst
+        if shared is not None:
+            self._cache[self._shared_key()] = shared
         return self
 
     # ---- probes, cached by parameters ----------------------------------
@@ -257,6 +271,33 @@ class RunContext:
                 self.metrics)
         return self._cache[key]
 
+    async def shared(self):
+        """The shared-endpoint probe (`workingset.shared.run_shared`), cached.
+
+        Raises `BudgetAbort` when a safety rail trips; the exception carries
+        the partial result, and `test_cmd` turns it into a run record and a
+        non-zero exit. A frozen context (after an interrupt) never starts one.
+        """
+        from ..shared import ProbeBudget, SharedOptions, run_shared
+
+        key = self._shared_key()
+        if key not in self._cache:
+            if self.frozen:
+                return None
+            self.on_progress("shared", self.shared_opts)
+            self._cache[key] = await run_shared(
+                self.client, self.ep, self.cfg, self.opts, self.prefixes,
+                self.budget or ProbeBudget.conservative(),
+                self.shared_opts or SharedOptions(), self.metrics,
+                on_progress=self.on_progress)
+        return self._cache[key]
+
+    async def shared_sample(self):
+        """The `Sample` the shared probe produced — the same object the plain
+        cheap probe returns, so every existing reader is unchanged."""
+        res = await self.shared()
+        return None if res is None else res.sample
+
     async def burst(self) -> BurstResult | None:
         pop = self._burst_pop()
         key = self._burst_key()
@@ -271,7 +312,7 @@ class RunContext:
 
     def cached(self) -> dict:
         """Everything measured so far, for the run record."""
-        out = {"rungs": [], "sample": None, "burst": None}
+        out = {"rungs": [], "sample": None, "burst": None, "shared": None}
         for key, val in self._cache.items():
             if key[0] == "ladder":
                 out["rungs"] = [r.to_dict() for r in val.rungs]
@@ -279,4 +320,11 @@ class RunContext:
                 out["sample"] = val.to_dict()
             elif key[0] == "burst":
                 out["burst"] = val.to_dict()
+            elif key[0] == "shared":
+                # the shared probe's Sample fills the `sample` slot, so the
+                # report's SAMPLE PROBE block prints for a shared run exactly
+                # as it always did; the fit lands in its own block
+                out["shared"] = val.to_dict()
+                if val.sample is not None:
+                    out["sample"] = val.sample.to_dict()
         return out

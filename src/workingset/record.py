@@ -31,6 +31,11 @@ class RunRecord:
     rungs: list = field(default_factory=list)
     sample: dict | None = None
     burst: dict | None = None
+    # shared-endpoint mode: the safety rails and what they spent, the
+    # covariate fits with their coefficients / n / residuals / condition
+    # number, the operating point they were evaluated at, the natural ladder
+    # and the server-side cross-check. Present only for a shared run.
+    shared: dict | None = None
     hypotheses: list = field(default_factory=list)
     skipped: list = field(default_factory=list)
     not_established: list = field(default_factory=list)
@@ -104,8 +109,8 @@ def _json_default(o):
 # ============================================================================
 def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
                           burst=None, hypotheses=None, exclusive: bool = False,
-                          metrics: bool = False,
-                          interrupted: bool = False) -> list[str]:
+                          metrics: bool = False, interrupted: bool = False,
+                          shared: dict | None = None) -> list[str]:
     """Built from what the run MEASURED, not from what it planned.
 
     The first cut of this list read the plan's booleans: a sample whose every
@@ -157,13 +162,7 @@ def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
             f"{sample.get('n', 0)} requests: the level and gap rows below "
             "rest on nothing. Fix the endpoint before reading them.")
     if not exclusive and (sample_ok or sample is None):
-        notes.append(
-            "Shared mode: the endpoint's standing load is unknown and not "
-            "controlled, so every level here was measured at whatever the "
-            "server was already doing rather than at the operating point the "
-            "predictions were made for. Those rows are capped at 'not "
-            "established' whatever the numbers say; only an exclusive run can "
-            "support or refute them.")
+        notes.extend(_shared_notes(shared))
 
     # --- measurements that were unavailable ------------------------------
     if not _token_accounting(rungs, sample):
@@ -222,6 +221,52 @@ def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
     for h, reason in plan.skipped:
         notes.append(f"{h.key} was not tested: {reason}.")
     return notes
+
+
+CAPPED = ("Shared mode: the endpoint's standing load is unknown and not "
+          "controlled, so every level here was measured at whatever the "
+          "server was already doing rather than at the operating point the "
+          "predictions were made for. Those rows are capped at 'not "
+          "established' whatever the numbers say; only an exclusive run, or a "
+          "shared run whose covariate fit clears its gates, can support or "
+          "refute them.")
+
+
+def _shared_notes(shared: dict | None) -> list[str]:
+    """What the shared run's covariate fit did and did not buy.
+
+    The old unconditional cap stays the note for a run that fitted nothing —
+    which is every run without a `/metrics` sampler. A run that DID fit says
+    which readings cleared the gate and, for the rest, which gate they failed;
+    a reader must never have to infer that from the absence of a line.
+    """
+    if not shared:
+        return [CAPPED]
+    out: list[str] = []
+    if shared.get("aborted"):
+        out.append(f"ABORTED by a probe safety rail: {shared['aborted']}. "
+                   "Everything below rests on what had been measured when the "
+                   "rail tripped, which is less than the plan asked for.")
+    readings = shared.get("readings") or {}
+    ok = sorted(k for k, r in readings.items() if r.get("available"))
+    bad = {k: r.get("reason") for k, r in readings.items()
+           if not r.get("available")}
+    if ok:
+        out.append(
+            "Shared mode, CORRECTED: the prevailing load was measured "
+            "alongside every probe request and regressed out, so "
+            + ", ".join(ok) + " are read AT the configured operating point "
+            "rather than at whatever the server was doing. Each such row "
+            "prints its extrapolation distance — the number that says how far "
+            "the correction reached beyond the load actually observed. A "
+            "small distance is an interpolation; a large one would have been "
+            "refused.")
+    else:
+        out.append(CAPPED)
+    for k, why in sorted(bad.items()):
+        out.append(f"The {k} reading was not corrected to the operating "
+                   f"point: {why}.")
+    return out
 
 
 def _verdict(hypotheses, key: str) -> str | None:

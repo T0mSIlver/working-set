@@ -50,6 +50,8 @@ def print_report(rec, out=None) -> None:
               f"--chars-per-token {cpt / med:.1f})")
     if sample is not None:
         _sample_block(w, sample, cpt)
+    if getattr(rec, "shared", None):
+        _shared_block(w, rec.shared)
     if rec.burst:
         _burst_block(w, rec.burst)
 
@@ -149,6 +151,117 @@ def _sample_block(w, s: Sample, cpt) -> None:
     if math.isfinite(s.cached_frac):
         w(f"  server-reported prefix-cache hits on warm turns: "
           f"{s.cached_frac:.0%}")
+
+
+def _shared_block(w, sh: dict) -> None:
+    """The shared-endpoint fit, printed from the RECORD — so `ws report
+    run.json` reproduces it byte for byte without re-running anything."""
+    g = sh.get("governor") or {}
+    op = sh.get("operating_point") or {}
+    w(f"\nSHARED-ENDPOINT FIT — the prevailing load as a COVARIATE "
+      f"({sh.get('n_covariate_rows', 0)} covariate-stamped requests)")
+    if sh.get("aborted"):
+        w(f"  ABORTED BY A SAFETY RAIL: {sh['aborted']}")
+    w(f"  budget spent: {g.get('n_requests', 0)} requests, "
+      f"{g.get('tokens_spent', 0):,} intended prompt tokens | peak waiting "
+      f"{fmt(g.get('peak_requests_waiting'), '', 1)} | peak KV "
+      f"{_pct(g.get('peak_kv_cache_usage'))} | canary n="
+      f"{g.get('n_canary', 0)} p50 {fmt(g.get('canary_p50_s'), 's')}")
+    if op.get("refused"):
+        w(f"  operating point: NOT AVAILABLE — {op['refused']}")
+    else:
+        w(f"  operating point: running {fmt(op.get('running'))} "
+          f"(= {fmt(op.get('steady_decode_seqs'))} decoding + "
+          f"{fmt(op.get('prefill_occupancy'))} prefilling) | waiting "
+          f"{fmt(op.get('waiting'))} | E[L] {fmt(op.get('L_ktok'), 'k tok', 1)}"
+          f" | E[L^2] {fmt(op.get('L2_ktok2'), '', 1)} (ktok^2)")
+    w(f"  a verdict needs an extrapolation distance <= "
+      f"{sh.get('max_extrapolation', 1.0):g} observed sd")
+    for name, f in (sh.get("fits") or {}).items():
+        if f.get("refused"):
+            w(f"  {name:<10} no fit — {f['refused']}")
+            continue
+        terms = " ".join(f"{c}={f['coefficients'][c]:+.4g}"
+                         for c in f["columns"])
+        w(f"  {name:<10} [{f['unit']}] {terms}")
+        w(f"  {'':<10} n={f['n']} dof={f['dof']} residual sd "
+          f"{fmt(f.get('residual_std'), '', 4)} R2 {fmt(f.get('r_squared'))} "
+          f"cond {fmt(f.get('condition_number'), '', 1)}")
+        r = (sh.get("readings") or {}).get(name) or {}
+        if r.get("available"):
+            w(f"  {'':<10} -> {fmt(r.get('value'), ' ' + f['unit'], 4)} at the "
+              f"operating point (se {fmt(r.get('se'), '', 4)}, extrapolation "
+              f"{fmt(r.get('extrapolation'))} sd) — SCORED")
+        else:
+            w(f"  {'':<10} -> not scored: {r.get('reason', 'no reading')}")
+    lad = sh.get("natural_ladder") or []
+    if lad:
+        modelled = any(b.get("model") for b in lad)
+        w("\n  NATURAL LADDER — binned by the `running` the server happened "
+          "to be carrying (this run set none of it)")
+        head = (f"  {'running':>14} {'n':>5} {'TTFT miss p50':>14} "
+                f"{'TTFT hit p50':>13} {'ITL p50':>10} {'decode p50':>12}")
+        if modelled:
+            head += (f" | {'model TTFT':>11} {'model ITL':>10} "
+                     f"{'model decode':>13} {'implied req/s':>14}")
+        w(head)
+        for b in lad:
+            hi = b.get("running_hi")
+            span = ("[" + format(b["running_lo"], "g") + ", "
+                    + ("inf" if hi is None else format(hi, "g")) + ")")
+            row = (f"  {span:>14} {b['n']:>5} "
+                   f"{fmt(b.get('ttft_miss_p50_s'), 's'):>14} "
+                   f"{fmt(b.get('ttft_hit_p50_s'), 's'):>13} "
+                   f"{fmt(b.get('itl_p50_ms'), ' ms', 1):>10} "
+                   f"{fmt(b.get('decode_p50_tok_s'), ' tok/s', 0):>12}")
+            m = b.get("model") or {}
+            if modelled:
+                row += (f" | {fmt(m.get('ttft_miss_s'), 's'):>11} "
+                        f"{fmt(m.get('itl_ms'), ' ms', 1):>10} "
+                        f"{fmt(m.get('decode_tok_s'), ' tok/s', 0):>13} "
+                        f"{fmt(m.get('rate_req_s'), '', 2):>14}")
+            w(row)
+        if modelled:
+            w("    model columns: the decode curve read at this bin's batch, "
+              "and the mean cold TTFT at the arrival rate that would PRODUCE "
+              "that batch (bisected on the model's own steady decode point). "
+              "The bins are observations, not a load the run set.")
+    _cross_block(w, sh.get("cross_check"))
+
+
+def _cross_block(w, c: dict | None) -> None:
+    """Client minus server, on the same quantile — the proxy tax, and whether
+    the forced misses actually missed."""
+    if not c:
+        return
+    if c.get("error"):
+        w(f"\n  SERVER CROSS-CHECK unavailable: {c['error']}")
+        return
+    w("\n  SERVER CROSS-CHECK over the probe window (client - server = the "
+      "proxy, the network and our own event loop)")
+    w(f"    TTFT p50: client {fmt(c.get('client_ttft_p50_s'), 's')} - server "
+      f"{fmt(c.get('server_ttft_p50_s'), 's')} = "
+      f"{fmt(c.get('proxy_overhead_ttft_p50_s'), 's')}  "
+      f"(server n={c.get('server_ttft_n', 0)})")
+    w(f"    TTFT p95: client {fmt(c.get('client_ttft_p95_s'), 's')} - server "
+      f"{fmt(c.get('server_ttft_p95_s'), 's')} = "
+      f"{fmt(c.get('proxy_overhead_ttft_p95_s'), 's')}")
+    w(f"    ITL  p50: client {fmt(c.get('client_itl_p50_ms'), ' ms', 1)} - "
+      f"server {fmt(c.get('server_itl_p50_ms'), ' ms', 1)} = "
+      f"{fmt(c.get('proxy_overhead_itl_p50_ms'), ' ms', 1)}")
+    w(f"    forced misses confirmed cold: "
+      f"{_pct(c.get('forced_miss_clean_frac'))} of "
+      f"{c.get('n_miss_with_cached_readback', 0)} with a cached_tokens "
+      f"readback (median cached "
+      f"{fmt(c.get('forced_miss_cached_tokens_p50'), '', 0)} tok); window "
+      f"prefix hit rate {_pct(c.get('prefix_hit_rate'))} — over ALL traffic, "
+      "ours and theirs, so it cannot attribute a hit to anybody")
+
+
+def _pct(x) -> str:
+    if x is None or (isinstance(x, float) and not math.isfinite(x)):
+        return "-"
+    return f"{x:.0%}"
 
 
 def _burst_block(w, b: dict) -> None:
