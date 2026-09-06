@@ -246,7 +246,12 @@ what survived scrutiny, not of what the fixture caught:
   so it reported miss *rates* of 41 and 55, and its zero test read the miss's
   own prefill where Python reads the whole TTFT at `f = 0`. `prefill.js` now
   clamps to `[0, 1]` and runs Python's zero test. 407 comparisons came off; the
-  20 that remain sit within 1.3% of the cliff the shared test now turns on.
+  20 that remain sit inside the entry's `_sla10_headroom` window, and in fact
+  in its first quarter — the fixture records that diagnostic per vector, and
+  on all 20 it reads 0.007-0.013, i.e. a miss whose own prefill already eats
+  98.7% or more of the 10 s budget. That is the cliff the shared zero test now
+  turns on, and a hair of sampling difference in the moments decides which
+  side of it a state lands.
 
 ## The rule
 
