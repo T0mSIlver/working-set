@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from workingset import model as M
+from workingset import cli, model as M
 from workingset.config import RunConfig, load_config
 from workingset.predict import predict
 
@@ -180,3 +180,24 @@ def test_ram_offload_raises_cache_ceiling():
     ram = predict(RunConfig.from_dict({"deployment": {**base["deployment"],
                                                       "ram_gib": 512}}), n_iter=200)
     assert ram.cache_ceiling_users > dry.cache_ceiling_users
+
+
+def test_init_default_filename_follows_the_format(tmp_path, monkeypatch, capsys):
+    """`ws init --json` must not write JSON into a .toml the next command
+    cannot parse: the default name follows --json, an explicit -o wins."""
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["init"]) == 0
+    assert load_config(tmp_path / "workingset.toml") == RunConfig()
+    assert not (tmp_path / "workingset.json").exists()
+
+    assert cli.main(["init", "--json"]) == 0
+    written = tmp_path / "workingset.json"
+    assert json.loads(written.read_text())          # JSON, and parseable as it
+    assert load_config(written) == RunConfig()
+
+    assert cli.main(["init", "--json", "-o", "custom.cfg"]) == 0
+    assert json.loads((tmp_path / "custom.cfg").read_text())
+
+    capsys.readouterr()
+    assert cli.main(["init", "--json", "-o", "-"]) == 0
+    assert json.loads(capsys.readouterr().out)      # stdout, no file written

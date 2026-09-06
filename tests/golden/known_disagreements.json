@@ -4,11 +4,11 @@
  "_fields": {
   "quantity": "vectors.json out-key, exact or with a trailing * as a prefix glob",
   "where": "matches the vector's state fields, the derived n_gpu / replicas, and the vector's cond block under a _ prefix (_duty, _sla_headroom, _sla10_headroom, _warm_p5, _decode_ceiling, _ctx_cv2, _steady_nmax_ratio, _sla_f_unreachable). Values: a literal, a list, or {gt|gte|lt|lte|ne|nin}. An entry with NO where and max_rel 1.0 pins nothing at all - relErr is bounded by 1 for any finite pair - so every entry here is gated on the condition that causes it. Use _sla10_headroom, not _sla_headroom, for the quantities compared at the hard-wired 10 s budget.",
-  "observed_rel": "the worst relative error actually measured on 2026-09-06, 821 vectors / 46,797 comparisons",
+  "observed_rel": "the worst relative error actually measured on 2026-09-07, 821 vectors / 46,797 comparisons",
   "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
   "hypothesis": "one line on the cause"
  },
- "_measured_at": "2026-09-06, tests/golden/vectors.json schema 1, 821 vectors, against src/workingset/model.py at origin/main 8d3ea61 (PR #56's mbu pass-through included)",
+ "_measured_at": "2026-09-07, tests/golden/vectors.json schema 1, 821 vectors, against src/workingset/model.py at origin/main 337fc86 plus the two mirror-drift fixes of this change (power_draw's decode_floor parameter, spikeMetrics' [0, 1] clamp and shared zero test). 1,721 comparisons were allowlisted before those two; 515 are now.",
 
  "entries": [
   {
@@ -48,40 +48,28 @@
   },
 
   {
-   "quantity": "power_d_d",
-   "where": { "decode_floor": { "ne": 40 } },
-   "observed_rel": 0.875,
-   "max_rel": 0.9,
-   "hypothesis": "model.power_draw hard-codes DECODE_FLOOR_TOKS in `cap = decode_users_group * DECODE_FLOOR_TOKS` while cost.js reads decodeFloor() = state.decode_floor. The decode duty comes out EXACTLY 40/floor apart (8x at the 5 tok/s floor, 0.5x at 80) wherever d_d's min(1 - d_p, ...) clip is not binding and the two decode ceilings agree; approximate where either does. Python bug: the floor is a parameter of every other ceiling in the module."
-  },
-  {
-   "quantity": "power_per_gpu_w",
-   "where": { "decode_floor": { "ne": 40 } },
-   "observed_rel": 0.54,
-   "max_rel": 0.65,
-   "hypothesis": "downstream of the power_d_d floor bug: d_d x p_decode_w is one of the three terms of the per-GPU draw"
-  },
-  {
-   "quantity": "power_kw",
-   "where": { "decode_floor": { "ne": 40 } },
-   "observed_rel": 0.331,
-   "max_rel": 0.4,
-   "hypothesis": "downstream of the power_d_d floor bug, diluted by the flat host_w adder"
-  },
-  {
-   "quantity": "energy_eur_month",
-   "where": { "decode_floor": { "ne": 40 } },
-   "observed_rel": 0.331,
-   "max_rel": 0.4,
-   "hypothesis": "the electricity line is power_kw x 720 x eur_kwh, so it inherits the power_d_d floor bug exactly. energy_total_month does not fail: the hardware line dominates the bill."
-  },
-  {
    "quantity": "power_*",
    "where": { "decode_floor": 40, "_decode_ceiling": { "lte": 40 },
               "_duty": { "lte": 0.85 } },
-   "observed_rel": 0.049,
+   "observed_rel": 0.042,
    "max_rel": 0.12,
-   "hypothesis": "with the floor bug excluded, d_d still divides the output demand by decode_users_group x floor. On a configuration whose decode ceiling is a few dozen sequences the two sides' separate integer bisections land one apart, and one step of ten is a tenth of the capacity."
+   "hypothesis": "d_d divides the output demand by decode_users_group x floor, and both sides bisect that ceiling on their own sampled curve. On a configuration whose ceiling is a few dozen sequences they land one apart, and one step of thirty is a thirtieth of the capacity. THE DEFAULT-FLOOR SLICE, kept at the ceiling it had before power_draw's floor bug was fixed: nothing in that fix touches a floor-40 state, so this entry must not move. 7 states, worst 4.2%."
+  },
+  {
+   "quantity": "power_*",
+   "where": { "decode_floor": { "ne": 40 }, "_decode_ceiling": { "lte": 45 },
+              "_duty": { "lte": 0.85 } },
+   "observed_rel": 0.333,
+   "max_rel": 0.4,
+   "hypothesis": "the same integer-bisection noise, at the floors the slider reaches away from 40, where it is far larger: a low floor puts the decode ceiling in the single digits, and one step of three is a third of the capacity. Gated on the ceiling as well as the floor, since the ceiling is the cause and the floor only selects for it; 45 is the largest ceiling that exhibits it, and above that the quantity is inside its band everywhere. Replaces the pre-fix `decode_floor != 40` entry, which licensed 87.5% on any state at any ceiling: the floor is a power_draw parameter now, so the two sides price the same cap and only the ceiling's own noise is left. 14 states, worst 33%."
+  },
+  {
+   "quantity": "energy_eur_month",
+   "where": { "decode_floor": { "ne": 40 }, "_decode_ceiling": { "lte": 45 },
+              "_duty": { "lte": 0.85 } },
+   "observed_rel": 0.104,
+   "max_rel": 0.15,
+   "hypothesis": "the electricity line is power_kw x 720 x eur_kwh, so it inherits the small-ceiling noise above one-for-one, diluted by the flat host_w adder. energy_total_month does not fail: the hardware line dominates the bill. 2 states, worst 10.4%."
   },
   {
    "quantity": "power_d_d",
@@ -144,24 +132,17 @@
 
   {
    "quantity": "sla_miss_rate_sla10",
-   "where": { "_sla_f_unreachable": 1 },
-   "observed_rel": 0.998,
-   "max_rel": 1.0,
-   "hypothesis": "THE CLAMP, and the same verdict on both sides. f is a miss RATE, so model.sla_miss_rate bisects it over [0, 1] and returns hi = 1.0 when the SLA survives an all-cold stream at this load. spikeMetrics solves the closed form and does not clamp the upper end, so it reports f* = 41 or 55 - a fraction of requests above one. 407 of 821 states, every one of them a configuration where the latency constraint is simply not reached. A JS-side fix (clamp fsla at 1) would close it; the two are not computing different models."
-  },
-  {
-   "quantity": "sla_miss_rate_sla10",
    "where": { "_sla10_headroom": { "gte": -0.05, "lt": 0.05 } },
    "observed_rel": 1.0,
    "max_rel": 1.0,
-   "hypothesis": "THE ZERO TEST, and the two sides ask different questions. Python returns 0 when the mean TTFT at f = 0 already breaches the budget - queue wait included; the explorer returns 0 when k = 2(SLA - E[S|miss]) <= 0, i.e. on the miss's own prefill alone. Between those two thresholds Python reads 0 and the mirror reads 6e-4, which agree in meaning and not in value. All 20 states sit within a percent of the cliff."
+   "hypothesis": "ILL-CONDITIONED AT THE ZERO TEST, which both sides now run the same way: is the WHOLE mean TTFT at f = 0 - the all-warm queue wait plus the miss's own prefill - already past the budget? All 20 states sit in the first quarter of this entry's window: their _sla10_headroom, which the fixture records per vector, reads 0.007-0.013. A hair of sampling difference in the moments decides which side of the cliff they land: Python reads 0 and the mirror 6e-4, agreeing in meaning and not in value. The window is bounded on BOTH sides so a state arbitrarily past its budget is not admitted."
   },
   {
    "quantity": "sla_miss_rate_sla10",
    "where": { "_sla10_headroom": { "lt": 0.35 } },
-   "observed_rel": 0.445,
+   "observed_rel": 0.415,
    "max_rel": 0.6,
-   "hypothesis": "the same 1/k amplification max_users_latency has: f* solves a linear equation whose coefficient is k = 2(SLA - E[S|miss]), so a couple of percent of sampling difference in the miss cost becomes tens of percent in f* once the miss eats most of the budget. Four states, headroom 0.10-0.30; above 0.35 headroom this quantity is inside its band everywhere it is not clamped."
+   "hypothesis": "the same 1/k amplification max_users_latency has: f* solves a linear equation whose coefficient is k = 2(SLA - E[S|miss]), so a couple of percent of sampling difference in the miss cost becomes tens of percent in f* once the miss eats most of the budget. Four states, headroom 0.10-0.30; above 0.35 headroom this quantity is inside its band everywhere."
   },
   {
    "quantity": "moments_miss_sq",

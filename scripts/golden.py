@@ -292,10 +292,12 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
 
     # ---- power and the bill ----------------------------------------------
     pue = float(st["pue"])
+    # decode_floor: the SAME floor `dec` was sized at, which is what the
+    # explorer's decodeFloor() feeds powerDraw
     e = M.energy_cost(m, topo, wl, rate, dec, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,
                       out_tokens=st["out"], per_pass_overhead=True,
-                      eur_gpu_h=st["gpuh"])
+                      eur_gpu_h=st["gpuh"], decode_floor=st["decode_floor"])
     o["power_d_p"] = e["d_p"]
     o["power_d_d"] = e["d_d"]
     o["power_per_gpu_w"] = e["per_gpu_w"]
@@ -320,9 +322,10 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         "warm_p5": o["warm_p5_all"],
         "decode_ceiling": dec,
         # 1 when sla_miss_rate returned its `hi` clamp, i.e. the SLA survives
-        # an all-cold stream at this load and there is no root inside [0, 1].
-        # Python reports the clamp; the explorer's closed form keeps going and
-        # returns an "f*" of 40 — the same verdict, and not a miss rate.
+        # an all-cold stream at this load and the latency constraint is not
+        # reached at any miss rate. Both sides clamp there now, so no allowlist
+        # entry uses this today; it stays because it names the regime, and an
+        # entry can be gated on it again without a fixture change.
         "sla_f_unreachable": float(o["sla_miss_rate_sla10"] >= 1.0),
         # squared coefficient of variation of the context length: E[S^2|miss]
         # runs on L^4, so its sampling variance scales with this
@@ -841,9 +844,8 @@ MAPPING = [
      "budget the two answer the same question at. Python bisects f over "
      "[0, 1] and CLAMPS to that interval; the explorer solves the same "
      "equation in closed form (E[S] and E[S^2] are both linear in f) and "
-     "clamps only at 0, and their 'no load meets it' tests differ: Python "
-     "compares the full TTFT at f = 0 (queue wait included), the explorer "
-     "compares the miss's own prefill alone (k = 2(SLA - E[S|miss]) <= 0)"),
+     "clamps the root to the same [0, 1], on the same zero test — the full "
+     "TTFT at f = 0, queue wait included"),
     ("burst_drain_seconds_b32", "model.burst_drain_seconds(burst=32)",
      "prefill.js spikeMetrics(...).drain", "mc",
      "spikeMetrics hard-wires SPIKE_BURST = 32; state.burst reaches the tile "
