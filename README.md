@@ -37,18 +37,18 @@ uv run ws models                         # model / GPU keys
 uv run pytest                            # self-checks + config round-trips
 ```
 
-No checkout needed — the explorer's `workingset.toml` runs straight off PyPI
-(the package publishes one console script, `ws`, so the package name travels in
-`--from`):
+No checkout needed — the explorer's `workingset.toml` runs straight from git
+(`--from` carries the package because `workingset` publishes one console
+script, `ws`):
 
 ```bash
-uvx --from workingset ws predict workingset.toml
-uvx --from workingset ws test workingset.toml --dry-run
-uvx --from workingset ws test workingset.toml --all --exclusive --out run.json
+uvx --from git+https://github.com/T0mSIlver/working-set ws predict workingset.toml
+uvx --from git+https://github.com/T0mSIlver/working-set ws test workingset.toml --dry-run
+uvx --from git+https://github.com/T0mSIlver/working-set ws test workingset.toml --all --exclusive --out run.json
 ```
 
-Until the PyPI release, read the package straight from git:
-`uvx --from git+https://github.com/T0mSIlver/working-set ws predict workingset.toml`.
+After the PyPI release the same commands shorten to `uvx --from workingset
+ws …`.
 
 Predictions live in no file: `ws predict` recomputes them from the config every
 time, so a config can never carry a number the code did not produce. A harness

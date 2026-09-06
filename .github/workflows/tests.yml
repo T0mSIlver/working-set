@@ -7,6 +7,9 @@
 #   mirror        tests/js/golden.test.mjs replays every vector through
 #                 interactive/src/*.js and fails on any disagreement that is not
 #                 in tests/golden/known_disagreements.json
+#   fixtures      tests/js/explorer_config.test.mjs re-emits every
+#                 tests/fixtures/explorer_*.toml from the share URL in its own
+#                 header and fails if the committed file has drifted
 name: Tests
 
 on:
@@ -61,3 +64,8 @@ jobs:
       # interactive/src/*.js directly and node's own test runner does the rest.
       - name: JS mirror agrees with the Python model
         run: node --import ./tests/js/register.mjs --test tests/js/golden.test.mjs
+      # the explorer's config emitter against the fixtures pytest reads: each
+      # fixture must still be what workingsetConfig writes for the share URL
+      # in its own header
+      - name: explorer config fixtures are current
+        run: node --import ./tests/js/register.mjs --test tests/js/explorer_config.test.mjs

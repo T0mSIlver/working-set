@@ -137,6 +137,10 @@ def test_explorer_toml_round_trips():
     assert (slo.ttft_budget_s, slo.itl_floor_tok_s, slo.percentile) == (10, 40, 95)
     assert ep.base_url == "http://localhost:8000/v1" and ep.api_key_env == "VLLM_API_KEY"
     assert (cal.mfu, cal.mbu) == (M.MFU_DEFAULT, M.MBU_DEFAULT)
+    # the three knobs that used to be dropped: written even at their defaults,
+    # and mtp written as the number on screen rather than left implicit
+    assert (d.recurrent_state_dtype, d.weight_overhead) == ("bf16", 0)
+    assert cal.mtp == M.MODELS["35BA3B"].mtp
     cfg.validate()
     # no predictions travel in the file, and re-dumping it changes nothing
     assert load_config(p) == RunConfig.from_dict(tomllib.loads(cfg.dumps("toml")))
@@ -153,6 +157,121 @@ def test_explorer_toml_names_every_field():
         want = {f.name for f in dataclass_fields(typ)}
         want -= {"metrics_url"}          # optional: no /metrics on the page
         assert want == set(raw[block]), f"{block}: {want ^ set(raw[block])}"
+
+
+# ---------------------------------------------------------------------------
+# The three explorer knobs the config used to drop: fp32 recurrent state,
+# +15% deployed weights, and the MTP speedup. Each moves numbers on the page,
+# so each has to move the same numbers here. The fixtures are real downloads
+# taken at the states quoted in the comments; tests/js/explorer_config.test.mjs
+# holds them to what `workingsetConfig` emits for their own share URLs.
+# ---------------------------------------------------------------------------
+KNOBS = "explorer_knobs_%s.toml"
+
+
+def _knob(name: str):
+    return load_config(Path(__file__).resolve().parent / "fixtures" / (KNOBS % name))
+
+
+def test_explorer_knobs_reach_the_model():
+    """35B-A3B on 1xH200, one knob at a time, against what the page reports."""
+    base, fp32 = _knob("base").to_model(), _knob("fp32").to_model()
+    p15, mtp10 = _knob("p15").to_model(), _knob("mtp10").to_model()
+    ref = M.MODELS["35BA3B"]
+    # fp32 doubles the per-session recurrent state (render.js modelFor)
+    assert base.deltanet_state == ref.deltanet_state
+    assert fp32.deltanet_state == 2 * ref.deltanet_state
+    assert "[fp32 state]" in fp32.name
+    # +15% raises the resident weight bytes, and nothing else
+    assert p15.w_resident == pytest.approx(ref.w_resident * 1.15)
+    assert p15.deltanet_state == ref.deltanet_state
+    assert "[+15% weights]" in p15.name
+    # the MTP slider overrides the model's own value
+    assert base.mtp == ref.mtp and mtp10.mtp == 1.0
+
+
+def test_fp32_state_costs_warm_capacity_as_the_page_reports():
+    """The page's warm p50 for these two states is 281 -> 252 sessions
+    (35B-A3B, 1xH200, defaults). The per-session charge is the doubled
+    recurrent state, so the whole effect is that one field."""
+    out = {}
+    for name in ("base", "fp32"):
+        cfg = _knob(name)
+        _, p50, _ = M.warm_capacity(cfg.to_model(), cfg.to_topology(),
+                                    cfg.to_workload(), n_iter=400, seed=0,
+                                    which="all")
+        out[name] = p50
+    assert 276 <= out["base"] <= 286        # page 281
+    assert 248 <= out["fp32"] <= 258        # page 252
+    assert out["fp32"] < out["base"]
+
+
+def test_weight_overhead_shrinks_the_kv_pool_as_the_page_reports():
+    """The page's KV pool for these two states is 8,417,102 -> 7,897,082
+    tokens. Closed form on both sides, so this is exact, not a band."""
+    pool = {n: M.kv_pool_tokens(_knob(n).to_model(), _knob(n).to_topology())
+            for n in ("base", "p15")}
+    assert pool["base"] == pytest.approx(8_417_102.005, abs=0.01)
+    assert pool["p15"] == pytest.approx(7_897_082.474, abs=0.01)
+
+
+def test_mtp_override_moves_the_decode_ceiling():
+    """Per-user decode is mtp x bandwidth / step bytes, so dropping the 1.7x
+    speedup to 1.0 has to drop the decode ceiling with it — the page goes
+    28 -> 16 users at this state."""
+    base = predict(_knob("base"), n_iter=400)
+    off = predict(_knob("mtp10"), n_iter=400)
+    assert off.decode_ceiling_users < base.decode_ceiling_users
+    assert 0.45 < off.decode_ceiling_users / base.decode_ceiling_users < 0.65
+    # nothing else about the deployment moved
+    assert off.warm_capacity_p5 == pytest.approx(base.warm_capacity_p5, rel=0.05)
+
+
+def test_knob_round_trip_with_non_default_values():
+    cfg = RunConfig.from_dict({
+        "deployment": {"model": "35BA3B", "gpu": "H200",
+                       "recurrent_state_dtype": "fp32", "weight_overhead": 0.15},
+        "calibration": {"mtp": 1.0}})
+    cfg.validate()
+    back = RunConfig.from_dict(tomllib.loads(cfg.dumps("toml")))
+    assert back == cfg
+    assert back.deployment.recurrent_state_dtype == "fp32"
+    assert back.deployment.weight_overhead == 0.15
+    assert back.calibration.mtp == 1.0
+    # a config that does not name mtp gets the model's own value, and says so
+    # by omitting the key rather than by writing a wrong number
+    plain = RunConfig.from_dict({"deployment": {"model": "35BA3B"}})
+    assert plain.calibration.mtp is None
+    assert "mtp" not in plain.dumps("toml")
+    assert plain.to_model().mtp == M.MODELS["35BA3B"].mtp
+
+
+def test_knob_gates_are_refusals_not_no_ops():
+    """The explorer disables these controls (main.js enforceConstraints); at
+    the file boundary they raise, so a hand-written config cannot ask for a
+    knob that would silently do nothing."""
+    with pytest.raises(ValueError, match="no bf16 recurrent state"):
+        RunConfig.from_dict({"deployment": {"model": "MM35", "gpu": "H200",
+                                            "tensor_parallel": 8,
+                                            "recurrent_state_dtype": "fp32"}}).validate()
+    with pytest.raises(ValueError, match="weight_overhead does not apply"):
+        RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
+                                            "weight_overhead": 0.15}}).validate()
+    with pytest.raises(ValueError, match="recurrent_state_dtype must be"):
+        RunConfig.from_dict({"deployment": {"model": "27B",
+                                            "recurrent_state_dtype": "bf32"}}).validate()
+    with pytest.raises(ValueError, match="weight_overhead must be >= 0"):
+        RunConfig.from_dict({"deployment": {"model": "35BA3B",
+                                            "weight_overhead": -0.1}}).validate()
+    with pytest.raises(ValueError, match="calibration.mtp must be"):
+        RunConfig.from_dict({"deployment": {"model": "27B"},
+                             "calibration": {"mtp": 0}}).validate()
+    # DSv4-Flash's state is a fixed mixed-precision buffer, not a bf16 one
+    assert M.MODELS["DSV4F"].state_fp32_ok is False
+    with pytest.raises(ValueError, match="no bf16 recurrent state"):
+        RunConfig.from_dict({"deployment": {"model": "DSV4F", "gpu": "H200",
+                                            "tensor_parallel": 8,
+                                            "recurrent_state_dtype": "fp32"}}).validate()
 
 
 def test_type_checked_at_the_boundary():

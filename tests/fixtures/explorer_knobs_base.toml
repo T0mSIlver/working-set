@@ -1,7 +1,6 @@
 # workingset.toml — the configuration on screen in the interactive explorer.
-# Qwen3.6-35B-A3B · 2×H200 data-par · max_num_batched_tokens 32768 · generated 2026-09-06
-# reproduce this page: https://workingset.tomvaucourt.com/#model=35BA3B&ngpu=2&ram=512&users=200
-# DP2: every figure is PER REPLICA GROUP — point base_url at ONE group.
+# Qwen3.6-35B-A3B · 1×H200 · max_num_batched_tokens 32768 · generated 2026-09-06
+# reproduce this page: https://workingset.tomvaucourt.com/#model=35BA3B
 # No predictions live here: `ws predict workingset.toml` computes them.
 
 schema_version = 1
@@ -10,12 +9,12 @@ schema_version = 1
 model = "35BA3B"
 gpu = "H200"
 tensor_parallel = 1
-replicas = 2
+replicas = 1
 weight_dtype = "fp8"
 kv_dtype = "fp8"
 max_num_batched_tokens = 32768
 max_model_len = 180000
-ram_gib = 256
+ram_gib = 0
 recurrent_state_dtype = "bf16"
 weight_overhead = 0
 
@@ -32,7 +31,7 @@ subagent_prefix_tokens = 3000
 sub_shares_prefix = false
 miss_rate = 0.01
 max_output_tokens = 400
-users = 100
+users = 64
 
 [slo]
 ttft_budget_s = 10

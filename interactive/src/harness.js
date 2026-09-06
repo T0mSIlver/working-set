@@ -81,6 +81,13 @@ export function workingsetConfig(state, model, topo, wl){
       ['max_num_batched_tokens', int(prefillChunk())],
       ['max_model_len', int(wl.cap)],
       ['ram_gib', flt(ramPerCache(topo))],
+      // the two model knobs render.js modelFor() applies beyond the dtypes:
+      // fp32 doubles the per-session recurrent state, "+15% weights" raises
+      // w_resident. Both are written even at their defaults — a knob that
+      // moves the page's numbers must be visible in the file that claims to
+      // reproduce them.
+      ['recurrent_state_dtype', state.state_dt],
+      ['weight_overhead', state.wover === 'p15' ? 0.15 : 0],
     ]],
     ['workload', [
       ['system_prefix_tokens', int(wl.sys_user)],
@@ -108,10 +115,14 @@ export function workingsetConfig(state, model, topo, wl){
                 + `${state.wdt === 'nvfp4' ? 'NVFP4' : 'FP8'} checkpoint>`],
       ['api_key_env', 'VLLM_API_KEY'],              // env var NAME, never the key
     ]],
-    // the study's two measured-efficiency constants, as the sliders have them
+    // the study's measured-efficiency constants, as the sliders have them.
+    // mtp is written explicitly rather than left to the model's own default:
+    // the slider seeds from CONFIG.MODELS[model].mtp but does not follow it
+    // afterwards, so only the number on screen can reproduce the page.
     ['calibration', [
       ['mfu', flt(state.mfu)],
       ['mbu', flt(state.mbu)],
+      ['mtp', flt(state.mtp)],
     ]],
   ];
   return head.join('\n') + '\n\nschema_version = 1\n\n'
