@@ -140,7 +140,7 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
      sub:`MFU 35–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
-        + ` · latency ceiling f_sla ${op.fsla>=1?'> 100':fmt(op.fsla*100,0)}%`,
+        + ` · latency ceiling f_sla ${op.fsla>=1?'never binds':fmt(op.fsla*100,0)+'%'}`,
      cls: op.bstar<1?'crit':(op.bstar<5?'warn':'good'),
      tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside the TTFT budget — linear in that budget. The band is the MFU [35–55%] bracket; B* reaches zero exactly at f*, and f_sla (mean TTFT = budget) binds earlier still."},
     {k:`A burst of ${fmt(state.burst,0)} at once`,

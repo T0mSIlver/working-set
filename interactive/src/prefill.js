@@ -267,7 +267,9 @@ export function prefillServiceMoments(m, topo, wl, cs, chunk, mfuAnchor){
 //   fsla     miss rate at which a MISS's mean TTFT reaches the budget. Closed
 //            form: E[S^2] and E[S] are both LINEAR in f, so
 //              lam (B + f(A-B)) / (2 (1 - lam(D + f(C-D)))) + C = SLA
-//            is one linear equation in f. It always binds BELOW f*.
+//            is one linear equation in f. It always binds BELOW f*. Clamped
+//            to [0, 1] — the bracket model.sla_miss_rate bisects over — so 1
+//            reads "not reached at any miss rate", never "4,100% of them".
 //   allCold  duty if every request missed — what a global cache flush means.
 //            Exceeds 1 exactly when f* < 100%, i.e. "this configuration cannot
 //            serve its own recovery and must shed load".
@@ -281,8 +283,17 @@ export function spikeMetrics(m, topo, wl, cs, rate, chunk){
   const A = mo.missSq, B = mo.hitSq, Cc = mo.miss, D = mo.hit;
   const k = 2*(SPIKE_SLA_S - Cc);          // budget left after its own prefill
   const den = lam*(A - B) + k*lam*(Cc - D);
-  const fsla = k <= 0 ? 0
-             : (den > 0 ? Math.max(0, (k*(1 - lam*D) - lam*B)/den) : Infinity);
+  // f is a miss RATE, so the answer lives in [0, 1] and nowhere else — the
+  // closed form's root can sit far outside it, and 4,100% is not a miss rate.
+  // model.sla_miss_rate bisects over [0, 1] and returns its bracket: 1 when
+  // the SLA survives an all-cold stream (the constraint is not reached at all)
+  // and 0 when the WHOLE mean TTFT at f = 0 already breaches the budget —
+  // queue wait included, not the miss's own prefill alone, which is what
+  // k <= 0 tests. Mirror both ends of that bracket.
+  const rho0 = lam*D;                                  // all-warm duty, f = 0
+  const ttft0 = rho0 < 1 ? Cc + lam*B/(2*(1 - rho0)) : Infinity;
+  const root = den > 0 ? (k*(1 - lam*D) - lam*B)/den : Infinity;
+  const fsla = ttft0 > SPIKE_SLA_S ? 0 : Math.min(1, Math.max(0, root));
   return {
     rho, mo, fsla,
     wait:    live ? lam*eS2/(2*(1-rho)) : Infinity,
