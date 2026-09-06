@@ -2501,22 +2501,25 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
                # and silently under-bill relative to the explorer
                turn_tokens: float = 2_000, pue: float = PUE_DEFAULT,
                mfu: float = MFU_DEFAULT, out_tokens: float = AVG_OUT_TOK,
-               per_pass_overhead: bool = False) -> dict:
+               per_pass_overhead: bool = False,
+               decode_floor: float = DECODE_FLOOR_TOKS) -> dict:
     """Average draw of one GPU and the whole system, at the current load.
 
     `rate_group` is the TOTAL req/s ONE replica group sees (main + subagent —
     the serverRate/replicas figure, same unit the queue metrics price);
-    `decode_users_group` is the per-group decode ceiling at the 40 tok/s floor
-    (its capacity proxy, max_users_decode). Returns a dict:
+    `decode_users_group` is the per-group decode ceiling at `decode_floor`
+    tok/s (its capacity proxy, max_users_decode — pass the SAME floor that
+    sized it, or the capacity and the price of that capacity disagree).
+    Returns a dict:
 
       d_p        prefill duty = min(1, rate x E[S]) — E[S] is the mixed
                  cold/warm prefill service time the spike model already
                  computes, so d_p IS the section-8 duty cycle, clamped
       d_d        decode-active fraction: the output-token demand
                  (rate x out_tokens) against the floor capacity
-                 (decode_users_group x 40 tok/s), capped at whatever prefill
-                 leaves (partition, no overlap); a non-positive capacity
-                 falls back to d_d = 1 - d_p (the explorer's guard)
+                 (decode_users_group x decode_floor), capped at whatever
+                 prefill leaves (partition, no overlap); a non-positive
+                 capacity falls back to d_d = 1 - d_p (the explorer's guard)
       per_gpu_w  d_p x p_prefill + d_d x p_decode + remainder x idle
       kw         n_gpu x (per_gpu_w + host_w) x pue / 1000 — at the meter
       pue        echoed multiplier
@@ -2533,6 +2536,8 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
             f"decode_users_group must be >= 0, got {decode_users_group!r}")
     if pue <= 0:
         raise ValueError(f"pue must be > 0, got {pue!r}")
+    if decode_floor <= 0:
+        raise ValueError(f"decode_floor must be > 0, got {decode_floor!r}")
     g = topo.gpu
     if g.tdp_w <= 0:
         raise ValueError(f"{g.name}: power constants unset (research/power.md)")
@@ -2545,7 +2550,7 @@ def power_draw(model: Model, topo: Topology, wl: Workload, rate_group: float,
     if out_tokens < 0:
         raise ValueError(f"out_tokens must be >= 0, got {out_tokens!r}")
     demand = rate_group * out_tokens                     # output tok/s asked
-    cap = decode_users_group * DECODE_FLOOR_TOKS         # output tok/s at floor
+    cap = decode_users_group * decode_floor              # output tok/s at floor
     d_d = min(max(0.0, 1.0 - d_p), demand / cap if cap > 0 else 1.0)
     per_gpu_w = (d_p * g.p_prefill_w + d_d * g.p_decode_w
                  + max(0.0, 1.0 - d_p - d_d) * g.idle_w)
@@ -2561,7 +2566,8 @@ def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
                 eur_kwh: float = EUR_PER_KWH_DEFAULT,
                 mfu: float = MFU_DEFAULT, out_tokens: float = AVG_OUT_TOK,
                 per_pass_overhead: bool = False,
-                eur_gpu_h: float = None) -> dict:
+                eur_gpu_h: float = None,
+                decode_floor: float = DECODE_FLOOR_TOKS) -> dict:
     """€ figures on top of power_draw() — the explorer's energyCost().
 
     720 h/month flat. Two lines: eur_month is the ELECTRICITY (the power
@@ -2592,7 +2598,8 @@ def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
     # positional tail would silently feed per_pass_overhead into it
     p = power_draw(model, topo, wl, rate_group, decode_users_group, chunk,
                    turn_tokens=turn_tokens, pue=pue, mfu=mfu,
-                   out_tokens=out_tokens, per_pass_overhead=per_pass_overhead)
+                   out_tokens=out_tokens, per_pass_overhead=per_pass_overhead,
+                   decode_floor=decode_floor)
     eur_month = p["kw"] * HOURS_PER_MONTH * eur_kwh
     hw_month = topo.n_gpu * eur_gpu_h * HOURS_PER_MONTH
     total_month = eur_month + hw_month
@@ -3545,6 +3552,16 @@ def _selfcheck():
     pz = power_draw(m27, tp2, wl, 0.1, 0.0, turn_tokens=TURN)
     assert abs(pz["d_d"] - (1.0 - pz["d_p"])) < 1e-12, \
         "cap <= 0 must give d_d = 1 - d_p, matching the explorer's guard"
+    # the decode floor is a PARAMETER, not a constant: cap = ceiling x floor,
+    # so halving it doubles the decode duty wherever the 1 - d_p clip is slack
+    p_f40 = power_draw(m27, tp2, wl, 0.1, du, turn_tokens=TURN)
+    p_f20 = power_draw(m27, tp2, wl, 0.1, du, turn_tokens=TURN,
+                       decode_floor=DECODE_FLOOR_TOKS / 2)
+    assert p_f40 == power_draw(m27, tp2, wl, 0.1, du, turn_tokens=TURN,
+                               decode_floor=DECODE_FLOOR_TOKS), \
+        "decode_floor must default to DECODE_FLOOR_TOKS"
+    assert abs(p_f20["d_d"] - 2 * p_f40["d_d"]) < 1e-12, \
+        "d_d must scale as 1/decode_floor below the 1 - d_p clip"
     # the bill is LINEAR in the tariff and in PUE — both are user-chosen
     # multipliers, not model error, and must behave like it
     cost_ref = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
@@ -3580,7 +3597,7 @@ def _selfcheck():
                        turn_tokens=TURN)["eur_mtok"] == float("inf")
     # guards
     for bad_kw in (dict(rate_group=-1.0), dict(decode_users_group=-1.0),
-                   dict(pue=0.0)):
+                   dict(pue=0.0), dict(decode_floor=0.0)):
         try:
             power_draw(m27, tp2, wl, **{**dict(rate_group=rate_ref,
                                                decode_users_group=du),
