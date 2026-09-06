@@ -180,18 +180,26 @@ def sum_samples(samples: Iterable[Sample], name: str,
     Summing is right for a single engine and WRONG across data-parallel
     engines, which step on independent clocks -- pass `engine` to select one
     (matched against the `engine` or `engine_index` label).
+
+    A selector EXCLUDES a series carrying no engine label at all. Folding an
+    unlabelled series into engine 0's total is exactly the cross-engine
+    mixing the selector exists to prevent, and vLLM labels every per-engine
+    series, so an unlabelled one is not engine 0's to claim.
     """
     total, seen = 0.0, False
     for s in samples:
         if s.name != name:
             continue
-        if engine is not None:
-            eid = s.labels.get("engine", s.labels.get("engine_index"))
-            if eid is not None and eid != str(engine):
-                continue
+        if engine is not None and not _is_engine(s.labels, engine):
+            continue
         total += s.value
         seen = True
     return total if seen else None
+
+
+def _is_engine(labels: dict[str, str], engine: str) -> bool:
+    eid = labels.get("engine", labels.get("engine_index"))
+    return eid is not None and eid == str(engine)
 
 
 def pick_histogram(hists: dict[str, list[Histogram]], base: str,
@@ -205,13 +213,8 @@ def pick_histogram(hists: dict[str, list[Histogram]], base: str,
     group = hists.get(base)
     if not group:
         return None
-    chosen = []
-    for h in group:
-        if engine is not None:
-            eid = h.labels.get("engine", h.labels.get("engine_index"))
-            if eid is not None and eid != str(engine):
-                continue
-        chosen.append(h)
+    chosen = [h for h in group
+              if engine is None or _is_engine(h.labels, engine)]
     if not chosen:
         return None
     acc = chosen[0]
@@ -231,17 +234,25 @@ def histogram_bases(samples: Iterable[Sample]) -> set[str]:
     return bases
 
 
-def group_by_position(samples: Iterable[Sample], name: str) -> dict[int, float] | None:
-    """A `position`-labelled counter as {position: value}. None if absent."""
+def group_by_position(samples: Iterable[Sample], name: str,
+                      engine: str | None = None) -> dict[int, float] | None:
+    """A `position`-labelled counter as {position: value}. None if absent.
+
+    Same engine selection as `sum_samples`: values are summed across engines
+    unless `engine` picks one.
+    """
     out: dict[int, float] = {}
     for s in samples:
         if s.name != name:
+            continue
+        if engine is not None and not _is_engine(s.labels, engine):
             continue
         pos = s.labels.get("position")
         if pos is None:
             continue
         try:
-            out[int(pos)] = out.get(int(pos), 0.0) + s.value
+            p = int(pos)
         except ValueError:
             continue
+        out[p] = out.get(p, 0.0) + s.value
     return out or None

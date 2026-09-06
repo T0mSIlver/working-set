@@ -129,10 +129,21 @@ class Snapshot:
 
 
 def _render(s: Sample) -> str:
+    """A Sample back into a `/metrics` line, escaped so it re-parses.
+
+    The raw lines ARE the archive format, so a round trip has to be exact:
+    a label value carrying `"` or `\\` would otherwise re-parse into
+    different labels, or be dropped. Only reached for a Snapshot built
+    without `lines` -- the sampler always keeps the server's own text.
+    """
     if s.labels:
-        inner = ",".join(f'{k}="{v}"' for k, v in s.labels.items())
+        inner = ",".join(f'{k}="{_escape(v)}"' for k, v in s.labels.items())
         return f"{s.name}{{{inner}}} {s.value!r}"
     return f"{s.name} {s.value!r}"
+
+
+def _escape(v: str) -> str:
+    return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 @dataclass(frozen=True)
@@ -180,6 +191,11 @@ class WindowDelta:
     counters           semantic key -> delta over the window
     histograms         semantic key -> bucket-wise Histogram delta
     gauges             semantic key -> GaugeStats over every snapshot in range
+    counter_resets     keys whose counter went BACKWARDS across the window --
+                       the engine restarted inside it. Their delta is None,
+                       because two endpoints cannot recover how far the
+                       counter climbed before the reset. A non-empty tuple
+                       invalidates the window for anything those keys feed.
     """
 
     t0: float
@@ -193,6 +209,7 @@ class WindowDelta:
     n_snapshots: int = 0
     n_failed: int = 0
     version_hint: str = "unknown"
+    counter_resets: tuple[str, ...] = ()
 
     # ---- timing ----------------------------------------------------------
     @property
@@ -388,6 +405,7 @@ class WindowDelta:
             "dt_s": self.dt, "dt_uncertainty_s": _num(self.dt_uncertainty),
             "n_snapshots": self.n_snapshots, "n_failed": self.n_failed,
             "version_hint": self.version_hint,
+            "counter_resets": list(self.counter_resets),
             "counters": {k: v for k, v in self.counters.items() if v is not None},
             "gauges": {k: g.to_dict() for k, g in self.gauges.items() if g.n},
             "histograms": {k: {"count": h.observations, "mean": h.mean(),
@@ -446,13 +464,26 @@ def window_from_snapshots(snaps: Sequence[Snapshot], t0: float, t1: float,
     inside = [s for s in snaps if lo.t <= s.t <= hi.t]
     inside_ok = [s for s in inside if s.ok and s.samples]
 
+    # A counter that went BACKWARDS means the engine restarted inside the
+    # window. The delta is then unknowable from two endpoints -- you know
+    # `b`, but not how far `a` climbed before the reset -- so the key is
+    # reported as unmeasurable (None) and named in `counter_resets`, rather
+    # than handed back as a negative rate or silently clamped to zero.
+    resets: list[str] = []
+
     counters: dict[str, float | None] = {}
     for key, kind in KEY_KIND.items():
         if kind != "counter":
             continue
         a = adapter.counter(lo.samples, key)
         b = adapter.counter(hi.samples, key)
-        counters[key] = None if a is None or b is None else b - a
+        if a is None or b is None:
+            counters[key] = None
+        elif b < a:
+            counters[key] = None
+            resets.append(key)
+        else:
+            counters[key] = b - a
 
     histograms: dict[str, Histogram | None] = {}
     for key, kind in KEY_KIND.items():
@@ -460,7 +491,13 @@ def window_from_snapshots(snaps: Sequence[Snapshot], t0: float, t1: float,
             continue
         a = adapter.histogram(lo.samples, key)
         b = adapter.histogram(hi.samples, key)
-        histograms[key] = None if a is None or b is None else b - a
+        if a is None or b is None:
+            histograms[key] = None
+        elif (a.count is not None and b.count is not None and b.count < a.count):
+            histograms[key] = None
+            resets.append(key)
+        else:
+            histograms[key] = b - a
 
     gauges: dict[str, GaugeStats] = {}
     for key, kind in KEY_KIND.items():
@@ -474,13 +511,18 @@ def window_from_snapshots(snaps: Sequence[Snapshot], t0: float, t1: float,
     a_pos = adapter.by_position(lo.samples, "spec_decode_accepted_per_pos")
     b_pos = adapter.by_position(hi.samples, "spec_decode_accepted_per_pos")
     if a_pos is not None and b_pos is not None:
-        per_pos = {p: b_pos.get(p, 0.0) - a_pos.get(p, 0.0) for p in sorted(b_pos)}
+        d_pos = {p: b_pos.get(p, 0.0) - a_pos.get(p, 0.0) for p in sorted(b_pos)}
+        if any(v < 0 for v in d_pos.values()):
+            resets.append("spec_decode_accepted_per_pos")
+        else:
+            per_pos = d_pos
 
     hint = adapter.resolution().version_hint if hasattr(adapter, "resolution") else "?"
     return WindowDelta(t0=t0, t1=t1, lo=lo, hi=hi, counters=counters,
                        histograms=histograms, gauges=gauges,
                        per_position=per_pos, n_snapshots=len(inside),
-                       n_failed=len(inside) - len(inside_ok), version_hint=hint)
+                       n_failed=len(inside) - len(inside_ok), version_hint=hint,
+                       counter_resets=tuple(resets))
 
 
 def load_jsonl(path) -> list[Snapshot]:
@@ -570,11 +612,14 @@ class MetricsSampler:
     async def start(self) -> None:
         if self._task is not None:
             return
+        # The log file opens FIRST: an unwritable --out path must fail before
+        # a client exists to leak. `__aenter__` raising means `__aexit__`
+        # never runs, so nothing opened here would ever be closed.
+        if self._out_path:
+            self._out = open(self._out_path, "a", buffering=1, encoding="utf-8")
         if self._client is None:
             self._client = httpx.AsyncClient(verify=self.verify,
                                              timeout=self.timeout)
-        if self._out_path:
-            self._out = open(self._out_path, "a", buffering=1, encoding="utf-8")
         self._stop = asyncio.Event()
         self._first = asyncio.Event()
         self._task = asyncio.create_task(self._loop(), name="metrics-sampler")

@@ -199,6 +199,11 @@ def cmd_window(args) -> int:
     print(f"  dt {w.dt:.3f} s  +/- {w.dt_uncertainty * 1e3:.0f} ms from scrape "
           f"round trips  |  {w.n_snapshots} snapshots, {w.n_failed} failed  "
           f"|  {w.version_hint}")
+    if w.counter_resets:
+        print(f"  COUNTER RESET inside this window (the engine restarted): "
+              f"{', '.join(w.counter_resets)}")
+        print(f"  those keys are unmeasurable here -- pick a window that does "
+              f"not span the restart")
     print()
     print("  counters (delta over the window)")
     for k, kind in KEY_KIND.items():

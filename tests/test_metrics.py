@@ -266,6 +266,40 @@ def test_counters_sum_over_label_sets_and_engine_selects_one():
     assert VLLMAdapter(two, engine="1").counter(two, "prompt_tokens_total") == 25.0
 
 
+def test_engine_selector_excludes_an_unlabelled_series():
+    """Folding a series that carries no engine label into engine 0's total is
+    the cross-engine mixing the selector exists to prevent."""
+    mixed = parse_text('vllm:prompt_tokens_total{engine="0"} 10\n'
+                       'vllm:prompt_tokens_total{engine="1"} 25\n'
+                       'vllm:prompt_tokens_total 7\n')
+    assert VLLMAdapter(mixed).counter(mixed, "prompt_tokens_total") == 42.0
+    assert VLLMAdapter(mixed, engine="0").counter(
+        mixed, "prompt_tokens_total") == 10.0
+    assert VLLMAdapter(mixed, engine="1").counter(
+        mixed, "prompt_tokens_total") == 25.0
+    # a selector naming an engine that exports nothing gets None, not 0
+    assert VLLMAdapter(mixed, engine="9").counter(
+        mixed, "prompt_tokens_total") is None
+
+
+def test_engine_selector_applies_to_histograms_and_positions():
+    text = ('vllm:time_to_first_token_seconds_bucket{engine="0",le="+Inf"} 4\n'
+            'vllm:time_to_first_token_seconds_count{engine="0"} 4\n'
+            'vllm:time_to_first_token_seconds_bucket{engine="1",le="+Inf"} 6\n'
+            'vllm:time_to_first_token_seconds_count{engine="1"} 6\n'
+            'vllm:spec_decode_num_accepted_tokens_per_pos_total'
+            '{engine="0",position="0"} 5\n'
+            'vllm:spec_decode_num_accepted_tokens_per_pos_total'
+            '{engine="1",position="0"} 9\n')
+    s = parse_text(text)
+    assert VLLMAdapter(s).histogram(s, "ttft_hist").observations == 10.0
+    assert VLLMAdapter(s, engine="1").histogram(
+        s, "ttft_hist").observations == 6.0
+    assert VLLMAdapter(s).by_position(s, "spec_decode_accepted_per_pos") == {0: 14.0}
+    assert VLLMAdapter(s, engine="0").by_position(
+        s, "spec_decode_accepted_per_pos") == {0: 5.0}
+
+
 def test_per_position_acceptance_keeps_the_label_as_the_measurement():
     ad = adapter_for(DUMP)
     pos = ad.by_position(parse_text(DUMP), "spec_decode_accepted_per_pos")
@@ -467,6 +501,38 @@ def test_failed_scrapes_are_retained_and_never_become_endpoints():
     assert w.n_snapshots == 5              # the failure is counted, not dropped
 
 
+def test_a_counter_reset_is_reported_not_reported_as_a_negative_rate():
+    """An engine restart inside the window makes the delta unknowable: you
+    know the end value but not how far the counter climbed before zeroing."""
+    snaps = [_snap(0.0, gen=5000.0, prompt=9000.0, steps=800),
+             _snap(1.0, gen=5400.0, prompt=9800.0, steps=850),
+             _snap(2.0, gen=120.0, prompt=300.0, steps=20)]     # restarted
+    w = window_from_snapshots(snaps, 0.5, 1.5)
+    assert "generation_tokens_total" in w.counter_resets
+    assert "prompt_tokens_total" in w.counter_resets
+    assert "iteration_tokens_hist" in w.counter_resets
+    assert w.tokens_out is None                  # never a negative token count
+    assert w.output_tok_s is None                # and never a negative rate
+    assert w.steps is None
+    # a window that does NOT span the restart is unaffected
+    clean = window_from_snapshots(snaps, 0.2, 0.8)
+    assert clean.counter_resets == ()
+    assert clean.tokens_out == pytest.approx(400.0)
+
+
+def test_per_position_reset_is_reported_too():
+    snaps = [_snap(0.0, accepted=0.0), _snap(1.0, accepted=0.0)]
+    text_a = ('vllm:spec_decode_num_accepted_tokens_per_pos_total'
+              '{engine="0",position="0"} 900\n')
+    text_b = ('vllm:spec_decode_num_accepted_tokens_per_pos_total'
+              '{engine="0",position="0"} 12\n')
+    snaps = [Snapshot(0.0, 0.01, parse_text(text_a)),
+             Snapshot(1.0, 0.01, parse_text(text_b))]
+    w = window_from_snapshots(snaps, 0.0, 1.0)
+    assert "spec_decode_accepted_per_pos" in w.counter_resets
+    assert w.per_position is None
+
+
 def test_window_to_dict_is_json_serialisable():
     d = window_from_snapshots(_series(), 1.0, 3.0).to_dict()
     json.dumps(d)                          # must not raise
@@ -489,6 +555,16 @@ def test_snapshot_json_round_trip_keeps_the_raw_lines(tmp_path):
     assert back.rtt == pytest.approx(s.rtt)
     ad = detect_adapter(back.samples)
     assert ad.counter(back.samples, "generation_tokens_total") == 42.0
+
+
+def test_snapshot_json_round_trip_escapes_label_values():
+    """The raw lines are the archive format, so a label value carrying a
+    quote or a backslash has to survive the round trip intact."""
+    nasty = Sample("vllm:request_success_total",
+                   {"finished_reason": 'stop\\ "quoted"', "engine": "0"}, 3.0)
+    s = Snapshot(t_sent=1.0, rtt=0.01, samples=[nasty])   # no `lines`: _render
+    back = Snapshot.from_json(s.to_json())
+    assert back.samples == [nasty]
 
 
 def test_load_jsonl_skips_a_truncated_final_line(tmp_path):
@@ -658,6 +734,24 @@ def test_sampler_live_line():
 def test_sampler_rejects_a_nonpositive_interval():
     with pytest.raises(ValueError):
         MetricsSampler("http://fake/metrics", interval=0.0)
+
+
+def test_an_unwritable_out_path_fails_before_a_client_is_opened(tmp_path):
+    """`__aenter__` raising means `__aexit__` never runs, so anything opened
+    before the failure would leak."""
+    async def run():
+        # NO injected client, so start() is the thing that would build one
+        s = MetricsSampler("http://fake/metrics", interval=0.01,
+                           out=str(tmp_path / "no-such-dir" / "log.jsonl"))
+        with pytest.raises(OSError):
+            async with s:
+                pass
+        return s
+
+    s = asyncio.run(run())
+    assert s._client is None       # nothing to leak: it was never opened
+    assert s._out is None
+    assert s._task is None
 
 
 # ---------------------------------------------------------------------------

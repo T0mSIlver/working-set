@@ -201,7 +201,7 @@ class VLLMAdapter:
         name = self._resolved.get(key)
         if name is None:
             return None
-        return group_by_position(samples, name)
+        return group_by_position(samples, name, self.engine)
 
     def read(self, samples: list[Sample], key: str):
         """Dispatch on `KEY_KIND[key]` -- float, Histogram, dict or None."""
