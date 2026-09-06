@@ -4,6 +4,7 @@
     ws init [--model KEY --gpu PART --tp N ...] write a starter config
     ws models                                  list model / GPU keys
     ws selfcheck                               run the model's self-checks
+    ws metrics probe|tail|window ...           sample a live /metrics endpoint
 """
 from __future__ import annotations
 
@@ -153,6 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("selfcheck", help="run the model's self-checks")
     p.set_defaults(fn=cmd_selfcheck)
+
+    # `ws metrics` owns its own subtree, and builds it itself.
+    from .metrics.cli import add_subparser as _add_metrics
+    _add_metrics(sub)
     return ap
 
 
