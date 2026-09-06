@@ -19,7 +19,7 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 
-from .population import _window, user_loop
+from .population import _window, spike_evidence, user_loop
 from .request import EndpointSpec, RequestTrace, send_request
 from .session import Prefixes, draw_session_tokens, make_text
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
@@ -41,10 +41,12 @@ class BurstResult:
     standing_n: int = 0
     standing_itl_p50_ms: float = float("nan")
     standing_worst_p50_ms: float = float("nan")
+    standing_worst_p95_ms: float = float("nan")
     standing_worst_max_ms: float = float("nan")
     standing_floor_ms: float = float("nan")
     standing_freeze_per_ktok: float | None = None
     standing_freeze_ladder: list | None = None
+    spike: dict = field(default_factory=dict)   # see probe.spike_evidence
     server: dict | None = None
     traces: list = field(default_factory=list, repr=False)
 
@@ -65,8 +67,15 @@ class BurstResult:
 
 def eval_burst(n: int, standing_users: int, burst_traces: list,
                standing_traces: list, t_fire: float,
-               server: dict | None = None) -> BurstResult:
-    """Pure: the burst's drain and the standing load's gap distribution."""
+               server: dict | None = None,
+               cap_tokens: float = 0.0) -> BurstResult:
+    """Pure: the burst's drain and the standing load's gap distribution.
+
+    `last_ttft_s` and `drain_s` are the max over the requests that ANSWERED.
+    With a failure among them they are the drain of a smaller burst, which is
+    why `n_err` is carried next to them and why H-burst refuses to score a
+    partial burst.
+    """
     ok = [t for t in burst_traces if t.ttft is not None and not t.error]
     r = BurstResult(n=n, standing_users=standing_users, n_ok=len(ok),
                     n_err=n - len(ok), server=server)
@@ -74,6 +83,11 @@ def eval_burst(n: int, standing_users: int, burst_traces: list,
         r.drain_s = max(t.t_send + t.ttft for t in ok) - t_fire
         r.last_ttft_s = max(t.ttft for t in ok)
     r.ttft_p50_s = pct([t.ttft for t in ok], 50)
+    # the same spike statistic the ladder and the sample report, over both
+    # legs: the burst's own misses are the cold prefills, the standing load
+    # supplies the decoders
+    r.spike = spike_evidence(list(burst_traces) + list(standing_traces),
+                             cap_tokens)
 
     # the window is "request in flight at fire time": t_end is the real
     # end-of-stream (turns that never got a first token have no t_end and are
@@ -85,6 +99,7 @@ def eval_burst(n: int, standing_users: int, burst_traces: list,
         r.standing_n = len(victims)
         r.standing_itl_p50_ms = pct([t.itl_p50 for t in victims], 50) * 1e3
         r.standing_worst_p50_ms = pct(worst, 50) * 1e3
+        r.standing_worst_p95_ms = pct(worst, 95) * 1e3
         r.standing_worst_max_ms = max(worst) * 1e3
         r.standing_floor_ms = min(t.itl_min for t in victims) * 1e3
         # per DECODED TOKEN, not per gap — see eval_rung
@@ -145,4 +160,5 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
         await asyncio.gather(*tasks, return_exceptions=True)
 
     server = _window(metrics, t_start, time.monotonic())
-    return eval_burst(n, pop, burst_traces, traces, t_fire, server)
+    return eval_burst(n, pop, burst_traces, traces, t_fire, server,
+                      cap_tokens=opts.context_cap_tokens)

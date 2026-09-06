@@ -12,14 +12,17 @@ than reporting a number that cannot be compared with B*.
 """
 from __future__ import annotations
 
-from .base import (BURST, EXCLUSIVE, NOT_ESTABLISHED, REFUTED, SUPPORTED,
-                   Hypothesis, Measurement, Prediction, Verdict)
+from .base import (BURST, BURST_PROBE, EXCLUSIVE, NOT_ESTABLISHED, REFUTED,
+                   SUPPORTED, Hypothesis, Measurement, Prediction, Verdict)
 
 
 class HBurst(Hypothesis):
     key = "H-burst"
     title = "a simultaneous flush of <= B* misses drains inside the budget"
     requires = frozenset({BURST, EXCLUSIVE})
+    # the burst probe, and ONLY the burst probe: `exclusive` is the permission
+    # to generate the standing load, not an instruction to ladder
+    probes = frozenset({BURST_PROBE})
 
     def statement(self, cfg, p) -> str:
         return (f"H-burst (needs --burst N): at the "
@@ -34,6 +37,10 @@ class HBurst(Hypothesis):
 
     async def measure(self, ctx) -> Measurement:
         b = await ctx.burst()
+        if b is None:
+            return Measurement(text="not measured",
+                               data={"reason": "the run ended before the "
+                                               "burst probe ran"})
         if b.last_ttft_s is None:
             return Measurement(text="not measured",
                                data={"reason": "no burst request answered",
@@ -55,6 +62,16 @@ class HBurst(Hypothesis):
                            "run with --burst N --exclusive to probe the "
                            "correlated-flush tolerance")
         n, budget = m.data["n"], m.data["ttft_budget_s"]
+        # DEVIATION from scripts/validate_deployment.py, which scored the max
+        # TTFT over the requests that ANSWERED. B* is about a flush of N: with
+        # a failure among them, "last first-token" is the drain of a burst of
+        # n_ok, and a burst that half failed could report support because the
+        # slow half was excluded from the max. A partial flush is no flush.
+        if m.data.get("n_err"):
+            return Verdict(NOT_ESTABLISHED,
+                           f"{m.data['n_err']} of {n} burst requests failed — "
+                           f"the drain measured is a burst of {m.data['n_ok']}, "
+                           "not of N")
         within = n <= (bstar or 0)
         met = m.value <= budget
         if within == met:

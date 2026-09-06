@@ -36,14 +36,38 @@ from dataclasses import asdict, dataclass, field
 from .stats import FREEZE_LADDER_MS, pct
 
 
-@dataclass
+@dataclass(frozen=True)
 class EndpointSpec:
-    """Where to send, and what the endpoint turned out to accept."""
+    """Where to send, and what the endpoint turned out to accept.
+
+    Frozen: a probe cache is keyed on it, and a spec that could be mutated
+    after a probe ran would hand back a result measured against a different
+    endpoint. The one thing that DOES change at run time — whether this
+    endpoint accepts `stream_options` — lives in `_flags`, excluded from
+    equality and the hash, so learning it does not change the spec's
+    identity.
+    """
     base_url: str = "http://localhost:8000/v1"
     model: str = ""
     api_key: str = ""                    # resolved value, never the env NAME
     api: str = "completions"             # "completions" | "chat"
-    use_stream_options: bool = True      # flipped off by the fallback
+    _flags: dict = field(default_factory=lambda: {"stream_options": True},
+                         compare=False, repr=False)
+
+    @property
+    def use_stream_options(self) -> bool:
+        return self._flags["stream_options"]
+
+    def disable_stream_options(self) -> None:
+        """Remember, for every FUTURE request, that this endpoint rejects the
+        usage extension. Requests already in flight carry their own payload
+        and decide their own retry from it — see `send_request`."""
+        self._flags["stream_options"] = False
+
+    def identity(self) -> tuple:
+        """What makes this a different endpoint. The API key is included by
+        presence only; it never reaches a cache key or a record."""
+        return (self.base_url, self.model, self.api, bool(self.api_key))
 
     @classmethod
     def from_config(cls, ep, api: str = "completions",
@@ -56,8 +80,9 @@ class EndpointSpec:
                    api=api)
 
     def redacted(self) -> dict:
-        d = asdict(self)
+        d = {k: v for k, v in asdict(self).items() if k != "_flags"}
         d["api_key"] = "<set>" if self.api_key else ""
+        d["use_stream_options"] = self.use_stream_options
         return d
 
 
@@ -70,6 +95,13 @@ class RequestTrace:
     t_send: float = 0.0               # monotonic clock at POST
     ttft: float | None = None
     decode_tps: float | None = None
+    # decode rate with the FREEZES TAKEN OUT: (tokens - 1) / (span - stall).
+    # steady_decode_point predicts the clean decode speed BETWEEN prefill
+    # spikes (its own docstring says so), and decode_tps is a mean over the
+    # whole stream, spikes included — comparing the two prices a freeze as a
+    # decode slowdown. Threshold-dependent by construction: `stall_s` is the
+    # time inside gaps at or above ProbeOptions.freeze_threshold_ms.
+    clean_decode_tps: float | None = None
     ptok_intended: int = 0
     ptok_achieved: int | None = None
     ctok: int | None = None
@@ -131,6 +163,14 @@ class RequestTrace:
         self.stall_at = tuple(
             sum(g for g in gaps if g >= t / 1e3) for t in FREEZE_LADDER_MS)
 
+    def finish_decode_rates(self, n_tok: int | None = None) -> None:
+        """Fill `clean_decode_tps` from the span and the stall. Split out of
+        the stream loop so a synthetic trace is scored by the same code."""
+        n_tok = n_tok if n_tok else (self.ctok or self.n_chunks)
+        clean = (self.span_s or 0.0) - self.stall_s
+        if n_tok and n_tok > 1 and clean > 0:
+            self.clean_decode_tps = (n_tok - 1) / clean
+
 
 def _covariates(metrics, t: float) -> dict | None:
     """Duck-typed read of a metrics sampler: `at(t) -> snapshot-like`. The
@@ -190,6 +230,33 @@ def _payload(ep: EndpointSpec, opts, prompt: str, max_tokens: int) -> tuple[str,
     return f"{ep.base_url}/completions", {**body, "prompt": prompt}
 
 
+async def _sse_events(response):
+    """Yield one SSE event's data payload per iteration.
+
+    The spec allows an event to carry SEVERAL `data:` lines, joined with a
+    newline, and terminates the event with a blank line. Treating every
+    `data:` line as its own JSON document raised JSONDecodeError on the first
+    such stream; vLLM does not split its frames today, but a proxy in front of
+    it may, and a crashed run loses the whole rung. Other field lines (`event:`,
+    `id:`, `:` comments) are skipped, as are the keep-alive blank lines that
+    separate nothing.
+    """
+    buf: list[str] = []
+    async for line in response.aiter_lines():
+        line = line.rstrip("\r")
+        if line == "":
+            if buf:
+                yield "\n".join(buf)
+                buf = []
+            continue
+        if line.startswith(":"):          # comment / keep-alive
+            continue
+        if line.startswith("data:"):
+            buf.append(line[5:].lstrip(" "))
+    if buf:
+        yield "\n".join(buf)
+
+
 def _delta_text(obj: dict) -> str:
     ch = obj.get("choices") or []
     if not ch:
@@ -203,7 +270,7 @@ def _delta_text(obj: dict) -> str:
 
 async def send_request(client, ep: EndpointSpec, opts, prompt: str,
                        trace: RequestTrace, max_tokens: int,
-                       metrics=None) -> str:
+                       metrics=None, _retries_left: int = 1) -> str:
     """Stream one completion; fills `trace` in place, returns the response
     text (appended to the session so the next warm turn extends the cached
     run)."""
@@ -222,18 +289,23 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
             trace.status = r.status_code
             if r.status_code != 200:
                 body = (await r.aread()).decode("utf-8", "replace")
-                if ep.use_stream_options and "stream_options" in body:
-                    # measure_mfu.py's fallback: the endpoint rejects the
-                    # usage extension. Retry once without it, for this run.
-                    ep.use_stream_options = False
+                # measure_mfu.py's fallback: the endpoint rejects the usage
+                # extension. Eligibility is decided from THIS request's own
+                # payload, not from the endpoint-wide flag — under the ladder
+                # many requests are in flight, and the first rejection clears
+                # that flag while the rest are still waiting on their own 400s.
+                # Reading the flag then made every one of them a hard error
+                # (8 concurrent: 1 retried, 7 failed). The flag is still
+                # cleared, for FUTURE requests.
+                if ("stream_options" in payload and _retries_left > 0
+                        and "stream_options" in body):
+                    ep.disable_stream_options()
                     return await send_request(client, ep, opts, prompt, trace,
-                                              max_tokens, metrics)
+                                              max_tokens, metrics,
+                                              _retries_left - 1)
                 trace.error = f"HTTP {r.status_code}: {body[:180]}"
                 return ""
-            async for line in r.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
+            async for data in _sse_events(r):
                 if data == "[DONE]":
                     break
                 obj = json.loads(data)
@@ -275,4 +347,5 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
     trace.n_chunks = n_chunks
     trace.gaps_ms = [g * 1e3 for g in gaps]
     trace.summarise_gaps(opts.freeze_threshold_ms)
+    trace.finish_decode_rates(n_tok)
     return "".join(text)

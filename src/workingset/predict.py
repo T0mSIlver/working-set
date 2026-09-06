@@ -127,7 +127,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 
     steady = _steady_block(m, t, wl, rate_total, w.max_output_tokens,
                            dep.max_model_len, chunk, cal.mfu, duty,
-                           n_iter=n_iter, seed=seed)
+                           mbu=cal.mbu, n_iter=n_iter, seed=seed)
 
     return Predictions(
         warm_capacity_p5=_int(op["ceilings"]["cache"]),
@@ -189,15 +189,16 @@ def freeze_ms(model: M.Model, topo: M.Topology, cap: float, chunk: float,
 
 
 def _steady_block(m, t, wl, rate_total: float, out_tokens: float, cap: float,
-                  chunk: float, mfu: float, duty: float,
+                  chunk: float, mfu: float, duty: float, mbu: float,
                   n_iter: int, seed: int) -> dict:
     empty = {"steady_decode_seqs": None, "steady_decode_tok_s": None,
              "itl_normal_ms": None, "itl_worst_freeze_ms": None,
              "itl_freeze_lo_ms": None, "itl_freeze_hi_ms": None}
     if duty >= 1.0:
         return empty
+    # the calibration block's MBU, the same one max_users_decode is priced at
     sp = M.steady_decode_point(m, t, wl, rate_total, out_tokens=out_tokens,
-                               n_iter=n_iter, seed=seed)
+                               mbu=mbu, n_iter=n_iter, seed=seed)
     pu = sp["per_user_tok_s"]
     if sp["saturated"] or not (pu > 0):
         return empty

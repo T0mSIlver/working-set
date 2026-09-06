@@ -53,6 +53,14 @@ class Rung:
     ttft_miss_mean: float = float("nan")
     ttft_all_pX: float = float("nan")
     decode_p50: float = float("nan")
+    # per-user p50 of the FREEZE-EXCLUDED decode rate, and the decode batch
+    # the server reported while this window was being measured. Both are what
+    # H-steady is scored on: steady_decode_point predicts the clean decode
+    # speed between prefill spikes, at a batch size, and neither decode_p50
+    # (a mean over freezes) nor the population answers that.
+    decode_clean_p50: float = float("nan")
+    decode_seqs: float = float("nan")   # mean requests_running, IN-WINDOW
+    n_seqs_obs: int = 0                 # snapshots behind decode_seqs
     # --- ITL gap distribution ---
     itl_p50_ms: float = float("nan")        # the normal inter-token gap
     itl_worst_p50_ms: float = float("nan")  # typical worst freeze, per response
@@ -76,6 +84,7 @@ class Rung:
     reasons: list = field(default_factory=list)
     blown: bool = False                # SLOs clearly blown -> ladder stops here
     partial: bool = False              # interrupted mid-window: shown, never counted
+    spike: dict = field(default_factory=dict)   # see probe.spike_evidence
     server: dict | None = None         # metrics window delta, opaque
     traces: list = field(default_factory=list, repr=False)
 
@@ -92,6 +101,102 @@ class Rung:
         r = cls(**{k: v for k, v in d.items() if k in known})
         r.traces = [RequestTrace.from_dict(t) for t in raw]
         return r
+
+
+# ============================================================================
+# shared derived statistics
+# ============================================================================
+def per_user_p50(traces: list, attr: str) -> float:
+    """Median within each user, then p50 across users — the model's "per-user
+    p50" is a population statistic, not a turn statistic."""
+    by_user: dict[int, list] = {}
+    for t in traces:
+        v = getattr(t, attr, None)
+        if v is not None:
+            by_user.setdefault(t.uid, []).append(v)
+    return pct([pct(v, 50) for v in by_user.values()], 50)
+
+
+def decode_batch(traces: list) -> tuple[float, int]:
+    """(mean requests_running, snapshots) over the traces PASSED IN — callers
+    pass the measured window only, never the ramp.
+
+    ARRIVAL-WEIGHTED, not time-weighted: each snapshot is taken when a request
+    was sent, so a period with more arrivals contributes more samples. Under
+    the closed loop arrivals are near-Poisson and the two agree in the mean,
+    but a run whose arrival rate moves inside the window (the ramp is exactly
+    that, which is why it is excluded) will not. Returns (nan, 0) with no
+    metrics sampler attached — the caller must then not claim a batch size.
+    """
+    vals = [t.covariates.get("requests_running") for t in traces
+            if t.covariates and t.covariates.get("requests_running") is not None]
+    if not vals:
+        return float("nan"), 0
+    return sum(vals) / len(vals), len(vals)
+
+
+SPIKE_MIN_FRAC = 0.5     # a cold prefill counts as "deep" at half the cap
+
+
+def spike_evidence(traces: list, cap_tokens: float,
+                   min_frac: float = SPIKE_MIN_FRAC) -> dict:
+    """Did a DEEP COLD PREFILL run while somebody was decoding, and what did
+    the decoders feel?
+
+    The freeze the model predicts is the last chunk of a FULL-CONTEXT cold
+    re-prefill joining the decode batch. Two things have to be true before a
+    number here can be read against that prediction, and neither is implied by
+    "some gaps were measured":
+
+      * a cold prefill (a forced miss, or a session's establishing turn) whose
+        prompt is at least `min_frac` x the context cap actually ran. A 31k
+        prefill's last chunk carries a ~31k prior, not a 180k one, and is a
+        genuinely smaller event — measuring it and scoring it against the
+        180k prediction refutes an experiment nobody performed.
+      * at least one OTHER response was streaming during that prefill. The
+        freeze is what the prefill does to the rest of the batch; with an idle
+        batch there is nothing to freeze.
+
+    The witnesses are the responses streaming inside such a prefill's window
+    [t_send, t_send + ttft]. Returns the same keys whatever the probe, so
+    H-itl-spike scores one statistic (`worst_p95_ms`) across the ladder, the
+    sample and the burst rather than three.
+    """
+    out = {"n": 0, "worst_p95_ms": None, "worst_p50_ms": None,
+           "worst_max_ms": None, "normal_ms": None, "floor_ms": None,
+           "deepest_ptok": 0, "cap_tokens": cap_tokens,
+           "min_ptok": min_frac * cap_tokens, "n_deep": 0}
+    deep = []
+    for t in traces:
+        if t.kind not in ("miss", "first") or t.ttft is None or t.error:
+            continue
+        ptok = t.ptok_achieved or t.ptok_intended or 0
+        out["deepest_ptok"] = max(out["deepest_ptok"], ptok)
+        if ptok >= out["min_ptok"]:
+            deep.append(t)
+    out["n_deep"] = len(deep)
+    if not deep:
+        return out
+
+    victims = []
+    for v in traces:
+        if v.n_gaps <= 0 or not v.t_end or v.ttft is None:
+            continue
+        v_start = v.t_send + v.ttft          # streaming, not queueing
+        for c in deep:
+            if c is v:
+                continue
+            if v_start <= c.t_send + c.ttft and v.t_end >= c.t_send:
+                victims.append(v)
+                break
+    if not victims:
+        return out
+    worst = [v.itl_max for v in victims]
+    out.update(n=len(victims), worst_p95_ms=pct(worst, 95) * 1e3,
+               worst_p50_ms=pct(worst, 50) * 1e3, worst_max_ms=max(worst) * 1e3,
+               normal_ms=pct([v.itl_p50 for v in victims], 50) * 1e3,
+               floor_ms=min(v.itl_min for v in victims) * 1e3)
+    return out
 
 
 # ============================================================================
@@ -120,11 +225,9 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     res.ttft_all_pX = pct([t.ttft for t in ok], p)
 
     # per-user decode: median within each user, then p50 across users
-    by_user: dict[int, list] = {}
-    for t in ok:
-        if t.decode_tps is not None:
-            by_user.setdefault(t.uid, []).append(t.decode_tps)
-    res.decode_p50 = pct([pct(v, 50) for v in by_user.values()], 50)
+    res.decode_p50 = per_user_p50(ok, "decode_tps")
+    res.decode_clean_p50 = per_user_p50(ok, "clean_decode_tps")
+    res.decode_seqs, res.n_seqs_obs = decode_batch(ok)
 
     # ITL gap distribution. decode_p50 above answers "how fast on average";
     # these answer "what did it feel like" — the chunk-size hypothesis lives
@@ -193,6 +296,10 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
                          and res.decode_p50 < 0.5 * floor)
                      or err_frac > 0.20)
     res.passed = not res.reasons
+    # spike evidence runs over EVERY trace in the rung, establishing turns
+    # included: a session's first turn is a cold prefill and freezes the batch
+    # exactly as a forced miss does, whether or not the SLO window counts it.
+    res.spike = spike_evidence(traces, opts.context_cap_tokens)
     res.traces = list(traces)
     return res
 
@@ -288,10 +395,15 @@ class Sample:
     n: int = 0
     n_ok: int = 0
     n_err: int = 0
+    n_miss: int = 0
+    n_hit: int = 0
     ttft_miss_mean: float = float("nan")
     ttft_miss_p50: float = float("nan")
     ttft_hit_p50: float = float("nan")
     decode_p50: float = float("nan")
+    decode_clean_p50: float = float("nan")
+    decode_seqs: float = float("nan")
+    n_seqs_obs: int = 0
     itl_p50_ms: float = float("nan")
     itl_worst_p50_ms: float = float("nan")
     itl_worst_max_ms: float = float("nan")
@@ -300,6 +412,7 @@ class Sample:
     chunk_tok_ratio: float = float("nan")
     ptok_ratio: float = float("nan")
     cached_frac: float = float("nan")
+    spike: dict = field(default_factory=dict)
     server: dict | None = None
     traces: list = field(default_factory=list, repr=False)
 
@@ -318,23 +431,31 @@ class Sample:
         return s
 
 
-def eval_sample(traces: list, server: dict | None = None) -> Sample:
+def eval_sample(traces: list, server: dict | None = None,
+                cap_tokens: float = 0.0) -> Sample:
     """Pure: the same derived quantities as `eval_rung`, over a handful of
-    turns and with no measure window to clip to."""
+    turns and with no measure window to clip to.
+
+    DEVIATION from the first cut of this file: "first" turns (session
+    establishment) are excluded, as `eval_rung` excludes them. An
+    establishment turn is a full cold prefill on an empty history — counting
+    it among the hits inflated the hit TTFT and put a cold decode into the
+    per-user median.
+    """
+    measured = [t for t in traces if t.kind in ("hit", "miss")]
     s = Sample(n=len(traces), server=server)
-    ok = [t for t in traces if not t.error and t.ttft is not None]
-    s.n_ok, s.n_err = len(ok), len(traces) - len(ok)
+    ok = [t for t in measured if not t.error and t.ttft is not None]
+    s.n_ok, s.n_err = len(ok), len(measured) - len(ok)
     miss = [t for t in ok if t.kind == "miss"]
     hit = [t for t in ok if t.kind == "hit"]
+    s.n_miss, s.n_hit = len(miss), len(hit)
     if miss:
         s.ttft_miss_mean = sum(t.ttft for t in miss) / len(miss)
         s.ttft_miss_p50 = pct([t.ttft for t in miss], 50)
     s.ttft_hit_p50 = pct([t.ttft for t in hit], 50)
-    by_user: dict[int, list] = {}
-    for t in ok:
-        if t.decode_tps is not None:
-            by_user.setdefault(t.uid, []).append(t.decode_tps)
-    s.decode_p50 = pct([pct(v, 50) for v in by_user.values()], 50)
+    s.decode_p50 = per_user_p50(ok, "decode_tps")
+    s.decode_clean_p50 = per_user_p50(ok, "clean_decode_tps")
+    s.decode_seqs, s.n_seqs_obs = decode_batch(ok)
     g = [t for t in ok if t.n_gaps > 0 and t.span_s]
     if g:
         s.itl_p50_ms = pct([t.itl_p50 for t in g], 50) * 1e3
@@ -354,6 +475,7 @@ def eval_sample(traces: list, server: dict | None = None) -> Sample:
     if cached:
         s.cached_frac = sum(1 for t in cached
                             if t.cached_tokens > 0.5 * t.ptok_achieved) / len(cached)
+    s.spike = spike_evidence(traces, cap_tokens)
     s.traces = list(traces)
     return s
 
@@ -387,4 +509,5 @@ async def run_sample(client, ep: EndpointSpec, cfg, opts, prefixes: Prefixes,
             session.commit(reply)
 
     await asyncio.gather(*[one(i) for i in range(max(1, opts.sample_requests))])
-    return eval_sample(traces, _window(metrics, t0, time.monotonic()))
+    return eval_sample(traces, _window(metrics, t0, time.monotonic()),
+                       cap_tokens=opts.context_cap_tokens)

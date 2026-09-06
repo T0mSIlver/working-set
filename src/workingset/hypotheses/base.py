@@ -108,12 +108,36 @@ def _safe(x):
     return x
 
 
+LADDER, SAMPLE, BURST_PROBE = "ladder", "sample", "burst"
+
+
 class Hypothesis:
     """Base class. Subclasses set `key`, `title`, `requires` and implement the
-    three methods."""
+    three methods.
+
+    `requires` is a set of PERMISSIONS (what the operator allowed this run to
+    do); `probes` and `conditional_probes` are the WORK that follows from
+    them. The two were one field, and it produced plans that lied: H-burst
+    carries the `exclusive` permission and had a ladder planned for it that it
+    never ran, while H-itl-spike planned a `sample` and then fired a burst.
+    `--dry-run` prints the probe set, so a plan that disagrees with the run is
+    a plan that under-reports what is about to hit the endpoint.
+    """
     key: str = ""
     title: str = ""
-    requires: frozenset = frozenset()
+    requires: frozenset = frozenset()      # permissions
+    probes: frozenset = frozenset()        # probes it always needs
+
+    def conditional_probes(self, planned: frozenset) -> frozenset:
+        """Probes that depend on what the rest of the run is already doing —
+        resolved once, against the mandatory set, never re-decided at
+        measure time."""
+        return frozenset()
+
+    def statement(self, cfg, predictions) -> str:
+        """The quotable sentence, with this config's numbers in it. Overridden
+        by every hypothesis; the fallback keeps a custom one printable."""
+        return f"{self.key}: {self.title}"
 
     def predict(self, cfg, predictions) -> Prediction:
         raise NotImplementedError
@@ -126,9 +150,13 @@ class Hypothesis:
         raise NotImplementedError
 
     # ---- convenience ---------------------------------------------------
-    def describe(self) -> dict:
-        return {"key": self.key, "title": self.title,
-                "requires": sorted(self.requires)}
+    def describe(self, probes: frozenset | None = None) -> dict:
+        d = {"key": self.key, "title": self.title,
+             "requires": sorted(self.requires)}
+        if probes is not None:
+            d["probes"] = sorted(self.probes
+                                 | self.conditional_probes(probes))
+        return d
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.key}>"

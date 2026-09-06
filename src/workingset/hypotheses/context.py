@@ -79,11 +79,33 @@ class LadderView:
               and r.achieved_rps < 0.7 * r.offered_rps]
         return min(ev, key=lambda r: r.pop) if ev else None
 
+    @staticmethod
+    def _warm_evidence(r) -> bool:
+        """Did this rung actually SHOW its hit turns staying warm?
+
+        DEVIATION from scripts/validate_deployment.py, which counted a rung as
+        held when `evict_frac` was nan — i.e. when there were no forced misses
+        to calibrate the cold-TTFT threshold against, so the classifier could
+        not run at all. Missing evidence read as evidence: a rung with zero
+        misses and a fully cold cache "held". Warmth now needs a witness,
+        either the TTFT classifier or the server's own cached_tokens.
+        """
+        return ((math.isfinite(r.evict_frac) and r.evict_frac < 0.05)
+                or (math.isfinite(r.cached_frac) and r.cached_frac >= 0.95))
+
     @property
     def warm_held(self) -> list[int]:
-        """Populations whose hit turns stayed warm (low effective-cold)."""
+        """Populations whose hit turns were SHOWN to stay warm."""
+        return [r.pop for r in self.full
+                if r.n_hit > 0 and self._warm_evidence(r)]
+
+    @property
+    def warm_unwitnessed(self) -> list[int]:
+        """Populations where neither classifier could run — no forced miss to
+        calibrate against and no cached_tokens from the server."""
         return [r.pop for r in self.full if r.n_hit > 0
-                and (not math.isfinite(r.evict_frac) or r.evict_frac < 0.05)]
+                and not math.isfinite(r.evict_frac)
+                and not math.isfinite(r.cached_frac)]
 
     @property
     def warm_evicted(self):
@@ -102,7 +124,7 @@ class RunContext:
 
     def __init__(self, cfg, predictions, opts, ep, client=None, metrics=None,
                  exclusive: bool = False, burst: int = 0,
-                 burst_users: int = 0, run_ladder: bool = False,
+                 burst_users: int = 0, probes=frozenset(),
                  on_progress=None):
         self.cfg = cfg
         self.predictions = predictions
@@ -113,29 +135,71 @@ class RunContext:
         self.exclusive = exclusive
         self.burst_n = burst
         self.burst_users = burst_users
-        self.run_ladder = run_ladder
+        # THE PLAN's probe set, not a per-hypothesis decision. A hypothesis
+        # asks what exists; it never starts a probe the plan did not print.
+        self.probes = frozenset(probes)
         self.on_progress = on_progress or (lambda *_a, **_k: None)
-        self.prefixes = build_prefixes(cfg.workload, opts.chars_per_token)
         self._cache: dict = {}
+        self._prefix_key = None
+        self._prefixes = None
+        self.frozen = False            # no new probes: answer from the cache
         self.partial = None            # (pop, n_sub, traces, measure_start)
 
+    def freeze(self) -> None:
+        """Stop starting probes. Used after an interrupt so the hypotheses
+        that had not run yet can still be scored against the evidence already
+        collected, without firing a fresh population at the endpoint on the
+        way out."""
+        self.frozen = True
+
+    @property
+    def run_ladder(self) -> bool:
+        return "ladder" in self.probes
+
+    @property
+    def prefixes(self):
+        """Rebuilt when the workload or the chars-per-token calibration that
+        determine their bytes change — a cached prefix from a different
+        workload is a different experiment."""
+        key = (self.cfg.workload, self.opts.chars_per_token)
+        if key != self._prefix_key:
+            self._prefixes = build_prefixes(self.cfg.workload,
+                                            self.opts.chars_per_token)
+            self._prefix_key = key
+        return self._prefixes
+
     # ---- cache keys ----------------------------------------------------
+    def _identity(self) -> tuple:
+        """Everything that changes what a probe measures. The endpoint and the
+        config were missing: `ctx.ep.base_url = other` used to hand back the
+        sample measured against the first endpoint, and two configs differing
+        only in workload or SLO shared a rung. EndpointSpec is frozen so this
+        cannot drift underneath the cache between the key and the probe."""
+        return (self.ep.identity(), self.opts.ladder_key(),
+                self.cfg.workload, self.cfg.slo, self.cfg.deployment,
+                self.metrics is not None)
+
     def _ladder_key(self) -> tuple:
-        return ("ladder", self.opts.ladder_key(),
+        return ("ladder", self._identity(),
                 self.predictions.predicted_limit_users,
                 self.predictions.operating_point_users)
 
     def _sample_key(self) -> tuple:
-        return ("sample", self.opts.ladder_key(), self.opts.sample_requests,
+        return ("sample", self._identity(), self.opts.sample_requests,
                 self.opts.sample_warm_turns)
 
     def _burst_pop(self) -> int:
+        """Standing load for the burst. ONE definition: --burst-users, else
+        the operating point the B* prediction was priced at, else half the
+        predicted limit when the operating point is zero. test_cmd's dry-run
+        prints this function's answer rather than its own copy of the rule,
+        which disagreed whenever operating_point_users was 0."""
         return self.burst_users or max(1, round(
             self.predictions.operating_point_users
             or 0.5 * self.predictions.predicted_limit_users))
 
     def _burst_key(self) -> tuple:
-        return ("burst", self.opts.ladder_key(), self.burst_n, self._burst_pop())
+        return ("burst", self._identity(), self.burst_n, self._burst_pop())
 
     def seed(self, rungs=None, sample=None, burst=None) -> "RunContext":
         """Pre-fill the cache with probe results measured elsewhere — a replay
@@ -159,6 +223,8 @@ class RunContext:
         key = self._ladder_key()
         if key in self._cache:
             return self._cache[key]
+        if self.frozen:
+            return LadderView([])
         rungs: list[Rung] = []
         view = LadderView(rungs)
         self._cache[key] = view
@@ -180,39 +246,28 @@ class RunContext:
     def _note_partial(self, pop, n_sub, traces, measure_start):
         self.partial = (pop, n_sub, traces, measure_start)
 
-    async def sample(self) -> Sample:
+    async def sample(self) -> Sample | None:
         key = self._sample_key()
         if key not in self._cache:
+            if self.frozen:
+                return None
             self.on_progress("sample", self.opts.sample_requests)
             self._cache[key] = await run_sample(
                 self.client, self.ep, self.cfg, self.opts, self.prefixes,
                 self.metrics)
         return self._cache[key]
 
-    async def burst(self) -> BurstResult:
+    async def burst(self) -> BurstResult | None:
         pop = self._burst_pop()
         key = self._burst_key()
         if key not in self._cache:
+            if self.frozen:
+                return None
             self.on_progress("burst", (self.burst_n, pop))
             self._cache[key] = await run_burst(
                 self.client, self.ep, self.cfg, self.opts, self.burst_n, pop,
                 self.prefixes, self.metrics)
         return self._cache[key]
-
-    # ---- what the cheap hypotheses read --------------------------------
-    async def at_operating_point(self):
-        """The best available reading at (or nearest) the operating point.
-
-        With a ladder: the rung nearest the operating point that carries the
-        statistic asked for — the harness's rule, because ttft_miss rises
-        steeply with load and sampling it at the predicted LIMIT instead
-        systematically failed a correct model. Without one: the cheap sample,
-        which measures at whatever load the endpoint already carries.
-        """
-        if self.run_ladder:
-            view = await self.ladder()
-            return view
-        return await self.sample()
 
     def cached(self) -> dict:
         """Everything measured so far, for the run record."""

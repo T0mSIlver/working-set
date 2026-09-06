@@ -2100,7 +2100,8 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
                         rate_group: float,
                         out_tokens: float = OUT_TOKENS_DEFAULT,
                         union: str = "linear", n_iter: int = 400,
-                        seed: int = 0, hi: int = 4096) -> dict:
+                        seed: int = 0, hi: int = 4096,
+                        mbu: float = None) -> dict:
     """The decode batch a given LOAD actually produces, and its per-user speed.
 
     Every other decode figure in this model is a stress test: max_users_decode
@@ -2138,6 +2139,12 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     `saturated` is True when the demand exceeds what `hi` concurrent decoders
     could retire: no steady state exists, so n is a floor, not an estimate.
 
+    `mbu` is passed straight to decode_curves (None = the measured default),
+    so a caller honouring a calibration block prices this point and
+    max_users_decode at the SAME decode efficiency. Without it the two
+    disagreed silently: at mbu 0.1 vs 0.8 the decode ceiling moved 3 -> 171
+    users while this point stayed at 59 tok/s either way.
+
     Approximations, both material enough to state wherever this is quoted:
       MEAN FIELD  v is evaluated at the MEAN batch, not averaged over the
           batch-size distribution. v is convex in n, so E[v(N)] >= v(E[N]) by
@@ -2161,7 +2168,7 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
 
     def v(n: int) -> float:
         return float(decode_curves(model, topo, wl, [n], n_iter=n_iter,
-                                   seed=seed, union=union)[1][0])
+                                   seed=seed, union=union, mbu=mbu)[1][0])
 
     out = {"demand_tok_s": demand, "saturated": False}
     if demand == 0:                        # no load: nothing is decoding

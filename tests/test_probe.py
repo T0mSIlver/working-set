@@ -16,7 +16,8 @@ from workingset.probe import (ProbeOptions, RequestTrace, build_ladder,
                               build_prefixes, draw_session_tokens, eval_burst,
                               eval_rung, eval_sample, make_session, make_text,
                               pct, run_population, run_sample,
-                              sampler_selfcheck, sub_prefix_floor)
+                              sampler_selfcheck, spike_evidence,
+                              sub_prefix_floor)
 from workingset.probe.burst import run_burst
 from workingset.probe.request import EndpointSpec, send_request
 
@@ -47,13 +48,24 @@ def _sse(obj) -> bytes:
     return f"data: {json.dumps(obj)}\n\n".encode()
 
 
+def _sse_multiline(obj) -> bytes:
+    """The same event, split across two `data:` lines — legal SSE, which the
+    reader must rejoin with a newline before parsing."""
+    blob = json.dumps(obj)
+    cut = blob.index(",") + 1
+    return f"data: {blob[:cut]}\ndata: {blob[cut:]}\n\n".encode()
+
+
 def fake_server(n_tokens: int = 6, delay: float = 0.001, ttft: float = 0.003,
                 usage: bool = True, cached: int = 0,
                 freeze_at: int | None = None, freeze_s: float = 0.05,
-                reject_stream_options: bool = False, seen: list | None = None):
+                reject_stream_options: bool = False, seen: list | None = None,
+                multiline: bool = False, keepalive: bool = False,
+                ptok: int | None = None):
     """An OpenAI-compatible streaming endpoint that streams N tokens with a
     configurable per-event delay, one optional long freeze, and a usage
-    trailer."""
+    trailer. Chat requests get `choices[].delta.content`, completion requests
+    get `choices[].text`, so both parser paths are real."""
     state = {"rejected": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -65,24 +77,28 @@ def fake_server(n_tokens: int = 6, delay: float = 0.001, ttft: float = 0.003,
             return httpx.Response(
                 400, json={"error": "stream_options is not supported"})
         n = min(n_tokens, body.get("max_tokens") or n_tokens)
-        prompt = body.get("prompt")
-        if prompt is None:
-            prompt = body["messages"][0]["content"]
-        ptok = int(len(prompt) / 4)
+        chat = "messages" in body
+        prompt = body["messages"][0]["content"] if chat else body["prompt"]
+        p = ptok if ptok is not None else int(len(prompt) / 4)
+        frame = _sse_multiline if multiline else _sse
+        chunk = ({"choices": [{"delta": {"content": "tok "}, "index": 0}]}
+                 if chat else {"choices": [{"text": "tok ", "index": 0}]})
 
         async def gen():
             await asyncio.sleep(ttft)
+            if keepalive:
+                yield b": keep-alive\n\n"
             for i in range(n):
                 if i:
                     await asyncio.sleep(
                         freeze_s if freeze_at == i else delay)
-                yield _sse({"choices": [{"text": "tok ", "index": 0}]})
+                yield frame(chunk)
             if usage and "stream_options" in body:
-                yield _sse({"choices": [],
-                            "usage": {"prompt_tokens": ptok,
-                                      "completion_tokens": n,
-                                      "prompt_tokens_details":
-                                          {"cached_tokens": cached}}})
+                yield frame({"choices": [],
+                             "usage": {"prompt_tokens": p,
+                                       "completion_tokens": n,
+                                       "prompt_tokens_details":
+                                           {"cached_tokens": cached}}})
             yield b"data: [DONE]\n\n"
 
         return httpx.Response(200, content=gen(),
@@ -407,17 +423,87 @@ def test_http_error_is_recorded_not_raised():
     asyncio.run(go())
 
 
-def test_chat_route_sends_messages():
+def test_chat_route_sends_messages_and_reads_delta_content():
     seen: list = []
     async def go():
-        handler = fake_server(seen=seen)
+        handler = fake_server(n_tokens=5, seen=seen)
         async with client_for(handler) as c:
             ep = EndpointSpec(base_url="http://x/v1", model="m", api="chat")
             tr = RequestTrace(uid=1, kind="hit")
-            await send_request(c, ep, small_opts(), "hello", tr, 4)
+            txt = await send_request(c, ep, small_opts(), "hello", tr, 5)
         assert seen[0]["messages"][0]["content"] == "hello"
-        assert tr.ttft is not None
+        # the server sends choices[].delta.content, not .text: the chat parser
+        # is what has to read it
+        assert txt == "tok " * 5
+        assert tr.ttft is not None and tr.n_chunks == 5 and tr.n_gaps == 4
     asyncio.run(go())
+
+
+def test_multiline_sse_frames_and_keepalives_parse():
+    """The SSE spec lets one event carry several `data:` lines, joined with a
+    newline, and `:` comment lines keep a connection alive. Splitting on lines
+    and parsing each as JSON raised JSONDecodeError and lost the rung."""
+    async def go():
+        handler = fake_server(n_tokens=4, multiline=True, keepalive=True)
+        async with client_for(handler) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            tr = RequestTrace(uid=1, kind="hit")
+            txt = await send_request(c, ep, small_opts(), "p" * 40, tr, 4)
+        assert txt == "tok " * 4
+        assert tr.error is None and tr.n_chunks == 4
+        assert tr.ctok == 4          # the usage trailer was split too
+    asyncio.run(go())
+
+
+def test_concurrent_stream_options_rejection_retries_every_request():
+    """The endpoint-wide flag is cleared by whichever request is rejected
+    first; the others are already in flight with stream_options in their own
+    payload. Deciding eligibility from the flag failed all of them (8
+    concurrent: 1 retried, 7 hard errors)."""
+    async def go():
+        handler = fake_server(n_tokens=3, reject_stream_options=True)
+        async with client_for(handler) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            traces = [RequestTrace(uid=i, kind="hit") for i in range(8)]
+            await asyncio.gather(*[
+                send_request(c, ep, small_opts(), "p" * 40, t, 3)
+                for t in traces])
+        assert [t.error for t in traces] == [None] * 8
+        assert all(t.ttft is not None for t in traces)
+        assert ep.use_stream_options is False
+    asyncio.run(go())
+
+
+def test_the_retry_is_bounded():
+    """An endpoint that mentions stream_options in EVERY error body must not
+    send the probe into unbounded recursion."""
+    calls = {"n": 0}
+
+    def handler(_request):
+        calls["n"] += 1
+        return httpx.Response(500, json={"error": "stream_options exploded"})
+
+    async def go():
+        async with client_for(handler) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            tr = RequestTrace(uid=1, kind="hit")
+            await send_request(c, ep, small_opts(), "p", tr, 4)
+        assert calls["n"] == 2               # the original plus one retry
+        assert tr.error and "500" in tr.error
+    asyncio.run(go())
+
+
+def test_endpoint_spec_is_frozen_but_learns_its_flags():
+    ep = EndpointSpec(base_url="http://x/v1", model="m")
+    with pytest.raises(Exception):
+        ep.base_url = "http://y/v1"
+    ident = ep.identity()
+    ep.disable_stream_options()
+    assert ep.use_stream_options is False
+    # learning a flag is not becoming a different endpoint
+    assert ep.identity() == ident
+    assert ep == EndpointSpec(base_url="http://x/v1", model="m")
+    assert ep.redacted()["use_stream_options"] is False
 
 
 def test_ignore_eos_is_droppable():
@@ -533,6 +619,83 @@ def test_eval_burst_reads_the_standing_load_in_flight():
     assert b.drain_s == pytest.approx(2.0)
     assert b.standing_n == 1
     assert b.standing_worst_max_ms == pytest.approx(400.0)
+
+
+def test_clean_decode_excludes_the_freeze():
+    """steady_decode_point predicts the decode speed BETWEEN prefill spikes.
+    100 tokens over 1.0 s of which 0.5 s is one freeze is 99 tok/s by the mean
+    and ~198 tok/s once the stall is taken out."""
+    t = trace(1, "hit", 1.0, 0.1, tps=None, gaps_ms=[5] * 99 + [500], ctok=101)
+    t.decode_tps = 100 / (t.span_s)
+    t.finish_decode_rates(101)
+    assert t.clean_decode_tps == pytest.approx(100 / (t.span_s - t.stall_s))
+    assert t.clean_decode_tps > 1.9 * t.decode_tps
+
+
+def test_decode_batch_is_restricted_to_the_measure_window():
+    """Send-time snapshots taken during the ramp describe the ramp. A rung's
+    decode_seqs must average only the turns it measured."""
+    cfg, opts = small_cfg(), small_opts(measure_s=10.0)
+    ramp = trace(1, "hit", 0.1, 0.2, tps=100, ctok=10)
+    ramp.covariates = {"requests_running": 100}
+    a = trace(1, "hit", 5.0, 0.2, tps=100, ctok=10)
+    a.covariates = {"requests_running": 4}
+    b = trace(2, "hit", 6.0, 0.2, tps=100, ctok=10)
+    b.covariates = {"requests_running": 6}
+    r = eval_rung(2, 0, [ramp, a, b], measure_start=1.0, cfg=cfg, opts=opts)
+    assert r.decode_seqs == pytest.approx(5.0)     # not (100+4+6)/3
+    assert r.n_seqs_obs == 2
+
+
+def test_decode_batch_is_absent_without_a_sampler():
+    cfg, opts = small_cfg(), small_opts(measure_s=10.0)
+    r = eval_rung(1, 0, [trace(1, "hit", 1.0, 0.2, tps=100, ctok=10)],
+                  0.0, cfg, opts)
+    assert not math.isfinite(r.decode_seqs) and r.n_seqs_obs == 0
+
+
+def test_spike_evidence_needs_a_deep_prefill_and_a_witness():
+    cap = 100_000
+    # a decoding response that overlaps the miss's PREFILL window
+    victim = trace(1, "hit", 0.0, 0.1, tps=100, gaps_ms=[2, 900], ctok=50)
+    victim.t_end = 10.0
+    deep = trace(2, "miss", 1.0, 3.0, tps=10, ctok=5, ptok=90_000)
+    shallow = trace(3, "miss", 1.0, 3.0, tps=10, ctok=5, ptok=1_000)
+
+    # deep prefill + a witness -> evidence
+    ev = spike_evidence([victim, deep], cap)
+    assert ev["n"] == 1 and ev["n_deep"] == 1
+    assert ev["worst_p95_ms"] == pytest.approx(900.0)
+    assert ev["worst_max_ms"] == pytest.approx(900.0)
+
+    # the same gaps, but the only cold prefill is shallow: NOT the event the
+    # prediction is about
+    ev = spike_evidence([victim, shallow], cap)
+    assert ev["n"] == 0 and ev["n_deep"] == 0
+    assert ev["deepest_ptok"] == 1_000
+
+    # a deep prefill with nothing decoding through it: nothing to freeze
+    ev = spike_evidence([deep], cap)
+    assert ev["n"] == 0 and ev["n_deep"] == 1
+
+
+def test_spike_evidence_ignores_a_response_that_finished_first():
+    cap = 100_000
+    early = trace(1, "hit", 0.0, 0.1, tps=100, gaps_ms=[2, 900], ctok=50)
+    early.t_end = 0.5                       # done before the miss was sent
+    deep = trace(2, "miss", 5.0, 3.0, tps=10, ctok=5, ptok=90_000)
+    assert spike_evidence([early, deep], cap)["n"] == 0
+
+
+def test_eval_sample_excludes_establishing_turns():
+    s = eval_sample([
+        trace(1, "first", 1.0, 9.0, tps=5, ctok=10),
+        trace(1, "hit", 2.0, 0.4, tps=110, ctok=10),
+        trace(1, "miss", 3.0, 2.0, tps=90, ctok=10),
+    ], cap_tokens=1000)
+    assert s.n == 3 and s.n_ok == 2 and s.n_hit == 1 and s.n_miss == 1
+    assert s.ttft_hit_p50 == pytest.approx(0.4)   # not the 9 s cold turn
+    assert s.decode_p50 == pytest.approx(100.0)   # p50 of [110, 90]
 
 
 def test_eval_sample_on_synthetic_traces():

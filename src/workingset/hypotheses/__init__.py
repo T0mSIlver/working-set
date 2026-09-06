@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .base import (BOUNDED_BELOW, BURST, EXCLUSIVE, GLYPH, METRICS,
-                   NOT_ESTABLISHED, REFUTED, REQUIREMENTS, STATUSES,
-                   SUPPORTED, Hypothesis, Measurement, Prediction, Verdict,
-                   bracket_verdict, ratio_verdict)
+from .base import (BOUNDED_BELOW, BURST, BURST_PROBE, EXCLUSIVE, GLYPH,
+                   LADDER, METRICS, NOT_ESTABLISHED, REFUTED, REQUIREMENTS,
+                   SAMPLE, STATUSES, SUPPORTED, Hypothesis, Measurement,
+                   Prediction, Verdict, bracket_verdict, ratio_verdict)
 from .burst import HBurst
 from .ceilings import HBinding, HCache, HDecode, HLatency, HSaturation
 from .context import LadderView, RunContext
@@ -75,17 +75,23 @@ REGISTRY = Registry([
 
 @dataclass
 class Plan:
-    """What a run will actually do."""
+    """What a run will actually do.
+
+    `probes` is the complete set the run will execute — it is what --dry-run
+    prints AND what RunContext is handed, so the two cannot disagree. A
+    hypothesis asks the context which probes exist; it never decides for
+    itself at measure time.
+    """
     selected: list = field(default_factory=list)
     skipped: list = field(default_factory=list)   # (hypothesis, reason)
-    probes: set = field(default_factory=set)      # {"ladder", "sample", "burst"}
+    probes: frozenset = frozenset()               # {"ladder", "sample", "burst"}
 
     @property
     def run_ladder(self) -> bool:
         return "ladder" in self.probes
 
     def to_dict(self) -> dict:
-        return {"selected": [h.describe() for h in self.selected],
+        return {"selected": [h.describe(self.probes) for h in self.selected],
                 "skipped": [{**h.describe(), "reason": r}
                             for h, r in self.skipped],
                 "probes": sorted(self.probes)}
@@ -101,9 +107,15 @@ SKIP_REASON = {
 
 def plan(hypotheses, exclusive: bool = False, metrics: bool = False,
          burst: int = 0) -> Plan:
-    """Gate `hypotheses` on what this run offers, and say which probes the
-    survivors need. A skip names EVERY unmet requirement, in a fixed order so
-    the reason is stable across runs."""
+    """Gate `hypotheses` on the PERMISSIONS this run offers, then resolve the
+    PROBES the survivors need.
+
+    A skip names EVERY unmet permission, in a fixed order so the reason is
+    stable across runs. Probes resolve in two passes: the mandatory ones
+    first, then the conditional ones against that set — so a cheap hypothesis
+    reads a ladder that some ceiling is running anyway, and opens a sample of
+    its own only when no ladder exists.
+    """
     have = {EXCLUSIVE: bool(exclusive), METRICS: bool(metrics),
             BURST: bool(burst)}
     p = Plan()
@@ -113,20 +125,18 @@ def plan(hypotheses, exclusive: bool = False, metrics: bool = False,
             p.skipped.append((h, "; ".join(SKIP_REASON[r] for r in unmet)))
             continue
         p.selected.append(h)
-        if EXCLUSIVE in h.requires:
-            p.probes.add("ladder")
-        if BURST in h.requires:
-            p.probes.add("burst")
-    # the cheap hypotheses read the ladder when one is being run and fall back
-    # to their own handful of requests when it is not
-    if any(not (h.requires & {EXCLUSIVE, BURST}) for h in p.selected) \
-            and "ladder" not in p.probes:
-        p.probes.add("sample")
+    mandatory = frozenset().union(*(h.probes for h in p.selected)) \
+        if p.selected else frozenset()
+    conditional = frozenset().union(
+        *(h.conditional_probes(mandatory) for h in p.selected)) \
+        if p.selected else frozenset()
+    p.probes = mandatory | conditional
     return p
 
 
 __all__ = [
-    "BOUNDED_BELOW", "BURST", "EXCLUSIVE", "GLYPH", "METRICS",
+    "BOUNDED_BELOW", "BURST", "BURST_PROBE", "EXCLUSIVE", "GLYPH", "LADDER",
+    "METRICS", "SAMPLE",
     "NOT_ESTABLISHED", "REFUTED", "REGISTRY", "REQUIREMENTS", "STATUSES",
     "SUPPORTED", "Hypothesis", "LadderView", "Measurement", "Plan",
     "Prediction", "Registry", "RunContext", "Verdict", "bracket_verdict",

@@ -13,8 +13,9 @@ from workingset import cli
 from workingset.config import RunConfig
 from workingset.hypotheses import (BOUNDED_BELOW, BURST, EXCLUSIVE, METRICS,
                                    NOT_ESTABLISHED, REFUTED, REGISTRY,
-                                   STATUSES, SUPPORTED, Hypothesis, Registry,
-                                   RunContext, Verdict, bracket_verdict, plan)
+                                   STATUSES, SUPPORTED, Hypothesis, Prediction,
+                                   Registry, RunContext, Verdict,
+                                   bracket_verdict, plan)
 from workingset.predict import predict
 from workingset.probe import ProbeOptions, Rung, Sample
 from workingset.probe.burst import BurstResult
@@ -29,21 +30,45 @@ from test_probe import trace
 # helpers
 # ============================================================================
 def rung(pop, passed=True, reasons=(), **kw) -> Rung:
-    r = Rung(pop=pop, n_sub=0, n_turns=10, n_hit=8, n_miss=2)
+    """A rung with eviction WITNESSED and warm by default — `warm_held` now
+    needs evidence, so a fixture that means "held" has to say so."""
+    r = Rung(pop=pop, n_sub=0, n_turns=10, n_hit=8, n_miss=2, evict_frac=0.0)
     r.passed, r.reasons = passed, list(reasons)
     for k, v in kw.items():
         setattr(r, k, v)
     return r
 
 
+def spike(worst_p95, n=3, normal=5.0, floor=0.01, n_deep=1,
+          deepest=95_000, min_ptok=90_000) -> dict:
+    return {"n": n, "worst_p95_ms": worst_p95, "worst_p50_ms": worst_p95,
+            "worst_max_ms": worst_p95 * 2, "normal_ms": normal,
+            "floor_ms": floor, "deepest_ptok": deepest, "cap_tokens": 180_000,
+            "min_ptok": min_ptok, "n_deep": n_deep}
+
+
+NO_SPIKE = {"n": 0, "worst_p95_ms": None, "worst_p50_ms": None,
+            "worst_max_ms": None, "normal_ms": None, "floor_ms": None,
+            "deepest_ptok": 1_000, "cap_tokens": 180_000, "min_ptok": 90_000,
+            "n_deep": 0}
+
+
 def ctx_with(cfg=None, preds=None, opts=None, exclusive=False, burst=0,
-             run_ladder=False, **seed) -> RunContext:
+             probes=frozenset(), ep=None, **seed) -> RunContext:
     cfg = cfg or RunConfig()
     preds = preds if preds is not None else predict(cfg, n_iter=40)
-    c = RunContext(cfg, preds, opts or ProbeOptions(),
-                   EndpointSpec(), exclusive=exclusive, burst=burst,
-                   run_ladder=run_ladder)
+    c = RunContext(cfg, preds, opts or ProbeOptions(), ep or EndpointSpec(),
+                   exclusive=exclusive, burst=burst, probes=frozenset(probes))
     return c.seed(**seed)
+
+
+def ladder_ctx(preds=None, rungs=(), **kw) -> RunContext:
+    return ctx_with(preds=preds, exclusive=True, probes={"ladder"},
+                    rungs=list(rungs), **kw)
+
+
+def shared_ctx(preds=None, sample=None, **kw) -> RunContext:
+    return ctx_with(preds=preds, probes={"sample"}, sample=sample, **kw)
 
 
 def score(h, ctx) -> tuple:
@@ -103,6 +128,37 @@ def test_exclusive_mode_runs_the_ladder_once_for_all_of_them():
     assert p.run_ladder and "sample" not in p.probes
     assert [h.key for h, _ in p.skipped] == ["H-burst"]
     assert "--burst" in dict((h.key, r) for h, r in p.skipped)["H-burst"]
+
+
+def test_permissions_are_not_probes():
+    """H-burst carries the `exclusive` PERMISSION so it may generate a
+    standing load. It does not ladder, and a plan that said so was planning
+    work the run never did."""
+    p = plan([REGISTRY.get("H-burst")], exclusive=True, burst=8)
+    assert p.probes == {"burst"}
+    assert not p.run_ladder
+
+
+def test_itl_spike_uses_a_burst_only_when_one_is_already_planned():
+    """It must never ADD a burst — and a 64-user standing load — to a plan
+    whose dry-run printed `sample`."""
+    alone = plan([REGISTRY.get("H-itl-spike")], exclusive=True, burst=8)
+    assert alone.probes == {"sample"}
+    assert alone.to_dict()["selected"][0]["probes"] == ["sample"]
+
+    withburst = plan([REGISTRY.get("H-burst"), REGISTRY.get("H-itl-spike")],
+                     exclusive=True, burst=8)
+    assert withburst.probes == {"burst"}
+    probes = {h["key"]: h["probes"] for h in withburst.to_dict()["selected"]}
+    assert probes["H-itl-spike"] == ["burst"]
+
+
+def test_cheap_hypotheses_read_a_ladder_that_already_exists():
+    p = plan([REGISTRY.get("H-binding"), REGISTRY.get("H-itl-mean")],
+             exclusive=True)
+    assert p.probes == {"ladder"}
+    probes = {h["key"]: h["probes"] for h in p.to_dict()["selected"]}
+    assert probes["H-itl-mean"] == ["ladder"]
 
 
 def test_burst_needs_both_the_flag_and_exclusive():
@@ -176,18 +232,15 @@ def test_h_binding_reads_the_slo_capacity_bracket():
     lim = preds.predicted_limit_users
     ladder = [rung(lim - 5, passed=True), rung(lim + 5, passed=False,
                                                reasons=["p95 TTFT 12.00s > 10s"])]
-    p, m, v = score(REGISTRY.get("H-binding"),
-                    ctx_with(preds=preds, exclusive=True, run_ladder=True,
-                             rungs=ladder))
+    p, m, v = score(REGISTRY.get("H-binding"), ladder_ctx(preds, ladder))
     assert m.lo == lim - 5 and m.hi == lim + 5
     assert v.status == SUPPORTED
 
 
 def test_h_decode_is_not_separable_without_a_floor_failure():
-    h = REGISTRY.get("H-decode")
     ladder = [rung(10), rung(20, passed=False,
                              reasons=["p95 TTFT 12.00s > 10s"])]
-    _, m, v = score(h, ctx_with(exclusive=True, run_ladder=True, rungs=ladder))
+    _, m, v = score(REGISTRY.get("H-decode"), ladder_ctx(rungs=ladder))
     assert m.text == "not separable"
     assert v.status == NOT_ESTABLISHED and "decode-floor" in v.text
 
@@ -197,9 +250,7 @@ def test_h_decode_brackets_on_a_floor_failure():
     dc = preds.decode_ceiling_users
     ladder = [rung(dc - 3), rung(dc + 3, passed=False,
                                  reasons=["decode p50 11.0 < 40 tok/s"])]
-    _, m, v = score(REGISTRY.get("H-decode"),
-                    ctx_with(preds=preds, exclusive=True, run_ladder=True,
-                             rungs=ladder))
+    _, m, v = score(REGISTRY.get("H-decode"), ladder_ctx(preds, ladder))
     assert (m.lo, m.hi) == (dc - 3, dc + 3) and v.status == SUPPORTED
 
 
@@ -208,9 +259,7 @@ def test_h_latency_brackets_on_a_ttft_failure():
     lc = preds.latency_ceiling_users
     ladder = [rung(lc - 2), rung(lc + 2, passed=False,
                                  reasons=["p95 TTFT 12.00s > 10s"])]
-    _, m, v = score(REGISTRY.get("H-latency"),
-                    ctx_with(preds=preds, exclusive=True, run_ladder=True,
-                             rungs=ladder))
+    _, m, v = score(REGISTRY.get("H-latency"), ladder_ctx(preds, ladder))
     assert (m.lo, m.hi) == (lc - 2, lc + 2) and v.status == SUPPORTED
 
 
@@ -218,20 +267,34 @@ def test_h_cache_is_bounded_below_when_nothing_evicts():
     preds = predict(RunConfig(), n_iter=40)
     wc = preds.warm_capacity_p5
     ladder = [rung(wc + 10, evict_frac=0.01)]
-    _, m, v = score(REGISTRY.get("H-cache"),
-                    ctx_with(preds=preds, exclusive=True, run_ladder=True,
-                             rungs=ladder))
+    _, m, v = score(REGISTRY.get("H-cache"), ladder_ctx(preds, ladder))
     assert m.lo == wc + 10 and m.hi is None
     assert v.status == BOUNDED_BELOW and "lower bound" in v.text
+
+
+def test_h_cache_needs_a_witness_before_it_calls_a_rung_warm():
+    """Inherited from the harness: a rung with NO forced miss leaves
+    evict_frac nan, the classifier cannot run, and "no evidence of eviction"
+    was counted as "held". Missing evidence is not evidence."""
+    preds = predict(RunConfig(), n_iter=40)
+    blind = rung(preds.warm_capacity_p5 + 10, n_hit=8, n_miss=0,
+                 evict_frac=float("nan"), cached_frac=float("nan"))
+    _, m, v = score(REGISTRY.get("H-cache"), ladder_ctx(preds, [blind]))
+    assert m.text == "not separable" and m.lo is None
+    assert v.status == NOT_ESTABLISHED and "never observed" in v.text
+
+    # the server's own cached_tokens is a witness where the classifier is not
+    witnessed = rung(preds.warm_capacity_p5 + 10, n_hit=8, n_miss=0,
+                     evict_frac=float("nan"), cached_frac=1.0)
+    _, m2, v2 = score(REGISTRY.get("H-cache"), ladder_ctx(preds, [witnessed]))
+    assert v2.status == BOUNDED_BELOW and m2.lo == preds.warm_capacity_p5 + 10
 
 
 def test_h_cache_is_refuted_when_eviction_arrives_far_early():
     preds = predict(RunConfig(), n_iter=40)
     wc = preds.warm_capacity_p5
     ladder = [rung(max(1, wc // 4), n_hit=8, evict_frac=0.4)]
-    _, m, v = score(REGISTRY.get("H-cache"),
-                    ctx_with(preds=preds, exclusive=True, run_ladder=True,
-                             rungs=ladder))
+    _, m, v = score(REGISTRY.get("H-cache"), ladder_ctx(preds, ladder))
     assert m.hi == max(1, wc // 4)
     assert v.status == REFUTED and "re-prefilled" in v.text
 
@@ -240,11 +303,9 @@ def test_h_saturation_never_rises_above_not_established():
     h = REGISTRY.get("H-saturation")
     plateau = rung(100, passed=False, reasons=["p95 TTFT 20.00s > 10s"],
                    achieved_rps=0.5, offered_rps=3.3)
-    _, m, v = score(h, ctx_with(exclusive=True, run_ladder=True,
-                                rungs=[plateau]))
+    _, m, v = score(h, ladder_ctx(rungs=[plateau]))
     assert v.status == NOT_ESTABLISHED and "throughput plateau" in v.text
-    _, _, v2 = score(h, ctx_with(exclusive=True, run_ladder=True,
-                                 rungs=[rung(100)]))
+    _, _, v2 = score(h, ladder_ctx(rungs=[rung(100)]))
     assert v2.status == NOT_ESTABLISHED and "throttles" in v2.text
 
 
@@ -252,144 +313,240 @@ def test_h_saturation_never_rises_above_not_established():
 # the cheap hypotheses
 # ============================================================================
 def sample_with(**kw) -> Sample:
-    s = Sample(n=4, n_ok=4)
+    s = Sample(n=4, n_ok=4, n_miss=2, n_hit=2)
     for k, v in kw.items():
         setattr(s, k, v)
     return s
 
 
+# ---- item 1: a shared sample can support nothing ------------------------
+def test_shared_mode_caps_every_cheap_verdict_at_not_established():
+    """A prediction is made AT the configured operating point. A sample taken
+    under unknown background load is a different experiment: a lower number is
+    what a quieter server gives and a higher one what a busier server gives,
+    so neither supports nor refutes. The number is still reported."""
+    preds = predict(RunConfig(), n_iter=40)
+    cases = {
+        # each of these would score SUPPORTED on a ladder rung
+        "H-ttft-miss": sample_with(ttft_miss_mean=preds.ttft_miss_s,
+                                   ttft_miss_p50=1.0),
+        "H-steady": sample_with(decode_clean_p50=preds.steady_decode_tok_s,
+                                decode_seqs=preds.steady_decode_seqs,
+                                n_seqs_obs=9),
+        "H-itl-mean": sample_with(itl_p50_ms=preds.itl_normal_ms,
+                                  itl_floor_ms=0.0001, chunk_tok_ratio=1.0),
+        "H-itl-spike": sample_with(spike=spike(preds.itl_worst_freeze_ms)),
+    }
+    for key, s in cases.items():
+        _, m, v = score(REGISTRY.get(key), shared_ctx(preds, s))
+        assert v.status == NOT_ESTABLISHED, f"{key} -> {v}"
+        assert "prevailing load" in v.text, key
+        assert m.value is not None, key       # the measurement is kept
+
+
+def test_shared_mode_caps_a_would_be_refutation_too():
+    """The cap is symmetric: an unknown load cannot refute either."""
+    preds = predict(RunConfig(), n_iter=40)
+    cases = {
+        "H-ttft-miss": sample_with(ttft_miss_mean=preds.ttft_miss_s * 20,
+                                   ttft_miss_p50=1.0),
+        "H-itl-mean": sample_with(itl_p50_ms=preds.itl_normal_ms * 10,
+                                  itl_floor_ms=0.0001, chunk_tok_ratio=1.0),
+        "H-itl-spike": sample_with(spike=spike(1.0)),
+    }
+    for key, s in cases.items():
+        _, _, v = score(REGISTRY.get(key), shared_ctx(preds, s))
+        assert v.status == NOT_ESTABLISHED, f"{key} -> {v}"
+        assert "prevailing load" in v.text, key
+
+
+def test_ttft_miss_statement_only_promises_a_rung_when_there_is_one():
+    preds = predict(RunConfig(), n_iter=40)
+    h = REGISTRY.get("H-ttft-miss")
+    assert "ladder rung" in h.statement_for(RunConfig(), preds, {"ladder"})
+    shared = h.statement_for(RunConfig(), preds, {"sample"})
+    assert "ladder rung" not in shared and "cannot be scored" in shared
+
+
+# ---- exclusive-mode scoring still works ---------------------------------
 def test_h_ttft_miss_reads_the_rung_nearest_the_operating_point():
     preds = predict(RunConfig(), n_iter=40)
     op, tm = preds.operating_point_users, preds.ttft_miss_s
     ladder = [rung(op, n_miss=5, ttft_miss_mean=tm),
               rung(op * 4, n_miss=5, ttft_miss_mean=tm * 9)]
-    _, m, v = score(REGISTRY.get("H-ttft-miss"),
-                    ctx_with(preds=preds, exclusive=True, run_ladder=True,
-                             rungs=ladder))
+    _, m, v = score(REGISTRY.get("H-ttft-miss"), ladder_ctx(preds, ladder))
     assert m.data["at_users"] == op
     assert v.status == SUPPORTED and "operating point" in v.text
 
 
-def test_h_ttft_miss_falls_back_to_the_sample_in_shared_mode():
+def test_h_ttft_miss_refuted_far_from_the_prediction_on_a_ladder():
     preds = predict(RunConfig(), n_iter=40)
-    s = sample_with(ttft_miss_mean=preds.ttft_miss_s, ttft_miss_p50=1.0)
-    _, m, v = score(REGISTRY.get("H-ttft-miss"),
-                    ctx_with(preds=preds, sample=s))
-    assert m.data["source"] == "sample"
-    assert v.status == SUPPORTED and "prevailing load" in v.text
-
-
-def test_h_ttft_miss_refuted_far_from_the_prediction():
-    preds = predict(RunConfig(), n_iter=40)
-    s = sample_with(ttft_miss_mean=preds.ttft_miss_s * 20, ttft_miss_p50=1.0)
-    _, _, v = score(REGISTRY.get("H-ttft-miss"), ctx_with(preds=preds, sample=s))
+    op = preds.operating_point_users
+    ladder = [rung(op, n_miss=5, ttft_miss_mean=preds.ttft_miss_s * 20)]
+    _, _, v = score(REGISTRY.get("H-ttft-miss"), ladder_ctx(preds, ladder))
     assert v.status == REFUTED
 
 
 def test_h_ttft_miss_not_established_without_misses():
     preds = predict(RunConfig(), n_iter=40)
     _, m, v = score(REGISTRY.get("H-ttft-miss"),
-                    ctx_with(preds=preds, sample=sample_with()))
+                    shared_ctx(preds, sample_with()))
     assert m.text == "not separable" and v.status == NOT_ESTABLISHED
 
 
-def test_h_steady_without_metrics_leaves_the_batch_size_open():
+# ---- item 9: an exclusive run never falls back to a live sample ---------
+def test_exclusive_run_reports_not_separable_instead_of_sampling():
+    """After the ladder has drained, the endpoint is idle. Sampling it and
+    scoring that against an operating-point prediction is the shared-mode
+    error with an exclusive label on it — the harness said "not separable"."""
     preds = predict(RunConfig(), n_iter=40)
-    s = sample_with(decode_p50=preds.steady_decode_tok_s)
-    _, m, v = score(REGISTRY.get("H-steady"), ctx_with(preds=preds, sample=s))
+    ctx = ladder_ctx(preds, [rung(preds.operating_point_users, n_miss=0,
+                                  ttft_miss_mean=float("nan"))])
+    _, m, v = score(REGISTRY.get("H-ttft-miss"), ctx)
+    assert m.text == "not separable" and v.status == NOT_ESTABLISHED
+    assert ctx.cached()["sample"] is None      # nothing was fired
+
+
+# ---- item 3: H-steady ---------------------------------------------------
+def test_h_steady_needs_both_halves_before_it_scores():
+    """A batch size is half the claim ("~n sequences at ~v tok/s each — NOT
+    the whole warm pool"). Without /metrics there is no batch size."""
+    preds = predict(RunConfig(), n_iter=40)
+    op = preds.operating_point_users
+    no_seqs = rung(op, decode_clean_p50=preds.steady_decode_tok_s,
+                   decode_seqs=float("nan"), n_seqs_obs=0)
+    _, m, v = score(REGISTRY.get("H-steady"), ladder_ctx(preds, [no_seqs]))
     assert not math.isfinite(m.data["seqs"])
-    assert v.status == SUPPORTED and "not established" in v.text
+    assert v.status == NOT_ESTABLISHED and "needs /metrics" in v.text
 
 
-def test_h_steady_reads_the_decode_batch_from_metrics_covariates():
+def test_h_steady_scores_the_freeze_excluded_rate_not_the_mean():
+    """decode_p50 is a mean over the stream, freezes included;
+    steady_decode_point predicts the clean speed between spikes. Scoring the
+    mean charges every freeze to decode."""
     preds = predict(RunConfig(), n_iter=40)
-    seqs = preds.steady_decode_seqs
-    t = trace(1, "hit", 1.0, 0.1, tps=preds.steady_decode_tok_s, ctok=10)
-    t.covariates = {"requests_running": seqs}
-    s = sample_with(decode_p50=preds.steady_decode_tok_s, traces=[t])
-    _, m, v = score(REGISTRY.get("H-steady"), ctx_with(preds=preds, sample=s))
-    assert m.data["seqs"] == pytest.approx(seqs)
-    assert v.status == SUPPORTED and "batch" in v.text
+    op = preds.operating_point_users
+    r = rung(op, decode_p50=preds.steady_decode_tok_s / 10,
+             decode_clean_p50=preds.steady_decode_tok_s,
+             decode_seqs=preds.steady_decode_seqs, n_seqs_obs=12)
+    _, m, v = score(REGISTRY.get("H-steady"), ladder_ctx(preds, [r]))
+    assert m.value == pytest.approx(preds.steady_decode_tok_s)
+    assert m.data["decode_p50_with_freezes"] < m.value
+    assert v.status == SUPPORTED and "snapshots" in v.text
 
 
 def test_h_steady_takes_the_weaker_of_the_two_halves():
     preds = predict(RunConfig(), n_iter=40)
-    t = trace(1, "hit", 1.0, 0.1, tps=1, ctok=10)
-    t.covariates = {"requests_running": preds.steady_decode_seqs * 50}
-    s = sample_with(decode_p50=preds.steady_decode_tok_s, traces=[t])
-    _, _, v = score(REGISTRY.get("H-steady"), ctx_with(preds=preds, sample=s))
+    op = preds.operating_point_users
+    r = rung(op, decode_clean_p50=preds.steady_decode_tok_s,
+             decode_seqs=preds.steady_decode_seqs * 50, n_seqs_obs=12)
+    _, _, v = score(REGISTRY.get("H-steady"), ladder_ctx(preds, [r]))
     assert v.status == REFUTED
 
 
+# ---- item 4: H-itl-spike ------------------------------------------------
+def test_h_itl_spike_scores_the_p95_against_the_mfu_bracket():
+    preds = predict(RunConfig(), n_iter=40)
+    h, op = REGISTRY.get("H-itl-spike"), preds.operating_point_users
+    inside = rung(op, spike=spike(preds.itl_worst_freeze_ms))
+    _, m, v = score(h, ladder_ctx(preds, [inside]))
+    # the SCORED number is the p95, not the max-of-maxes the ported comment
+    # calls a footnote — which is in data, and is twice as large here
+    assert m.value == pytest.approx(preds.itl_worst_freeze_ms)
+    assert m.data["spike_worst_max_ms"] == pytest.approx(
+        2 * preds.itl_worst_freeze_ms)
+    assert v.status == SUPPORTED and "p95" in v.text
+
+    edge = rung(op, spike=spike(preds.itl_freeze_lo_ms * 0.8))
+    _, _, v = score(h, ladder_ctx(preds, [edge]))
+    assert v.status == NOT_ESTABLISHED
+
+    small = rung(op, spike=spike(1.0))
+    _, _, v = score(h, ladder_ctx(preds, [small]))
+    assert v.status == REFUTED and "below" in v.text
+
+
+def test_h_itl_spike_will_not_refute_an_experiment_that_did_not_run():
+    """The prediction is the last chunk of a FULL-CONTEXT cold prefill. A run
+    whose deepest cold prefill was 1k tokens has not performed it, and 1 ms
+    gaps do not bound a 4-second event."""
+    preds = predict(RunConfig(), n_iter=40)
+    op = preds.operating_point_users
+    shallow = rung(op, spike=dict(NO_SPIKE), itl_max_ms=1.0, itl_p50_ms=1.0)
+    _, m, v = score(REGISTRY.get("H-itl-spike"), ladder_ctx(preds, [shallow]))
+    assert m.value is None and m.text == "not observed"
+    assert v.status == NOT_ESTABLISHED
+    assert "did not occur" in v.text and "90,000 tokens" in v.text
+
+
+def test_h_itl_spike_says_so_when_nothing_was_decoding_through_the_prefill():
+    preds = predict(RunConfig(), n_iter=40)
+    op = preds.operating_point_users
+    ev = dict(NO_SPIKE, n_deep=2, deepest_ptok=150_000)
+    _, m, v = score(REGISTRY.get("H-itl-spike"),
+                    ladder_ctx(preds, [rung(op, spike=ev)]))
+    assert v.status == NOT_ESTABLISHED
+    assert "nothing was decoding through one" in v.text
+
+
+def _burst_ctx(preds, b, probes=("burst",)) -> RunContext:
+    c = RunContext(RunConfig(), preds, ProbeOptions(), EndpointSpec(),
+                   exclusive=True, burst=b.n, burst_users=b.standing_users,
+                   probes=frozenset(probes))
+    return c.seed(burst=b)
+
+
+def test_h_itl_spike_uses_the_burst_when_the_plan_ran_one():
+    preds = predict(RunConfig(), n_iter=40)
+    b = BurstResult(n=4, standing_users=8, n_ok=4, last_ttft_s=1.0,
+                    standing_n=3, spike=spike(preds.itl_worst_freeze_ms))
+    _, m, v = score(REGISTRY.get("H-itl-spike"), _burst_ctx(preds, b))
+    assert m.data["source"] == "burst" and v.status == SUPPORTED
+
+
+def test_h_itl_spike_does_not_fire_a_burst_the_plan_did_not_include():
+    """It used to run one whenever `--burst N --exclusive` was passed, even on
+    a plan whose dry-run printed `probes: sample` — a surprise 64-user
+    standing load."""
+    preds = predict(RunConfig(), n_iter=40)
+    ctx = ctx_with(preds=preds, exclusive=True, burst=8, probes={"sample"},
+                   sample=sample_with(spike=spike(preds.itl_worst_freeze_ms)))
+    _, m, _ = score(REGISTRY.get("H-itl-spike"), ctx)
+    assert m.data["source"] == "sample"
+    assert ctx.cached()["burst"] is None
+
+
+# ---- H-itl-mean ---------------------------------------------------------
 def test_h_itl_mean_guards_on_the_client_floor():
     preds = predict(RunConfig(), n_iter=40)
-    normal = preds.itl_normal_ms
-    good = sample_with(itl_p50_ms=normal, itl_floor_ms=normal / 100,
-                       chunk_tok_ratio=1.0)
-    _, _, v = score(REGISTRY.get("H-itl-mean"), ctx_with(preds=preds, sample=good))
+    normal, op = preds.itl_normal_ms, preds.operating_point_users
+    good = rung(op, itl_p50_ms=normal, itl_floor_ms=normal / 100,
+                chunk_tok_ratio=1.0)
+    _, _, v = score(REGISTRY.get("H-itl-mean"), ladder_ctx(preds, [good]))
     assert v.status == SUPPORTED
 
-    floored = sample_with(itl_p50_ms=normal, itl_floor_ms=normal * 0.9,
-                          chunk_tok_ratio=1.0)
-    _, _, v = score(REGISTRY.get("H-itl-mean"),
-                    ctx_with(preds=preds, sample=floored))
+    floored = rung(op, itl_p50_ms=normal, itl_floor_ms=normal * 0.9,
+                   chunk_tok_ratio=1.0)
+    _, _, v = score(REGISTRY.get("H-itl-mean"), ladder_ctx(preds, [floored]))
     assert v.status == NOT_ESTABLISHED and "client floor" in v.text
 
 
 def test_h_itl_mean_refuses_a_multi_token_event_comparison():
     preds = predict(RunConfig(), n_iter=40)
-    s = sample_with(itl_p50_ms=preds.itl_normal_ms, itl_floor_ms=0.001,
-                    chunk_tok_ratio=4.0)
-    _, _, v = score(REGISTRY.get("H-itl-mean"), ctx_with(preds=preds, sample=s))
+    op = preds.operating_point_users
+    r = rung(op, itl_p50_ms=preds.itl_normal_ms, itl_floor_ms=0.0001,
+             chunk_tok_ratio=4.0)
+    _, _, v = score(REGISTRY.get("H-itl-mean"), ladder_ctx(preds, [r]))
     assert v.status == NOT_ESTABLISHED and "per SSE event" in v.text
 
 
 def test_h_itl_mean_refuted_when_the_gap_is_nowhere_near():
     preds = predict(RunConfig(), n_iter=40)
-    s = sample_with(itl_p50_ms=preds.itl_normal_ms * 10, itl_floor_ms=0.001,
-                    chunk_tok_ratio=1.0)
-    _, _, v = score(REGISTRY.get("H-itl-mean"), ctx_with(preds=preds, sample=s))
+    op = preds.operating_point_users
+    r = rung(op, itl_p50_ms=preds.itl_normal_ms * 10, itl_floor_ms=0.0001,
+             chunk_tok_ratio=1.0)
+    _, _, v = score(REGISTRY.get("H-itl-mean"), ladder_ctx(preds, [r]))
     assert v.status == REFUTED
-
-
-def test_h_itl_spike_scores_against_the_mfu_bracket():
-    preds = predict(RunConfig(), n_iter=40)
-    h = REGISTRY.get("H-itl-spike")
-    inside = sample_with(itl_worst_max_ms=preds.itl_worst_freeze_ms,
-                         itl_worst_p50_ms=preds.itl_worst_freeze_ms,
-                         itl_p50_ms=preds.itl_normal_ms, itl_floor_ms=0.001,
-                         itl_max_ms=preds.itl_worst_freeze_ms)
-    _, _, v = score(h, ctx_with(preds=preds, sample=inside))
-    assert v.status == SUPPORTED and "MFU bracket" in v.text
-
-    tiny = sample_with(itl_worst_max_ms=1.0, itl_worst_p50_ms=1.0,
-                       itl_p50_ms=preds.itl_normal_ms, itl_floor_ms=0.001)
-    _, _, v = score(h, ctx_with(preds=preds, sample=tiny))
-    assert v.status == REFUTED and "below" in v.text
-
-    edge = sample_with(itl_worst_max_ms=preds.itl_freeze_lo_ms * 0.8,
-                       itl_worst_p50_ms=1.0, itl_p50_ms=preds.itl_normal_ms,
-                       itl_floor_ms=0.001)
-    _, _, v = score(h, ctx_with(preds=preds, sample=edge))
-    assert v.status == NOT_ESTABLISHED
-
-
-def test_h_itl_spike_prefers_the_burst_probe():
-    preds = predict(RunConfig(), n_iter=40)
-    b = BurstResult(n=4, standing_users=8, n_ok=4, last_ttft_s=1.0,
-                    standing_n=3,
-                    standing_worst_max_ms=preds.itl_worst_freeze_ms,
-                    standing_worst_p50_ms=preds.itl_worst_freeze_ms,
-                    standing_itl_p50_ms=preds.itl_normal_ms,
-                    standing_floor_ms=0.001)
-    _, m, v = score(REGISTRY.get("H-itl-spike"), _burst_ctx(preds, b))
-    assert m.data["source"] == "burst" and v.status == SUPPORTED
-
-
-def _burst_ctx(preds, b) -> RunContext:
-    c = RunContext(RunConfig(), preds, ProbeOptions(), EndpointSpec(),
-                   exclusive=True, burst=b.n, burst_users=b.standing_users)
-    return c.seed(burst=b)
 
 
 def test_h_steady_not_established_without_a_steady_point():
@@ -398,8 +555,7 @@ def test_h_steady_not_established_without_a_steady_point():
                     itl_worst_freeze_ms=None, itl_freeze_lo_ms=None,
                     itl_freeze_hi_ms=None)
     for key in ("H-steady", "H-itl-spike", "H-itl-mean"):
-        _, _, v = score(REGISTRY.get(key),
-                        ctx_with(preds=preds, sample=sample_with()))
+        _, _, v = score(REGISTRY.get(key), shared_ctx(preds, sample_with()))
         assert v.status == NOT_ESTABLISHED, key
 
 
@@ -435,6 +591,76 @@ def test_h_burst_not_established_at_the_threshold_itself():
     b = BurstResult(n=9, standing_users=8, n_ok=9, last_ttft_s=1.0)
     _, _, v = score(REGISTRY.get("H-burst"), _burst_ctx(preds, b))
     assert v.status == NOT_ESTABLISHED and "not resolved" in v.text
+
+
+def test_h_burst_refuses_to_score_a_partial_flush():
+    """Inherited from the harness: `last_ttft_s` is the max over the requests
+    that ANSWERED, so a burst of 20 where 19 failed reports the drain of the
+    one that worked — and "supported"."""
+    preds = replace(predict(RunConfig(), n_iter=40), bstar_misses=2.0)
+    b = BurstResult(n=20, standing_users=8, n_ok=1, n_err=19, last_ttft_s=0.5)
+    _, _, v = score(REGISTRY.get("H-burst"), _burst_ctx(preds, b))
+    assert v.status == NOT_ESTABLISHED
+    assert "19 of 20 burst requests failed" in v.text
+
+
+def test_h_burst_not_measured_when_the_run_ended_first():
+    preds = predict(RunConfig(), n_iter=40)
+    ctx = RunContext(RunConfig(), preds, ProbeOptions(), EndpointSpec(),
+                     exclusive=True, burst=4, probes=frozenset({"burst"}))
+    ctx.freeze()
+    _, m, v = score(REGISTRY.get("H-burst"), ctx)
+    assert m.value is None and v.status == NOT_ESTABLISHED
+
+
+# ============================================================================
+# the probe cache
+# ============================================================================
+def test_cache_key_separates_endpoints_and_configs():
+    """The key was (options, predictions) only: pointing the context at
+    another endpoint handed back the sample measured against the first."""
+    preds = predict(RunConfig(), n_iter=40)
+    a = EndpointSpec(base_url="http://a/v1", model="m")
+    b = EndpointSpec(base_url="http://b/v1", model="m")
+    s = sample_with(ttft_miss_mean=1.0)
+    ctx_a = ctx_with(preds=preds, probes={"sample"}, ep=a, sample=s)
+    assert asyncio.run(ctx_a.sample()) is s
+
+    ctx_b = ctx_with(preds=preds, probes={"sample"}, ep=b)
+    ctx_b._cache = ctx_a._cache        # the same cache, a different endpoint
+    ctx_b.freeze()
+    assert asyncio.run(ctx_b.sample()) is None
+
+    # and a different workload is a different experiment on the same endpoint
+    other = replace(RunConfig(), workload=replace(RunConfig().workload,
+                                                  warm_turn_tokens=99))
+    ctx_c = ctx_with(cfg=other, preds=preds, probes={"sample"}, ep=a)
+    ctx_c._cache = ctx_a._cache
+    ctx_c.freeze()
+    assert asyncio.run(ctx_c.sample()) is None
+
+
+def test_prefixes_follow_the_workload():
+    ctx = ctx_with()
+    first = ctx.prefixes
+    assert ctx.prefixes is first                    # cached
+    ctx.cfg = replace(ctx.cfg, workload=replace(ctx.cfg.workload,
+                                                system_prefix_tokens=99))
+    assert ctx.prefixes is not first
+    assert len(ctx.prefixes.user) != len(first.user)
+
+
+def test_burst_standing_load_has_one_definition():
+    """test_cmd's dry-run printed its own copy of the rule, which disagreed
+    with the run whenever operating_point_users was 0."""
+    preds = replace(predict(RunConfig(), n_iter=40), operating_point_users=0,
+                    predicted_limit_users=80)
+    ctx = RunContext(RunConfig(), preds, ProbeOptions(), EndpointSpec(),
+                     burst=4)
+    assert ctx._burst_pop() == 40                   # half the limit, not 1
+    ctx2 = RunContext(RunConfig(), preds, ProbeOptions(), EndpointSpec(),
+                      burst=4, burst_users=7)
+    assert ctx2._burst_pop() == 7
 
 
 # ============================================================================
@@ -484,6 +710,22 @@ def test_freeze_reproduces_the_reference_harness_block():
     assert p.itl_freeze_lo_ms < p.itl_worst_freeze_ms < p.itl_freeze_hi_ms
 
 
+def test_steady_point_honours_the_calibration_mbu():
+    """max_users_decode reads cfg.calibration.mbu; steady_decode_point stayed
+    at the study default, so the decode ceiling and the steady point were
+    priced at different decode efficiencies in the same run."""
+    base = {"deployment": {"model": "27B", "gpu": "H200", "tensor_parallel": 4}}
+    lo = predict(RunConfig.from_dict({**base, "calibration": {"mbu": 0.1}}),
+                 n_iter=60)
+    hi = predict(RunConfig.from_dict({**base, "calibration": {"mbu": 0.8}}),
+                 n_iter=60)
+    assert hi.decode_ceiling_users > lo.decode_ceiling_users
+    # the steady point must move WITH it, not stay put
+    assert hi.steady_decode_tok_s > 2 * lo.steady_decode_tok_s
+    # and the normal gap, which is one decode step at that speed, with it
+    assert hi.itl_normal_ms < lo.itl_normal_ms
+
+
 def test_itl_normal_is_one_decode_step():
     p = predict(RunConfig(), n_iter=40)
     m = RunConfig().to_model()
@@ -499,11 +741,12 @@ def make_record() -> RunRecord:
     preds = predict(cfg, n_iter=40)
     opts = ProbeOptions(measure_s=5.0)
     h = REGISTRY.get("H-ttft-miss")
+    t = trace(1, "hit", 1.0, 0.4, tps=120, ctok=10, ptok=100, intended=100)
     s = sample_with(ttft_miss_mean=preds.ttft_miss_s, ttft_miss_p50=1.0,
                     itl_p50_ms=preds.itl_normal_ms, itl_floor_ms=0.01,
                     decode_p50=preds.steady_decode_tok_s,
-                    chunk_tok_ratio=1.0, ptok_ratio=0.98)
-    ctx = ctx_with(cfg=cfg, preds=preds, opts=opts, sample=s)
+                    chunk_tok_ratio=1.0, ptok_ratio=0.98, traces=[t])
+    ctx = shared_ctx(preds, s, cfg=cfg, opts=opts)
     p, m, v = score(h, ctx)
     pl = plan(REGISTRY.all(), exclusive=False)
     r = rung(31, passed=True, ttft_hit_p50=0.4, ttft_hit_pX=0.9,
@@ -523,13 +766,16 @@ def make_record() -> RunRecord:
         rungs=[r.to_dict()], sample=s.to_dict(),
         hypotheses=[{"key": h.key, "title": h.title,
                      "requires": sorted(h.requires),
+                     "probes": sorted(h.conditional_probes(pl.probes)),
                      "statement": h.statement(cfg, preds),
                      "prediction": p.to_dict(), "measurement": m.to_dict(),
                      "verdict": v.to_dict()}],
         skipped=[{**hh.describe(), "reason": rr} for hh, rr in pl.skipped],
-        not_established=not_established_notes(cfg, opts, pl, ran_ladder=True,
-                                              ran_burst=False,
-                                              exclusive=False, metrics=False),
+        not_established=not_established_notes(
+            cfg, opts, pl, rungs=[r.to_dict()], sample=s.to_dict(),
+            burst=None, hypotheses=[{"key": h.key,
+                                     "verdict": v.to_dict()}],
+            exclusive=False, metrics=False),
         measured_capacity_bracket=[31, None])
 
 
@@ -558,17 +804,59 @@ def test_non_finite_numbers_survive_the_json_round_trip(tmp_path):
     assert back.rungs[0]["decode_p50"] is None
 
 
-def test_not_established_names_the_untested(tmp_path):
+def test_not_established_names_the_untested():
     cfg, opts = RunConfig(), ProbeOptions()
     pl = plan(REGISTRY.all(), exclusive=False)
-    notes = not_established_notes(cfg, opts, pl, ran_ladder=False,
-                                  ran_burst=False, exclusive=False,
+    notes = not_established_notes(cfg, opts, pl, exclusive=False,
                                   metrics=False)
     joined = "\n".join(notes)
     assert "No ladder was run" in joined
     assert "Shared mode" in joined
     assert "B*" in joined
     assert "H-cache was not tested" in joined
+
+
+def test_trailer_is_built_from_results_not_from_the_plan():
+    """A sample was PLANNED and every request failed. The old trailer said the
+    run "establishes levels and gap distributions"; it establishes nothing."""
+    cfg, opts = RunConfig(), ProbeOptions()
+    pl = plan(REGISTRY.all(), exclusive=False)
+    dead = {"n": 8, "n_ok": 0, "n_err": 8, "traces": []}
+    notes = "\n".join(not_established_notes(cfg, opts, pl, sample=dead,
+                                            exclusive=False, metrics=False))
+    assert "answered 0 of 8 requests" in notes
+    assert "rest on nothing" in notes
+    # and with no usage readback anywhere, the token accounting is called out
+    assert "No `usage` readback" in notes
+
+    live = {"n": 8, "n_ok": 8, "n_err": 0,
+            "traces": [{"ptok_achieved": 1234}]}
+    ok = "\n".join(not_established_notes(cfg, opts, pl, sample=live,
+                                         exclusive=False, metrics=False))
+    assert "rest on nothing" not in ok
+    assert "No `usage` readback" not in ok
+    assert "chars/4 approximations" in ok
+
+
+def test_trailer_reports_a_ladder_that_measured_nothing():
+    cfg, opts = RunConfig(), ProbeOptions()
+    pl = plan(REGISTRY.all(), exclusive=True, burst=1)
+    rungs = [{"pop": 31, "n_turns": 0, "passed": False, "traces": []}]
+    notes = "\n".join(not_established_notes(cfg, opts, pl, rungs=rungs,
+                                            exclusive=True, metrics=True))
+    assert "none produced a measured turn" in notes
+    assert "No ladder was run" not in notes
+
+
+def test_trailer_lists_the_hypotheses_that_reached_no_conclusion():
+    cfg, opts = RunConfig(), ProbeOptions()
+    pl = plan(REGISTRY.all(), exclusive=False)
+    rows = [{"key": "H-itl-mean", "verdict": {"status": "not_established"}},
+            {"key": "H-ttft-miss", "verdict": {"status": "supported"}}]
+    notes = "\n".join(not_established_notes(cfg, opts, pl, hypotheses=rows,
+                                            exclusive=False, metrics=False))
+    assert "Not established by this run" in notes
+    assert "H-itl-mean" in notes.split("Not established by this run")[1]
 
 
 def test_degenerate_subagent_leg_is_called_out():
@@ -578,8 +866,8 @@ def test_degenerate_subagent_leg_is_called_out():
                                         subagent_median_tokens=8_000))
     notes = not_established_notes(cfg, ProbeOptions(),
                                   plan(REGISTRY.all(), exclusive=True),
-                                  ran_ladder=True, ran_burst=True,
-                                  exclusive=True, metrics=True)
+                                  rungs=[{"n_turns": 3, "traces": []}],
+                                  burst={"n": 4}, exclusive=True, metrics=True)
     assert any("DEGENERATE" in n for n in notes)
 
 
@@ -637,6 +925,61 @@ def test_ws_test_dry_run_honours_overrides(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "http://gpu:9000/v1" in out and "api=chat" in out
     assert "HYPOTHESES SELECTED (1)" in out
+
+
+def test_an_interrupt_keeps_the_verdicts_already_computed():
+    """The harness printed its PREDICTED vs MEASURED block over whatever had
+    completed when Ctrl-C arrived. Discarding the rows threw away the only
+    output a long ladder run had produced."""
+    from workingset.test_cmd import _score, _score_from_cache
+
+    preds = predict(RunConfig(), n_iter=40)
+    op = preds.operating_point_users
+    r = rung(op, n_miss=5, ttft_miss_mean=preds.ttft_miss_s,
+             itl_p50_ms=preds.itl_normal_ms, itl_floor_ms=0.0001,
+             chunk_tok_ratio=1.0)
+    ctx = ladder_ctx(preds, [r])
+
+    class Boom(Hypothesis):
+        key, title, requires = "H-boom", "explodes", frozenset()
+
+        def predict(self, cfg, p):
+            return Prediction(value=1.0)
+
+        async def measure(self, ctx):
+            raise KeyboardInterrupt
+
+        def verdict(self, pred, m):
+            return Verdict(SUPPORTED, "never reached")
+
+    pl = plan([REGISTRY.get("H-ttft-miss"), Boom(),
+               REGISTRY.get("H-itl-mean")], exclusive=True)
+    rows: list = []
+
+    async def go():
+        try:
+            await _score(ctx, pl, rows)
+        except KeyboardInterrupt:
+            rows.extend(await _score_from_cache(ctx, pl,
+                                                {x["key"] for x in rows}))
+    asyncio.run(go())
+
+    by_key = {x["key"]: x["verdict"]["status"] for x in rows}
+    # the one that completed BEFORE the interrupt keeps its verdict
+    assert by_key["H-ttft-miss"] == SUPPORTED
+    # the ones after it are scored from the cache — the completed rung is
+    # still evidence, so H-itl-mean gets a real verdict too
+    assert by_key["H-itl-mean"] == SUPPORTED
+    assert "H-boom" in by_key
+
+
+def test_a_frozen_context_starts_no_new_probe():
+    preds = predict(RunConfig(), n_iter=40)
+    ctx = shared_ctx(preds)          # nothing seeded
+    ctx.freeze()
+    _, m, v = score(REGISTRY.get("H-ttft-miss"), ctx)
+    assert m.text == "not separable" and v.status == NOT_ESTABLISHED
+    assert ctx.cached()["sample"] is None
 
 
 def test_ws_hypotheses_lists_requirements(capsys):

@@ -10,7 +10,8 @@ import sys
 from dataclasses import replace
 
 from . import __version__
-from .hypotheses import REGISTRY, RunContext, plan as make_plan
+from .hypotheses import (NOT_ESTABLISHED, REGISTRY, Measurement, RunContext,
+                         Verdict, plan as make_plan)
 from .probe.options import ProbeOptions
 from .probe.population import eval_rung
 from .probe.request import EndpointSpec, make_client
@@ -119,7 +120,9 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
           f"{opts.sample_warm_turns + 2} turns = ~{n} requests "
           "(1 establishing + warm turns + 1 forced miss each)")
     if "burst" in pl.probes:
-        pop = opts.burst_users or max(1, round(preds.operating_point_users))
+        # the standing load the RUN will use, from the run's own rule
+        pop = RunContext(cfg, preds, opts, ep, burst=opts.burst,
+                         burst_users=opts.burst_users)._burst_pop()
         w(f"\nBURST PROBE: {opts.burst} simultaneous forced misses at a "
           f"{pop}-user standing load, after a {opts.ramp_s:g}s ramp")
 
@@ -153,8 +156,9 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
     w(f"\nHYPOTHESES SELECTED ({len(pl.selected)})")
     for h in pl.selected:
         req = ",".join(sorted(h.requires)) or "-"
-        w(f"  {h.key:<14} [{req}]")
-        w(f"    {h.statement(cfg, preds)}")
+        probes = ",".join(sorted(h.probes | h.conditional_probes(pl.probes)))
+        w(f"  {h.key:<14} needs [{req}]  reads [{probes or '-'}]")
+        w(f"    {_statement(h, cfg, preds, pl.probes)}")
     if pl.skipped:
         w(f"\nSKIPPED ({len(pl.skipped)}) — listed, never silently run")
         for h, reason in pl.skipped:
@@ -170,17 +174,66 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
 # ============================================================================
 # the run
 # ============================================================================
-async def _score(ctx, pl) -> list[dict]:
-    rows = []
+def _statement(h, cfg, preds, probes) -> str:
+    """A hypothesis may phrase itself differently depending on what the run
+    will actually do (H-ttft-miss only claims a ladder rung when there is
+    one)."""
+    fn = getattr(h, "statement_for", None)
+    return fn(cfg, preds, probes) if fn else h.statement(cfg, preds)
+
+
+def _row(h, ctx, pr, m, v) -> dict:
+    return {"key": h.key, "title": h.title, "requires": sorted(h.requires),
+            "probes": sorted(h.probes | h.conditional_probes(ctx.probes)),
+            "statement": _statement(h, ctx.cfg, ctx.predictions, ctx.probes),
+            "prediction": pr.to_dict(), "measurement": m.to_dict(),
+            "verdict": v.to_dict()}
+
+
+async def _score(ctx, pl, rows: list) -> list[dict]:
+    """Score each hypothesis, appending to `rows` as it goes.
+
+    `rows` is the CALLER's list. On Ctrl-C the verdicts already computed are
+    the run's only output, and the harness printed exactly those — it built
+    its PREDICTED vs MEASURED block over whatever had completed. Returning a
+    fresh list from here meant an interrupt threw them away.
+    """
     for h in pl.selected:
         pr = h.predict(ctx.cfg, ctx.predictions)
         m = await h.measure(ctx)
-        v = h.verdict(pr, m)
-        rows.append({"key": h.key, "title": h.title,
-                     "requires": sorted(h.requires),
-                     "statement": h.statement(ctx.cfg, ctx.predictions),
-                     "prediction": pr.to_dict(), "measurement": m.to_dict(),
-                     "verdict": v.to_dict()})
+        rows.append(_row(h, ctx, pr, m, h.verdict(pr, m)))
+    return rows
+
+
+async def _score_from_cache(ctx, pl, done: set) -> list[dict]:
+    """After an interrupt: score the hypotheses that never ran against the
+    evidence already in the cache, WITHOUT starting a probe.
+
+    `ctx.freeze()` makes every probe answer from the cache or not at all, so a
+    hypothesis reads a completed rung if one exists and otherwise reports "not
+    separable" — never a verdict over nothing, and never a fresh 64-user
+    population fired off during a Ctrl-C.
+    """
+    ctx.freeze()
+    rows = []
+    for h in pl.selected:
+        if h.key in done:
+            continue
+        pr = h.predict(ctx.cfg, ctx.predictions)
+        try:
+            m = await h.measure(ctx)
+            v = h.verdict(pr, m)
+        except (Exception, KeyboardInterrupt, asyncio.CancelledError) as e:
+            # the hypothesis the interrupt landed inside will raise again on
+            # the way out; that is a row, not a crash that loses every other
+            # verdict the run had already produced
+            m = Measurement(text="interrupted",
+                            data={"reason": f"{type(e).__name__} while "
+                                            "measuring"})
+            v = Verdict(NOT_ESTABLISHED,
+                        "the run was interrupted before this hypothesis "
+                        "finished measuring")
+        rows.append(_row(h, ctx, pr, m, v))
     return rows
 
 
@@ -206,18 +259,22 @@ def _progress(kind, payload) -> None:
 async def run_test(cfg, preds, opts, ep, pl, metrics, exclusive: bool) -> tuple:
     """Returns (hypothesis rows, probe cache, capacity bracket, interrupted)."""
     interrupted = False
+    rows: list[dict] = []
     await _maybe(metrics, "start", "open")
     try:
         async with make_client() as client:
             ctx = RunContext(cfg, preds, opts, ep, client=client,
                              metrics=metrics, exclusive=exclusive,
                              burst=opts.burst, burst_users=opts.burst_users,
-                             run_ladder=pl.run_ladder,
-                             on_progress=_progress)
+                             probes=pl.probes, on_progress=_progress)
             try:
-                rows = await _score(ctx, pl)
+                await _score(ctx, pl, rows)
             except (KeyboardInterrupt, asyncio.CancelledError):
-                interrupted, rows = True, []
+                # the verdicts already computed ARE the run's output; the rest
+                # are scored against the cache, starting nothing new
+                interrupted = True
+                rows += await _score_from_cache(ctx, pl,
+                                                {r["key"] for r in rows})
     finally:
         await _maybe(metrics, "stop", "aclose", "close")
 
@@ -290,9 +347,9 @@ def cmd_test(args) -> int:
         hypotheses=rows,
         skipped=[{**h.describe(), "reason": r} for h, r in pl.skipped],
         not_established=not_established_notes(
-            cfg, opts, pl, ran_ladder=bool(cached["rungs"]),
-            ran_burst=cached["burst"] is not None, exclusive=args.exclusive,
-            metrics=bool(args.metrics_url)),
+            cfg, opts, pl, rungs=cached["rungs"], sample=cached["sample"],
+            burst=cached["burst"], hypotheses=rows, exclusive=args.exclusive,
+            metrics=bool(metrics_url), interrupted=interrupted),
         measured_capacity_bracket=bracket)
 
     print_report(rec)

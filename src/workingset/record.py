@@ -102,53 +102,109 @@ def _json_default(o):
 # so it is built from the run, not hard-coded, and it is stored in the record
 # rather than regenerated at print time.
 # ============================================================================
-def not_established_notes(cfg, opts, plan, ran_ladder: bool,
-                          ran_burst: bool, exclusive: bool,
-                          metrics: bool) -> list[str]:
+def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
+                          burst=None, hypotheses=None, exclusive: bool = False,
+                          metrics: bool = False,
+                          interrupted: bool = False) -> list[str]:
+    """Built from what the run MEASURED, not from what it planned.
+
+    The first cut of this list read the plan's booleans: a sample whose every
+    request failed still produced "this run establishes levels and gap
+    distributions", because a sample had been planned. A trailer that
+    overstates a failed run is worse than no trailer, so every line below is
+    conditioned on a result.
+    """
     from .probe.session import sub_prefix_floor
 
+    rungs = rungs or []
+    hypotheses = hypotheses or []
     notes: list[str] = []
-    if ran_ladder:
+    full = [r for r in rungs if not r.get("partial")]
+    ok_rungs = [r for r in full if (r.get("n_turns") or 0) > 0]
+    sample_ok = bool(sample) and (sample.get("n_ok") or 0) > 0
+
+    if interrupted:
         notes.append(
-            "Warm capacity is bounded BELOW only: unless a rung shows >5% "
-            "effective-cold hit turns, the pool was never driven to eviction, "
-            "and the eviction classifier itself is the baseline's 0.4x-cold "
-            "TTFT heuristic, not a pool measurement.")
+            "INTERRUPTED: the run did not finish. Any rung shown as partial "
+            "is orientation only, and every hypothesis below was scored "
+            "against the evidence that existed when the run stopped.")
+
+    # --- what the ladder did or did not establish ------------------------
+    if ok_rungs:
         notes.append(
             "Ceilings the ladder did not fail on are 'not separable': one run "
             "observes one binding constraint, not four.")
+        if _verdict(hypotheses, "H-cache") == "bounded_below":
+            notes.append(
+                "Warm capacity is bounded BELOW only: the pool was never "
+                "driven to eviction, and the eviction classifier itself is "
+                "the baseline's 0.4x-cold TTFT heuristic, not a pool "
+                "measurement.")
+    elif full:
+        notes.append(
+            f"The ladder ran {len(full)} rung(s) and none produced a measured "
+            "turn: no capacity ceiling is established here, and the rung "
+            "table below is a record of failures, not of load.")
     else:
         notes.append(
             "No ladder was run: every capacity ceiling (cache, decode, "
-            "latency, saturation, and the binding one) is untested here. This "
-            "run establishes levels and gap distributions at the endpoint's "
-            "prevailing load, nothing about how many users it serves.")
-    if not exclusive:
+            "latency, saturation, and the binding one) is untested here.")
+
+    # --- what the cheap probe did or did not establish -------------------
+    if sample is not None and not sample_ok:
+        notes.append(
+            f"The sample probe answered {sample.get('n_ok', 0)} of "
+            f"{sample.get('n', 0)} requests: the level and gap rows below "
+            "rest on nothing. Fix the endpoint before reading them.")
+    if not exclusive and (sample_ok or sample is None):
         notes.append(
             "Shared mode: the endpoint's standing load is unknown and not "
-            "controlled. Every level below was measured at whatever the "
-            "server was already doing, not at the predicted operating point "
-            "the model priced these numbers at.")
-    notes.append(
-        "Token counts are chars/{:g} approximations; the achieved/intended "
-        "ratio above says how far off — re-run calibrated before trusting "
-        "capacity numbers to better than ~15%.".format(opts.chars_per_token))
-    notes.append(
-        "Think time is exponential around a fixed mean; real agentic cadence "
-        "is burstier (lognormal sigma 2.43 in the measured trace), which "
-        "moves the latency ceiling down, not up.")
-    notes.append(
-        "One seed, one window per rung: no variance estimate. Steady state is "
-        "assumed after the ramp, not verified.")
-    notes.append(
-        "DP deployments: this drives ONE endpoint; replica-splitting and "
-        "session-sticky routing are not exercised.")
+            "controlled, so every level here was measured at whatever the "
+            "server was already doing rather than at the operating point the "
+            "predictions were made for. Those rows are capped at 'not "
+            "established' whatever the numbers say; only an exclusive run can "
+            "support or refute them.")
+
+    # --- measurements that were unavailable ------------------------------
+    if not _token_accounting(rungs, sample):
+        notes.append(
+            "No `usage` readback from this endpoint: prompt- and "
+            "completion-token counts are the client's chars/{:g} estimate "
+            "only, so the achieved/intended ratio, freezes per 1k tokens and "
+            "tokens per SSE event are all unavailable or unverified."
+            .format(opts.chars_per_token))
+    else:
+        notes.append(
+            "Token counts are chars/{:g} approximations; the achieved/intended "
+            "ratio above says how far off — re-run calibrated before trusting "
+            "capacity numbers to better than ~15%.".format(opts.chars_per_token))
     if not metrics:
         notes.append(
             "No /metrics sampler: the concurrent-decode count, the queue "
             "depth and the KV-cache occupancy are inferred from client-side "
             "timing or not at all. Pass --metrics-url for the server's own "
             "view.")
+
+    # --- hypotheses that reached no conclusion ---------------------------
+    open_rows = [h for h in hypotheses
+                 if h.get("verdict", {}).get("status") == "not_established"]
+    if open_rows:
+        notes.append(
+            "Not established by this run, each for the reason on its row: "
+            + ", ".join(h["key"] for h in open_rows) + ".")
+
+    # --- standing caveats of the workload itself -------------------------
+    notes.append(
+        "Think time is exponential around a fixed mean; real agentic cadence "
+        "is burstier (lognormal sigma 2.43 in the measured trace), which "
+        "moves the latency ceiling down, not up.")
+    if ok_rungs:
+        notes.append(
+            "One seed, one window per rung: no variance estimate. Steady "
+            "state is assumed after the ramp, not verified.")
+    notes.append(
+        "DP deployments: this drives ONE endpoint; replica-splitting and "
+        "session-sticky routing are not exercised.")
     wl = cfg.workload
     sub_floor = sub_prefix_floor(wl)
     if sub_floor >= wl.subagent_median_tokens:
@@ -158,7 +214,7 @@ def not_established_notes(cfg, opts, plan, ran_ladder: bool,
             f"({wl.subagent_median_tokens:,} tok), so most subagent first "
             "turns are byte-identical and vLLM dedups them to one cache "
             "entry — the subagent KV load is not being exercised.")
-    if not ran_burst:
+    if not burst:
         notes.append(
             "Correlated-flush tolerance (B*) needs the separate burst probe "
             "(--burst N --exclusive); independent per-turn misses cannot "
@@ -166,3 +222,24 @@ def not_established_notes(cfg, opts, plan, ran_ladder: bool,
     for h, reason in plan.skipped:
         notes.append(f"{h.key} was not tested: {reason}.")
     return notes
+
+
+def _verdict(hypotheses, key: str) -> str | None:
+    for h in hypotheses:
+        if h.get("key") == key:
+            return h.get("verdict", {}).get("status")
+    return None
+
+
+def _token_accounting(rungs, sample) -> bool:
+    """Did the endpoint return `usage` anywhere? request.py's fallback drops
+    stream_options on a rejection, and without it there is no token count to
+    check the synthetic-text calibration against."""
+    for r in rungs:
+        for t in r.get("traces") or []:
+            if t.get("ptok_achieved"):
+                return True
+    for t in (sample or {}).get("traces") or []:
+        if t.get("ptok_achieved"):
+            return True
+    return False

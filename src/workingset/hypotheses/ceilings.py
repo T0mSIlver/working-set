@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from .base import (BOUNDED_BELOW, EXCLUSIVE, NOT_ESTABLISHED, REFUTED,
+from .base import (BOUNDED_BELOW, EXCLUSIVE, LADDER, NOT_ESTABLISHED, REFUTED,
                    Hypothesis, Measurement, Prediction, Verdict,
                    bracket_verdict)
 
@@ -31,6 +31,7 @@ class HCache(Hypothesis):
     key = "H-cache"
     title = "the warm-session pool holds the predicted p5 population"
     requires = frozenset({EXCLUSIVE})
+    probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
         return (f"H-cache: >= {p.warm_capacity_p5:g} user sessions stay warm "
@@ -56,7 +57,17 @@ class HCache(Hypothesis):
                                data={"evict_frac": ev.evict_frac,
                                      "pop": ev.pop,
                                      "cached_frac": ev.cached_frac})
-        return Measurement(text="not separable", data={})
+        unwitnessed = v.warm_unwitnessed
+        if unwitnessed:
+            # rungs ran, but nothing could tell warm from cold on them
+            return Measurement(
+                text="not separable",
+                data={"unwitnessed_pops": unwitnessed,
+                      "reason": "no forced miss to calibrate the cold-TTFT "
+                                "classifier and no cached_tokens from the "
+                                "server — warmth was never observed"})
+        return Measurement(text="not separable",
+                           data={"reason": "no rung produced hit turns"})
 
     def verdict(self, pred: Prediction, m: Measurement) -> Verdict:
         wc = pred.value
@@ -73,13 +84,14 @@ class HCache(Hypothesis):
             if wc is not None and m.hi < 0.75 * wc:
                 return Verdict(REFUTED, note)
             return Verdict(NOT_ESTABLISHED, note)
-        return Verdict(NOT_ESTABLISHED, "no data")
+        return Verdict(NOT_ESTABLISHED, m.data.get("reason", "no data"))
 
 
 class HDecode(Hypothesis):
     key = "H-decode"
     title = "per-user p50 decode holds at the floor up to the decode ceiling"
     requires = frozenset({EXCLUSIVE})
+    probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
         return (f"H-decode: per-user p50 decode holds >= "
@@ -111,6 +123,7 @@ class HLatency(Hypothesis):
     key = "H-latency"
     title = "a miss's mean TTFT reaches the budget at the latency ceiling"
     requires = frozenset({EXCLUSIVE})
+    probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
         return (f"H-latency: a cache miss's mean TTFT reaches the "
@@ -142,6 +155,7 @@ class HSaturation(Hypothesis):
     key = "H-saturation"
     title = "prefill duty reaches 100% at the saturation ceiling"
     requires = frozenset({EXCLUSIVE})
+    probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
         sat = ("never binds" if p.saturation_ceiling_users >= 999999
@@ -184,6 +198,7 @@ class HBinding(Hypothesis):
     key = "H-binding"
     title = "measured SLO capacity lands at the binding ceiling"
     requires = frozenset({EXCLUSIVE})
+    probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
         return (f"H-binding: the binding constraint is "

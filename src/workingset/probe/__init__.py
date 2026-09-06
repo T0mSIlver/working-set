@@ -20,8 +20,9 @@ Nothing here imports the sampler.
 from .burst import BurstResult, eval_burst, run_burst
 from .ladder import build_ladder
 from .options import ProbeOptions
-from .population import (Rung, Sample, eval_rung, eval_sample, run_population,
-                         run_sample)
+from .population import (Rung, Sample, decode_batch, eval_rung, eval_sample,
+                         per_user_p50, run_population, run_sample,
+                         spike_evidence)
 from .request import EndpointSpec, RequestTrace, make_client, send_request
 from .session import (Prefixes, Session, build_prefixes, draw_session_tokens,
                       make_session, make_text, sampler_selfcheck,
@@ -31,8 +32,9 @@ from .stats import DEFAULT_RUNGS, FREEZE_LADDER_MS, fmt, pct
 __all__ = [
     "BurstResult", "DEFAULT_RUNGS", "EndpointSpec", "FREEZE_LADDER_MS",
     "Prefixes", "ProbeOptions", "RequestTrace", "Rung", "Sample", "Session",
-    "build_ladder", "build_prefixes", "draw_session_tokens", "eval_burst",
-    "eval_rung", "eval_sample", "fmt", "make_client", "make_session",
-    "make_text", "pct", "run_burst", "run_population", "run_sample",
-    "sampler_selfcheck", "send_request", "sub_prefix_floor",
+    "build_ladder", "build_prefixes", "decode_batch", "draw_session_tokens",
+    "eval_burst", "eval_rung", "eval_sample", "fmt", "make_client",
+    "make_session", "make_text", "pct", "per_user_p50", "run_burst",
+    "run_population", "run_sample", "sampler_selfcheck", "send_request",
+    "spike_evidence", "sub_prefix_floor",
 ]
