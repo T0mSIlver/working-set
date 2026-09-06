@@ -16,8 +16,8 @@ Blocks (TOML tables) and their model counterparts:
   [calibration] mfu / mbu overrides (defaults = the study's calibrated values)
 
 Field names follow the explorer's generated CONFIG block one-for-one (the
-harness's `workload` keys), so an existing validate_deployment.py CONFIG maps
-onto this schema without renaming.
+harness's `workload` keys), so a CONFIG block from a harness downloaded
+before the package maps onto this schema without renaming.
 """
 from __future__ import annotations
 
@@ -221,7 +221,7 @@ def _dump_toml(d: dict[str, Any]) -> str:
 
 
 def load_config(path: str | Path) -> RunConfig:
-    """Read a TOML or JSON config. A validate_deployment.py file is accepted
+    """Read a TOML or JSON config. A downloaded harness .py is accepted
     too: its CONFIG block is extracted, so an explorer download from before
     the package can still be priced."""
     p = Path(path)

@@ -698,7 +698,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
   <div class="sub-h" id="validate"><span class="n">3·4</span><h3>Prove it on your endpoint</h3><span class="lede">the predictions rewritten as a falsifiable load test</span></div>
 
   <div class="panel card" id="testCard" style="margin-bottom:14px">
-    <p class="cs">Every number on this page is a projection — the planning stance defines "comfortable capacity" as <b>measured</b> SLO capacity, which no model produces. This button writes the current predictions down as falsifiable hypotheses inside a standalone load-test script (Python, no checkout needed: <code>uv run validate_&hellip;.py</code>): closed-loop users with the shared prefix and log-normal contexts configured above, a load ladder bracketing the predicted limit, and a predicted-vs-measured verdict table at the end. Start with <code>--dry-run</code>; probe B* with <code>--burst N</code>.</p>
+    <p class="cs">Every number on this page is a projection — the planning stance defines "comfortable capacity" as <b>measured</b> SLO capacity, which no model produces. This button hands out the configuration on screen as a <code>workingset.toml</code>, and the <code>workingset</code> package turns it into the load test: closed-loop users with the shared prefix and log-normal contexts configured above, a ladder bracketing the predicted limit, and a predicted-vs-measured verdict table. The predictions are <b>not</b> in the file — <code>ws predict</code> recomputes them from it, so a config can never carry a number the code did not produce. Start with <code>--dry-run</code>; probe B* with <code>--burst N</code>.</p>
     <div id="testBody"></div>
   </div>
 

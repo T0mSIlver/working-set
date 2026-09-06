@@ -18,7 +18,7 @@ limit of what they can then conclude, and this module is strict about it:
 
 When a ladder IS being run (an exclusive run that also selected a ceiling
 hypothesis), they read the rung nearest the operating point instead, exactly
-as scripts/validate_deployment.py does — and if no rung carries the statistic
+as the retired standalone harness did — and if no rung carries the statistic
 they report "not separable" rather than opening a live sample against an
 endpoint the ladder has just finished draining.
 
