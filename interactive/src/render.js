@@ -675,9 +675,6 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   // cold-SPIKE tolerance (research/spike.md): the duty cycle above is a mean
   // rate against a mean service time, and misses arrive in clumps
   const sp = noFit ? null : spikeMetrics(model, topo, wl, cs, groupRate, CH);
-  const spikeClass = noFit ? undefined
-    : ((sp.bstar < 1 || wl.invalidation >= sp.fsla) ? 'crit'
-      : ((sp.bstar < 5 || wl.invalidation >= sp.fsla/2) ? 'warn' : 'good'));
   // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
   // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
   // different draws and is not a count of anything.
