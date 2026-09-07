@@ -915,19 +915,23 @@ def steady_tables():
         v_warm = float(M.decode_curves(m, t, w0, [n_warm], n_iter=600)[1][0])
         dec = M.max_users_decode(m, t, w0, n_iter=400)
         cap = dec * M.DECODE_FLOOR_TOKS
+        cap_pct = (f"{100 * sd['demand_tok_s'] / cap:15.1f}%"
+                   if cap != 0 else f"{'--':>16}")
+        floor_note = ("   DECODE FLOOR: not met by a single decoder"
+                      if cap == 0 else "")
         if sd["saturated"]:
             # no steady state exists: the demand outruns anything this cache
             # can decode. Printing an n here would be inventing one.
             print(f"  {mk + ' ' + t.name:24} {warm5:8.0f} {'--':>7} {'--':>8} "
-                  f"{v_warm:8.0f} {'--':>8} {100 * sd['demand_tok_s'] / cap:15.1f}%"
-                  f"   SATURATED: no steady state at this load")
+                  f"{v_warm:8.0f} {'--':>8} {cap_pct}"
+                  f"   SATURATED: no steady state at this load{floor_note}")
             continue
         under = " (under one decoder: mostly idle between requests)" \
             if sd["n"] < 1 else ""
         print(f"  {mk + ' ' + t.name:24} {warm5:8.0f} {sd['n']:7.1f} "
               f"{sd['per_user_tok_s']:8.0f} {v_warm:8.0f} "
               f"{sd['per_user_tok_s'] / v_warm:7.1f}x "
-              f"{100 * sd['demand_tok_s'] / cap:15.1f}%{under}")
+              f"{cap_pct}{under}{floor_note}")
     print("  Read the speedup column as the size of the reporting error, not as")
     print("  a hardware result: the two numbers are the SAME curve at two batch")
     print("  sizes. The stress figure stays the right worst case (a flush, or a")
