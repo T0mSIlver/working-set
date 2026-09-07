@@ -32,6 +32,7 @@ The interactive viz (interactive/src/*.js) mirrors this math in JS; keep the
 two in sync.
 """
 from __future__ import annotations
+import math
 import numpy as np
 from dataclasses import dataclass, field, replace
 
@@ -2148,7 +2149,8 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
                         out_tokens: float = OUT_TOKENS_DEFAULT,
                         union: str = "linear", n_iter: int = 400,
                         seed: int = 0, hi: int = 4096,
-                        mbu: float = None) -> dict:
+                        mbu: float = None,
+                        resident: float = None) -> dict:
     """The decode batch a given LOAD actually produces, and its per-user speed.
 
     Every other decode figure in this model is a stress test: max_users_decode
@@ -2183,8 +2185,18 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     load asks for, which is what "no steady state" means. They were one field;
     the explorer's chart D read it as demand and so mislabelled the saturated
     marker by up to 24x.
-    `saturated` is True when the demand exceeds what `hi` concurrent decoders
-    could retire: no steady state exists, so n is a floor, not an estimate.
+    THE BATCH CANNOT OUTGROW THE POOL. A batch of n sequences needs n
+    contexts resident in HBM, and decode_curves prices exactly that read
+    without asking whether they fit. So the search stops at `resident`, the
+    GPU-resident warm population of one cache (warm_capacity which="gpu",
+    p95: the most sessions any fill packs). Past it the engine is evicting
+    and every returning session is a cold prefill, which is the miss-rate
+    axis's business and is not priced here; a point found out there would be
+    a number about a machine that does not exist. `saturated` is therefore
+    True when the demand exceeds what the resident population retires (or,
+    as a hard bracket, what `hi` decoders retire): no steady state exists and
+    n is a floor, not an estimate. Callers that already hold the warm figure
+    pass `resident`; None computes it at the same seed.
 
     `mbu` is passed straight to decode_curves (None = the measured default),
     so a caller honouring a calibration block prices this point and
@@ -2212,6 +2224,13 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
         raise ValueError(f"hi must be >= 1, got {hi!r}")
     reps = topo.replicas
     demand = rate_group * out_tokens
+    if resident is None:
+        resident = float(warm_capacity(model, topo, wl, ram_gib=0,
+                                       n_iter=max(40, n_iter // 4), seed=seed,
+                                       which="gpu")[2])
+    # at least one sequence decodes if anything does; below one resident
+    # context decode_curves itself refuses (no pool), so the floor is safe
+    cap = max(1, min(hi, int(math.floor(resident))))
 
     def v(n: int) -> float:
         return float(decode_curves(model, topo, wl, [n], n_iter=n_iter,
@@ -2228,16 +2247,18 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
         return {**out, "n": demand / v1, "per_user_tok_s": v1,
                 "delivered_tok_s": demand * reps,
                 "demanded_tok_s": demand * reps}
-    lo, up = 1, 2
-    while up <= hi and up * v(up) < demand:
-        lo, up = up, up * 2
-    if up > hi:
-        # the study does not do silent caps: say the demand ran off the end
-        # delivered != demanded here, which is exactly what saturated means:
-        # one field for both silently understated the demand by up to 24x
-        return {**out, "n": float(hi), "per_user_tok_s": v(hi),
-                "delivered_tok_s": hi * v(hi) * reps,
+    a_cap = cap * v(cap)
+    if demand >= a_cap:
+        # the resident population, all decoding at once, does not retire what
+        # the load asks for: no steady state. delivered != demanded here,
+        # which is exactly what saturated means (one field for both once
+        # understated the demand by up to 24x)
+        return {**out, "n": float(cap), "per_user_tok_s": a_cap / cap,
+                "delivered_tok_s": a_cap * reps,
                 "demanded_tok_s": demand * reps, "saturated": True}
+    lo, up = 1, 2
+    while up < cap and up * v(up) < demand:
+        lo, up = up, min(cap, up * 2)
     while up - lo > 1:
         mid = (lo + up) // 2
         if mid * v(mid) < demand:
@@ -3524,6 +3545,22 @@ def _selfcheck():
     hot = steady_decode_point(m27, tp2, wl, 1e6, n_iter=100, hi=64)
     assert hot["saturated"] and hot["n"] == 64.0, \
         "demand beyond the decode curve must flag saturated, not invent a batch"
+    # 6b. and so is a demand past the GPU-RESIDENT population: a batch of n
+    #     needs n contexts in HBM, and past that every return is a cold
+    #     prefill this point does not price. 27B/TP2 holds ~200 resident; a
+    #     demand that 4,096 decoders would retire is still no steady state.
+    res = float(warm_capacity(m27, tp2, wl, n_iter=100, which="gpu")[2])
+    v_res = float(decode_curves(m27, tp2, wl, [int(res)], n_iter=100)[1][0])
+    past = steady_decode_point(m27, tp2, wl, 1.5 * int(res) * v_res / OUT_TOKENS_DEFAULT,
+                               n_iter=100, resident=res)
+    assert past["saturated"] and past["n"] == float(int(res)), \
+        f"a batch past the resident population ({res:.0f}) must saturate, " \
+        f"got n={past['n']} saturated={past['saturated']}"
+    assert past["delivered_tok_s"] < past["demanded_tok_s"]
+    #     and the explicit `resident` matches the computed one in kind
+    assert steady_decode_point(m27, tp2, wl, rate_g, n_iter=100, resident=res)["n"] \
+        == steady_decode_point(m27, tp2, wl, rate_g, n_iter=100, resident=None)["n"], \
+        "inside the population the cap must not move the point"
     # 7. per-group vs system: n is what ONE cache decodes, agg is the estate
     dpg = topology_grid(dp=2, tp=1)
     sd_dp = steady_decode_point(m27, dpg, wl, rate_g, n_iter=200)

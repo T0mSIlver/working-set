@@ -1095,59 +1095,70 @@ delivered      demanded      (output tok/s, one replica group)
 `n × v(n)` is the aggregate decode curve — strictly increasing in *n* — so the
 crossing is unique, and it is what `steady_decode_point()` bisects.
 
-At the reference load (64 users / 30 s, r = 0.10, 1,000 output tokens per
-response — the assumed default when this table was generated; measured
-production output is ~400 tokens/response as of 2026-08-27, which shrinks
-n@load ~2.9× and raises v@load — see research/workload_agentic_poc.md; the
-table below still quotes the 1,000-token reference):
+At the reference load (64 users / 30 s, r = 0.10, 400 output tokens per
+response — the measured mean, 404.1 tokens on 2026-08-27,
+research/workload_agentic_poc.md; regenerated 2026-09-07 with the calibrated
+MBU and the 27B's measured MTP, which is why the speeds are lower and the
+batches larger than the first version of this table):
 
 | config | warm p5 | n@load | v@load | v@warm | ratio | % of `mns@40` capacity |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 27B 1×H200 | 77 | 15.2 | 155 | 57 | 2.7× | 50% |
-| 27B 2×H200 TP2 | 195 | 6.4 | 366 | 46 | 7.9× | 26% |
-| 35B-A3B 1×H200 | 250 | 0.9 | 2,474 | 53 | 46× | 17% |
-| 35B-A3B 2×H200 TP2 | 632 | 0.5 | 4,453 | 44 | 102× | 8% |
-| Mistral-3.5 4×H200 TP4 | 56 | — | — | 29 | — | 163% — **saturated** |
-| GLM-5.2 8×H200 TP8 | 143 | 37.0 | 63 | 62 | 1.0× | 3% |
-| 27B 1×B300 | 210 | 7.1 | 330 | 40 | 8.2× | 28% |
-| 35B-A3B 2×B300 TP2 | 1,506 | 0.3 | 7,422 | 33 | 228× | 5% |
+| 27B 1×H200 | 77 | 16.6 | 57 | 22 | 2.6× | 76% |
+| 27B 2×H200 TP2 | 195 | 6.9 | 137 | 18 | 7.8× | 32% |
+| 35B-A3B 1×H200 | 250 | 4.3 | 216 | 12 | 18× | 81% |
+| 35B-A3B 2×H200 TP2 | 632 | 1.0 | 980 | 10 | 102× | 24% |
+| Mistral-3.5 4×H200 TP4 | 56 | — | — | 6 | — | — **saturated**; floor not met by one decoder |
+| GLM-5.2 8×H200 TP8 | 143 | 67.9 | 14 | 14 | 1.0× | 235% |
+| 27B 1×B300 | 210 | 7.6 | 123 | 15 | 8.1× | 36% |
+| 35B-A3B 2×B300 TP2 | 1,506 | 0.6 | 1,633 | 7 | 228× | 11% |
 
 The ratio column is **the size of a reporting error, not a hardware result**:
 both numbers are the same curve read at two batch sizes. Two rows are the
 interesting ones. Mistral-3.5/TP4 has *no* steady state at this load — its
-output demand exceeds what the cache can retire at any batch size, which is the
-same finding § 9's planner reports as `DECODE`-bound at 36 users, arrived at
-independently. GLM-5.2/TP8 is the row where the gap closes to 1.0×: it is slow
-enough that the reference load already fills its batch, so for that config the
-stress figure *was* the expectation all along. Everywhere else the study has
-been quoting a number 2.7–228× pessimistic against what a user at this load
-would see.
+output demand exceeds what the whole GPU-resident population retires decoding
+at once, and a single decoder already sits under the 40 tok/s floor, which is
+the same finding § 9's planner reports as `DECODE`-bound at 0 users, arrived
+at independently. GLM-5.2/TP8 is the row where the gap closes to 1.0×: it is
+slow enough that the reference load already fills its batch (and overfills the
+`mns@40` capacity, at 14 tok/s per user), so for that config the stress figure
+*was* the expectation all along. Everywhere else the study has been quoting a
+number 2.6–228× pessimistic against what a user at this load would see.
 
-Sensitivity (27B / TP2). The point depends on the request rate and the output
-length **only through their product**, so those two inputs are the whole error
-budget — but *n* is not linear in the product, because per-user speed falls as
-the batch grows:
+**The batch cannot outgrow the pool.** A batch of *n* sequences needs *n*
+contexts resident in HBM, and the decode curve prices exactly that read
+without asking whether they fit. So `steady_decode_point()` stops its search
+at the GPU-resident warm p95 of one cache, and so does the explorer's
+`steadyDecodePoint()`: past it the engine is evicting, every returning session
+is a cold prefill the miss-rate axis prices and this point does not, and a
+crossing found out there would be a number about a machine that does not
+exist. "Saturated" therefore means *the resident population, all decoding at
+once, does not retire what the load asks for* — not that some larger batch
+would. (Until 2026-09-07 the Python side searched to 4,096 sequences and could
+resolve such a point; the explorer never did. The two now agree on the flag
+on every one of the 821 golden states.)
 
-*(Table generated at the 1,000-token output default. The default became 400
-— measured — on 2026-08-27, putting the reference point at n ≈ 2.2, v ≈ 430;
-the rows remain valid as a sweep. research/workload_agentic_poc.md.)*
+Sensitivity (27B / TP2, resident population 251). The point depends on the
+request rate and the output length **only through their product**, so those
+two inputs are the whole error budget — but *n* is not linear in the product,
+because per-user speed falls as the batch grows:
 
 | think time | n | v |     | output tokens | n | v |
 | ---: | ---: | ---: | --- | ---: | ---: | ---: |
-| 15 s | 18.2 | 257 |     | 250 | 1.3 | 450 |
-| 30 s | 6.4 | 366 |     | 1,000 | 6.4 | 366 |
-| 43 s (measured) | 4.0 | 402 |     | 4,000 | 328 | 29 |
-| 60 s | 2.8 | 425 |     | 16,000 | — | saturated |
+| 15 s | 20.0 | 94 |     | 250 | 3.8 | 154 |
+| 30 s | 6.9 | 137 |     | 400 (reference) | 6.9 | 137 |
+| 43 s (measured) | 4.3 | 151 |     | 1,000 | 33.5 | 70 |
+| 60 s | 2.9 | 161 |     | 4,000 | — | saturated |
 
-4× the output length moves *n* 4.9×; the next 4× moves it 51×; the next
-saturates the configuration outright. **Output length is the one assumed input
-in this section** — the workload model is fitted on 1,850 real prompt *lengths*
-and has never fitted output lengths. The 1,000-token default *(measured at
-~400 and replaced on 2026-08-27 — research/workload_agentic_poc.md)* was
-consistent with the traced 10.8 s served per request (`MEASURED_SERVICE_R_S`)
-at the observed 50–90 tok/s, but that was a consistency check, not a fit,
-which is why the
-explorer exposes it as a slider rather than burying it as a constant.
+4× the output length (250 → 1,000) moves *n* 8.8×; the next 4× saturates the
+configuration outright — 4,000-token responses at 2.35 req/s ask for more
+output than 251 resident sessions retire. **Output length is the one assumed
+input in this section** — the workload model is fitted on 1,850 real prompt
+*lengths* and has never fitted output lengths. The 400-token reference is the
+measured mean of the traced responses; the traced 10.8 s served per request
+(`MEASURED_SERVICE_R_S`) at the observed 50–90 tok/s would put it nearer
+1,000, so the two rows around it bracket that uncertainty, and a k× error in
+it is a k× error in the demand. That is why the explorer exposes it as a
+slider rather than burying it as a constant.
 
 Three approximations travel with every figure here, and the explorer states all
 three on the tiles. **Mean field:** *v* is evaluated at the mean batch rather
@@ -1401,8 +1412,8 @@ so is the bandwidth they would share.
 | H5 subagents raise warm count | **Supported** (640 → 918 across r = 0 → 1) |
 | H6 invalidation ≈ linear, ceiling 1 − f | **Supported** (−1.5% at f = 1%, −14% at 10%) |
 | H7 cache binds before bandwidth | **Supported in all 6 configs — with MTP, under the roofline decode convention these tables use** (warm < mns@40; v@warm ≥ 41 tok/s). **Reversed in all 6 without it** (mns@40 falls 1.8–2.0×, e.g. 118 → 60 on the 27B / 1×H200). **Unresolved on the 27B since the 2026-08-28 decode calibration** (limitation 11): the measured efficiency lowers every decode ceiling, and which side of the cache ceiling it lands on depends on a mechanism the measurement could not separate |
-| H8 spikes bind below f\*; MoE compounds | **Supported** (§ 9). f_sla is 0.35–0.93× f\* (tightest on Mistral-3.5/TP4) and duty still reads 76–93% there; B\* → 0 at f\*. MoE spike tolerance beats dense **8.8× (1×H200) / 7.2× (TP2)** against a 5.9× prefill-speed gap — and, as predicted, the advantage **shrinks to ~2.2–2.7× on a global flush**. Unpredicted corollary: under FCFS the miss tax lands on *hits* (74× their own service time at f = 20%). The § 9 planner adds a second: **which** constraint binds switches from cache to latency at f ≈ 5% on the 27B/TP2 (f ≈ 10% at the measured 43 s interval), and Mistral-3.5/TP4 turns out **decode**-bound at 36 users (it ships no MTP module) |
-| H9 steady state ≪ stress test | **Supported** (§ 10). At the reference load the batch holds 0.3–37 sequences against warm populations of 56–1,506, and per-user speed runs **2.7–228×** the all-warm figure. Predicted widening with decode headroom holds (largest on the MoE, smallest on GLM-5.2/TP8 at 1.0×), and the one config where decode already binds — Mistral-3.5/TP4 — has **no steady state at all** at this load, agreeing with § 9's independent `DECODE`-bound verdict |
+| H8 spikes bind below f\*; MoE compounds | **Supported** (§ 9). f_sla is 0.35–0.93× f\* (tightest on Mistral-3.5/TP4) and duty still reads 76–93% there; B\* → 0 at f\*. MoE spike tolerance beats dense **8.8× (1×H200) / 7.2× (TP2)** against a 5.9× prefill-speed gap — and, as predicted, the advantage **shrinks to ~2.2–2.7× on a global flush**. Unpredicted corollary: under FCFS the miss tax lands on *hits* (74× their own service time at f = 20%). The § 9 planner adds a second: **which** constraint binds switches from cache to latency at f ≈ 5% on the 27B/TP2 (f ≈ 10% at the measured 43 s interval), and Mistral-3.5/TP4 turns out **decode**-bound at 0 users under the calibrated MBU: a single decoder already sits under the 40 tok/s floor (it ships no MTP module) |
+| H9 steady state ≪ stress test | **Supported** (§ 10). At the reference load the batch holds 0.6–68 sequences against warm populations of 56–1,506, and per-user speed runs **2.6–228×** the all-warm figure (1.0× on GLM-5.2/TP8, where the load already fills the batch). Predicted widening with decode headroom holds (largest on the MoE, smallest on GLM-5.2/TP8), and the one config where decode already binds — Mistral-3.5/TP4 — has **no steady state at all** at this load, agreeing with § 9's independent `DECODE`-bound verdict |
 
 ## Extension (2026-07): B300 GPUs, NVFP4 weights, Mistral-Medium-3.5, GLM-5.2
 
@@ -1757,25 +1768,29 @@ Ordered roughly by how much each could move the numbers:
     `research/spike.md` #4 for latency). It reproduces § 7's published cache and
     decode columns exactly, which is evidence the arithmetic is right — not that
     the conversions are.
-21. **The steady-state decode point rests on an assumed output length** (§ 10;
-    added 2026-08-07). Little's law is exact and the flow balance it produces
-    needs no fitting, but it is driven by `λ × out`, and `out` — output tokens
-    per response — was **assumed at 1,000, never fitted** (measured at ~400
-    on 2026-08-27, now the default — research/workload_agentic_poc.md; the
-    figures in this section predate that). The workload model's
-    log-normal is fitted on 1,850 real *prompt* lengths; no output-length trace
-    has been collected. The 1,000-token figure is only cross-checked for
-    consistency against the traced 10.8 s served per request at 50–90 tok/s.
-    The section is not merely linear in this input: 4× moves *n* 4.9×, the next
-    4× moves it 51×, and 16× saturates the 27B/TP2 outright — so an
+21. **The steady-state decode point rests on an assumed output length, and
+    stops at the pool** (§ 10; added 2026-08-07, revised 2026-09-07). Little's
+    law is exact and the flow balance it produces needs no fitting, but it is
+    driven by `λ × out`, and `out` — output tokens per response — is a single
+    measured mean (404 tokens, 2026-08-27, research/workload_agentic_poc.md),
+    not a fitted distribution. The workload model's log-normal is fitted on
+    1,850 real *prompt* lengths; no output-length trace has been collected, and
+    the traced 10.8 s served per request at 50–90 tok/s would put the mean
+    nearer 1,000. The section is not merely linear in this input: 4× moves *n*
+    8.8× on the 27B/TP2 and the next 4× saturates it outright — so an
     order-of-magnitude error in `out` does not scale the answer, it changes
-    which regime the configuration is in. Three further approximations are
-    stated with every figure: the mean-field closure (*v* priced at the mean
-    batch; convex, so conservative by Jensen), decode-only accounting (the ITL
-    spike of § 8 is separate), and the presumption that prefill is not already
-    saturated. An output-length distribution — even a crude one — from the same
-    trace that produced the think-time anchor would retire most of this, and it
-    is the cheapest measurement outstanding in this study.
+    which regime the configuration is in. The search itself is bounded by the
+    GPU-resident warm population: a batch of *n* needs *n* contexts in HBM, and
+    a load that population cannot retire decoding at once is reported as
+    saturated rather than priced at a batch the machine cannot hold — the
+    eviction and re-prefill that would follow belong to the miss-rate axis and
+    are not in this figure. Three further approximations are stated with every
+    figure: the mean-field closure (*v* priced at the mean batch; convex, so
+    conservative by Jensen), decode-only accounting (the ITL spike of § 8 is
+    separate), and the presumption that prefill is not already saturated. An
+    output-length distribution — even a crude one — from the same trace that
+    produced the think-time anchor would retire most of this, and it is the
+    cheapest measurement outstanding in this study.
 
 ## Reproducibility
 

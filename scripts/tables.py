@@ -909,7 +909,8 @@ def steady_tables():
         if M.kv_pool_tokens(m, t) <= 0:
             continue
         rate_g = M.request_rate(M.REF_USERS, THINK, w0.sub_ratio) / t.replicas
-        sd = M.steady_decode_point(m, t, w0, rate_g, n_iter=600)
+        res = float(M.warm_capacity(m, t, w0, n_iter=300, which="gpu")[2])
+        sd = M.steady_decode_point(m, t, w0, rate_g, n_iter=600, resident=res)
         warm5 = M.warm_capacity(m, t, w0, n_iter=600)[0]
         n_warm = max(1, int(round(warm5)))
         v_warm = float(M.decode_curves(m, t, w0, [n_warm], n_iter=600)[1][0])
@@ -938,33 +939,43 @@ def steady_tables():
     print("  correlated burst, really does put the whole warm pool in the batch");
     print("  at once) — it is simply not what a user experiences at this load.")
 
+    m27, tp2 = MODELS["27B"], TOPOLOGIES["2xH200-TP2"]
+    # the batch cannot outgrow the pool: past the GPU-resident population the
+    # engine is evicting and every return is a cold prefill this point does
+    # not price, so both the model and the explorer stop there and say so
+    resident = float(M.warm_capacity(m27, tp2, w0, n_iter=300, which="gpu")[2])
+    kw = dict(n_iter=600, resident=resident)
     print("\n  Sensitivity. The point depends on the request rate and the output")
     print("  length ONLY through their product, so these two rows are the whole")
     print("  error budget. n is NOT linear in that product: per-user speed falls")
-    print("  as the batch grows, so n accelerates and then runs away entirely —")
-    print("  4x the output length moves n 4.9x here, the next 4x moves it 51x.")
-    m27, tp2 = MODELS["27B"], TOPOLOGIES["2xH200-TP2"]
+    print("  as the batch grows, so n accelerates and then runs away entirely.")
+    print(f"  SATURATED below means the demand exceeds what the whole GPU-resident")
+    print(f"  population ({resident:.0f} sessions on this cache) retires decoding at")
+    print(f"  once: no steady batch exists, and a bigger one would be a number about")
+    print(f"  a machine that does not exist.")
     for think in (15.0, THINK, M.MEASURED_CYCLE_S, 60.0):
         rate_g = M.request_rate(M.REF_USERS, think, w0.sub_ratio) / tp2.replicas
-        sd = M.steady_decode_point(m27, tp2, w0, rate_g, n_iter=600)
+        sd = M.steady_decode_point(m27, tp2, w0, rate_g, **kw)
         mark = "  <-- measured interval" if think == M.MEASURED_CYCLE_S else ""
         print(f"  think {think:5.0f} s   n {sd['n']:6.1f}   "
               f"v {sd['per_user_tok_s']:6.0f} tok/s{mark}")
-    for out in (250, 1_000, 4_000, 16_000):
+    for out in (250, OUT, 1_000, 4_000):
         rate_g = M.request_rate(M.REF_USERS, THINK, w0.sub_ratio) / tp2.replicas
-        sd = M.steady_decode_point(m27, tp2, w0, rate_g, out_tokens=out,
-                                   n_iter=600)
+        sd = M.steady_decode_point(m27, tp2, w0, rate_g, out_tokens=out, **kw)
+        mark = "  <-- reference" if out == OUT else ""
         if sd["saturated"]:
-            print(f"  out {out:6,} tok  SATURATED — no steady state")
+            print(f"  out {out:6,} tok  SATURATED — no steady state{mark}")
             continue
         print(f"  out {out:6,} tok  n {sd['n']:6.1f}   "
-              f"v {sd['per_user_tok_s']:6.0f} tok/s")
-    print("  Output length is the one ASSUMED input: the workload model fits")
-    print("  prompt lengths on 1,850 real requests and has never fitted output")
-    print("  lengths. 1,000 is consistent with the traced 10.8 s served per")
-    print("  request (MEASURED_SERVICE_R_S) at the observed 50-90 tok/s, but it")
-    print("  is a consistency check, not a fit — a 16x error in it is a 16x")
-    print("  error in n, and the whole section scales with it.")
+              f"v {sd['per_user_tok_s']:6.0f} tok/s{mark}")
+    print(f"  Output length is the one ASSUMED input: the workload model fits")
+    print(f"  prompt lengths on 1,850 real requests and has never fitted output")
+    print(f"  lengths. The {OUT:,}-token reference is the measured mean of the")
+    print(f"  traced responses; the traced 10.8 s served per request")
+    print(f"  (MEASURED_SERVICE_R_S) at the observed 50-90 tok/s would put it")
+    print(f"  nearer 1,000, so the two rows around it bracket that uncertainty.")
+    print(f"  A kx error in it is a kx error in the demand, and the whole section")
+    print(f"  scales with it.")
 
 
 if __name__ == "__main__":

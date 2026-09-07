@@ -135,7 +135,7 @@ export function driveState(v){
   const plan = decodePlan(wc.gpu[2], false);
   seedFor('decode');
   const dc = decodeCurves(m, topo, wl, plan.nMax, plan.step, plan.iter);
-  const sd = steadyDecodePoint(dc, topo, rate, state.out);
+  const sd = steadyDecodePoint(dc, topo, rate, state.out, wc.gpu[2]);
   o.steady_n = sd.n;
   o.steady_per_user_tok_s = sd.pu;
   o.steady_saturated = sd.saturated;

@@ -3,45 +3,38 @@
  "_what": "Differences between src/workingset/model.py and interactive/src/*.js that are known, measured and explained. CI is green on this set and red on anything else. An entry is a DEBT, not a decision: it records that the two implementations disagree and why we believe they do, never that the disagreement is correct. Delete an entry when the difference is fixed - the test ASSERTS that every entry matched something, so a stale allowlist fails the build.",
  "_fields": {
   "quantity": "vectors.json out-key, exact or with a trailing * as a prefix glob",
-  "where": "matches the vector's state fields, the derived n_gpu / replicas, and the vector's cond block under a _ prefix (_duty, _sla_headroom, _sla10_headroom, _warm_p5, _decode_ceiling, _ctx_cv2, _steady_nmax_ratio, _sla_f_unreachable). Values: a literal, a list, or {gt|gte|lt|lte|ne|nin}. An entry with NO where and max_rel 1.0 pins nothing at all - relErr is bounded by 1 for any finite pair - so every entry here is gated on the condition that causes it. Use _sla10_headroom, not _sla_headroom, for the quantities compared at the hard-wired 10 s budget.",
+  "where": "matches the vector's state fields, the derived n_gpu / replicas, and the vector's cond block under a _ prefix (_duty, _sla_headroom, _sla10_headroom, _warm_p5, _decode_ceiling, _ctx_cv2, _steady_cap_ratio, _sla_f_unreachable). Values: a literal, a list, or {gt|gte|lt|lte|ne|nin}. An entry with NO where and max_rel 1.0 pins nothing at all - relErr is bounded by 1 for any finite pair - so every entry here is gated on the condition that causes it. Use _sla10_headroom, not _sla_headroom, for the quantities compared at the hard-wired 10 s budget.",
   "observed_rel": "the worst relative error actually measured on 2026-09-07, 821 vectors / 46,797 comparisons",
   "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
   "hypothesis": "one line on the cause"
  },
- "_measured_at": "2026-09-07, tests/golden/vectors.json schema 1, 821 vectors, against src/workingset/model.py at origin/main 337fc86 plus the two mirror-drift fixes of this change (power_draw's decode_floor parameter, spikeMetrics' [0, 1] clamp and shared zero test). 1,721 comparisons were allowlisted before those two; 515 are now.",
+ "_measured_at": "2026-09-07, tests/golden/vectors.json schema 1, 821 vectors, against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 515 comparisons were allowlisted before the cap; 165 are now, and steady_saturated needs no entry at all.",
 
  "entries": [
   {
-   "quantity": "steady_saturated",
-   "where": { "_steady_nmax_ratio": { "gte": 1.0 } },
-   "observed_rel": 1.0,
-   "max_rel": 1.0,
-   "hypothesis": "THE FLAG, gated on its own cause. steadyDecodePoint inverts the sweep the page already drew, whose widest n is decodePlan's 1.15 x warm-p95; steady_decode_point bisects integer n out to 4,096. _steady_nmax_ratio is the load's demand against the aggregate at the MIRROR's widest n, so at >= 1 the demand runs off the end of the axis the explorer inverts and it reports `saturated` where Python resolves a point. Every one of the 30 flag mismatches sits at ratio >= 1.005; none sits below."
-  },
-  {
    "quantity": "steady_n",
-   "where": { "_steady_nmax_ratio": { "gte": 1.0 } },
-   "observed_rel": 0.971,
-   "max_rel": 1.0,
-   "hypothesis": "same axis truncation: past the mirror's widest n its answer is a FLOOR (n = nMax, flagged saturated) while Python's search resolves - 4,096 against 119. The two are not estimating the same quantity there, which is why the ceiling is 1.0 and why it is gated to exactly that regime."
+   "where": { "_steady_cap_ratio": { "gte": 1.0 } },
+   "observed_rel": 0.111,
+   "max_rel": 0.15,
+   "hypothesis": "SATURATED ON BOTH SIDES, and both say so: past the cap each side reports n = floor(its own GPU-resident warm p95), and the two p95 draws come from different samplers (numpy vs mulberry32) at different iteration counts. The residual is that draw difference, worst on small populations (9 against 10 is 11%). 132 states at ratio >= 1, the flag identical on every one - which is why steady_saturated needs no entry."
   },
   {
    "quantity": "steady_per_user_tok_s",
-   "where": { "_steady_nmax_ratio": { "gte": 1.0 } },
-   "observed_rel": 0.97,
-   "max_rel": 1.0,
-   "hypothesis": "demand/n at a truncated n; same cause as steady_n"
+   "where": { "_steady_cap_ratio": { "gte": 1.0 } },
+   "observed_rel": 0.101,
+   "max_rel": 0.15,
+   "hypothesis": "aggregate/n at each side's own floor(p95); same cap-draw residual as steady_n"
   },
   {
    "quantity": "steady_n",
-   "where": { "_steady_nmax_ratio": { "lt": 1.0 } },
+   "where": { "_steady_cap_ratio": { "lt": 1.0 } },
    "observed_rel": 0.177,
    "max_rel": 0.25,
-   "hypothesis": "INSIDE the mirror's axis the same two algorithms disagree by a bounded amount: Python bisects integer n redrawing contexts at every probe, the explorer inverts a LINEAR interpolation of one pre-sampled aggregate. 45 of 821 states, worst 18%, no trend in _steady_nmax_ratio below 1 - so this is the algorithmic residue, not the truncation."
+   "hypothesis": "INSIDE the resident cap the same two algorithms disagree by a bounded amount: Python bisects integer n redrawing contexts at every probe, the explorer inverts a LINEAR interpolation of one pre-sampled aggregate. 45 of 821 states, worst 18%, no trend in _steady_cap_ratio below 1 - so this is the algorithmic residue, not the cap."
   },
   {
    "quantity": "steady_per_user_tok_s",
-   "where": { "_steady_nmax_ratio": { "lt": 1.0 } },
+   "where": { "_steady_cap_ratio": { "lt": 1.0 } },
    "observed_rel": 0.177,
    "max_rel": 0.25,
    "hypothesis": "same bounded interpolation-vs-bisection residue as steady_n"

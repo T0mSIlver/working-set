@@ -164,7 +164,7 @@ can be gated on the **cause** rather than on a model name.
 | `_warm_p5` | the warm count in sessions — one session either way is 33% of three |
 | `_decode_ceiling` | same, for the decode bisection |
 | `_ctx_cv2` | squared coefficient of variation of the context length; `E[S^2\|miss]` runs on `L^4`, so its sampling variance scales with this |
-| `_steady_nmax_ratio` | demand / aggregate throughput at the **mirror's own** widest decode `n`. At `>= 1` the load runs off the end of the axis `steadyDecodePoint` inverts, which is when it stops resolving and starts reporting `saturated` |
+| `_steady_cap_ratio` | demand / aggregate throughput at the resident cap (the GPU-resident warm p95, where both `steady_decode_point` and `steadyDecodePoint` stop). At `>= 1` both report `saturated`; the cap itself is a Monte-Carlo draw on each side, so `n` there differs by the draw |
 
 ```jsonc
 {
@@ -202,12 +202,14 @@ is a sampled quantity, and every entry in the allowlist is one of these:
    answer the same question; the hard-wire itself is recorded here, not
    silently absorbed.
 2. **A genuine algorithmic difference.** `steady_decode_point` bisects integer
-   `n` out to 4,096, redrawing at each probe; `steadyDecodePoint` inverts the
-   interpolated aggregate of the sweep the page already drew, whose widest `n`
-   is 1.15 x the warm p95. Where the load runs past that axis
-   (`_steady_nmax_ratio >= 1`) the mirror reports `saturated` and Python
-   resolves a point — two answers to different questions, not a numeric
-   disagreement. Below the axis end the same difference is bounded at ~18%.
+   `n`, redrawing at each probe; `steadyDecodePoint` inverts the interpolated
+   aggregate of the sweep the page already drew. Both stop at the same
+   physical cap, the GPU-resident warm p95 (a batch of `n` needs `n` contexts
+   in HBM), and both report `saturated` past it, so the flag agrees on every
+   state. Past the cap (`_steady_cap_ratio >= 1`) `n` is each side's own
+   floor(p95) draw and differs by that draw, worst 11% on a population of
+   nine; below it the bisection-vs-interpolation difference is bounded at
+   ~18%.
 3. **A standing approximation.** `max_users_cache`: the explorer scales the
    whole warm p5 by `(1 - p_sub)`, where Python counts user-class sessions
    inside each fill. Invisible at ordinary counts, visible at three sessions.
