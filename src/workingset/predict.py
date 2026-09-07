@@ -85,7 +85,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     m, t, wl = cfg.to_model(), cfg.to_topology(), cfg.to_workload()
     w, slo, cal, dep = cfg.workload, cfg.slo, cfg.calibration, cfg.deployment
     chunk = dep.max_num_batched_tokens
-    users = w.users
+    users = cfg.users_per_group()
 
     ram = dep.ram_gib
     op = M.operating_point(

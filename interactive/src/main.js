@@ -31,7 +31,8 @@ import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, union
 import { decodeComfort, decodeFloor, requestRate } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
-import { STATE_DEFAULTS, capSliderMax, currentTopo, currentWL, state } from './state.js';
+import { STATE_DEFAULTS, capSliderMax, currentTopo, currentWL, hasHeadcount,
+         sessionsFromHeadcount, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartCGeom, chartDGeom, clearChartGeomCD, drawCross, interpAt, lastChartE,
          redrawChartECompanions, removeCross, renderChartA, renderChartB, renderChartC,
@@ -241,6 +242,8 @@ const sliderMap=[
   ['s-sys','sys',v=>parseFloat(v)],
   ['s-inval','inval',v=>parseFloat(v)],
   ['s-users','users',v=>parseInt(v,10)],
+  ['s-active','active',v=>parseFloat(v)],
+  ['s-spu','spu',v=>parseFloat(v)],
   ['s-think','think',v=>parseInt(v,10)],
   ['s-sla','sla',v=>parseInt(v,10)],
   ['s-decode_floor','decode_floor',v=>parseInt(v,10)],
@@ -263,6 +266,12 @@ sliderMap.forEach(([id,key,cast])=>{
     if (key==='ngpu') enforceConstraints();
     onInput();
   });
+});
+document.getElementById('i-headcount').addEventListener('input', e=>{
+  const raw = e.target.value.trim();
+  state.headcount = raw === '' ? null : Math.max(0, Math.round(Number(raw)));
+  if (raw !== '' && !Number.isFinite(state.headcount)) state.headcount = null;
+  onInput();
 });
 // metric/control explainer tooltips are keyboard-reachable (CSS shows them on
 // :focus-visible); tile tips are stamped in renderTiles' generated markup
@@ -310,6 +319,17 @@ document.querySelectorAll('.preset button[data-burst]').forEach(b=>{
 });
 
 function syncLabels(){
+  const usersEl = document.getElementById('s-users');
+  if (hasHeadcount()){
+    const lo = parseFloat(usersEl.min), hi = parseFloat(usersEl.max);
+    const step = parseFloat(usersEl.step) || 1;
+    const raw = sessionsFromHeadcount(state.headcount, state.active, state.spu);
+    state.users = clip(Math.round(raw / step) * step, lo, hi);
+  }
+  usersEl.disabled = hasHeadcount();
+  const headcountEl = document.getElementById('i-headcount');
+  const headcountText = hasHeadcount() ? String(state.headcount) : '';
+  if (headcountEl.value !== headcountText) headcountEl.value = headcountText;
   // sliders follow state, not the other way round: without this a change made
   // in code (a preset button, a future URL-state feature) leaves the thumb
   // parked at its old position while the readout moves
@@ -318,6 +338,19 @@ function syncLabels(){
     if (el && String(state[key]) !== el.value) el.value = state[key];
   }
   document.getElementById('v-users').textContent=fmt(state.users,0);
+  document.getElementById('v-active').textContent=fmt(state.active*100,0);
+  document.getElementById('v-spu').textContent=state.spu.toFixed(1);
+  if (hasHeadcount()){
+    // the page prices the slider's range; say so when the product leaves it,
+    // because the TOML carries the unclamped population and ws predict will
+    // price the real load
+    const raw = sessionsFromHeadcount(state.headcount, state.active, state.spu);
+    document.getElementById('v-pop-sessions').textContent = Math.abs(raw - state.users) < 1e-6
+      ? `→ ${fmt(state.users,0)} sessions`
+      : `→ ${fmt(raw,0)} sessions · page prices ${fmt(state.users,0)} (slider limit; the TOML keeps ${fmt(raw,0)})`;
+  } else {
+    document.getElementById('v-pop-sessions').textContent = 'optional';
+  }
   document.getElementById('v-think').textContent=fmt(state.think,0);
   document.getElementById('v-sla').textContent=fmt(state.sla,0);
   document.getElementById('v-decode_floor').textContent=fmt(state.decode_floor,0);
@@ -401,12 +434,13 @@ const URL_ENUMS = {
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
-const URL_EXTRA_NUM = { tp: [1, 8] };
+const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000] };
 export function encodeStateURL(){
   const p = new URLSearchParams();
   const put = (k, v) => { if (String(v) !== String(STATE_DEFAULTS[k])) p.set(k, String(v)); };
   for (const k of Object.keys(URL_ENUMS)) put(k, state[k]);
-  for (const [, k] of sliderMap) put(k, state[k]);
+  // a headcount link re-derives users on load, so the derived value is noise
+  for (const [, k] of sliderMap) if (!(k === 'users' && hasHeadcount())) put(k, state[k]);
   // mtp diffs against the SELECTED model's own default, not the global one:
   // the decoder resets an absent mtp to CONFIG.MODELS[model].mtp, so diffing
   // globally silently flipped a 1.7x Mistral link back to that model's 1.0x
@@ -460,7 +494,8 @@ function applyURLState(){
     const v = p.get(k);
     if (v === null) continue;
     const n = parseFloat(v);
-    if (Number.isFinite(n)) state[k] = k === 'tp' ? Math.round(clip(n, lo, hi)) : clip(n, lo, hi);
+    if (Number.isFinite(n)) state[k] = (k === 'tp' || k === 'headcount')
+      ? Math.round(clip(n, lo, hi)) : clip(n, lo, hi);
   }
   for (const k of URL_BOOLS) if (p.get(k) !== null) state[k] = p.get(k) === '1';
 }

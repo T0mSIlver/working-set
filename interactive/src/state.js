@@ -39,7 +39,12 @@ export const state = {
   // `out` = output tokens one response decodes (AVG_OUT_TOK, the reference).
   // It sets the steady-state decode point and the power model's decode duty;
   // it is the ONE assumption those two readouts cannot be honest without.
-  users: 64, think: 30, sla: 10, turn: 2000, out: AVG_OUT_TOK, burst: 32,
+  users: 64,
+  // Optional population layer above `users`. Null means the users slider is
+  // the direct system-wide concurrent-session load, as before. When set, the
+  // product is snapped to that slider's legal values by main.js.
+  headcount: null, active: 1.0, spu: 1.0,
+  think: 30, sla: 10, turn: 2000, out: AVG_OUT_TOK, burst: 32,
   // per-user decode speed the DECODE ceiling is solved against. A workload
   // property, not a hardware one: the study's 40 is an agentic-coding comfort
   // standard, and a chat deployment judged at it can read as decode-bound
@@ -64,6 +69,14 @@ export const state = {
 // state is applied: the share link encodes only the DIFFS from this, so a
 // default page shares as a bare URL and every link stays readable.
 export const STATE_DEFAULTS = { ...state };
+
+export function sessionsFromHeadcount(headcount, active=1.0, spu=1.0){
+  return headcount * active * spu;
+}
+export function hasHeadcount(){ return state.headcount !== null; }
+export function peopleFromSessions(sessions){
+  return hasHeadcount() ? sessions / (state.active * state.spu) : null;
+}
 
 // top stop of the max_seq_len slider for the active model, derived from its
 // max_ctx (1049 for 1M models, 262 for Mistral). At the top stop the workload

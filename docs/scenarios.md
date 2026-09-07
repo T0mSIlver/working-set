@@ -664,9 +664,9 @@ held vs work rate), and the bracketed flag marks rows where the cache is
 *also* short of the 64-user reference load before a single miss.
 
 > *§ 9's "Reading the two-axis planner" does combine the axes, by converting
-> every constraint into **max concurrent users**. It costs two stated
-> assumptions (one user holds one session; a user turns every `think_time`
-> seconds), and it does not retire this table — read its caveats before
+> every constraint into **max concurrent sessions**, then into people when the
+> optional headcount product is set. The active share, sessions per active
+> person, and request cadence are stated inputs. It does not retire this table. Read its caveats before
 > treating the combined view as a replacement.*
 
 | Model / topology | warm p5 | max cold req/s | `f*` | prefill sensitivity |
@@ -884,11 +884,34 @@ capacity is a separate constraint in different units (sessions held vs work
 rate)". That refusal was right, and it is also why sizing a deployment has meant
 holding two incompatible numbers in your head.
 
-They can be made commensurable, and it costs exactly **two assumptions** — both
-load-bearing, so both are stated here rather than buried in the code:
+They can be made commensurable by adding a population conversion above the
+existing concurrent-session load:
 
-1. **One user holds one session.** A session count becomes a user count.
-2. **A user's main-agent stream issues a request every `think_time` seconds** —
+```
+concurrent_sessions = headcount × peak_active_share × sessions_per_active_user
+```
+
+`sessions_from_headcount()` in `src/workingset/model.py` is the Python form.
+`headcount` counts people with access. `peak_active_share` is the fraction with
+at least one live session in the busiest interval being sized.
+`sessions_per_active_user` counts parallel agent sessions for each active
+person. The product is system-wide, then DP divides it across replica groups.
+Leaving headcount unset keeps the original direct `users` input, whose name is
+historical: it prices concurrent sessions per replica group.
+
+The layer carries three assumptions:
+
+1. **Peak activity and sessions per active person are operator inputs.** Neither
+   has been measured for this study. Gateway logs can estimate them by counting
+   distinct user IDs in 15-minute windows, then counting simultaneous active
+   sessions per user ID in the peak windows.
+2. **Each parallel session is a full request stream.** It has its own think-time
+   loop, so two sessions double both cache occupancy and request load. This is
+   the conservative reading for autonomous agents. The lower-load end of the
+   range is a person who holds *k* sessions but attends them one at a time. That
+   case divides the cache ceiling by *k* but leaves the prefill load near one
+   stream per person. The tool prices the conservative end.
+3. **A session's main-agent stream issues a request every `think_time` seconds**,
    the full turn-to-turn interval, open loop (the previous response's service
    time is inside it, not on top of it). A user count becomes a request rate,
    and a work rate converts back into users. Each main request additionally
@@ -897,8 +920,14 @@ load-bearing, so both are stated here rather than buried in the code:
    moments already price (corrected 2026-08-04; it previously inflated the
    latency and saturation columns by ~9%).
 
-Under those, all four constraints become the same quantity — **max concurrent
-users** — and the binding one is simply the smallest:
+Under those, all four constraints become the same quantity, **max concurrent
+sessions**, and the binding one is simply the smallest. When headcount is set,
+each session ceiling also has a people equivalent:
+
+```
+ceiling_people = ceiling_sessions × replicas
+               / (peak_active_share × sessions_per_active_user)
+```
 
 | ceiling | what it is | already published? |
 | --- | --- | --- |
@@ -949,14 +978,14 @@ Two results fall out that neither axis produced on its own:
   cache ceiling) — on a big enough pool, capacity stops being the binding
   constraint and H7 reverses on hardware rather than on a knob.
 
-**Both assumptions bite, in opposite directions.** Think time scales the latency
-and saturation ceilings linearly and leaves cache and decode untouched: halving
-it to 15 s flips the 27B/TP2 from cache-bound to latency-bound with no change to
-hardware or workload. The sessions-per-user assumption acts on the other pair — a
-user holding *k* concurrent sessions divides the cache ceiling by *k* and leaves
-latency alone, since the work rate is unchanged. Neither is a fact about the
-deployment; both are inputs, and the explorer exposes think time as a control for
-exactly that reason.
+**Sensitivity.** Think time scales the latency and saturation ceilings linearly
+and leaves cache and decode untouched. Halving it to 15 s flips the 27B/TP2 from
+cache-bound to latency-bound with no change to hardware or workload. Under the
+tool's conservative reading, peak active share and sessions per active person
+scale every ceiling in people by the reciprocal of their product. Under the
+held-session lower bound, sessions per person cuts cache capacity in people but
+does not multiply the request rate. The gap between those readings is not
+measured.
 
 #### Think time, measured
 
@@ -1012,10 +1041,10 @@ rather than papered over with a mean.
 The planner inherits every limitation of the ceilings it combines — the cache
 column is a packing limit (limitation 14), the decode column is an uncalibrated
 roofline (11) conditional on MTP, and the latency column is a mean rather than a
-percentile (`research/spike.md` #4). It adds one of its own: **the two
-conversions above**. Assumption 1 remains unmeasured; assumption 2 now carries
-one session trace's worth of anchor (previous subsection) — one trace, one
-harness, one week, not a fleet study.
+percentile (`research/spike.md` #4). It adds the population and cadence
+conversions above. Both population shares remain unmeasured. The cadence has
+one session trace's worth of anchor (previous subsection), one trace from one
+harness rather than a fleet study.
 
 #### What this does and does not establish
 
@@ -1702,23 +1731,28 @@ Ordered roughly by how much each could move the numbers:
     salts (deliberate isolation) split it into many equivalence classes. A rough
     no-global-dedup proxy costs ~200 sessions on TP2. The sharing/isolation domain
     is a policy decision, not a modelling detail.
-20. **The two-axis planner rests on two conversions, one of them now anchored**
+20. **The population and load conversions remain partly unmeasured**
     (§ 9, "Reading the two-axis planner"; added 2026-08-03, revised 2026-08-04 —
-    numbered 20 because the 2026-07 extension already owns 16–19). Combining the
-    study's four ceilings into one unit requires assuming **one user holds one
-    session** and **a user's main-agent stream issues a request every
-    `think_time` seconds**. They bite in *opposite* directions: a user holding
-    *k* concurrent sessions divides the cache ceiling by *k* while leaving the
-    latency ceiling alone, and think time scales latency and saturation linearly
-    while leaving cache and decode untouched — halving it to 15 s flips the
-    27B/TP2 from cache-bound to latency-bound with no change to hardware or
-    workload. Assumption 2 is now measured once (§ 9 "Think time, measured":
+    numbered 20 because the 2026-07 extension already owns 16–19). The optional
+    population layer assumes
+    `sessions = headcount × peak_active_share × sessions_per_active_user`.
+    Neither share has been measured. Operators must supply them, ideally from
+    distinct user IDs per 15-minute gateway-log window and simultaneous active
+    sessions per user ID. The tool conservatively treats every parallel session
+    as a full request stream. The lower-load bound is *k* sessions held but
+    attended one at a time, which divides the cache ceiling by *k* without
+    multiplying prefill load. The tool does not choose a point between those
+    readings. The next conversion assumes **a session's main-agent stream issues
+    a request every `think_time` seconds**. Think time scales latency and
+    saturation linearly while leaving cache and decode untouched. Halving it to
+    15 s flips the 27B/TP2 from cache-bound to latency-bound with no change to
+    hardware or workload. The cadence assumption is now measured once (§ 9 "Think time, measured":
     43 s open-loop interval, Z = 32.5 s), but the anchor is **one trace from one
     harness**, its human-wait tail rests on 19 observations, its service side is
     backend-specific, and the per-session spread (4–126 s cycles) says the
     single-scalar shape — not just its value — is the residual assumption; the
     closed-loop variant removes the backend dependence but keeps the shape.
-    Assumption 1 remains unmeasured. The planner also inherits every limitation
+    The planner also inherits every limitation
     of the ceilings it combines (14 for cache, 11 for decode,
     `research/spike.md` #4 for latency). It reproduces § 7's published cache and
     decode columns exactly, which is evidence the arithmetic is right — not that

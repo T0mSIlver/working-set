@@ -305,18 +305,18 @@ export function spikeMetrics(m, topo, wl, cs, rate, chunk){
 
 /* ---- THE OPERATING POINT (research/spike.md) -------------------------------
    The study reports its constraints in DIFFERENT UNITS and has always refused
-   to combine them — section 8 says so outright. Two assumptions make them
-   commensurable, and both are stated on the Concurrent users control rather
-   than hidden here:
-     1. one user holds one session      (a session count becomes a user count)
-     2. a user's MAIN requests come every `think` s — the full open-loop
+   to combine them — section 8 says so outright. The optional population layer
+   in state.js converts headcount × active share × sessions per active person
+   into the concurrent-session load before any formula here runs. It prices
+   each parallel session as a full request stream. A session's MAIN requests
+   then come every `think` s — the full open-loop
         interval (measured 43 s on a role-tagged pi-agent trace; the 30 s
         reference is the conservative side). Each main request tows
         `sub_ratio` subagent requests through the prefill server, so the
         arrival rate carries (1 + r) — the same mixture the service moments
         already price. (The Python model also offers a CLOSED conversion,
         operating_point(closed=True); the explorer stays open-loop.)
-   Under those, all four ceilings become MAX CONCURRENT USERS and the binding
+   Under those, all four ceilings become MAX CONCURRENT SESSIONS and the binding
    one is simply the smallest. Mirrors operating_point() in scenario_model.py.
    -------------------------------------------------------------------------- */
 // DECODE_FLOOR_TOKS, DECODE_COMFORT_RATIO and AVG_OUT_TOK live with the study

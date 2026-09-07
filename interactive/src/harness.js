@@ -56,6 +56,11 @@ export function workingsetConfig(state, model, topo, wl){
   // trim binary-float dust (0.7000000000000001) without moving any value the
   // sliders can produce: their finest step is far coarser than 1e-6
   const flt = x => Math.round(x * 1e6) / 1e6;
+  const populationRows = state.headcount !== null
+    ? [['headcount', int(state.headcount)],
+       ['peak_active_share', flt(state.active)],
+       ['sessions_per_active_user', flt(state.spu)]]
+    : [['users', flt(state.users / reps)]];
 
   const head = [
     `# workingset.toml — the configuration on screen in the interactive explorer.`,
@@ -102,11 +107,10 @@ export function workingsetConfig(state, model, topo, wl){
       ['sub_shares_prefix', !!wl.sub_shares_prefix],
       ['miss_rate', flt(wl.invalidation)],
       ['max_output_tokens', int(state.out)],
-      // NOT rounded: this is a load, and the file has to price the same one
-      // the page does. 4 users across 8 replica groups is half a user per
-      // group; rounding it up to 1 would hand `ws predict` twice the arrival
-      // rate and move TTFT, duty and B* with it.
-      ['users', flt(state.users / reps)],
+      // Direct mode writes the unrounded per-group load. Population mode
+      // writes the three inputs instead; Python repeats the product and DP
+      // division, so the file preserves the question the operator asked.
+      ...populationRows,
     ]],
     ['slo', [
       ['ttft_budget_s', flt(state.sla)],

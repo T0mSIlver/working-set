@@ -4,7 +4,7 @@ import { decodeFloor, maxUsersLatency, maxUsersSaturation, prefillChunk,
 import { clip } from './mathlib.js';
 import { p_sub } from './workload.js';
 import { warmCapacity } from './capacity.js';
-import { state } from './state.js';
+import { hasHeadcount, peopleFromSessions, sessionsFromHeadcount, state } from './state.js';
 import { cssv, esc, fmt, linScale, logScale, logTicks, niceTicks, svgEl } from './svg.js';
 import { renderNoFit } from './charts.js';
 import { paintTiles, pendingLoadTiles } from './render.js';
@@ -23,6 +23,9 @@ export const PLANNER_COLORS = () => ({
 const PLANNER_DASH = { cache:'', decode:'7 3', latency:'2 3', saturation:'11 4' };
 export const PLANNER_LABEL = { cache:'cache', decode:'decode', latency:'latency',
                         saturation:'saturation' };
+const ceilingText = value => hasHeadcount()
+  ? `${fmt(value,0)} sessions ≈ ${fmt(peopleFromSessions(value),0)} people`
+  : fmt(value,0);
 
 /* Right-hand end of the miss-rate axis charts F and G sweep and draw.
    The study's planning range is 0–50% and every published figure uses it, so
@@ -126,18 +129,26 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
   const headClass = op.headroom >= 1 ? crit : (op.headroom >= 0.8 ? warn : good);
   const others = Object.keys(op.ceilings).filter(k=>k!==bind)
     .sort((a,b)=>op.ceilings[a]-op.ceilings[b])
-    .map(k=>`${PLANNER_LABEL[k]} ${fmt(op.ceilings[k],0)}`).join(' · ');
+    .map(k=>`${PLANNER_LABEL[k]} ${ceilingText(op.ceilings[k])}`).join(' · ');
   const tiles = [
     {decision:true, k:'Binding constraint', hero:true, v:PLANNER_LABEL[bind].toUpperCase(),
-     u: op.limit >= 1 ? `at ${fmt(op.limit,0)} users` : 'at no load at all',
+     u: op.limit >= 1
+        ? (hasHeadcount() ? `at ${ceilingText(op.limit)}` : `at ${fmt(op.limit,0)} users`)
+        : 'at no load at all',
      sub: op.limit >= 1
-        ? `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`
+        ? (hasHeadcount()
+          ? `your ${fmt(state.headcount,0)} people produce ${fmt(sessionsFromHeadcount(state.headcount, state.active, state.spu),0)} sessions`
+            + (Math.abs(sessionsFromHeadcount(state.headcount, state.active, state.spu) - op.users) < 1e-6 ? '' : ` (priced at the slider's ${fmt(op.users,0)})`)
+            + ` — ${fmt(op.headroom*100,0)}% of the limit`
+          : `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`)
           + ` · next: ${others}`
         : `the ${fmt(state.sla,0)} s budget is below one miss's own prefill `
           + `(${fmt(sp.mo.miss,1)} s) — unachievable at any load`
           + ` · next: ${others}`,
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
-     tip:`All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
+     tip:hasHeadcount()
+       ? `All four ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. cache = the warm p5 population that fits the pool; decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%.`
+       : `All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
      sub:`MFU 35–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
@@ -245,12 +256,12 @@ export function renderBindingChart(d, op){
   const flip = X0 > mL + pw*0.82;
   const over = op.users > yHi;
   g+=`<text class="dlabel" x="${X0+(flip?-9:9)}" y="${Y0+4}" text-anchor="${flip?'end':'start'}" fill="${col0}">`
-    +`${over?'≥ ':''}${fmt(op.users,0)} users</text>`;
+    +`${over?'≥ ':''}${fmt(op.users,0)} ${hasHeadcount()?'sessions':'users'}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">cache-miss rate f</text>`;
-  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent users (log)</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent ${hasHeadcount()?'sessions':'users'} (log)</text>`;
   document.getElementById('chartG').innerHTML =
-    svgEl(g,W,H,'The four ceilings in max concurrent users versus the cache-miss rate');
+    svgEl(g,W,H,`The four ceilings in max concurrent ${hasHeadcount()?'sessions':'users'} versus the cache-miss rate`);
   bindingGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
@@ -318,7 +329,8 @@ export function renderCeilingBars(op){
   if (!box) return;
   if (!op){ box.innerHTML = '<p class="cs">model weights do not fit this configuration.</p>'; return; }
   const C = PLANNER_COLORS(), keys = ['cache','decode','latency','saturation'];
-  const W=1120, rowH=46, mT=10, mL=112, mR=92, H=mT+rowH*keys.length+34;
+  const W=1120, rowH=46, mT=10, mL=112, mR=hasHeadcount()?230:92;
+  const H=mT+rowH*keys.length+34;
   const pw = W-mL-mR;
   const top = Math.max(op.users, ...keys.map(k=>op.ceilings[k]).filter(isFinite))*1.08 || 1;
   const sx = linScale(0, top, mL, mL+pw);
@@ -337,11 +349,13 @@ export function renderCeilingBars(op){
     g+=`<text class="axlbl" x="${mL-10}" y="${y+18}" text-anchor="end" fill="${bind?C[k]:muted}"`
       +`${bind?' font-weight="700"':''}>${esc(PLANNER_LABEL[k])}</text>`;
     g+=`<text class="dlabel" x="${mL+pw+8}" y="${y+18}" text-anchor="start" fill="${bind?C[k]:muted}"`
-      +`${bind?' font-weight="700"':''}>${isFinite(v)?fmt(v,0):'—'}${bind?' ← binds':''}</text>`;
+      +`${bind?' font-weight="700"':''}>${isFinite(v)?ceilingText(v):'—'}${bind?' ← binds':''}</text>`;
   });
   // the load you asked for, across all four
   const X = sx(Math.min(op.users, top));
   g+=`<line x1="${X}" y1="${mT-4}" x2="${X}" y2="${mT+rowH*keys.length+2}" stroke="${op.fits?text:crit}" stroke-width="2" stroke-dasharray="4 3"/>`;
   g+=`<text class="dlabel" x="${X+6}" y="${mT+rowH*keys.length+14}" text-anchor="start" fill="${op.fits?text:crit}">your load ${fmt(op.users,0)}${op.fits?'':' — over'}</text>`;
-  box.innerHTML = svgEl(g, W, H, 'The four ceilings compared in max concurrent users, with the current load marked');
+  box.innerHTML = svgEl(g, W, H, hasHeadcount()
+    ? 'The four concurrent-session ceilings with people equivalents and the current load marked'
+    : 'The four ceilings compared in max concurrent users, with the current load marked');
 }
