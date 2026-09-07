@@ -1,5 +1,5 @@
 import { CONFIG, makeGrid } from './config.js';
-import { state } from './state.js';
+import { hasHeadcount, peopleFromSessions, state } from './state.js';
 import { cssv, esc, fmt, linScale, logScale, logTicks, svgEl } from './svg.js';
 import { PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
 
@@ -18,7 +18,7 @@ export function renderFrontierTable(rows, curKey){
   const ceilHead = state.showCeil
     ? `<th class="num">cache</th><th class="num">decode</th>`
       + `<th class="num">latency</th><th class="num">saturation</th>` : '';
-  const head = `<tr><th>configuration</th><th class="num">TB 2.1</th><th>your load</th><th class="num">max users</th>`
+  const head = `<tr><th>configuration</th><th class="num">TB 2.1</th><th>your load</th><th class="num">${hasHeadcount()?'max sessions / people':'max users'}</th>`
              + `<th>binds on</th><th class="num">headroom</th>${ceilHead}`
              + `<th class="num">B*</th><th class="num">€/mo</th><th class="num">€/seat</th></tr>`;   // .num headers right-align over their digits
   const body = rows.map(r=>{
@@ -28,7 +28,11 @@ export function renderFrontierTable(rows, curKey){
     const ceilCells = state.showCeil ? ['cache','decode','latency','saturation']
       .map(k=>`<td class="num"${k===r.op.binding?` style="color:${C[k]};font-weight:650"`:''}>`
              + `${k==='decode'&&r.censored?'≥ ':''}`
-             + `${isFinite(r.op.ceilings[k])?fmt(r.op.ceilings[k],0):'—'}</td>`).join('') : '';
+             + `${isFinite(r.op.ceilings[k])
+                 ? (hasHeadcount()
+                   ? `${fmt(r.op.ceilings[k],0)} sessions<br><span style="color:${muted}">≈ ${fmt(peopleFromSessions(r.op.ceilings[k]),0)} people</span>`
+                   : fmt(r.op.ceilings[k],0))
+                 : '—'}</td>`).join('') : '';
     const why = r.op.binding === 'latency'
       ? 'cannot meet the TTFT budget at any load'
       : (r.op.binding === 'saturation' ? 'prefill saturates before one user'
@@ -45,7 +49,9 @@ export function renderFrontierTable(rows, curKey){
             ? `<td class="v" style="color:${fits?good:crit}">${fits?'✓ fits':'✗ over'}</td>`
             : `<td class="v" style="color:${muted}">—</td>`)
          + (viable
-            ? `<td class="num">${cen}${fmt(r.op.limit,0)}${r.reps>1?` <span style="color:${muted}">(${cen}${fmt(r.op.limit/r.reps,0)}/grp)</span>`:''}</td>`
+            ? (hasHeadcount()
+              ? `<td class="num">${cen}${fmt(r.op.limit,0)} sessions<br><span style="color:${muted}">≈ ${cen}${fmt(peopleFromSessions(r.op.limit),0)} people${r.reps>1?` · ${cen}${fmt(r.op.limit/r.reps,0)}/grp`:''}</span></td>`
+              : `<td class="num">${cen}${fmt(r.op.limit,0)}${r.reps>1?` <span style="color:${muted}">(${cen}${fmt(r.op.limit/r.reps,0)}/grp)</span>`:''}</td>`)
             : `<td class="num" style="color:${muted}">not viable<br><span style="font-size:10.5px">${esc(why)}</span></td>`)
          + `<td class="bind" style="color:${C[r.op.binding]}">${esc(PLANNER_LABEL[r.op.binding])}</td>`
          + (viable

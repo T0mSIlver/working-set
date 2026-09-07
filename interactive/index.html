@@ -134,6 +134,13 @@ input[type=range]::-moz-range-thumb{
   width:15px; height:15px; border-radius:50%; background:var(--s1); cursor:pointer;
   border:2px solid var(--surface); box-shadow:var(--shadow);
 }
+input[type=number].population{
+  width:100%; box-sizing:border-box; border:1px solid var(--border); border-radius:7px;
+  background:var(--control); color:var(--text); font:inherit; font-size:12.5px;
+  padding:6px 8px; outline:none;
+}
+input[type=number].population:focus{border-color:var(--s1)}
+input[type=range]:disabled{opacity:.38}
 
 /* toggle */
 .toggle{display:inline-flex; align-items:center; gap:9px; cursor:pointer; font-size:12.5px; color:var(--text-2)}
@@ -507,8 +514,20 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
       <div class="ctl-group">
         <div class="ctl-sec">How much traffic</div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="The knob that turns every constraint into ONE unit: a user is assumed to hold one session and send a MAIN request every think-time seconds, each towing sub_ratio subagent requests through the prefill server. The reference load is 64 users / 30 s = 2.13 main req/s (2.35 total at r = 0.10); assumption 1 is unmeasured, assumption 2 has one measured anchor (43 s — see Think time).">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
+          <label class="flabel"><span class="tip" data-tip="Concurrent sessions are the load the model prices. Set headcount below to derive them as people × peak active share × sessions per active person. Each session is conservatively treated as a full request stream with its own think-time loop.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
           <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
+        </div>
+        <div class="field">
+          <label class="flabel" for="i-headcount"><span class="tip" data-tip="People with access. Leave this empty to set concurrent sessions directly above. With a value here, the users slider is derived and disabled.">Headcount</span> <span class="val" id="v-pop-sessions">optional</span></label>
+          <input class="population" type="number" id="i-headcount" min="0" step="1" inputmode="numeric" placeholder="people with access">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Fraction of the headcount with at least one live session in the busiest interval you size for. This is unmeasured; estimate distinct users per 15-minute window from gateway logs.">Peak active share</span> <span class="val"><span id="v-active">100</span>%</span></label>
+          <input type="range" id="s-active" min="0.01" max="1" step="0.01" value="1">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Parallel agent sessions per active person. The conservative reading gives each session its own request loop. Count simultaneous active sessions per user id in gateway logs.">Sessions per active person</span> <span class="val"><span id="v-spu">1.0</span></span></label>
+          <input type="range" id="s-spu" min="1" max="8" step="0.1" value="1">
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Average seconds between one user's MAIN requests (reference: 30 s) — the full turn-to-turn interval, including the previous response's prefill + decode, not idle time on top: arrivals are open-loop, so response time never feeds back into the cadence. Measured once (role-tagged pi-agent trace, 2026-08-04): 43 s = 32.5 s waiting (tool + human) + 10.8 s being served, so 30 s is the conservative side — but per-session cycles spanned 4–126 s. Scales the request rate inversely — moves the latency and saturation ceilings linearly while leaving cache and decode untouched. The Python model also offers a closed-loop conversion (operating_point(closed=True)) where waiting alone is the knob and the deployment supplies its own response time.">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>

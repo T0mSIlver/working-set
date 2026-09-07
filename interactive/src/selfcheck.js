@@ -10,6 +10,7 @@ import { seedRng } from './mathlib.js';
 import { decodeCurves, warmCapacity } from './capacity.js';
 import { interpAt } from './charts.js';
 import { bStar } from './planner.js';
+import { sessionsFromHeadcount } from './state.js';
 
 /* ============================================================================
    UNIT CHECKS — must match scenario_model.py derived numbers
@@ -394,6 +395,11 @@ export function prefillSampledChecks(){
     "unit checks must run at the published reference turn size and think time");
   console.assert(approx(requestRate(64, 30), REF_REQ_RATE, 0.01),
     "64 users at one turn per 30 s must reproduce the 2.13 req/s reference");
+  // Population conversion is arithmetic above `users`: unit factors preserve
+  // the default load, and DP divides total sessions between replica groups.
+  console.assert(sessionsFromHeadcount(64, 1, 1) === 64
+                 && sessionsFromHeadcount(2000, 0.35, 2)/8 === 175,
+    "headcount conversion must preserve defaults and divide total sessions across DP");
   // the algebraic heart of the section: the queue diverges before the server,
   // so the latency ceiling is ALWAYS strictly inside saturation
   for (const [mk, tt] of [["27B", t1H], ["27B", tp2H], ["35BA3B", tp2H]]){

@@ -44,7 +44,8 @@ function decodeStateURL(url){
   const q = url.includes('#') ? url.slice(url.indexOf('#') + 1) : '';
   for (const [k, v] of new URLSearchParams(q)){
     if (!(k in STATE_DEFAULTS)) throw new Error(`unknown state key in URL: ${k}`);
-    st[k] = typeof STATE_DEFAULTS[k] === 'boolean' ? v === '1'
+    st[k] = STATE_DEFAULTS[k] === null ? Number(v)
+          : typeof STATE_DEFAULTS[k] === 'boolean' ? v === '1'
           : typeof STATE_DEFAULTS[k] === 'number' ? Number(v)
           : v;
   }
