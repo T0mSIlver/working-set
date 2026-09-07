@@ -102,6 +102,13 @@ class WorkloadCfg:
     sub_shares_prefix: bool = False
     miss_rate: float = 0.01
     max_output_tokens: int = M.OUT_TOKENS_DEFAULT
+    # Optional population layer above the operating point. `headcount` is the
+    # number of people with access; the other two factors turn it into
+    # system-wide concurrent sessions. Both shares are operator-supplied and
+    # unmeasured. When headcount is set, `users` must be omitted.
+    headcount: int | None = None
+    peak_active_share: float = 1.0
+    sessions_per_active_user: float = 1.0
     # The operating point, PER REPLICA GROUP — and therefore fractional
     # whenever the load does not divide by the replica count. It is a LOAD, not
     # a population: everything downstream reads it as an arrival rate
@@ -111,7 +118,7 @@ class WorkloadCfg:
     # sessions round it themselves, at the point they build one: the load
     # ladder (probe/ladder.build_ladder) and the burst's standing load
     # (hypotheses/context.RunContext._burst_pop).
-    users: float = M.REF_USERS
+    users: float | None = M.REF_USERS
 
 
 @dataclass(frozen=True)
@@ -187,6 +194,17 @@ class RunConfig:
             sys_sub=w.subagent_prefix_tokens, sub_shares_prefix=w.sub_shares_prefix,
             invalidation=w.miss_rate, cap=self.deployment.max_model_len)
 
+    def users_per_group(self) -> float:
+        """The concurrent-session load one replica group must serve."""
+        w = self.workload
+        if w.headcount is not None:
+            sessions = M.sessions_from_headcount(
+                w.headcount, w.peak_active_share, w.sessions_per_active_user)
+            return sessions / self.deployment.replicas
+        if w.users is None:
+            raise ValueError("workload must set either users or headcount")
+        return w.users
+
     def validate(self) -> None:
         """Raise on anything the model refuses to price."""
         m, t, wl = self.to_model(), self.to_topology(), self.to_workload()
@@ -196,8 +214,22 @@ class RunConfig:
             raise ValueError(f"weight_dtype must be one of {M.WEIGHT_DTYPES}")
         if self.deployment.kv_dtype not in M.KV_DTYPES:
             raise ValueError(f"kv_dtype must be one of {M.KV_DTYPES}")
-        if self.workload.users < 0:
-            raise ValueError("workload.users must be >= 0")
+        w = self.workload
+        if w.headcount is not None and w.users is not None:
+            raise ValueError("workload.headcount and workload.users cannot both be set; "
+                             "users is derived from headcount")
+        if w.headcount is not None:
+            M.sessions_from_headcount(w.headcount, w.peak_active_share,
+                                      w.sessions_per_active_user)
+        else:
+            if w.users is None:
+                raise ValueError("workload must set either users or headcount")
+            if w.users < 0:
+                raise ValueError("workload.users must be >= 0")
+            # Validate the dormant defaults too. A malformed population factor
+            # must not become valid merely because headcount is absent.
+            M.sessions_from_headcount(0, w.peak_active_share,
+                                      w.sessions_per_active_user)
         if self.deployment.ram_gib < 0:
             raise ValueError("deployment.ram_gib must be >= 0")
         d = self.deployment
@@ -241,6 +273,11 @@ class RunConfig:
         for name, typ in blocks.items():
             block = dict(raw.pop(name, {}) or {})
             _reject_unknown(block, typ, name)
+            # The dataclass default keeps legacy direct-load configs at 64.
+            # A headcount-only file selects the other representation, so make
+            # the omitted direct load explicit before construction.
+            if name == "workload" and "headcount" in block and "users" not in block:
+                block["users"] = None
             kw[name] = typ(**block)
         if raw:
             raise ValueError(f"unknown top-level config keys: {sorted(raw)}")
@@ -296,6 +333,15 @@ def _dump_toml(d: dict[str, Any]) -> str:
         for k, v in d[block].items():
             if v is None:
                 continue
+            # Keep the two workload representations distinct on disk. Direct
+            # session configs retain their old shape; headcount configs retain
+            # the product inputs and never collapse to derived users.
+            if block == "workload":
+                has_headcount = d[block].get("headcount") is not None
+                if k in ("peak_active_share", "sessions_per_active_user") and not has_headcount:
+                    continue
+                if k == "users" and has_headcount:
+                    continue
             out.append(f"{k} = {_toml_scalar(v)}")
         out.append("")
     return "\n".join(out)

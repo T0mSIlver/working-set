@@ -1948,10 +1948,24 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
 # rate)". That refusal was correct at the time and is the reason a reader must
 # hold two numbers at once to size a deployment.
 #
-# There is a way to make them commensurable, and it costs exactly two
-# assumptions, both stated rather than hidden:
+# There is a way to make them commensurable. A population conversion sits
+# above the existing `users` load:
 #
-#   1. ONE USER HOLDS ONE SESSION. So a session count converts to a user count.
+#   concurrent sessions = headcount x peak active share
+#                       x sessions per active user
+#
+# `users` remains concurrent sessions per replica group. The population
+# conversion therefore divides the system-wide product by the number of DP
+# replica groups before any ceiling or arrival-rate formula sees it.
+#
+# Making the four ceilings commensurable then costs two assumptions, both
+# stated rather than hidden:
+#
+#   1. ONE ACTIVE PERSON RUNS ONE OR MORE FULL REQUEST STREAMS. The conservative
+#      reading prices each concurrent session as its own think-time loop. A
+#      person who merely holds k sessions but attends them one at a time is the
+#      lower-load end of the range: cache occupancy grows by k, request rate
+#      does not.
 #   2. A USER'S MAIN-AGENT STREAM ISSUES A REQUEST EVERY `think_time_s`
 #      SECONDS — the full turn-to-turn interval, open loop (the previous
 #      response's service time is inside it, not on top of it). So a user
@@ -1976,10 +1990,11 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
 # WHICH ONE BINDS CHANGES with f — the crossover is the planner's whole point,
 # and neither axis alone can show it.
 #
-# Both assumptions are load-bearing, so both are limitations, not conveniences:
-# see docs/scenarios.md § 9 "Reading the two-axis planner". A user with several
-# concurrent sessions, or bursty think time, moves the cache and latency
-# frontiers in opposite directions.
+# These assumptions are load-bearing, so they are limitations, not conveniences:
+# see docs/scenarios.md § 9 "Reading the two-axis planner". Multiple independent
+# sessions per person lower every ceiling expressed in people. Multiple held
+# sessions attended one at a time lower only the cache ceiling. Bursty think
+# time changes the load-derived frontiers again.
 #
 # Assumption 2 now has a measured anchor (the MEASURED_* block below): a
 # role-tagged pi-agent trace puts the open-loop interval at 43 s — waiting
@@ -2014,6 +2029,23 @@ MEASURED_T_HUMAN_S = 275.0    # mean human wait; n = 19, tail-dominated (median 
 MEASURED_THINK_Z_S = 32.5     # waiting per request (tool 47% + human 53%)
 MEASURED_SERVICE_R_S = 10.8   # being-served per request ON THE TRACED API BACKEND
 MEASURED_CYCLE_S = 43.3       # Z + R: the open-loop inter-request interval
+
+
+def sessions_from_headcount(headcount: float, peak_active_share: float = 1.0,
+                            sessions_per_active_user: float = 1.0) -> float:
+    """Convert people with access into system-wide concurrent sessions.
+
+    Each session is conservatively treated as a full request stream with its
+    own think-time loop. Replica-group division belongs to the configuration
+    layer because this function describes the whole population.
+    """
+    if headcount < 0:
+        raise ValueError("workload.headcount must be >= 0")
+    if not 0 < peak_active_share <= 1:
+        raise ValueError("workload.peak_active_share must be in (0, 1]")
+    if sessions_per_active_user < 1:
+        raise ValueError("workload.sessions_per_active_user must be >= 1")
+    return headcount * peak_active_share * sessions_per_active_user
 
 
 def think_z(req_per_turn: float = MEASURED_REQ_PER_TURN,

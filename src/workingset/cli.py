@@ -38,6 +38,11 @@ def _fmt(x) -> str:
     return str(x)
 
 
+def _fmt_count(x: float) -> str:
+    """A population count without decimal noise when it is integral."""
+    return f"{int(x):,}" if float(x).is_integer() else f"{x:,.2f}"
+
+
 def cmd_predict(args) -> int:
     cfg = load_config(args.config)
     cfg = _apply_overrides(cfg, args)
@@ -51,8 +56,15 @@ def cmd_predict(args) -> int:
     d, w = cfg.deployment, cfg.workload
     print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}), "
           f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}")
-    print(f"operating point: {w.users:g} users/group, think {w.think_time_s} s, "
+    users = cfg.users_per_group()
+    print(f"operating point: {users:g} users/group, think {w.think_time_s} s, "
           f"miss {w.miss_rate:.0%}, {'closed' if args.closed else 'open'} loop")
+    if w.headcount is not None:
+        sessions = M.sessions_from_headcount(
+            w.headcount, w.peak_active_share, w.sessions_per_active_user)
+        print(f"population: {w.headcount:,} people x {w.peak_active_share:g} active x "
+              f"{w.sessions_per_active_user:.1f} sessions = {_fmt_count(sessions)} sessions "
+              f"-> {_fmt_count(users)} /group on DP{d.replicas}")
     print()
     rows = [("cache (warm p5, users)", p.warm_capacity_p5),
             ("decode (users at floor)", p.decode_ceiling_users),
@@ -60,7 +72,11 @@ def cmd_predict(args) -> int:
             ("saturation (prefill duty 100%)", p.saturation_ceiling_users)]
     for k, v in rows:
         mark = "  <- binds" if k.startswith(p.binding_constraint) else ""
-        print(f"  {k:32} {_fmt(v):>14}{mark}")
+        people = ""
+        if w.headcount is not None:
+            denom = w.peak_active_share * w.sessions_per_active_user
+            people = f"  ≈ {_fmt_count(v * d.replicas / denom)} people"
+        print(f"  {k:32} {_fmt(v):>14}{people}{mark}")
     if p.replicas > 1:
         print(f"  (per replica group; x{p.replicas} under balanced routing)")
     print()
@@ -83,6 +99,8 @@ def _apply_overrides(cfg: RunConfig, args) -> RunConfig:
     if dep:
         cfg = replace(cfg, deployment=replace(cfg.deployment, **dep))
     if wl:
+        if "users" in wl:
+            wl["headcount"] = None
         cfg = replace(cfg, workload=replace(cfg.workload, **wl))
     return cfg
 

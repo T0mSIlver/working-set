@@ -26,6 +26,38 @@ def test_defaults_round_trip_json(tmp_path):
     assert load_config(p) == cfg
 
 
+def test_headcount_round_trip_and_dp_conversion(tmp_path):
+    cfg = RunConfig.from_dict({
+        "deployment": {"replicas": 8},
+        "workload": {"headcount": 2000, "peak_active_share": 0.35,
+                     "sessions_per_active_user": 2.0},
+    })
+    assert cfg.workload.users is None
+    assert cfg.users_per_group() == 175
+    text = cfg.dumps("toml")
+    assert "headcount = 2000" in text and "users =" not in text
+    p = tmp_path / "headcount.toml"
+    p.write_text(text)
+    assert load_config(p) == cfg
+
+
+def test_headcount_and_users_are_mutually_exclusive():
+    cfg = RunConfig.from_dict({"workload": {"headcount": 2000, "users": 175}})
+    with pytest.raises(ValueError, match="cannot both be set"):
+        cfg.validate()
+
+
+@pytest.mark.parametrize("workload, message", [
+    ({"headcount": -1}, "headcount must be >= 0"),
+    ({"headcount": 1, "peak_active_share": 0}, "peak_active_share"),
+    ({"headcount": 1, "peak_active_share": 1.01}, "peak_active_share"),
+    ({"headcount": 1, "sessions_per_active_user": 0.9}, "sessions_per_active_user"),
+])
+def test_headcount_inputs_are_validated(workload, message):
+    with pytest.raises(ValueError, match=message):
+        RunConfig.from_dict({"workload": workload}).validate()
+
+
 def test_unknown_key_rejected():
     with pytest.raises(ValueError, match="unknown key workload.foo"):
         RunConfig.from_dict({"workload": {"foo": 1}})
@@ -156,7 +188,21 @@ def test_explorer_toml_names_every_field():
                        ("calibration", Calibration)):
         want = {f.name for f in dataclass_fields(typ)}
         want -= {"metrics_url"}          # optional: no /metrics on the page
+        if block == "workload":
+            want -= {"headcount", "peak_active_share", "sessions_per_active_user"}
         assert want == set(raw[block]), f"{block}: {want ^ set(raw[block])}"
+
+
+def test_explorer_headcount_toml_names_population_fields():
+    p = Path(__file__).resolve().parent / "fixtures" / "explorer_headcount.toml"
+    raw = tomllib.loads(p.read_text(encoding="utf-8"))
+    assert raw["workload"]["headcount"] == 400
+    assert raw["workload"]["peak_active_share"] == 0.4
+    assert raw["workload"]["sessions_per_active_user"] == 2
+    assert "users" not in raw["workload"]
+    cfg = load_config(p)
+    assert cfg.users_per_group() == 40
+    cfg.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +421,29 @@ def test_predict_dp_system_multiplies():
     p = predict(cfg, n_iter=200)
     assert p.replicas == 2
     assert p.system()["warm_capacity_p5"] == 2 * p.warm_capacity_p5
+
+
+def test_predict_derives_headcount_load_per_dp_group():
+    cfg = RunConfig.from_dict({
+        "deployment": {"model": "35BA3B", "gpu": "H200", "replicas": 8},
+        "workload": {"headcount": 40, "peak_active_share": 0.5,
+                     "sessions_per_active_user": 2},
+    })
+    assert predict(cfg, n_iter=40).operating_point_users == 5
+
+
+def test_predict_prints_headcount_conversion_and_people_ceilings(tmp_path, capsys):
+    cfg = RunConfig.from_dict({
+        "deployment": {"model": "35BA3B", "gpu": "H200", "replicas": 8},
+        "workload": {"headcount": 2000, "peak_active_share": 0.35,
+                     "sessions_per_active_user": 2.0},
+    })
+    p = tmp_path / "headcount.toml"
+    p.write_text(cfg.dumps("toml"))
+    assert cli.main(["predict", str(p), "--n-iter", "20"]) == 0
+    out = capsys.readouterr().out
+    assert "2,000 people x 0.35 active x 2.0 sessions = 1,400 sessions -> 175 /group on DP8" in out
+    assert out.count(" people") == 5       # conversion plus all four ceilings
 
 
 def test_predict_closed_uses_configured_think():
