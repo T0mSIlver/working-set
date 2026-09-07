@@ -41,7 +41,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          ver="$(uv run --no-project python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          ver="$(uv run --no-project --python 3.12 python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
           test "$tag" = "$ver" || { echo "tag v$tag but pyproject.toml says $ver" >&2; exit 1; }
       - name: install (dev group)
         run: uv sync --group dev
