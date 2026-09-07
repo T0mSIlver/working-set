@@ -226,10 +226,13 @@ class RunConfig:
                 raise ValueError("workload must set either users or headcount")
             if w.users < 0:
                 raise ValueError("workload.users must be >= 0")
-            # Validate the dormant defaults too. A malformed population factor
-            # must not become valid merely because headcount is absent.
-            M.sessions_from_headcount(0, w.peak_active_share,
-                                      w.sessions_per_active_user)
+            # Without a headcount the two shares price nothing, and the TOML
+            # writer drops them; accepting a non-default value here would
+            # normalise it away silently on the next write
+            if (w.peak_active_share, w.sessions_per_active_user) != (1.0, 1.0):
+                raise ValueError("workload.peak_active_share and "
+                                 "workload.sessions_per_active_user need "
+                                 "workload.headcount; without it they price nothing")
         if self.deployment.ram_gib < 0:
             raise ValueError("deployment.ram_gib must be >= 0")
         d = self.deployment

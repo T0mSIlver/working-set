@@ -138,7 +138,7 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
      sub: op.limit >= 1
         ? (hasHeadcount()
           ? `your ${fmt(state.headcount,0)} people produce ${fmt(sessionsFromHeadcount(state.headcount, state.active, state.spu),0)} sessions`
-            + (sessionsFromHeadcount(state.headcount, state.active, state.spu) === op.users ? '' : ` (priced at the slider's ${fmt(op.users,0)})`)
+            + (Math.abs(sessionsFromHeadcount(state.headcount, state.active, state.spu) - op.users) < 1e-6 ? '' : ` (priced at the slider's ${fmt(op.users,0)})`)
             + ` — ${fmt(op.headroom*100,0)}% of the limit`
           : `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`)
           + ` · next: ${others}`
@@ -256,12 +256,12 @@ export function renderBindingChart(d, op){
   const flip = X0 > mL + pw*0.82;
   const over = op.users > yHi;
   g+=`<text class="dlabel" x="${X0+(flip?-9:9)}" y="${Y0+4}" text-anchor="${flip?'end':'start'}" fill="${col0}">`
-    +`${over?'≥ ':''}${fmt(op.users,0)} users</text>`;
+    +`${over?'≥ ':''}${fmt(op.users,0)} ${hasHeadcount()?'sessions':'users'}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">cache-miss rate f</text>`;
-  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent users (log)</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent ${hasHeadcount()?'sessions':'users'} (log)</text>`;
   document.getElementById('chartG').innerHTML =
-    svgEl(g,W,H,'The four ceilings in max concurrent users versus the cache-miss rate');
+    svgEl(g,W,H,`The four ceilings in max concurrent ${hasHeadcount()?'sessions':'users'} versus the cache-miss rate`);
   bindingGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 

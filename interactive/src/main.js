@@ -345,7 +345,7 @@ function syncLabels(){
     // because the TOML carries the unclamped population and ws predict will
     // price the real load
     const raw = sessionsFromHeadcount(state.headcount, state.active, state.spu);
-    document.getElementById('v-pop-sessions').textContent = raw === state.users
+    document.getElementById('v-pop-sessions').textContent = Math.abs(raw - state.users) < 1e-6
       ? `→ ${fmt(state.users,0)} sessions`
       : `→ ${fmt(raw,0)} sessions · page prices ${fmt(state.users,0)} (slider limit; the TOML keeps ${fmt(raw,0)})`;
   } else {

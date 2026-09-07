@@ -52,6 +52,8 @@ def test_headcount_and_users_are_mutually_exclusive():
     ({"headcount": 1, "peak_active_share": 0}, "peak_active_share"),
     ({"headcount": 1, "peak_active_share": 1.01}, "peak_active_share"),
     ({"headcount": 1, "sessions_per_active_user": 0.9}, "sessions_per_active_user"),
+    ({"users": 64, "peak_active_share": 0.5}, "need workload.headcount"),
+    ({"users": 64, "sessions_per_active_user": 2.0}, "need workload.headcount"),
 ])
 def test_headcount_inputs_are_validated(workload, message):
     with pytest.raises(ValueError, match=message):
