@@ -832,10 +832,18 @@ def validate_spread_probe(probe: list[dict], states: list[dict]) -> None:
     # 40.0, and the model prices both identically
     unreachable = [i for i, st in enumerate(probe) if st not in states]
     if unreachable:
+        shown = ", ".join(f"[{i}] {SPREAD_PROBE[i] if i < len(SPREAD_PROBE) else probe[i]}"
+                          for i in unreachable)
         raise ValueError(
-            f"SPREAD_PROBE states at indexes {unreachable} are not produced "
-            "by build_states()"
+            f"SPREAD_PROBE entries are not states build_states() produces: {shown}"
         )
+    # two entries that resolve to one state would double-weight it in every
+    # p50 / p90 / max without any signal — the failure mode this list exists
+    # to make loud
+    keys = [json.dumps(st, sort_keys=True) for st in probe]
+    dupes = sorted({i for i, k in enumerate(keys) if keys.index(k) != i})
+    if dupes:
+        raise ValueError(f"SPREAD_PROBE entries at indexes {dupes} duplicate an earlier state")
 
     missing_models = sorted(set(M.MODELS) - {st["model"] for st in probe})
     missing_gpus = sorted(set(GPU_KEYS) - {st["gpu"] for st in probe})
