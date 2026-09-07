@@ -1,0 +1,99 @@
+# Publish `workingset` to PyPI on a version tag.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must equal `project.version` in pyproject.toml, or the build job
+# refuses: a release whose tag and wheel disagree is worse than none. Test
+# runs go to TestPyPI through the manual trigger.
+#
+# Credentials: none stored. Both publish jobs use PyPI trusted publishing
+# (OIDC): PyPI trusts this repository's `publish.yml` running in the named
+# GitHub environment. The one-time setup on the PyPI side is in
+# docs/release.md.
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "index to publish to"
+        type: choice
+        options: [testpypi]
+        default: testpypi
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: tag matches project.version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(uv run --no-project --python 3.12 python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          test "$tag" = "$ver" || { echo "tag v$tag but pyproject.toml says $ver" >&2; exit 1; }
+      - name: install (dev group)
+        run: uv sync --group dev
+      # the same gate tests.yml runs on every push; a release is not the
+      # moment to discover a red suite
+      - name: pytest
+        run: uv run pytest -q
+      - name: build sdist and wheel
+        run: uv build
+      - name: the wheel installs and the console script runs
+        run: |
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+          /tmp/smoke/bin/ws models | head -5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/workingset/
+    permissions:
+      id-token: write   # trusted publishing
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-testpypi:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/workingset/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
