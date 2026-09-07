@@ -16,20 +16,37 @@ Blocks (TOML tables) and their model counterparts:
   [calibration] mfu / mbu overrides (defaults = the study's calibrated values)
 
 Field names follow the explorer's generated CONFIG block one-for-one (the
-harness's `workload` keys), so an existing validate_deployment.py CONFIG maps
-onto this schema without renaming.
+harness's `workload` keys), so a CONFIG block from a harness downloaded
+before the package maps onto this schema without renaming.
 """
 from __future__ import annotations
 
 import json
 import tomllib
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
 from . import model as M
 
 SCHEMA_VERSION = 1
+STATE_DTYPES = ("bf16", "fp32")
+
+# The model with no as-published weight overhead to add: its w_resident is the
+# vendor's stated as-DEPLOYED footprint, and comparing it against the raw
+# checkpoint bytes is where the +15% figure was measured in the first place.
+# Mirrors main.js enforceConstraints (`woverOk = state.model !== "27B"`).
+_NO_WEIGHT_OVERHEAD = ("27B",)
+
+
+def _fp32_state_applies(m: M.Model) -> bool:
+    """render.js modelFor()'s gate: a recurrent state exists and is a bf16
+    buffer the toggle can meaningfully widen."""
+    return m.deltanet_state > 0 and m.state_fp32_ok is not False
+
+
+def _weight_overhead_applies(model_key: str | None) -> bool:
+    return model_key not in _NO_WEIGHT_OVERHEAD
 
 
 @dataclass(frozen=True)
@@ -53,6 +70,18 @@ class Deployment:
     max_num_batched_tokens: int = M.CHUNK_DEFAULT
     max_model_len: int = 180_000
     ram_gib: float = 0.0                 # CPU KV offload per replica group (explorer's RAM knob)
+    # Recurrent (Gated DeltaNet / KDA) state precision. "fp32" doubles the
+    # per-session state bytes, which is a per-session charge against the KV
+    # pool: the explorer's fp32-state control. No-op on a model with no
+    # recurrent state, or whose state is not a bf16 buffer to widen
+    # (state_fp32_ok=False) — validate() refuses those rather than no-opping.
+    recurrent_state_dtype: str = "bf16"   # bf16 | fp32
+    # Deployed-weight overhead over the checkpoint bytes, as a fraction:
+    # the explorer's "+15% weights" arm is 0.15. Raises w_resident, which
+    # costs KV pool and lengthens the prefill weight stream. Refused on the
+    # 27B, whose 28.8 GiB is already the as-deployed footprint (that
+    # measurement is where the 15% came from).
+    weight_overhead: float = 0.0          # 0.0 = as published
 
     @property
     def gpus(self) -> str:
@@ -73,7 +102,16 @@ class WorkloadCfg:
     sub_shares_prefix: bool = False
     miss_rate: float = 0.01
     max_output_tokens: int = M.OUT_TOKENS_DEFAULT
-    users: int = M.REF_USERS             # the operating point (per replica group)
+    # The operating point, PER REPLICA GROUP — and therefore fractional
+    # whenever the load does not divide by the replica count. It is a LOAD, not
+    # a population: everything downstream reads it as an arrival rate
+    # (users / think_time_s), which is perfectly well defined at 0.5. Rounding
+    # it here would double the rate a DP8 deployment is priced at when the page
+    # shows 4 users across 8 groups. The two places that need a whole number of
+    # sessions round it themselves, at the point they build one: the load
+    # ladder (probe/ladder.build_ladder) and the burst's standing load
+    # (hypotheses/context.RunContext._burst_pop).
+    users: float = M.REF_USERS
 
 
 @dataclass(frozen=True)
@@ -87,6 +125,13 @@ class SLO:
 class Calibration:
     mfu: float = M.MFU_DEFAULT
     mbu: float = M.MBU_DEFAULT
+    # Effective decode speedup from speculative decoding / MTP. Multiplies
+    # per-user decode tok/s directly, so it moves the decode ceiling and the
+    # steady point. None = the model's own value (M.MODELS[key].mtp), which is
+    # measured for the 27B and transplanted everywhere else; the explorer
+    # exposes it as a slider for exactly that reason. It travels with the MBU
+    # it was fitted against — moving one without the other breaks the fit.
+    mtp: float | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +156,20 @@ class RunConfig:
         if d.weight_dtype != "fp8":
             m = M.with_weight_dtype(m, d.weight_dtype)
         m = M.with_kv_dtype(m, d.kv_dtype)
+        # The explorer's three remaining model knobs, in modelFor()'s own
+        # order and under its own gates (interactive/src/render.js). They are
+        # `replace` on the Model rather than functions in workingset.model
+        # because that is all the explorer does: no new pricing, three field
+        # edits. validate() refuses the combinations modelFor() would skip, so
+        # a gate can never turn into a silently unapplied knob here.
+        if d.recurrent_state_dtype == "fp32" and _fp32_state_applies(m):
+            m = replace(m, deltanet_state=m.deltanet_state * 2,
+                        name=m.name + " [fp32 state]")
+        if d.weight_overhead and _weight_overhead_applies(d.model):
+            m = replace(m, w_resident=m.w_resident * (1 + d.weight_overhead),
+                        name=m.name + f" [+{d.weight_overhead:.0%} weights]")
+        if self.calibration.mtp is not None:
+            m = replace(m, mtp=self.calibration.mtp)
         return m
 
     def to_topology(self) -> M.Topology:
@@ -141,6 +200,27 @@ class RunConfig:
             raise ValueError("workload.users must be >= 0")
         if self.deployment.ram_gib < 0:
             raise ValueError("deployment.ram_gib must be >= 0")
+        d = self.deployment
+        if d.recurrent_state_dtype not in STATE_DTYPES:
+            raise ValueError(f"deployment.recurrent_state_dtype must be one of "
+                             f"{STATE_DTYPES}, got {d.recurrent_state_dtype!r}")
+        # the explorer snaps these two back rather than mis-pricing (main.js
+        # enforceConstraints); at the file boundary they are refusals, so a
+        # hand-written config cannot ask for a knob that would do nothing
+        if d.recurrent_state_dtype == "fp32" and not _fp32_state_applies(M.MODELS[d.model]):
+            raise ValueError(
+                f"{M.MODELS[d.model].name}: recurrent_state_dtype 'fp32' does "
+                "nothing here — the model carries no bf16 recurrent state to "
+                "widen (deltanet_state 0, or a fixed mixed-precision buffer)")
+        if d.weight_overhead < 0:
+            raise ValueError("deployment.weight_overhead must be >= 0")
+        if d.weight_overhead and not _weight_overhead_applies(d.model):
+            raise ValueError(
+                f"{d.model}: weight_overhead does not apply — its w_resident "
+                "is already the as-deployed footprint, which is where the 15% "
+                "figure came from")
+        if self.calibration.mtp is not None and self.calibration.mtp <= 0:
+            raise ValueError("calibration.mtp must be > 0")
 
     # ---- (de)serialisation --------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -176,7 +256,8 @@ class RunConfig:
 
 
 _SCALAR = {"int": (int,), "float": (int, float), "bool": (bool,), "str": (str,),
-           "int | None": (int, type(None)), "str | None": (str, type(None))}
+           "int | None": (int, type(None)), "str | None": (str, type(None)),
+           "float | None": (int, float, type(None))}
 
 
 def _reject_unknown(block: dict, typ, name: str) -> None:
@@ -221,7 +302,7 @@ def _dump_toml(d: dict[str, Any]) -> str:
 
 
 def load_config(path: str | Path) -> RunConfig:
-    """Read a TOML or JSON config. A validate_deployment.py file is accepted
+    """Read a TOML or JSON config. A downloaded harness .py is accepted
     too: its CONFIG block is extracted, so an explorer download from before
     the package can still be priced."""
     p = Path(path)
@@ -276,6 +357,6 @@ def _legacy_to_schema(raw: dict) -> dict:
     # predictions block; it is the operating point, not a prediction
     preds = raw.get("predictions") or {}
     if "users" not in wl and "operating_point_users" in preds:
-        wl["users"] = int(preds["operating_point_users"])
+        wl["users"] = float(preds["operating_point_users"])
     raw["workload"] = wl
     return raw

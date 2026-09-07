@@ -239,7 +239,10 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
               "itl_worst_freeze_ms"):
         v = getattr(preds, k, None)
         if v is not None:
-            w(f"  {k:<26} {v}")
+            # :g so a whole-number float reads as the load it is (64, not
+            # 64.0) while a fractional per-group operating point keeps its
+            # fraction
+            w(f"  {k:<26} {v:g}" if isinstance(v, float) else f"  {k:<26} {v}")
 
     w(f"\nHYPOTHESES SELECTED ({len(pl.selected)})")
     for h in pl.selected:

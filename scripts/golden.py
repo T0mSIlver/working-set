@@ -880,8 +880,16 @@ MAPPING = [
     ("energy_*", "model.energy_cost", "cost.js energyCost", "mc", ""),
     ("(state -> model)", "golden.py state_model / state_topo / state_wl",
      "render.js modelFor + state.js currentTopo/currentWL", "n/a",
-     "the explorer's dtype/mtp switches; state_dt and wover are explorer-only "
-     "and are NOT sampled (Python has no counterpart knob)"),
+     "the explorer's dtype/mtp switches. state_dt and wover now HAVE Python "
+     "counterparts (deployment.recurrent_state_dtype / weight_overhead, "
+     "applied by RunConfig.to_model as the same two field edits modelFor "
+     "makes) but are still NOT sampled here: the spread probe is "
+     "states[::stride], so changing the state COUNT reshuffles which 25 states "
+     "derive the mc bands, and adding these two axes moved several bands by "
+     "more than 2x (moments_miss_sq 0.082 -> 0.21, max_users_decode 0.038 -> "
+     "0.09) without any vector's numbers changing. Sampling them needs a probe "
+     "selection that does not depend on the state count; until then they are "
+     "covered by tests/test_config.py against measured page figures"),
     ("(NOT COMPARED) itl_spike / spike_token_debt",
      "model.itl_spike, model.spike_token_debt",
      "render.js itlSpikeRatio (module-private) -> op.tokensLost", "n/a",

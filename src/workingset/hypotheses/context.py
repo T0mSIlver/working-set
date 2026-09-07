@@ -24,7 +24,7 @@ class LadderView:
     """The bracket arithmetic every ceiling hypothesis reads, computed once.
 
     Ported from the bracket / failure-mode split in `print_report`
-    (scripts/validate_deployment.py). A partial rung is orientation, never
+    (the retired standalone harness). A partial rung is orientation, never
     evidence, and is excluded here.
     """
     rungs: list = field(default_factory=list)
@@ -83,7 +83,7 @@ class LadderView:
     def _warm_evidence(r) -> bool:
         """Did this rung actually SHOW its hit turns staying warm?
 
-        DEVIATION from scripts/validate_deployment.py, which counted a rung as
+        DEVIATION from the retired standalone harness, which counted a rung as
         held when `evict_frac` was nan — i.e. when there were no forced misses
         to calibrate the cold-TTFT threshold against, so the classifier could
         not run at all. Missing evidence read as evidence: a rung with zero
@@ -204,7 +204,11 @@ class RunContext:
         the operating point the B* prediction was priced at, else half the
         predicted limit when the operating point is zero. test_cmd's dry-run
         prints this function's answer rather than its own copy of the rule,
-        which disagreed whenever operating_point_users was 0."""
+        which disagreed whenever operating_point_users was 0.
+
+        The second of the two places a fractional per-group operating point is
+        rounded (see probe.ladder.build_ladder): sessions get opened here, so
+        the standing load has to be a whole number of them."""
         return self.burst_users or max(1, round(
             self.predictions.operating_point_users
             or 0.5 * self.predictions.predicted_limit_users))

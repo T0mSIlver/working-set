@@ -36,8 +36,8 @@ uv run scripts/golden.py --jobs 1    # same bytes, one process
 Byte-reproducible: every draw is seeded, every float is rounded to 12
 significant digits, the JSON separators are fixed, and the work is split across
 processes only for speed — the output does not depend on `--jobs`. `--check`
-regenerates in memory and diffs, the way `scripts/sync_harness.py --check`
-does; CI runs it, so the fixture cannot drift behind the model.
+regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
+the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
 (821 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
@@ -307,9 +307,23 @@ is a Python-first modelling change, not a test change.
 record that it is inert in the compared set rather than to imply it is covered.
 
 **`state_dt` (fp32 recurrent state) and `wover` (+15% deployed weights)** are
-explorer-only controls with no counterpart in `workingset.model`, so they are
-held at their defaults. A golden vector for them would encode a JS convention
-as if it were the model's.
+held at their defaults, though no longer for want of a counterpart:
+`deployment.recurrent_state_dtype` and `deployment.weight_overhead` apply the
+same two field edits `modelFor()` makes (`deltanet_state` x2,
+`w_resident` x1.15), so a downloaded `workingset.toml` reproduces the page.
+
+What blocks sampling them is this file's own probe: `measure_spread` takes
+`states[::stride]`, so the state COUNT decides which 25 states derive every
+`mc` band. Adding the two axes changed no vector's numbers at all and still
+moved several bands by more than 2x — `moments_miss_sq` 0.082 -> 0.21,
+`queue_wait_seconds` 0.082 -> 0.17, `max_users_decode` 0.038 -> 0.09,
+`steady_n` 0.028 -> 0.067 — i.e. it loosened the mirror test for every model
+as a side effect of growing the set by three states. Three allowlist entries
+then matched nothing, because the band had overtaken them rather than because
+the disagreement had stopped. Sampling these two axes needs a probe selection
+that does not move with the state count; until then they are covered by
+`tests/test_config.py`, against warm-p50 / KV-pool / decode-ceiling figures
+measured off the page in a headless browser.
 
 **`operatingPoint()`'s ceiling scaling** is a documented convention difference,
 not a disagreement: the explorer reports all four ceilings system-wide

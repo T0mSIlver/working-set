@@ -35,8 +35,13 @@ class Predictions:
     saturation_ceiling_users: int   # 999999 when never binds at this rate
     binding_constraint: str
     predicted_limit_users: int
-    # the operating point
-    operating_point_users: int
+    # The operating point, per replica group — the LOAD the queue figures
+    # below (req_rate_main, prefill_duty, ttft_*, bstar_misses) were priced at,
+    # not a population. Fractional whenever the load does not divide by the
+    # replica count: 4 users across 8 DP groups is 0.5, and rounding it to 1
+    # would double the arrival rate every one of those figures depends on. The
+    # probes round it where they must actually open sessions.
+    operating_point_users: float
     req_rate_main: float            # main-agent req/s at the operating point
     prefill_duty: float
     ttft_miss_s: float              # mean TTFT of a forced miss (FCFS)
@@ -137,7 +142,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         saturation_ceiling_users=_int(op["ceilings"]["saturation"]),
         binding_constraint=op["binding"],
         predicted_limit_users=_int(op["limit"]),
-        operating_point_users=int(round(users)),
+        operating_point_users=float(users),
         req_rate_main=round(rate, 4),
         prefill_duty=round(duty, 4),
         ttft_miss_s=round(ttft_miss, 3) if math.isfinite(ttft_miss) else math.inf,
@@ -153,7 +158,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 # ----------------------------------------------------------------------------
 # Formulas transcribed from interactive/src/harness.js (`harnessPredictions`
 # and `freezeMs`), which is the code that generated every `predictions` block
-# a validate_deployment.py ever carried. No new modelling: every term comes
+# a downloaded harness ever carried. No new modelling: every term comes
 # from workingset.model.
 #
 #   steady_decode_seqs   steady_decode_point(...)["n"]
