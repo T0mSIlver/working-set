@@ -3,7 +3,7 @@ import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeT
 import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
          decodeFloor, maxUsersDecode, missContextSeconds, operatingPoint, prefillChunk,
          prefillContextSeconds, prefillSeconds, prefillServiceMoments, serverRate,
-         setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint } from './prefill.js';
+         setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint, ttftMoments } from './prefill.js';
 import { samplingSig, seedFor } from './mathlib.js';
 import { p_sub } from './workload.js';
 import { decodeCurves, decodeMbu, decodePlan, warmCapacity } from './capacity.js';
@@ -12,7 +12,7 @@ import { cssv, esc, fmt } from './svg.js';
 import { chartEData, clearChartGeomCD, interpAt, renderChartA, renderChartB,
          renderChartC, renderChartD, renderChartE, renderChartECompanions, renderNoFit } from './charts.js';
 import { bStar, fAxisMax, plannerData, renderBindingChart, renderCeilingBars,
-         renderSpikeChart, renderSpikeTiles, warmUsersCurve } from './planner.js';
+         renderSpikeChart, renderSpikeTiles, warmUsersCurve, warmUsersNow } from './planner.js';
 import { renderTestCard } from './harness.js';
 import { energyCost, renderCostCard } from './cost.js';
 import { computeFlipData, lastFlipAxes, renderFlipPanel, setLastFlipAxes } from './sensitivity.js';
@@ -246,7 +246,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   const moLo = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), PREFILL_MFU_LO);
   const moHi = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), PREFILL_MFU_HI);
   const f = wl.invalidation;
-  const warmUsersNow = lastWarmCur.p5 * (1 - p_sub(wl));
+  const warmUsers = warmUsersNow(lastWarmCur.p5, wl);
 
   // --- the sampled halves, on settled renders only ---
   // A DRAFT render reuses the last settled results UNCONDITIONALLY (the same
@@ -261,7 +261,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     decodeCensored = decodeUsers.censored; decodeUsers = decodeUsers.n;
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
-                            q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
+                            q.WARM_BUDGET_SCAN, wl, f, warmUsers);
     lastPlanner = { warmFn, decodeUsers, decodeCensored, fMax: fAxisMax() };
   } else {
     warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
@@ -275,17 +275,18 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   if (lastPlanner.fMax !== fAxisMax()){
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
-                            q.WARM_BUDGET_SCAN, wl, f, warmUsersNow);
+                            q.WARM_BUDGET_SCAN, wl, f, warmUsers);
     lastPlanner = { ...lastPlanner, warmFn, fMax: fAxisMax() };
   }
 
   const d = plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo);
   const op = operatingPoint(model, topo, wl, cs, {
-    mo, reps, warmUsers: warmUsersNow*reps, decodeUsers: decodeUsers*reps });
+    mo, reps, warmUsers: warmUsers*reps, decodeUsers: decodeUsers*reps });
   // per-group quantities the tiles quote alongside the user ceilings
   const sp = spikeMetrics(model, topo, wl, cs, rate, prefillChunk());
   const drain = state.burst * mo.miss / Math.max(1e-9, 1 - sp.rho);
   const dm = itlSpikeRatio(model, topo, wl, cs);
+  const ttft = ttftMoments(mo, f, rate, sp.rho);
   Object.assign(op, {
     bstar:   bStar(mo,   f, state.sla, rate),
     bstarLo: bStar(moLo, f, state.sla, rate),
@@ -295,9 +296,9 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     burstDrain: sp.rho >= 1 ? Infinity : drain,
     tokensLost: (sp.rho >= 1 || !(dm.ratio > 1)) ? 0
               : drain * (1/dm.decodeS - 1/dm.mixedS),
-    ttftMiss:    sp.rho >= 1 ? Infinity : (rate*(f*mo.missSq+(1-f)*mo.hitSq))/(2*(1-sp.rho)) + mo.miss,
-    ttftHitFcfs: sp.rho >= 1 ? Infinity : (rate*(f*mo.missSq+(1-f)*mo.hitSq))/(2*(1-sp.rho)) + mo.hit,
-    ttftHitPs:   sp.rho >= 1 ? Infinity : mo.hit/(1-sp.rho),
+    ttftMiss:    ttft.miss,
+    ttftHitFcfs: ttft.hitFcfs,
+    ttftHitPs:   ttft.hitPs,
   });
   renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
   renderCeilingBars(op);

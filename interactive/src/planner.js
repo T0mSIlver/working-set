@@ -46,6 +46,7 @@ function fAxisTicks(fMax){
 // curve passes exactly through the value the tiles quote — beat 50 fills for
 // any resolution this chart can show. Interpolation is stated in the caption
 // rather than hidden: this is the one series on the panel that is sampled.
+export function warmUsersNow(p5, wl){ return p5 * (1 - p_sub(wl)); }
 export function warmUsersCurve(model, topo, ram, iter, budget, wl0, fNow, warmNow){
   const fMax = fAxisMax();
   const anchors = [0, 0.25, 0.5, 0.75, 1.0].map(a => a*fMax);
@@ -55,7 +56,7 @@ export function warmUsersCurve(model, topo, ram, iter, budget, wl0, fNow, warmNo
     if (f === fNow && warmNow !== undefined) return {f, u: warmNow};
     const wl = {...wl0, invalidation: f};
     const wc = warmCapacity(model, topo, wl, ram, iter, budget);
-    return { f, u: wc.all[0] * (1 - p_sub(wl)) };
+    return { f, u: warmUsersNow(wc.all[0], wl) };
   });
   return f => {
     if (f <= pts[0].f) return pts[0].u;

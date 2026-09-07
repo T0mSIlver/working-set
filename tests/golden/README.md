@@ -277,24 +277,15 @@ So when this test goes red after a model change:
 
 ## Coverage limitations
 
-Four things the fixture does not pin, and one thing it pins only partly. None
-is a silent omission — the `mapping` block names each at its row.
-
-**Four quantities are duplicated in `drive.mjs`, not called.** The explorer
-computes them somewhere the driver cannot reach, so for these the test pins the
-*model*, not the explorer's own line of code: an edit to the render.js
-expression would pass.
-
-| quantity | where the explorer computes it |
-|---|---|
-| `ttft_miss_fcfs`, `ttft_hit_fcfs`, `ttft_hit_ps` | inline in `render.js`'s `Object.assign` onto the operating point |
-| `max_users_cache` | `render.js` `warmUsersNow`, inline |
-| `mean_passes` | `prefill.js` `meanPasses`, module-private |
-
-Moving the three `render.js` expressions into `prefill.js` and exporting
-`meanPasses` would close this. It is a **follow-up**, not part of this change:
-it touches the render path, which `AGENTS.md` requires be verified
-byte-identical in a headless browser.
+Three things the fixture does not pin, and one thing it pins only partly. None
+is a silent omission — the `mapping` block names each at its row. Every
+compared quantity comes out of a function the page itself calls: `drive.mjs`
+once restated five of them (`mean_passes`, the three TTFT figures,
+`max_users_cache`) because the page computed them inline or in a
+module-private function; those are now exported (`meanPasses`, `ttftMoments`,
+`warmUsersNow`) and called. `max_users_cache` stays a standing approximation
+on both sides of that change: the explorer scales the whole warm p5 by
+`(1 - p_sub)`, where Python counts user-class sessions inside each fill.
 
 **`itl_spike` / `spike_token_debt` / `op.tokensLost` are not compared at all.**
 `itlSpikeRatio` is private to `render.js` *and* prices the spike differently on

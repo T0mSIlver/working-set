@@ -1080,9 +1080,9 @@
   {
    "quantity": "mean_passes",
    "python": "model.mean_passes",
-   "js": "prefill.js meanPasses (module-private) \u2014 DUPLICATED in drive.mjs",
+   "js": "prefill.js meanPasses",
    "class": "mc",
-   "note": "NOT CALLED: meanPasses is not exported, so the test recomputes E[ceil(L/C)] over the same contextStats draw"
+   "note": ""
   },
   {
    "quantity": "cold_request_seconds",
@@ -1122,23 +1122,23 @@
   {
    "quantity": "ttft_miss_fcfs",
    "python": "model.prefill_ttft_seconds(request='cold')",
-   "js": "render.js op.ttftMiss (inline) \u2014 DUPLICATED in drive.mjs",
+   "js": "prefill.js ttftMoments(...).miss",
    "class": "mc",
-   "note": "NOT CALLED: render.js stamps this expression onto the operating point inline, so the test restates it. The arithmetic in render.js itself is unpinned until it moves into prefill.js \u2014 see the README's coverage limitations."
+   "note": ""
   },
   {
    "quantity": "ttft_hit_fcfs",
    "python": "model.prefill_ttft_seconds(request='warm')",
-   "js": "render.js op.ttftHitFcfs (inline) \u2014 DUPLICATED in drive.mjs",
+   "js": "prefill.js ttftMoments(...).hitFcfs",
    "class": "mc",
-   "note": "NOT CALLED; same inline block as ttft_miss_fcfs"
+   "note": ""
   },
   {
    "quantity": "ttft_hit_ps",
    "python": "model.prefill_ttft_seconds(request='warm', discipline='ps')",
-   "js": "render.js op.ttftHitPs (inline) \u2014 DUPLICATED in drive.mjs",
+   "js": "prefill.js ttftMoments(...).hitPs",
    "class": "mc",
-   "note": "NOT CALLED; same inline block as ttft_miss_fcfs"
+   "note": ""
   },
   {
    "quantity": "sla_miss_rate_sla10",
@@ -1192,9 +1192,9 @@
   {
    "quantity": "max_users_cache",
    "python": "model.max_users_cache (warm_capacity which='user')",
-   "js": "render.js warmUsersNow = warmCapacity(...).all[0] * (1 - p_sub) (inline) \u2014 DUPLICATED in drive.mjs",
+   "js": "planner.js warmUsersNow",
    "class": "mc",
-   "note": "NOT CALLED, and a STANDING APPROXIMATION either way: the explorer scales the whole warm p5 by the non-subagent share where Python counts user-class sessions inside each fill"
+   "note": "STANDING APPROXIMATION: the explorer scales the whole warm p5 by the non-subagent share where Python counts user-class sessions inside each fill"
   },
   {
    "quantity": "warm_p5_all",
