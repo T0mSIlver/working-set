@@ -41,7 +41,8 @@ TOLERANCE CLASSES.
   mc     Monte-Carlo on both sides, with DIFFERENT samplers (numpy PCG64 +
          numpy lognormal at n = 200,000 in Python; mulberry32 + Box-Muller at
          n = 20,000 in the explorer). The band per quantity is derived from
-         the seed-to-seed spread measured below and stored in `mc_spread`.
+         the seed-to-seed spread of the named states in SPREAD_PROBE, stored
+         below in `mc_spread`.
 """
 from __future__ import annotations
 
@@ -525,6 +526,111 @@ SWEEP_ANCHORS = [
     dict(model="GLM52", gpu="H200", wdt="fp8", kv="fp8", ngpu=8, tp=8),
     dict(model="MM35", gpu="H200", wdt="fp8", kv="fp8", ngpu=8, tp=2),
 ]
+
+# The states the Monte-Carlo bands are measured on, named by content: a
+# deployment plus the knobs that differ from DEFAULT_STATE, resolved through the
+# same base_state() build_states() uses. Adding a sweep axis, a model or a GPU
+# part therefore cannot move a band — the state count and sort order no longer
+# choose the sample — and a new default-valued key leaves every entry valid.
+# Seeded with the 25 states the former states[::34] stride happened to pick, so
+# the switch itself moved nothing. A new model is represented here only once
+# someone adds it; validate_spread_probe() refuses to generate until it is.
+SPREAD_PROBE = [
+    # Dense single-GPU sweep state with a one-request burst.
+    dict(model='27B', gpu='H200', wdt='fp8', kv='fp8', ngpu=1, tp=1,
+         burst=1),
+    # H200 MoE deployment with DP2, TP3, and added RAM.
+    dict(model='35BA3B', gpu='H200', wdt='fp8', kv='fp8', ngpu=6, tp=3,
+         ram=256, mfu=0.55, sub_ratio=0.4, inval=0.5, users=16, think=45,
+         turn=1000, burst=200, out=900, decode_floor=60),
+    # B300 NVFP4 MoE deployment with DP4 and high subagent share.
+    dict(model='35BA3B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=8, tp=2,
+         ram=256, cap=262, mbu=0.15, mfu=0.35, chunk='16384', user_median=12,
+         user_sigma=0.5, sub_ratio=0.4, inval=3.0, users=128, turn=1000, burst=200),
+    # H200 FP16-KV MoE deployment with DP2 and TP2.
+    dict(model='Q38FN', gpu='H200', wdt='fp8', kv='fp16', ngpu=4, tp=2,
+         cap=262, mbu=0.3, chunk='4096', sub_ratio=0.4, sys=30, inval=0.5,
+         turn=6000, burst=200, out=200),
+    # B300 large-MoE deployment with DP4, short cap, and low decode floor.
+    dict(model='DSV4F', gpu='B300', wdt='fp8', kv='fp8', ngpu=8, tp=2,
+         cap=64, mfu=0.35, chunk='16384', user_median=60, sub_ratio=0.0, sys=3,
+         inval=10.0, sla=20, turn=1000, burst=200, decode_floor=10),
+    # H200 FP16-KV DP4 deployment under a tight SLA.
+    dict(model='MM35', gpu='H200', wdt='fp8', kv='fp16', ngpu=8, tp=2,
+         ram=256, cap=64, mfu=0.35, chunk='4096', user_median=12, user_sigma=0.5,
+         sub_ratio=0.0, sys=30, inval=3.0, think=45, sla=5, burst=200, out=200,
+         decode_floor=60),
+    # B300 NVFP4 dense deployment on odd TP5.
+    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=5, tp=5,
+         mfu=0.55, chunk='16384', user_median=12, sub_ratio=0.4, sys=30,
+         inval=10.0, users=128, think=45, decode_floor=60),
+    # B300 dense reference deployment on TP2.
+    dict(model='27B', gpu='B300', wdt='fp8', kv='fp8', ngpu=2, tp=2),
+    # B300 large-MoE reference deployment on odd TP7.
+    dict(model='GLM53F', gpu='B300', wdt='fp8', kv='fp8', ngpu=7, tp=7),
+    # Dense single-GPU sweep state with a short subagent median.
+    dict(model='27B', gpu='H200', wdt='fp8', kv='fp8', ngpu=1, tp=1,
+         sub_median=2),
+    # H200 dense reference deployment on TP4.
+    dict(model='27B', gpu='H200', wdt='fp8', kv='fp8', ngpu=4, tp=4),
+    # H200 huge-MoE reference deployment on TP8.
+    dict(model='GLM52', gpu='H200', wdt='fp8', kv='fp8', ngpu=8, tp=8),
+    # H200 MoE sweep state at full memory-bandwidth utilization.
+    dict(model='35BA3B', gpu='H200', wdt='fp8', kv='fp8', ngpu=2, tp=2,
+         mbu=1.0),
+    # H200 FP16-KV MoE deployment on odd TP3.
+    dict(model='MM35', gpu='H200', wdt='fp8', kv='fp16', ngpu=3, tp=3,
+         ram=256, mbu=0.3, mfu=0.55, chunk='4096', user_median=60, user_sigma=1.1,
+         sub_ratio=0.0, sys=3, inval=0.5, users=32, think=45, sla=5, turn=1000),
+    # H200 huge-MoE sweep state with an 8K chunk.
+    dict(model='GLM52', gpu='H200', wdt='fp8', kv='fp8', ngpu=8, tp=8,
+         chunk='8192'),
+    # B300 large-MoE deployment on TP2 with low MBU.
+    dict(model='GLM53F', gpu='B300', wdt='fp8', kv='fp8', ngpu=2, tp=2,
+         cap=262, mbu=0.15, user_median=60, sub_ratio=0.0, sys=30, inval=10.0,
+         users=128, sla=20, turn=6000, out=200, decode_floor=60),
+    # B300 MoE deployment with DP5 and a low decode floor.
+    dict(model='Q38FN', gpu='B300', wdt='fp8', kv='fp8', ngpu=5, tp=1,
+         cap=64, mbu=0.15, chunk='16384', user_sigma=0.5, sub_ratio=0.0,
+         inval=10.0, sla=20, turn=1000, out=900, decode_floor=10),
+    # B300 NVFP4 MoE deployment with DP2 and added RAM.
+    dict(model='35BA3B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=2, tp=1,
+         ram=256, cap=64, mbu=0.3, user_median=60, user_sigma=0.5, sys=30,
+         users=128, think=15, sla=5, turn=1000, out=900, decode_floor=60),
+    # B300 NVFP4 FP16-KV MoE deployment with DP3 and high context variance.
+    dict(model='MM35', gpu='B300', wdt='nvfp4', kv='fp16', ngpu=6, tp=2,
+         cap=64, mbu=0.15, mfu=0.35, chunk='8192', user_sigma=1.1, sub_ratio=0.4,
+         sys=30, inval=0.5, users=128, think=15, turn=1000, out=200,
+         decode_floor=60),
+    # B300 NVFP4 MoE deployment on TP6 with high request load.
+    dict(model='Q38FN', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=6, tp=6,
+         ram=256, mbu=0.3, chunk='2048', sub_ratio=0.4, sys=3, users=400, sla=20,
+         burst=8, out=200, decode_floor=60),
+    # B300 NVFP4 large-MoE deployment on odd TP3 with a 64K chunk.
+    dict(model='GLM53F', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=3, tp=3,
+         ram=256, mbu=0.3, mfu=0.35, chunk='65536', user_median=60, user_sigma=0.5,
+         sub_ratio=0.4, inval=35.0, users=128, think=15, turn=1000, burst=8,
+         out=900, decode_floor=60),
+    # B300 NVFP4 dense deployment on TP6 with a low decode floor.
+    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=6, tp=6,
+         cap=262, user_sigma=0.5, sys=30, inval=0.5, users=16, think=45, sla=5,
+         burst=8, out=900, decode_floor=10),
+    # B300 NVFP4 dense deployment on TP2 under high load.
+    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=2, tp=2,
+         cap=262, mfu=0.55, chunk='65536', user_sigma=1.1, sub_ratio=0.0, sys=3,
+         inval=35.0, users=400, think=15, sla=20, burst=8, out=200,
+         decode_floor=60),
+    # B300 NVFP4 FP16-KV dense deployment on TP6.
+    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp16', ngpu=6, tp=6,
+         ram=256, cap=64, mbu=0.15, mfu=0.35, user_median=12, user_sigma=0.5,
+         inval=10.0, users=128, think=90, sla=5, turn=6000, burst=8, out=900,
+         decode_floor=60),
+    # B300 NVFP4 single-GPU MoE deployment with high context variance.
+    dict(model='MM35', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=1, tp=1,
+         cap=64, mbu=0.15, mfu=0.55, chunk='8192', user_median=12, user_sigma=1.1,
+         sub_ratio=0.4, inval=0.5, users=32, think=90, sla=20, turn=6000, burst=8,
+         out=900, decode_floor=60),
+]
 # how many knobs of the sweep each anchor gets (the first anchor gets all of
 # them; the others cover the knobs most likely to interact with topology)
 ANCHOR_KNOBS = {
@@ -644,7 +750,6 @@ MC_QUANTITIES = [
 FLAG_QUANTITIES = ["max_users_decode_censored", "steady_saturated"]
 
 SPREAD_SEEDS = (0, 1, 2)
-SPREAD_PROBE_STATES = 24   # states sampled for the spread, evenly strided
 
 
 def _spread_one(st: dict, n: int, warm_iter: int, dec_iter: int) -> tuple:
@@ -702,8 +807,48 @@ def _spread_task(args):
     return _spread_one(*args)
 
 
-def measure_spread(states: list[dict], stride: int, jobs: int = 1) -> dict:
-    """Seed-to-seed spread per quantity, at two sampling scales.
+PROBE_DEPLOYMENT_KEYS = ("model", "gpu", "wdt", "kv", "ngpu", "tp")
+
+
+def resolve_probe(entry: dict) -> dict:
+    """A SPREAD_PROBE entry as the full state build_states() would emit."""
+    dep = {k: entry[k] for k in PROBE_DEPLOYMENT_KEYS}
+    st = base_state(dep)
+    for k, v in entry.items():
+        if k not in dep:
+            if k not in st:
+                raise ValueError(f"SPREAD_PROBE entry has unknown knob {k!r}: {entry}")
+            st[k] = v
+    return st
+
+
+def validate_spread_probe(probe: list[dict], states: list[dict]) -> None:
+    """Require reachable probe states and coverage of every model and GPU.
+
+    Reachability is checked on the RESOLVED state, so a probe entry only
+    breaks when its own values stop being a state the explorer can reach —
+    never because a new axis added a default-valued key to every state."""
+    # by value, not by JSON text: a sweep may write 40 where the default is
+    # 40.0, and the model prices both identically
+    unreachable = [i for i, st in enumerate(probe) if st not in states]
+    if unreachable:
+        raise ValueError(
+            f"SPREAD_PROBE states at indexes {unreachable} are not produced "
+            "by build_states()"
+        )
+
+    missing_models = sorted(set(M.MODELS) - {st["model"] for st in probe})
+    missing_gpus = sorted(set(GPU_KEYS) - {st["gpu"] for st in probe})
+    if missing_models or missing_gpus:
+        raise ValueError(
+            "SPREAD_PROBE lacks coverage: "
+            f"models={missing_models or 'none'}, gpus={missing_gpus or 'none'}"
+        )
+
+
+def measure_spread(probe: list[dict], jobs: int = 1,
+                   entries: list[dict] | None = None) -> dict:
+    """Seed-to-seed spread for the named probe, at two sampling scales.
 
     `python` is the scale the committed vectors are generated at.
     `mirror` cuts the context draw to the explorer's own 20,000 — the one
@@ -711,15 +856,18 @@ def measure_spread(states: list[dict], stride: int, jobs: int = 1) -> dict:
     the comparison's noise floor. A band read off the Python scale alone would
     be far too tight to survive a correct mirror.
 
-    p50 / p90 / max over the probe states, not just the max: a couple of the
-    sampled states put an estimator somewhere it is ill-conditioned (the
+    SPREAD_PROBE fixes the states by content, so a new sweep axis cannot
+    reshuffle the band sample. p50 / p90 / max are taken over those states,
+    not just the max: a couple put an estimator somewhere it is ill-conditioned (the
     latency ceiling near c -> SLA, the breakeven rate near cold -> warm) and
     their spread runs an order of magnitude above every other state's. A band
     set on the max would then license real drift everywhere; the band is set
     on p90 and the ill-conditioned states are named in the allowlist instead.
     """
-    probe = states[::stride]
+    # recorded in the compact SPREAD_PROBE form (deployment + non-default
+    # knobs) so a new default-valued axis leaves this block byte-identical
     out = {"seeds": list(SPREAD_SEEDS), "n_states": len(probe),
+           "probe": entries if entries is not None else probe,
            "statistic": "relative full spread (max-min)/mid across the seeds, "
                         "summarised over the probe states",
            "python": {}, "mirror": {}}
@@ -880,16 +1028,13 @@ MAPPING = [
     ("energy_*", "model.energy_cost", "cost.js energyCost", "mc", ""),
     ("(state -> model)", "golden.py state_model / state_topo / state_wl",
      "render.js modelFor + state.js currentTopo/currentWL", "n/a",
-     "the explorer's dtype/mtp switches. state_dt and wover now HAVE Python "
+     "the explorer's dtype/mtp switches. state_dt and wover have Python "
      "counterparts (deployment.recurrent_state_dtype / weight_overhead, "
      "applied by RunConfig.to_model as the same two field edits modelFor "
-     "makes) but are still NOT sampled here: the spread probe is "
-     "states[::stride], so changing the state COUNT reshuffles which 25 states "
-     "derive the mc bands, and adding these two axes moved several bands by "
-     "more than 2x (moments_miss_sq 0.082 -> 0.21, max_users_decode 0.038 -> "
-     "0.09) without any vector's numbers changing. Sampling them needs a probe "
-     "selection that does not depend on the state count; until then they are "
-     "covered by tests/test_config.py against measured page figures"),
+     "makes) but are still NOT sampled here. SPREAD_PROBE now names its states "
+     "by content, so adding these axes cannot reshuffle the states that derive "
+     "the mc bands. Until the axes are added by a later change, "
+     "tests/test_config.py covers them against measured page figures"),
     ("(NOT COMPARED) itl_spike / spike_token_debt",
      "model.itl_spike, model.spike_token_debt",
      "render.js itlSpikeRatio (module-private) -> op.tokensLost", "n/a",
@@ -996,9 +1141,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true",
                     help="verify the committed vectors are current; write nothing")
-    ap.add_argument("--spread-probe", type=int, default=SPREAD_PROBE_STATES,
-                    help="how many states to probe for the seed-to-seed "
-                         "spread (evenly strided through the fixture)")
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1,
                     help="worker processes; the output is identical at any "
                          "value (every state is independently seeded)")
@@ -1006,11 +1148,11 @@ def main() -> int:
 
     states = build_states()
     print(f"states: {len(states)} (jobs: {args.jobs})", file=sys.stderr)
-    # a fixed PROBE COUNT, not a fixed stride: the state set grows whenever the
-    # study gains a model or a GPU part, and a fixed stride would silently make
-    # regeneration slower every time
-    stride = max(1, len(states) // max(1, args.spread_probe))
-    spread = measure_spread(states, stride, args.jobs)
+    # Content-addressed probe states keep band selection independent of state
+    # count and order. Validation also turns a stale probe into a loud failure.
+    probe = [resolve_probe(e) for e in SPREAD_PROBE]
+    validate_spread_probe(probe, states)
+    spread = measure_spread(probe, args.jobs, entries=SPREAD_PROBE)
     bands = bands_from_spread(spread)
     text = render(states, spread, bands, args.jobs)
 
