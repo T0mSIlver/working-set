@@ -276,8 +276,9 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     draw = M.warm_draw(m, topo)
     o["max_users_cache"] = _warm_user(m, topo, wl, ram, draw, seed)
     o["warm_p5_all"] = _warm_all(m, topo, wl, ram, draw, seed, "all")
-    warm_gpu95 = _warm_all(m, topo, wl, ram, draw, seed, "gpu", pct=2,
-                           n_iter=COND_WARM_ITER)
+    # the GPU-resident p95 now CAPS the steady point on both sides (it used
+    # to be a diagnostic only), so it runs at the full warm iteration count
+    warm_gpu95 = _warm_all(m, topo, wl, ram, draw, seed, "gpu", pct=2)
     dec, cens = _decode_ceiling(m, topo, wl, st, seed)
     o["max_users_decode"] = dec
     o["max_users_decode_censored"] = cens
@@ -285,8 +286,11 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
                             seed=seed, mbu=st["mbu"])
     for i, n in enumerate((1, 8, 64)):
         o[f"decode_p50_n{n}"] = float(curve[1][i])
+    # capped at the GPU-resident population, the same figure the mirror's
+    # steadyDecodePoint is handed (render.js lastWarmCur.g95)
     sd = M.steady_decode_point(m, topo, wl, rate, out_tokens=st["out"],
-                               n_iter=DECODE_ITER, seed=seed, mbu=st["mbu"])
+                               n_iter=DECODE_ITER, seed=seed, mbu=st["mbu"],
+                               resident=warm_gpu95)
     o["steady_n"] = sd["n"]
     o["steady_per_user_tok_s"] = sd["per_user_tok_s"]
     o["steady_saturated"] = bool(sd["saturated"])
@@ -332,43 +336,30 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         # runs on L^4, so its sampling variance scales with this
         "ctx_cv2": (o["ctx_mean_sq"] / o["ctx_mean"] ** 2 - 1.0
                     if o["ctx_mean"] > 0 else 0.0),
-        # HOW FAR PAST THE MIRROR'S OWN AXIS the load sits. steadyDecodePoint
-        # inverts the sweep the page already drew, and decodePlan sizes that
-        # sweep from the GPU-resident warm band:
-        #     nMax = max(DECODE_NMIN, ceil(warm_gpu_p95 x DECODE_HEADROOM))
-        # At a ratio >= 1 the demand runs off the end of that axis and the
-        # mirror reports `saturated` while Python, searching to n = 4,096,
-        # resolves a point. This is the CAUSE of the steady_* disagreement, so
-        # the allowlist gates on it. The two constants below are the
-        # explorer's (CONFIG.DECODE_NMIN / DECODE_HEADROOM), restated here
-        # ONLY to compute this diagnostic — nothing compared depends on them.
-        "steady_nmax_mirror": float(_mirror_nmax(warm_gpu95)),
-        "steady_nmax_ratio": _steady_nmax_ratio(m, topo, wl, st, rate,
-                                                warm_gpu95, seed),
+        # HOW CLOSE TO THE RESIDENT CAP the load sits. Both sides stop the
+        # steady search at the GPU-resident warm p95 (a batch of n needs n
+        # contexts in HBM) and report `saturated` past it. Each side draws
+        # that p95 with its own sampler, so within a few percent of ratio 1
+        # the flag can flip on noise alone: that band is what the allowlist
+        # names. Away from it the two agree on the flag.
+        "steady_cap": float(warm_gpu95),
+        "steady_cap_ratio": _steady_cap_ratio(m, topo, wl, st, rate,
+                                              warm_gpu95, seed),
     }
     return o, cond
 
 
-MIRROR_DECODE_NMIN = 120        # CONFIG.DECODE_NMIN
-MIRROR_DECODE_HEADROOM = 1.15   # CONFIG.DECODE_HEADROOM
+def _steady_cap_ratio(m, topo, wl, st, rate, warm_gpu_p95, seed) -> float:
+    """demand / (aggregate decode throughput at the resident cap).
 
-
-def _mirror_nmax(warm_gpu_p95: float) -> int:
-    return max(MIRROR_DECODE_NMIN,
-               int(math.ceil(warm_gpu_p95 * MIRROR_DECODE_HEADROOM)))
-
-
-def _steady_nmax_ratio(m, topo, wl, st, rate, warm_gpu_p95, seed) -> float:
-    """demand / (aggregate decode throughput at the mirror's widest n).
-
-    >= 1 means the load asks for more output than the explorer's own decode
-    axis can retire, which is exactly when steadyDecodePoint stops inverting
-    and starts reporting `saturated`.
+    >= 1 means the load asks for more output than the GPU-resident population
+    retires all decoding at once, which is where both steady_decode_point and
+    steadyDecodePoint stop and report `saturated`.
     """
     demand = rate * st["out"]
     if demand <= 0:
         return 0.0
-    n = _mirror_nmax(warm_gpu_p95)
+    n = max(1, int(math.floor(warm_gpu_p95)))
     p50 = float(M.decode_curves(m, topo, wl, [n], n_iter=COND_DECODE_ITER,
                                 seed=seed, mbu=st["mbu"])[1][0])
     agg = n * p50

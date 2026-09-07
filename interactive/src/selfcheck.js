@@ -497,6 +497,13 @@ export function steadyChecks(){
   // the whole point of splitting them, and chart D must plot the demand
   console.assert(hot.demanded > hot.delivered,
     "a saturated point demands more than it delivers");
+  // 6b. and a demand past the GPU-RESIDENT population saturates at that
+  //     population, not at the axis: a batch of n needs n contexts in HBM
+  const capped = steadyDecodePoint(dc, tp2, 1e6, OUT, 150.7);
+  console.assert(capped.saturated && capped.n === 150,
+    "demand beyond the resident population must saturate at floor(resident)");
+  console.assert(approx(steadyDecodePoint(dc, tp2, rate, OUT, 150.7).n, sd.n, 1e-9),
+    "inside the resident population the cap must not move the point");
   console.assert(Math.abs(sd.demanded - sd.delivered) < 1e-6,
     "an unsaturated point delivers exactly what it demands");
   // 7. DP: the batch is PER GROUP, the aggregate is the system. A 2-group grid

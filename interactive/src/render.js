@@ -161,7 +161,7 @@ export function computeAndRender(draft, deferFrontierDecode){
   lastSteady=steadyDecodePoint(dc, topo,
                 serverRate(state.users, state.think, wl.sub_ratio)
                   / (topo.replicas || 1),
-                state.out);
+                state.out, lastWarmCur.g95);
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
   const noFit = kv_pool_tokens(model,topo) <= 0;
 
@@ -682,7 +682,7 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   const offl = warm.o5;
   // ---- the STEADY-STATE decode point (act 2's honest counterpart to act 1's
   // stress test). Every quantity below is per replica GROUP, like groupRate.
-  const sd = noFit ? null : (steady || steadyDecodePoint(dc, topo, groupRate, state.out));
+  const sd = noFit ? null : (steady || steadyDecodePoint(dc, topo, groupRate, state.out, warm.g95));
   // prefill duty at this load. Above 1 the queue is unbounded, so there is no
   // steady state to be in: requests never reach the decode batch at all, and
   // quoting a decode speed for them would be the most misleading number on the

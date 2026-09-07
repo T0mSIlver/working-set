@@ -110,6 +110,11 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     draw = int(4000 + M.kv_pool_tokens(m, t) / 8000)
     p5_all, _, _ = M.warm_capacity(m, t, wl, ram_gib=ram, n_iter=n_iter,
                                    draw=draw, seed=seed, which="all")
+    # the most sessions HBM ever holds at once: the decode batch cannot
+    # outgrow it, so the steady point stops there (offload is storage, not
+    # a place to decode from — hence ram_gib=0)
+    _, _, resident95 = M.warm_capacity(m, t, wl, ram_gib=0, n_iter=n_iter,
+                                       draw=draw, seed=seed, which="gpu")
 
     rate = op["req_rate"]                       # main-agent req/s
     rate_total = rate * (1.0 + wl.sub_ratio)    # what the prefill server sees
@@ -132,7 +137,8 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 
     steady = _steady_block(m, t, wl, rate_total, w.max_output_tokens,
                            dep.max_model_len, chunk, cal.mfu, duty,
-                           mbu=cal.mbu, n_iter=n_iter, seed=seed)
+                           mbu=cal.mbu, n_iter=n_iter, seed=seed,
+                           resident=float(resident95))
 
     return Predictions(
         warm_capacity_p5=_int(op["ceilings"]["cache"]),
@@ -195,7 +201,7 @@ def freeze_ms(model: M.Model, topo: M.Topology, cap: float, chunk: float,
 
 def _steady_block(m, t, wl, rate_total: float, out_tokens: float, cap: float,
                   chunk: float, mfu: float, duty: float, mbu: float,
-                  n_iter: int, seed: int) -> dict:
+                  n_iter: int, seed: int, resident: float) -> dict:
     empty = {"steady_decode_seqs": None, "steady_decode_tok_s": None,
              "itl_normal_ms": None, "itl_worst_freeze_ms": None,
              "itl_freeze_lo_ms": None, "itl_freeze_hi_ms": None}
@@ -203,7 +209,8 @@ def _steady_block(m, t, wl, rate_total: float, out_tokens: float, cap: float,
         return empty
     # the calibration block's MBU, the same one max_users_decode is priced at
     sp = M.steady_decode_point(m, t, wl, rate_total, out_tokens=out_tokens,
-                               mbu=mbu, n_iter=n_iter, seed=seed)
+                               mbu=mbu, n_iter=n_iter, seed=seed,
+                               resident=resident)
     pu = sp["per_user_tok_s"]
     if sp["saturated"] or not (pu > 0):
         return empty

@@ -415,13 +415,14 @@ export function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
    sits far to the left of that, where the curve is steep and the inversion is
    well conditioned; in the plateau the root is badly conditioned and the
    bisection may return one of several. If the
-   demand exceeds the aggregate at the sweep's widest n, no crossing exists
-   INSIDE what this page models and the result is flagged `saturated` — the
-   axis is sized to the GPU-resident warm band, so that says the load asks for
-   more output than this cache's whole resident population retires. (Aggregate
-   throughput does have a true asymptote, at bandwidth / mean-context bytes;
-   scenario_model.py searches to n = 4,096 and reaches the same verdict on the
-   one configuration where this bites, Mistral-3.5/TP4.)
+   demand exceeds the aggregate at the GPU-resident warm p95 (the `resident`
+   argument), no crossing exists INSIDE what this machine can hold and the
+   result is flagged `saturated`: the load asks for more output than this
+   cache's whole resident population retires decoding at once. A batch of n
+   needs n contexts in HBM; past that the engine is evicting and every return
+   is a cold prefill the miss-rate axis prices, so a crossing found further
+   out would describe a machine that does not exist. workingset.model's
+   steady_decode_point stops at the same population.
 
    Approximations, both stated on the tile:
      - MEAN FIELD. v is evaluated at the MEAN batch, not averaged over the
@@ -430,10 +431,19 @@ export function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
      - DECODE ONLY. Prefill chunks sharing a forward pass are priced separately
        (the ITL spike); this is the clean-decode speed between those spikes.
    Mirrors steady_decode_point() in scenario_model.py. */
-export function steadyDecodePoint(dc, topo, rateGroup, outTok){
+// `resident` is the GPU-resident warm population of one cache (lastWarmCur
+// .g95): a batch of n needs n contexts in HBM, so the search stops there and
+// a demand the resident population cannot retire is `saturated` — past it
+// the engine is evicting and every return is a cold prefill, which the
+// miss-rate axis prices and this point does not. Mirrors the `resident` cap
+// in workingset.model.steady_decode_point. Omitted (the self-checks), the
+// sweep's own top is the cap.
+export function steadyDecodePoint(dc, topo, rateGroup, outTok, resident){
   const reps = topo.replicas || 1;
   const demand = Math.max(0, rateGroup) * Math.max(0, outTok);   // tok/s asked
-  const nMax = dc.ns[dc.ns.length-1];
+  const axisMax = dc.ns[dc.ns.length-1];
+  const nMax = resident === undefined ? axisMax
+             : Math.max(1, Math.min(axisMax, Math.floor(resident)));
   // the AGGREGATE series, per replica group. dc.agg is already x replicas, and
   // its samples are exactly ns[i] x p50[i] — so inverting the LINEARLY
   // interpolated agg curve (increasing and concave between samples) is both
@@ -443,7 +453,7 @@ export function steadyDecodePoint(dc, topo, rateGroup, outTok){
   const out = { demand, nMax, saturated:false };
   if (!(demand > 0))                     // no load: nothing is decoding at all
     return { ...out, n:0, pu:interpAt(dc,'p50',1,true), delivered:0, demanded:0 };
-  if (demand >= aggAt(nMax))             // beyond the sampled axis — say so
+  if (demand >= aggAt(nMax))             // beyond the resident population — say so
     return { ...out, n:nMax, pu:aggAt(nMax)/nMax,
              delivered:aggAt(nMax)*reps, demanded:demand*reps, saturated:true };
   // below n = 1 the batch is a single sequence whenever anyone is decoding, so
