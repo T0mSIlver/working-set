@@ -26,8 +26,7 @@ const WS_CMDS = [
   'uvx --from workingset ws test workingset.toml --all --exclusive --out run.json',
 ];
 const WS_CMD_NOTE =
-  '# until the PyPI release, read the package straight from git:\n'
-  + '#   uvx --from git+https://github.com/T0mSIlver/working-set ws predict workingset.toml';
+  '# pip install workingset / uv add workingset for a project; pypi.org/project/workingset';
 
 /* ---- workingset.toml ------------------------------------------------------ */
 // TOML scalars, matching workingset.config._dump_toml: JSON string quoting

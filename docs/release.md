@@ -59,7 +59,6 @@ publishing, OIDC).
 
 ## After the first release
 
-Two places still print the git form of the install command "until the PyPI
-release": the explorer's test card (`interactive/src/harness.js`,
-`WS_CMD_NOTE`) and the README's install block. Remove the note in a follow-up
-PR once `uvx --from workingset ws` resolves.
+Done on 2026-09-07 with v0.1.0: the README and the explorer's test card print
+the PyPI form of the commands. A commit that PyPI does not have yet still runs
+through `uvx --from git+https://github.com/T0mSIlver/working-set ws …`.

@@ -23,7 +23,19 @@ that hands out the configuration on screen as a `workingset.toml` — feed it to
 ## The `workingset` package
 
 The model behind the explorer is a Python package (`src/workingset/`, the
-source of truth; the explorer's JS mirrors it). It ships a CLI:
+source of truth; the explorer's JS mirrors it), published on PyPI as
+[`workingset`](https://pypi.org/project/workingset/). It ships one console
+script, `ws`, so the package name travels in `--from`:
+
+```bash
+uvx --from workingset ws init --model Q38FN --gpu B300 --tp 8 --weight-dtype nvfp4   # writes workingset.toml
+uvx --from workingset ws predict workingset.toml        # the four ceilings, which one binds, the operating point
+uvx --from workingset ws test workingset.toml --dry-run # the plan, the sampler self-check, no requests
+uvx --from workingset ws test workingset.toml --all --exclusive --out run.json   # measure it
+```
+
+or, as a dependency, `pip install workingset` / `uv add workingset`. From a
+checkout the same commands run under `uv run`:
 
 ```bash
 uv run ws init --model Q38FN --gpu B300 --tp 8 --weight-dtype nvfp4   # writes workingset.toml
@@ -37,18 +49,10 @@ uv run ws models                         # model / GPU keys
 uv run pytest                            # self-checks + config round-trips
 ```
 
-No checkout needed — the explorer's `workingset.toml` runs straight from git
-(`--from` carries the package because `workingset` publishes one console
-script, `ws`):
-
-```bash
-uvx --from git+https://github.com/T0mSIlver/working-set ws predict workingset.toml
-uvx --from git+https://github.com/T0mSIlver/working-set ws test workingset.toml --dry-run
-uvx --from git+https://github.com/T0mSIlver/working-set ws test workingset.toml --all --exclusive --out run.json
-```
-
-After the PyPI release the same commands shorten to `uvx --from workingset
-ws …`.
+The explorer's `workingset.toml` needs no checkout at all: the three `uvx`
+lines above are exactly what its "Test these hypotheses" card prints. To run
+the model at a commit PyPI does not have yet, point `--from` at git:
+`uvx --from git+https://github.com/T0mSIlver/working-set ws …`.
 
 Predictions live in no file: `ws predict` recomputes them from the config every
 time, so a config can never carry a number the code did not produce. A harness
