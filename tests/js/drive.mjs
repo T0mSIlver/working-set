@@ -8,42 +8,23 @@
    RNG (mathlib.js seedFor) that computeAndRender() calls before each sampled
    section.
 
-   FOUR quantities are DUPLICATED here rather than called, because the
-   explorer computes them somewhere this module cannot reach. Each is marked
-   DUPLICATED at its site, named as such in vectors.json's `mapping`, and
-   listed in tests/golden/README.md under coverage limitations. What that
-   costs: for these four the test pins the MODEL, not the explorer's own line
-   of code — an edit to the render.js expression would not be caught.
-
-     ttft_miss_fcfs / ttft_hit_fcfs / ttft_hit_ps   inline in render.js's
-         Object.assign onto the operating point (~line 298)
-     max_users_cache                                render.js warmUsersNow,
-         inline (~line 249)
-     mean_passes                                    prefill.js meanPasses is
-         module-private
-
-   Moving those three render.js expressions into prefill.js would close it, and
-   is a follow-up rather than part of this change: it touches the render path,
-   which AGENTS.md requires be verified byte-identical in a headless browser.
-
-   Everything else comes out of a function the page itself calls. */
+   Every quantity comes out of a function the page itself calls. */
 import { CONFIG, effective_bw, kv_pool_tokens, tpEff, w_decode }
   from '../../interactive/src/config.js';
 import { state, currentTopo, currentWL, ramPerCache }
   from '../../interactive/src/state.js';
 import { activeModel } from '../../interactive/src/render.js';
 import { seedFor } from '../../interactive/src/mathlib.js';
-import { p_sub } from '../../interactive/src/workload.js';
 import { decodeCurves, decodePlan, warmCapacity }
   from '../../interactive/src/capacity.js';
-import { bStar, warmUsersCurve } from '../../interactive/src/planner.js';
+import { bStar, warmUsersCurve, warmUsersNow } from '../../interactive/src/planner.js';
 import { energyCost } from '../../interactive/src/cost.js';
 import {
-  breakevenMissRate, coldRequestSeconds, contextStats, maxUsersDecode,
+  breakevenMissRate, coldRequestSeconds, contextStats, maxUsersDecode, meanPasses,
   maxUsersLatency, maxUsersSaturation, mfuCeil, mfuEff, missContextSeconds,
   peakFlops, prefillContextSeconds, prefillFlops, prefillOverheadSeconds,
   prefillSeconds, prefillServiceMoments, serverRate, setLiveThink, setLiveTurn,
-  spikeMetrics, steadyDecodePoint,
+  spikeMetrics, steadyDecodePoint, ttftMoments,
 } from '../../interactive/src/prefill.js';
 
 // the three lengths and the one context golden.py prices every state at
@@ -94,11 +75,7 @@ export function driveState(v){
   const cs = contextStats(wl);
   o.ctx_mean = cs.mean;
   o.ctx_mean_sq = cs.meanSq;
-  // DUPLICATED: meanPasses is module-private in prefill.js. E[ceil(L/C)] over
-  // the same cs.samples draw is exactly what it computes.
-  let passes = 0;
-  for (let i = 0; i < cs.samples.length; i++) passes += Math.ceil(cs.samples[i]/chunk);
-  o.mean_passes = passes / cs.samples.length;
+  o.mean_passes = meanPasses(cs, chunk);
 
   o.cold_request_seconds = coldRequestSeconds(m, topo, wl, cs, chunk);
   o.warm_request_seconds =
@@ -112,7 +89,6 @@ export function driveState(v){
 
   const sp = spikeMetrics(m, topo, wl, cs, rate, chunk);
   const f = wl.invalidation;
-  const eS2 = f*mo.missSq + (1-f)*mo.hitSq;
   o.prefill_duty = sp.rho;
   o.queue_wait_seconds = sp.wait;
   // spikeMetrics computes fsla against the same hard-wired SPIKE_SLA_S = 10
@@ -120,13 +96,10 @@ export function driveState(v){
   // spikeMetrics hard-wires SPIKE_BURST = 32; the vectors price Python's
   // burst_drain_seconds at the same 32 so the two are comparable at all
   o.burst_drain_seconds_b32 = sp.drain;
-  // DUPLICATED: render.js stamps these three onto the operating point inline
-  // (renderPlanner's Object.assign), so there is no function to call.
-  o.ttft_miss_fcfs = sp.rho >= 1 ? Infinity
-    : rate*eS2/(2*(1-sp.rho)) + mo.miss;
-  o.ttft_hit_fcfs = sp.rho >= 1 ? Infinity
-    : rate*eS2/(2*(1-sp.rho)) + mo.hit;
-  o.ttft_hit_ps = sp.rho >= 1 ? Infinity : mo.hit/(1-sp.rho);
+  const ttft = ttftMoments(mo, f, rate, sp.rho);
+  o.ttft_miss_fcfs = ttft.miss;
+  o.ttft_hit_fcfs = ttft.hitFcfs;
+  o.ttft_hit_ps = ttft.hitPs;
   o.breakeven_miss_rate = breakevenMissRate(m, topo, wl, rate, cs, chunk);
   o.spike_tolerance = bStar(mo, f, state.sla, rate);
   o.spike_tolerance_sla10 = sp.bstar;
@@ -139,11 +112,10 @@ export function driveState(v){
   const wc = warmCapacity(m, topo, wl, ramPerCache(topo), WARM_ITER,
                           CONFIG.WARM_BUDGET);
   o.warm_p5_all = wc.all[0];
-  // DUPLICATED: render.js computes warmUsersNow inline. It is also a standing
-  // APPROXIMATION either way — the explorer scales the whole warm p5 by the
-  // non-subagent share, where Python counts user-class sessions inside each
-  // fill (warm_capacity which="user").
-  o.max_users_cache = wc.all[0] * (1 - p_sub(wl));
+  // This remains a standing approximation: the explorer scales the whole warm
+  // p5 by the non-subagent share, where Python counts user-class sessions
+  // inside each fill (warm_capacity which="user").
+  o.max_users_cache = warmUsersNow(wc.all[0], wl);
 
   // ---- decode --------------------------------------------------------
   seedFor('decodeCeil');

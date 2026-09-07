@@ -156,7 +156,7 @@ export function missContextSeconds(m, topo, context, chunk, prior){
 // and one render asks for the same C many times over (chart E's 41-point
 // sweep, E3's seven models on the same grid, every tile at the priced chunk).
 // The scan is 20,000 ceils, so the memo is what keeps E3 free on drag frames.
-function meanPasses(cs, C){
+export function meanPasses(cs, C){
   const memo = cs.passMemo || (cs.passMemo = new Map());
   let v = memo.get(C);
   if (v !== undefined) return v;
@@ -335,6 +335,14 @@ export function requestRate(users, think){ return users / (think || liveThink); 
 // requestRate is the main-agent figure the readouts display.
 export function serverRate(users, think, subR){
   return requestRate(users, think) * (1 + (subR || 0));
+}
+
+export function ttftMoments(mo, f, rate, rho){
+  return {
+    miss:    rho >= 1 ? Infinity : (rate*(f*mo.missSq+(1-f)*mo.hitSq))/(2*(1-rho)) + mo.miss,
+    hitFcfs: rho >= 1 ? Infinity : (rate*(f*mo.missSq+(1-f)*mo.hitSq))/(2*(1-rho)) + mo.hit,
+    hitPs:   rho >= 1 ? Infinity : mo.hit/(1-rho),
+  };
 }
 
 // Concurrency at which per-user p50 falls to `floor` tok/s. Bisection: speed

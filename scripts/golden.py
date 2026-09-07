@@ -969,9 +969,7 @@ MAPPING = [
      "prefill.js contextStats -> {mean, meanSq}", "mc",
      "Python draws 200,000 with numpy PCG64; the explorer draws 20,000 with mulberry32"),
     ("mean_passes", "model.mean_passes",
-     "prefill.js meanPasses (module-private) — DUPLICATED in drive.mjs", "mc",
-     "NOT CALLED: meanPasses is not exported, so the test recomputes "
-     "E[ceil(L/C)] over the same contextStats draw"),
+     "prefill.js meanPasses", "mc", ""),
     ("cold_request_seconds", "model.cold_request_seconds(per_pass_overhead=True)",
      "prefill.js coldRequestSeconds", "mc",
      "the explorer has no flat-MFU arm: coldRequestSeconds is always the overhead pricing"),
@@ -983,17 +981,11 @@ MAPPING = [
     ("queue_wait_seconds", "model.queue_wait_seconds",
      "prefill.js spikeMetrics(...).wait", "mc", ""),
     ("ttft_miss_fcfs", "model.prefill_ttft_seconds(request='cold')",
-     "render.js op.ttftMiss (inline) — DUPLICATED in drive.mjs", "mc",
-     "NOT CALLED: render.js stamps this expression onto the operating point "
-     "inline, so the test restates it. The arithmetic in render.js itself is "
-     "unpinned until it moves into prefill.js — see the README's coverage "
-     "limitations."),
+     "prefill.js ttftMoments(...).miss", "mc", ""),
     ("ttft_hit_fcfs", "model.prefill_ttft_seconds(request='warm')",
-     "render.js op.ttftHitFcfs (inline) — DUPLICATED in drive.mjs", "mc",
-     "NOT CALLED; same inline block as ttft_miss_fcfs"),
+     "prefill.js ttftMoments(...).hitFcfs", "mc", ""),
     ("ttft_hit_ps", "model.prefill_ttft_seconds(request='warm', discipline='ps')",
-     "render.js op.ttftHitPs (inline) — DUPLICATED in drive.mjs", "mc",
-     "NOT CALLED; same inline block as ttft_miss_fcfs"),
+     "prefill.js ttftMoments(...).hitPs", "mc", ""),
     ("sla_miss_rate_sla10", "model.sla_miss_rate(sla_seconds=10, request='cold')",
      "prefill.js spikeMetrics(...).fsla", "mc",
      "spikeMetrics hard-wires SPIKE_SLA_S = 10 here too, so 10 is the only "
@@ -1019,9 +1011,8 @@ MAPPING = [
     ("max_users_saturation", "model.max_users_saturation",
      "prefill.js maxUsersSaturation", "mc", "per replica GROUP on both sides"),
     ("max_users_cache", "model.max_users_cache (warm_capacity which='user')",
-     "render.js warmUsersNow = warmCapacity(...).all[0] * (1 - p_sub) "
-     "(inline) — DUPLICATED in drive.mjs", "mc",
-     "NOT CALLED, and a STANDING APPROXIMATION either way: the explorer scales "
+     "planner.js warmUsersNow", "mc",
+     "STANDING APPROXIMATION: the explorer scales "
      "the whole warm p5 by the non-subagent share where Python counts "
      "user-class sessions inside each fill"),
     ("warm_p5_all", "model.warm_capacity(which='all')[0]",
