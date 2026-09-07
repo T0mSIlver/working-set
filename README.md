@@ -90,3 +90,5 @@ reads from it. `--burst N` adds the correlated-flush probe (B*).
   ```
 
 Method, calibration, and caveats are laid out in the docs above.
+
+MIT licensed; see [LICENSE](LICENSE).
