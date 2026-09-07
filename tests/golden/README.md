@@ -277,8 +277,8 @@ So when this test goes red after a model change:
 
 ## Coverage limitations
 
-Three things the fixture does not pin, and one thing it pins only partly. None
-is a silent omission — the `mapping` block names each at its row. Every
+Three things the fixture does not pin, one thing it pins only partly, and one
+convention note. None is a silent omission — the `mapping` block names each at its row. Every
 compared quantity comes out of a function the page itself calls: `drive.mjs`
 once restated five of them (`mean_passes`, the three TTFT figures,
 `max_users_cache`) because the page computed them inline or in a

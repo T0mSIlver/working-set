@@ -490,7 +490,7 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
                                  Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
         base.push({ key: p.key, mk: p.mk, dp: p.dp, tp: p.tp,
                     label: `${m2.name} · ${t2.name}`, reps,
-                    warmUsers: wc2.all[0]*(1-p_sub(wl))*reps });
+                    warmUsers: warmUsersNow(wc2.all[0], wl)*reps });
       }
       if (decOld[p.key]){ dec[p.key] = decOld[p.key]; }
       else {
