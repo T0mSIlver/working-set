@@ -160,7 +160,8 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
   const excused = [];
   const over = [];               // everything past tolerance, allowlisted or not
   const missing = new Set();     // quantities the JS driver does not produce
-  let compared = 0, declined = 0;
+  let compared = 0, declined = 0, censoredLower = 0;
+  const WARM_COUNTS = new Set(['warm_p5_all', 'max_users_cache']);
 
   for (const vec of doc.vectors){
     let js;
@@ -182,8 +183,18 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
       if (!(q in js)){ missing.add(q); continue; }
       const jsv = js[q];
       compared++;
-      const rel = relErr(py, jsv);
+      let rel = relErr(py, jsv);
       const tol = tolerance(q);
+      // A censored warm fill (capacity.js warmOnce hit its SAFETY draw cap;
+      // the page prints "≥ N") is a lower bound, not an estimate: Python's
+      // reference must sit at or above it, within the band. The explorer's
+      // cap is a UI cost guard, not a modelling difference, and a count past
+      // it (DSv4.1-Flash at 890 B/token holds 10^5 sessions on 8xB300) binds
+      // nothing the page decides — the users slider ends at 1,024.
+      if (js._warm_censored && WARM_COUNTS.has(q)){
+        censoredLower++;
+        rel = py >= jsv * (1 - tol) ? 0 : rel;
+      }
       const ok = rel <= tol || allowed(q, d, rel);
       const rec = { q, rel, label: vec.label, py, js: jsv, ok,
                     cls: klass(q), tol };
@@ -257,7 +268,8 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
     .map((e, i) => [e, i]).filter(([, i]) => !used.has(i));
   if (!QUIET){
     console.log(`\n  ${doc.vectors.length} vectors, ${compared} comparisons, `
-      + `${declined} declined by the fixture, ${excused.length} allowlisted, `
+      + `${declined} declined by the fixture, ${censoredLower} censored warm `
+      + `fills compared as lower bounds, ${excused.length} allowlisted, `
       + `${failures.length} failing`
       + (NO_ALLOWLIST ? '   [GOLDEN_NO_ALLOWLIST=1: allowlist ignored]' : ''));
     if (unused.length && !NO_ALLOWLIST)

@@ -73,7 +73,7 @@ function modelFor(key){
   // so no code path — the frontier included — ever prices an unservable arm.
   m = withKvDtype(m, servableKv(m, state.kv, state.gpu));
   // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.3
-  // carry no state at all) and on DSv4-Flash (its per-session state is a
+  // carry no state at all) and on DSv4.1-Flash (its per-session state is a
   // fixed mixed-precision buffer, state_fp32_ok) — the UI disables both.
   if (state.state_dt === "fp32" && m.deltanet_state > 0 && m.state_fp32_ok !== false)
     m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [fp32 state]" };

@@ -91,7 +91,7 @@ export let frontierChartGeom = null;
 // name is ~25 characters and three of them stack at a 560-wide viewBox) and
 // the split as the DP×TP shorthand the split control uses
 const FRONTIER_SHORT = { "27B": "Qwen3.8-27B", "35BA3B": "35B-A3B", "MM35": "Mistral-Med-3.5",
-                         "GLM52": "GLM-5.3", "DSV4F": "DSv4-Flash", "Q38FN": "Q3.8-Flash",
+                         "GLM52": "GLM-5.3", "DSV41F": "DSv4.1-Flash", "Q38FN": "Q3.8-Flash",
                          "GLM53F": "G5.3-Flash" };
 // the row as the table and the tooltip print it: the model without its
 // architecture tag and the split in the TP/DP shorthand. r.label keeps the
@@ -109,7 +109,13 @@ function frontierShortLabel(r){
           : r.tp === 1 ? `DP${r.dp}` : `DP${r.dp}×TP${r.tp}`;
   return `${m} · ${t}`;
 }
-export const frontierScore = r => (CONFIG.QUALITY[r.mk] || {}).tb21;
+// NaN, never null, for a model without a run: isFinite(null) is true in JS
+// (null coerces to 0), which would plot an unscored model at 0% instead of
+// leaving it off the chart and printing '—' in the table
+export const frontierScore = r => {
+  const q = (CONFIG.QUALITY[r.mk] || {}).tb21;
+  return Number.isFinite(q) ? q : NaN;
+};
 export function renderFrontierChart(rows, curKey){
   const box = document.getElementById('chartH'); if (!box) return;
   const tt = document.getElementById('ttH'); if (tt) tt.style.opacity = 0;

@@ -116,6 +116,11 @@ export function driveState(v){
   // p5 by the non-subagent share, where Python counts user-class sessions
   // inside each fill (warm_capacity which="user").
   o.max_users_cache = warmUsersNow(wc.all[0], wl);
+  // A fill that hit warmOnce's SAFETY draw cap is a LOWER BOUND, and the page
+  // prints it as one ("≥ N"). Python's fixture grows its draw until the fill
+  // is uncensored, so the two counts are compared as bound-vs-value: not a
+  // golden quantity, read by golden.test.mjs for the two counts above.
+  o._warm_censored = wc.censored;
 
   // ---- decode --------------------------------------------------------
   seedFor('decodeCeil');

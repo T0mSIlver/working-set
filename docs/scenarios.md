@@ -35,6 +35,7 @@ math with live sliders.
 | Weight dtype *(2026-07)* | FP8 | + **NVFP4** (B300-only; weights, never KV) |
 | Models *(2026-07)* | — | + **Mistral-Medium-3.5-128B** (dense GQA) and **GLM-5.2** (744B-A40B, MLA+DSA) |
 | Models *(2026-08)* | — | + **DeepSeek-V4-Flash-0731** (284B-A13B, CSA), **Qwen3.8-Flash-Next** (125B-A6B, QSA + n-gram) and **GLM-5.3-Flash** (320B-A18B, KDA + NoPE-MLA) — in the explorer and `tables.py`; the § tables below predate them ([`research/model_dsv4flash.md`](../research/model_dsv4flash.md), [`research/model_qwen38flashnext.md`](../research/model_qwen38flashnext.md), [`research/model_glm53flash.md`](../research/model_glm53flash.md)) |
+| Models *(2026-09-10)* | DeepSeek-V4-Flash-0731 | → **DeepSeek-V4.1-Flash** (552B + 196B Engram, 8B/16B active, CED + CSA2, FP4 main KV: 890 B/token but 510 GB resident — 8×H200 / 2×B300 minimum) replaces it ([`research/model_dsv41flash.md`](../research/model_dsv41flash.md)) |
 
 Model refinements over the first draft of this study (each moves numbers by 10–20%):
 
@@ -1425,7 +1426,9 @@ Added 2026-07-27; regenerate every number via the extension sections of
 [`research/model_glm52.md`](../research/model_glm52.md).
 
 Three models joined after this section was written — **DeepSeek-V4-Flash-0731**
-(2026-08-03, [`research/model_dsv4flash.md`](../research/model_dsv4flash.md)),
+(2026-08-03, [`research/model_dsv4flash.md`](../research/model_dsv4flash.md);
+replaced on 2026-09-10 by **DeepSeek-V4.1-Flash**,
+[`research/model_dsv41flash.md`](../research/model_dsv41flash.md)),
 **Qwen3.8-Flash-Next** (2026-08-26,
 [`research/model_qwen38flashnext.md`](../research/model_qwen38flashnext.md))
 and **GLM-5.3-Flash** (2026-08-26,

@@ -291,7 +291,7 @@ def fig_prefill_thrash():
                ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
                ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
                ("GLM52", 1, 8, "H200", AQUA, "GLM-5.3 TP8"),
-               ("DSV4F", 1, 2, "H200", YELLOW, "DSv4-Flash TP2"),
+               ("DSV41F", 1, 8, "H200", YELLOW, "DSv4.1-Flash TP8"),
                ("Q38FN", 1, 2, "H200", PURPLE, "Q3.8-Flash TP2"),
                ("GLM53F", 1, 4, "H200", MAGENTA, "G5.3-Flash TP4 (BF16 KV)")]
     fs = np.linspace(0, 0.5, 101)

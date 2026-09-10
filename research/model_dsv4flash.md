@@ -1,5 +1,14 @@
 # DeepSeek-V4-Flash-0731 (284B-A13B, CSA/HCA compressed sparse attention) — parameterization note
 
+> **Superseded 2026-09-10:** the study now models **DeepSeek-V4.1-Flash**
+> (`MODELS["DSV41F"]`, `research/model_dsv41flash.md`), released that day —
+> a different architecture (Causal Encoder-Decoder, CSA2 cross-layer cache
+> reuse, FP4 main KV, 196B Engram tables) rather than a refresh of this one.
+> The `DSV4F` key, its explorer button and its golden vectors are gone; this
+> note stays as the record of the 0731 constants and of the derivation
+> conventions the V4.1 card inherits (per-layer cache re-reads, token-space
+> top-k scaling, the prefill bias direction).
+
 **Purpose:** defensible KV-cache / decode-bandwidth constants for
 **DeepSeek-V4-Flash-0731** (`deepseek-ai/DeepSeek-V4-Flash-0731`, MIT weights,
 released 2026-07-31) as used by `scripts/scenario_model.py` and the explorer.

@@ -14,7 +14,7 @@ from scenario_model import GIB, Workload, MODELS, TOPOLOGIES
 MODELS_K = ["27B", "35BA3B"]
 TOPOS_K = ["1xH200", "2xH200-TP2", "2xH200-DP2"]
 # the 2026-07+ models, which fit no single H200 — the DP x TP node-split table
-MODELS_EXT_K = ["MM35", "GLM52", "DSV4F", "Q38FN", "GLM53F"]
+MODELS_EXT_K = ["MM35", "GLM52", "DSV41F", "Q38FN", "GLM53F"]
 
 
 def wl(**kw):
@@ -297,7 +297,7 @@ def main():
         ("35BA3B", [("tp", 1, "B300"), ("tp", 2, "B300")]),
         ("MM35",   [("tp", 1, "B300"), ("tp", 2, "B300")]),
         ("GLM52",  [("tp", 4, "B300"), ("tp", 8, "B300")]),
-        ("DSV4F",  [("tp", 1, "B300"), ("tp", 2, "B300")]),
+        ("DSV41F", [("tp", 2, "B300"), ("tp", 4, "B300")]),
         ("Q38FN",  [("tp", 1, "B300"), ("tp", 2, "B300")]),
         ("GLM53F", [("tp", 2, "B300"), ("tp", 4, "B300")]),
     ]
@@ -307,7 +307,7 @@ def main():
             row = []
             for wd in M.WEIGHT_DTYPES:
                 if wd == "nvfp4" and MODELS[mk].nvfp4_w is None:
-                    row.append("nvfp4: n/a (native FP4 experts)" if mk == "DSV4F"
+                    row.append("nvfp4: n/a (native FP4 experts)" if mk == "DSV41F"
                                else "nvfp4: n/a (no official NVFP4 ckpt)")
                     continue
                 mdl = M.with_weight_dtype(MODELS[mk], wd)
@@ -323,13 +323,14 @@ def main():
     print("  GLM-5.3-Flash rows are its BF16-KV arm — the ONLY servable Hopper")
     print("  arm (fp8 KV is Blackwell-only; research/model_glm53flash.md #2)")
     for mk, kind, n in [("MM35", "tp", 2), ("MM35", "tp", 4), ("GLM52", "tp", 8),
-                        ("DSV4F", "tp", 2), ("Q38FN", "tp", 2),
+                        ("DSV41F", "tp", 8), ("Q38FN", "tp", 2),
                         ("GLM53F", "tp", 4)]:
         t = M.topology(kind, n)
         mdl = servable(mk)
         pool = M.kv_pool_tokens(mdl, t)
-        p5, p50, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000)
-        g5, _, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=6000, which="gpu")
+        draw = int(4000 + pool / 8_000)   # DSv4.1-Flash's 8xH200 pool holds ~17k sessions
+        p5, p50, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=draw)
+        g5, _, _ = M.warm_capacity(mdl, t, w0, n_iter=600, draw=draw, which="gpu")
         _, v, _, _ = M.decode_curves(mdl, t, w0, [max(int(g5), 1)], n_iter=800)
         print(f"  {mk:7} {t.name:16} pool={pool / 1e6:6.2f}M  warm p5={p5:4.0f} p50={p50:4.0f}  "
               f"v@warm-p5={v[0]:6.0f} tok/s")
@@ -356,22 +357,25 @@ def main():
         _, b, _, _ = M.decode_curves(glm_dense, t_h8, w0, [n], n_iter=1500)
         print(f"  8xH200 mns={n:3d}  DSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
 
-    print("\n== DSv4-Flash compressed-sparse decode: CSA pricing vs dense-read ==")
-    print("  the indexer scans fp4 keys over the compressed axis (426 B/ctx token)")
-    print("  and attention gathers top-512 compressed entries + the 128-entry")
-    print("  windows; dense-read streams the (already tiny) 3.45 KB/token cache.")
-    t_h2 = M.topology("tp", 2)
-    dsf_dense = dataclasses.replace(MODELS["DSV4F"], kv_decode_bpt=None,
+    print("\n== DSv4.1-Flash compressed-sparse decode: CSA2 pricing vs dense-read ==")
+    print("  four full-axis fp4 indexer scans (170 B/ctx token), then top-512")
+    print("  FP4 latents on 38 layers, four candidate-pool indexer reads and the")
+    print("  128-entry windows; dense-read streams the 890 B/token cache instead.")
+    print("  (the two agree to the printed digit: at 890 B/token the whole cache")
+    print("  is a rounding error next to the 297 GB expert union past n = 64)")
+    t_h8 = M.topology("tp", 8)
+    dsf_dense = dataclasses.replace(MODELS["DSV41F"], kv_decode_bpt=None,
                                     kv_decode_const=0.0)
     for n in (16, 64, 120):
-        _, a, _, _ = M.decode_curves(MODELS["DSV4F"], t_h2, w0, [n], n_iter=1500)
-        _, b, _, _ = M.decode_curves(dsf_dense, t_h2, w0, [n], n_iter=1500)
-        print(f"  2xH200 mns={n:3d}  CSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
+        _, a, _, _ = M.decode_curves(MODELS["DSV41F"], t_h8, w0, [n], n_iter=1500)
+        _, b, _, _ = M.decode_curves(dsf_dense, t_h8, w0, [n], n_iter=1500)
+        print(f"  8xH200 mns={n:3d}  CSA2={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
 
     print("\n== Qwen3.8-Flash-Next sparse decode: QSA pricing vs dense-read ==")
     print("  the indexer scans ratio-4 compressed fp8 keys (384 B/ctx token) and")
     print("  attention reads full KV for only the top-2048 selected tokens; the")
     print("  dense-read row streams the whole 12.4 KiB/token cache instead.")
+    t_h2 = M.topology("tp", 2)
     q38_dense = dataclasses.replace(MODELS["Q38FN"], kv_decode_bpt=None,
                                     kv_decode_const=0.0)
     for n in (16, 64, 120):
@@ -437,7 +441,7 @@ def main():
     print("     exactly when the weight charge W is positive and material (a")
     print("     weightless model is flat). On 8 GPUs, TP8 beats the widest DP by:")
     for mk, gpu in (("35BA3B", "H200"), ("MM35", "H200"), ("GLM52", "B300"),
-                    ("DSV4F", "H200"), ("Q38FN", "H200"), ("GLM53F", "H200")):
+                    ("DSV41F", "H200"), ("Q38FN", "H200"), ("GLM53F", "H200")):
         mdl = servable(mk, gpu)
         tots = [t.replicas * M.kv_pool_tokens(mdl, t)
                 for t in M.node_splits(mdl, gpu, node=8)]
@@ -496,7 +500,7 @@ def prefill_tables():
     print("  below are its BF16-KV arm (fp8 KV is Blackwell-only)")
     rows = [("27B", 1, 1, "H200"), ("27B", 1, 2, "H200"), ("35BA3B", 1, 1, "H200"),
             ("35BA3B", 1, 2, "H200"), ("MM35", 1, 4, "H200"), ("GLM52", 1, 8, "H200"),
-            ("DSV4F", 1, 2, "H200"), ("Q38FN", 1, 2, "H200"),
+            ("DSV41F", 1, 8, "H200"), ("Q38FN", 1, 2, "H200"),
             ("GLM53F", 1, 4, "H200"),
             ("27B", 1, 1, "B300"), ("35BA3B", 1, 2, "B300")]
     for mk, dp, tp, gk in rows:
