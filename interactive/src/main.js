@@ -142,6 +142,13 @@ function enforceConstraints(){
     b=>b.setAttribute('aria-pressed', b.dataset.v===val?'true':'false'));
   sync('seg-wdt', state.wdt); sync('seg-kv', state.kv);
   sync('seg-state', state.state_dt); sync('seg-wover', state.wover);
+  sync('seg-kvshard', state.kvshard);
+  // the KV-layout control only prices something once a group is wider than
+  // the model's KV heads; below that both arms are one copy (kvReplication)
+  const kvshardMatters = state.tp > (m.kv_heads || 1);
+  document.querySelector('#seg-kvshard button[data-v="replicate"]').disabled = !kvshardMatters;
+  if (!kvshardMatters && state.kvshard === "replicate") state.kvshard = "dcp";
+  sync('seg-kvshard', state.kvshard);
   document.querySelector('#seg-wdt button[data-v="nvfp4"]').disabled = !nvOk;
   document.querySelector('#seg-kv button[data-v="fp16"]').disabled = !fp16Ok;
   document.querySelector('#seg-kv button[data-v="fp8"]').disabled = !fp8Ok;
@@ -161,6 +168,17 @@ function enforceConstraints(){
     : (state.model === "DSV41F"
       ? `DeepSeek-V4.1-Flash pays a fixed ${fmt(m.deltanet_state/MIB,1)} MiB/session (fp8 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.`
       : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention — so this control is disabled.`));
+  document.getElementById('kvshard-tip').setAttribute('data-tip', (() => {
+    const heads = m.kv_heads || 1, tp = state.tp;
+    const copies = tp > heads ? tp / heads : 1;
+    const head = heads === 1
+      ? `${m.name.split(" (")[0]} caches ONE latent per token (MQA / MLA): no KV heads to split, so plain tensor parallelism keeps a full copy on every rank.`
+      : `${m.name.split(" (")[0]} has ${heads} KV heads: TP splits them across up to ${heads} ranks and REPLICATES the cache on the rank groups beyond that.`;
+    const now = tp <= heads
+      ? ` At TP${tp} the cache shards fully — both arms are one copy, so the control is disabled.`
+      : ` At TP${tp} plain TP stores ${copies}× the cache and re-reads it ${copies}× per decode step: the pool divides by ${copies} and decode slows. "Sharded" prices vLLM's decode context parallelism (--decode-context-parallel-size ${Math.max(1, Math.floor(tp / heads))}, emitted in the recipe), which splits those copies along the sequence — the layout the study's capacity numbers have always assumed. Its cost: speculative decoding under DCP is still in development in vLLM (2026-08), so the MTP slider and this arm may not be available together.`;
+    return head + now + " research/kv_tp_sharding.md.";
+  })());
   document.getElementById('wover-tip').setAttribute('data-tip', woverOk
     ? "Slack between a checkpoint's stated bytes and the server's real resident footprint. This model's figure is raw/on-disk — an under-estimate by an unknown margin; +15% is the one calibrated data point (the 27B's as-deployed 28.8 GiB vs its raw params), transferred here as an extrapolation."
     : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Its NVFP4 figure is a measured checkpoint total under the same convention, so the knob stays disabled on this model.");
@@ -429,6 +447,7 @@ const URL_ENUMS = {
   gpu:   () => Object.keys(CONFIG.GPUS),
   wdt:   () => ["fp8","nvfp4"], kv: () => ["fp8","fp16"],
   state_dt: () => ["bf16","fp32"], wover: () => ["pub","p15"],
+  kvshard: () => ["dcp","replicate"],
   pue: () => ["1.2","1.5","2.0"],
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
 };

@@ -31,6 +31,7 @@ from . import model as M
 
 SCHEMA_VERSION = 1
 STATE_DTYPES = ("bf16", "fp32")
+KV_SHARDINGS = M.KV_SHARDS               # ("dcp", "replicate")
 
 # The model with no as-published weight overhead to add: its w_resident is the
 # vendor's stated as-DEPLOYED footprint, and comparing it against the raw
@@ -82,6 +83,14 @@ class Deployment:
     # 27B, whose 28.8 GiB is already the as-deployed footprint (that
     # measurement is where the 15% came from).
     weight_overhead: float = 0.0          # 0.0 = as published
+    # How the KV cache is laid out across a group's TP ranks. "dcp" (the
+    # default, and the layout every published number assumes): ranks beyond
+    # the model's KV heads split the cache along the sequence — vLLM's
+    # --decode-context-parallel-size, emitted by the explorer's recipe.
+    # "replicate": plain tensor parallelism, every rank past the KV heads
+    # keeps a full copy; the pool divides by tp / kv_heads and each rank
+    # re-reads the whole cache per step. research/kv_tp_sharding.md.
+    kv_sharding: str = "dcp"              # dcp | replicate
 
     @property
     def gpus(self) -> str:
@@ -183,7 +192,7 @@ class RunConfig:
         d = self.deployment
         if d.gpu not in M.GPUS:
             raise KeyError(f"unknown GPU {d.gpu!r}; known: {sorted(M.GPUS)}")
-        return M.topology_grid(d.replicas, d.tensor_parallel, d.gpu)
+        return M.topology_grid(d.replicas, d.tensor_parallel, d.gpu, d.kv_sharding)
 
     def to_workload(self) -> M.Workload:
         w = self.workload
@@ -239,6 +248,9 @@ class RunConfig:
         if d.recurrent_state_dtype not in STATE_DTYPES:
             raise ValueError(f"deployment.recurrent_state_dtype must be one of "
                              f"{STATE_DTYPES}, got {d.recurrent_state_dtype!r}")
+        if d.kv_sharding not in KV_SHARDINGS:
+            raise ValueError(f"deployment.kv_sharding must be one of "
+                             f"{KV_SHARDINGS}, got {d.kv_sharding!r}")
         # the explorer snaps these two back rather than mis-pricing (main.js
         # enforceConstraints); at the file boundary they are refusals, so a
         # hand-written config cannot ask for a knob that would do nothing

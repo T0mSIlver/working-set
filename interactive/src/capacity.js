@@ -1,5 +1,5 @@
 import { CONFIG, DECODE_MBU, GIB, PREFILL_MFU, effective_bw, is_moe, kv_pool_tokens,
-         state_traffic, w_decode } from './config.js';
+         replicated, state_traffic, w_decode } from './config.js';
 import { percentiles } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
@@ -8,12 +8,15 @@ import { state } from './state.js';
    CAPACITY — warm reusable sessions in one cache  (mirrors _warm_once)
    ========================================================================== */
 const _warmReq = {full:0, prefix:0, isCold:false};   // warmOnce scratch
-function warmOnce(pool, ram_gib, model, wl){
+function warmOnce(pool, ram_gib, model, wl, ramModel){
   // reserve one block per distinct prefix a request class can actually use
   let reserved = wl.sys_user;
   if (!wl.sub_shares_prefix && wl.sub_ratio > 0) reserved += wl.sys_sub;
   const gpu_budget = pool - reserved;
-  const ram_budget = ram_gib > 0 ? ram_gib*GIB - reserved*model.kv_bpt : 0;
+  // the host offload buffer holds ONE copy of a session (a restore
+  // re-replicates onto the ranks): priced from the un-replicated model
+  const rm = ramModel || model;
+  const ram_budget = ram_gib > 0 ? ram_gib*GIB - reserved*rm.kv_bpt : 0;
 
   // every resident session also holds its constant DeltaNet recurrent state
   // (a warm hit needs the state, not just the attention KV) — charged in
@@ -39,7 +42,7 @@ function warmOnce(pool, ram_gib, model, wl){
       gpuFull = true;   // this request overflows the GPU -> spills to CPU below
     }
     if (ram_gib > 0){
-      ram += u*model.kv_bpt + model.deltanet_state;
+      ram += u*rm.kv_bpt + rm.deltanet_state;
       if (ram <= ram_budget){ if (!r.isCold) warm++; } else done = true;
     } else done = true;
   }
@@ -66,6 +69,10 @@ export function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
   // CPU-offload buffer (mirrors warm_capacity in scenario_model.py).
   if (pool <= 0)
     return { all:[0,0,0], gpu:[0,0,0], off:[0,0,0], censored:false };
+  // GPU-side costs are paid per stored copy (mirrors warm_capacity's
+  // gpu_model / ram_model split)
+  const ramModel = model;
+  model = replicated(model, topo);
   // One fill costs one draw per resident session, so a big pool full of small
   // sessions (a 91M-token TP8 pool at a 5k median holds ~30k of them) makes a
   // 700-iteration run a multi-second freeze. Probe one fill for its true cost,
@@ -73,7 +80,7 @@ export function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
   // sessions per fill — where the count's relative spread is ~1/sqrt(count),
   // i.e. under 1%, so a dozen fills already pin p5/p50/p95 to a fraction of a
   // percent. Ordinary configs (~100 sessions) keep every requested iteration.
-  const first = warmOnce(pool, ram_gib, model, wl);
+  const first = warmOnce(pool, ram_gib, model, wl, ramModel);
   const cap = Math.round((budget ?? CONFIG.WARM_BUDGET) / Math.max(1, first.drawn));
   // A censored fill is pinned at the draw cap, so every repeat returns the same
   // floor: sampling it many times buys no distribution, only cost.
@@ -83,7 +90,7 @@ export function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
         off = new Float64Array(iters);
   let censored = false;
   for (let i=0;i<iters;i++){
-    const r = i===0 ? first : warmOnce(pool, ram_gib, model, wl);
+    const r = i===0 ? first : warmOnce(pool, ram_gib, model, wl, ramModel);
     all[i] = r.warm; gpu[i] = r.warmGpu; off[i] = r.warm - r.warmGpu;
     censored = censored || r.censored;
   }
@@ -133,6 +140,9 @@ export function prefillMfu(){
 }
 
 export function decodeCurves(model, topo, wl, nMax, step, n_iter){
+  // a replicated cache is re-read by every rank that holds a copy: per-step
+  // KV and state bytes scale by the storage factor (mirrors decode_curves)
+  model = replicated(model, topo);
   // MEASURED efficiency, not a roofline: see DECODE_MBU.
   const bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU), scale = topo.replicas;
   const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);

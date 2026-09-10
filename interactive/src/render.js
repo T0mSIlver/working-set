@@ -453,7 +453,7 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   for (const mk of Object.keys(CONFIG.MODELS))
     for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
       if (dp*tp > 8) continue;
-      const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu);
+      const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu, state.kvshard);
       if (kv_pool_tokens(m2, t2) <= 0) continue;
       plan.push({ mk, dp, tp, key: `${mk}|${dp}x${tp}`, m2, t2, ram: ramPerCache(t2) });
     }
@@ -530,7 +530,7 @@ function assembleFrontier(wl, cs){
   const f = wl.invalidation;
   const rows = lastFrontier.base.map(r0=>{
     const r = { ...r0, ...lastFrontierDec.dec[r0.key] };
-    const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu);
+    const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu, state.kvshard);
     const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
     const mo2 = lastFrontierMo.mo[r.key]
              || (lastFrontierMo.mo[r.key] = prefillServiceMoments(m2, t2, wl, cs));

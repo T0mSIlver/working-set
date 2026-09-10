@@ -138,6 +138,7 @@ export const CONFIG = {
       // Same whole-checkpoint convention as the FP8 arm: dense, every step
       // reads everything.
       nvfp4_w: [23417339744, 23417339744, 0.0, 0.0],
+      kv_heads: 4,                 // GQA 24/4 on the 16 full-attention layers (research/kv_tp_sharding.md)
       params_prefill: 24.5e9,      // 27B dense less ~2.5e9 embed + lm_head (vocab 248,320)
       attn_layers: 16, attn_d: 24*256,
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
@@ -154,6 +155,7 @@ export const CONFIG = {
       // RedHatAI NVFP4 recipe: experts+attn NVFP4; DeltaNet/lm_head/router/MTP BF16
       // -> shared per-step read GROWS 1.7x while expert reads shrink 1.78x
       nvfp4_w: [24.13e9, 3.308e9, 566231040, 18119393280],
+      kv_heads: 2,                 // GQA 16/2 on the 10 full-attention layers
       params_prefill: 2.44e9,      // MoE: ledger active GEMM params (shared - lm_head + routed)
       attn_layers: 10, attn_d: 16*256,
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision)
@@ -168,6 +170,7 @@ export const CONFIG = {
       w_route_total: 0.0,
       mtp: 1.0,                    // NO MTP module (external EAGLE draft exists)
       nvfp4_w: [95.2e9, 86.6e9, 0.0, 0.0],  // nvidia mixed recipe, MEASURED safetensors total
+      kv_heads: 8,                 // GQA 96/8 — shards on every TP the study prices
       params_prefill: 121.8e9,     // TEXT decoder only (ledger); vision tower excluded
       attn_layers: 88, attn_d: 96*128,
       max_ctx: 262144,             // hard model max (YaRN x64 over a 4k base)
@@ -197,6 +200,7 @@ export const CONFIG = {
       kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
       kv_decode_topk: 2048,        // ...scaled by min(len, topk)/topk per sequence
       kv_fp16_ok: false,           // vLLM DSA path asserts a quantized KV cache
+      kv_heads: 1,                 // MLA: one 576-B latent per token, replicated under plain TP
       params_prefill: 37.4e9,      // MoE: ledger 39.3B active (excl embed) less lm_head 1.9e9
       attn_layers: 78, attn_d: 64*256,
       max_ctx: 1048576,            // native 1M context
@@ -221,6 +225,7 @@ export const CONFIG = {
       kv_decode_const: 12763136,   // 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool + 40 x 128 x 528 windows
       kv_decode_topk: 1024,        // 512 compressed entries x ratio 2, in token space
       kv_fp16_ok: false,           // FP4 main KV is the TRAINED cache format (QAT); no BF16 main-KV path
+      kv_heads: 1, state_heads: 1, // MQA latent caches AND the latent windows replicate under plain TP
       params_prefill: 7.90e9,      // CED: the 20 encoder layers only (+ the layer-20 projection), excl embed + lm_head
       attn_layers: 3, attn_d: 1024, // 3 encoder indexers (2/8/14), QK-only over the ratio-2 axis: 32 x 128 / 2 / 2
       max_ctx: 1048576,            // native 1M (YaRN x16 baked into the config)
@@ -246,6 +251,7 @@ export const CONFIG = {
       kv_decode_topk: 2048,        // indexer_budget, read in token space (research note #6)
       kv_fp16_ok: true,            // no documented fp8-KV assert on the QSA path (note #6)
       state_fp32_ok: true,         // bf16-priced (inferred) DeltaNet state — the fp32 knob applies
+      kv_heads: 2,                 // GQA 24/2 on the 12 QSA layers; the DeltaNet state shards (48 v-heads)
       params_prefill: 6.04e9,      // MoE: active GEMM params excl embed/lm_head/n-gram lookups
       attn_layers: 12, attn_d: 24*256,  // dense upper bound; QSA prefill sparsity uncharacterised
       max_ctx: 1048576,            // 262,144 native; 1M via YaRN (owner decision, as the Qwens)
@@ -279,6 +285,7 @@ export const CONFIG = {
       kv_fp8_blackwell_only: true, // ...so modelFor auto-prices BF16 KV on H200 and the fp8
                                    // toggle locks (servableKv; mirrors check_dtype_supported)
       state_fp32_ok: true,         // bf16-priced (inferred) KDA state — the fp32 knob applies
+      kv_heads: 1,                 // NoPE sparse-MLA: one latent per token; the KDA state shards (64 heads)
       params_prefill: 16.11e9,     // MoE: active GEMM params excl embed/lm_head (card "18B" incl.)
       attn_layers: 11, attn_d: 64*256,  // dense upper bound; DSA prefill sparsity uncharacterised
       max_ctx: 1048576,            // native 1M context
@@ -451,7 +458,44 @@ export function kv_pool_tokens(m, topo){
   // pre-existing configuration bit-identical to the pre-grid code (and to
   // Python's kv_pool_tokens), rather than merely equal after formatting.
   const poolBytes = topo.tp * gpu.vram - m.w_resident - topo.tp * R;
-  return Math.max(poolBytes, 0) / m.kv_bpt;
+  // ...in tokens of the cache the group STORES: a replicated layout pays
+  // kv_bpt x copies per token (kvReplication) — mirrors _replicated()
+  return Math.max(poolBytes, 0) / replicated(m, topo).kv_bpt;
+}
+
+// KV sharding under TP (mirrors kv_replication / dcp_size / _replicated in
+// workingset.model; research/kv_tp_sharding.md). A cache with h shardable
+// heads splits across min(tp, h) ranks and is REPLICATED on the tp/h rank
+// groups beyond that. topo.kv_shard "dcp" (the default — decode context
+// parallelism, --decode-context-parallel-size floor(tp/h)) splits that
+// dimension along the sequence: ONE copy at every tp (an odd width the heads
+// do not divide is extrapolated as sharded, as before this layout existed);
+// "replicate" (plain --tensor-parallel-size) pays every copy, tp/h.
+export const KV_SHARDS = ["dcp", "replicate"];
+export function kvReplication(m, topo){
+  const factor = heads => {
+    if ((topo.kv_shard || "dcp") === "dcp" || heads === undefined || heads === null || topo.tp <= heads) return 1.0;
+    return topo.tp / heads;
+  };
+  return [factor(m.kv_heads), factor(m.state_heads)];
+}
+export function dcpSize(m, topo){
+  if ((topo.kv_shard || "dcp") !== "dcp") return 1;
+  return Math.max(1, Math.floor(topo.tp / Math.max(1, m.kv_heads)));
+}
+// the model with its cache and state bytes multiplied by the copies the group
+// holds — what the pool and the decode step pay. Applied INSIDE kv_pool_tokens,
+// warmCapacity and decodeCurves to the caller's model; never returned to a
+// caller, so it cannot be applied twice.
+export function replicated(m, topo){
+  const [rKv, rSt] = kvReplication(m, topo);
+  if (rKv === 1.0 && rSt === 1.0) return m;
+  return { ...m,
+    kv_bpt: m.kv_bpt * rKv,
+    kv_decode_bpt: (m.kv_decode_bpt === undefined || m.kv_decode_bpt === null) ? m.kv_decode_bpt : m.kv_decode_bpt * rKv,
+    kv_decode_const: (m.kv_decode_const ?? 0) * rKv,
+    deltanet_state: m.deltanet_state * rSt,
+    state_step_bytes: (m.state_step_bytes === undefined || m.state_step_bytes === null) ? m.state_step_bytes : m.state_step_bytes * rSt };
 }
 
 // Smallest TP group size with a non-empty pool on this part. Shares the single
@@ -484,7 +528,7 @@ export function tpEff(n, domain){
 // DP x TP grid (mirrors topology_grid() in scenario_model.py). DP replicates
 // whole GROUPS of `tp` GPUs — the only way the models that fit no single GPU
 // (Mistral-Medium-3.5, GLM-5.3) can be data-parallel at all.
-export function makeGrid(dp, tp, gpuKey){
+export function makeGrid(dp, tp, gpuKey, kvShard){
   // mirror topology_grid()'s validation: a silently-accepted dp=0 would build a
   // zero-GPU topology whose pool still reads non-empty (the pool depends on tp)
   for (const [label, v] of [["dp", dp], ["tp", tp]])
@@ -492,19 +536,22 @@ export function makeGrid(dp, tp, gpuKey){
       throw new Error(`${label} must be a positive integer, got ${v}`);
   const key = gpuKey || "H200";
   if (!CONFIG.GPUS[key]) throw new Error(`unknown gpu ${key}`);
+  const shard = kvShard || "dcp";
+  if (!KV_SHARDS.includes(shard)) throw new Error(`kv_shard must be one of ${KV_SHARDS}, got ${kvShard}`);
   const g = CONFIG.GPUS[key], n = dp*tp;
   // names match Python's topology_grid() exactly (× for x)
-  const name = n===1 ? `1×${g.name}`
-             : dp===1 ? `${tp}×${g.name} tensor-par`
-             : tp===1 ? `${dp}×${g.name} data-par`
-             : `${n}×${g.name} DP${dp}×TP${tp}`;
+  let name = n===1 ? `1×${g.name}`
+           : dp===1 ? `${tp}×${g.name} tensor-par`
+           : tp===1 ? `${dp}×${g.name} data-par`
+           : `${n}×${g.name} DP${dp}×TP${tp}`;
+  if (shard === "replicate" && tp > 1) name += " [KV replicated]";
   const kind = n===1 ? "single" : dp===1 ? "tp" : tp===1 ? "dp" : "hybrid";
-  return {name, dp, tp, n_gpu:n, kind, replicas:dp, gpu:g};
+  return {name, dp, tp, n_gpu:n, kind, replicas:dp, gpu:g, kv_shard:shard};
 }
 // single-axis helper for the explorer's TP/DP toggle: the two grid edges
-export function makeTopo(kind, n, gpuKey){
+export function makeTopo(kind, n, gpuKey, kvShard){
   if (kind!=="tp" && kind!=="dp") throw new Error(`kind must be 'tp' or 'dp', got ${kind}`);
-  return kind==="tp" ? makeGrid(1, n, gpuKey) : makeGrid(n, 1, gpuKey);
+  return kind==="tp" ? makeGrid(1, n, gpuKey, kvShard) : makeGrid(n, 1, gpuKey, kvShard);
 }
 // divisors of n, ascending — the TP widths that evenly split n GPUs
 export function divisors(n){ const d=[]; for (let i=1;i<=n;i++) if (n%i===0) d.push(i); return d; }

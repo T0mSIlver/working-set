@@ -2,6 +2,7 @@ import { CONFIG } from './config.js';
 import { prefillChunk } from './prefill.js';
 import { p_sub } from './workload.js';
 import { currentTopo, ramPerCache, state } from './state.js';
+import { dcpSize, kvReplication } from './config.js';
 import { esc, fmt } from './svg.js';
 import { activeModel, fitHintFor, lastSteady, lastStress, lastWarmCur } from './render.js';
 import { PLANNER_LABEL } from './planner.js';
@@ -56,6 +57,11 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
                  ...(state.gpu==="H200" ? [`  --moe-backend triton`] : []));
   if (state.state_dt==='fp32' && m0.deltanet_state>0 && m0.state_fp32_ok!==false)
     lines.push(`  --mamba-ssm-cache-dtype float32`);
+  // KV cache under TP: ranks beyond the model's KV heads either split the
+  // cache along the sequence (DCP — the layout the page's capacity prices by
+  // default) or keep a full copy each (plain TP, the "Replicated" arm)
+  const dcp = dcpSize(m0, topo), [rKv] = kvReplication(m0, topo);
+  if (dcp > 1) lines.splice(2, 0, `  --decode-context-parallel-size ${dcp}`);
   if (specOn)
     lines.push(`  --speculative-config '{"method":"mtp","num_speculative_tokens":${specDrafts}}'`);
   if (state.ram>0)
@@ -71,6 +77,8 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   if (state.model==="GLM53F" && topo.tp<4)
     cmts.push(`# TP<4 is this study's pool arithmetic; the vLLM recipe only demonstrates TP4 (one GB200 tray)`);
   if (state.kv==='fp16') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
+  if (dcp > 1) cmts.push(`# DCP ${dcp}: ${m0.kv_heads===1?'a single-latent (MQA/MLA) cache':`${m0.kv_heads} KV heads`} would replicate on ${dcp}× the ranks under plain TP${topo.tp}; the page prices ONE copy (speculative decoding under DCP is still in development in vLLM, 2026-08)`);
+  if (rKv > 1) cmts.push(`# KV REPLICATED: plain TP${topo.tp} keeps ${rKv}× copies of every session's cache — the page prices the pool ÷ ${rKv} and ${rKv}× per-step cache reads; --decode-context-parallel-size ${Math.max(1, Math.floor(topo.tp/(m0.kv_heads||1)))} would remove them`);
   if (specOn) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${state.model==='DSV41F'?' (DSpark drafts)':''}`);
   if (eagle) cmts.push(`# the modelled ${state.mtp.toFixed(2)}× speedup assumes an EXTERNAL EAGLE-style draft (no MTP module; unmeasured)`);
   if (state.ram>0) cmts.push(`# --kv-offloading-size is GiB per group${dp>1?` (${fmt(state.ram,0)} GiB total across ${dp} groups)`:''}; a storage tier — restore latency unpriced`);

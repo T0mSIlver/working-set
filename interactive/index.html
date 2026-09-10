@@ -384,6 +384,13 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
           </div>
         </div>
         <div class="field">
+          <label class="flabel"><span class="tip" id="kvshard-tip" data-tip="">KV cache across TP ranks</span></label>
+          <div class="seg" id="seg-kvshard" data-key="kvshard">
+            <button data-v="dcp" aria-pressed="true">Sharded (DCP)</button>
+            <button data-v="replicate" aria-pressed="false">Replicated</button>
+          </div>
+        </div>
+        <div class="field">
           <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
           <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.01" value="2.94">
         </div>
