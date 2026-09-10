@@ -308,11 +308,20 @@ class Model:
     # mis-pricing becomes a crash, not a wrong number.
     kv_fp8_blackwell_only: bool = False
     # False when deltanet_state is NOT a bf16 recurrent state the fp32 toggle
-    # can meaningfully double (DSv4-Flash reuses the field for its fixed
+    # can meaningfully double (DSv4.1-Flash reuses the field for its fixed
     # per-session window + fp32 compressor buffers, already mixed-precision).
     # Python charges deltanet_state as-is either way; the flag exists for
     # mirror parity with the explorer, which gates its fp32-state control on it.
     state_fp32_ok: bool = True
+    # Bytes the recurrent / fixed per-session state moves PER ACTIVE SEQUENCE
+    # PER DECODE STEP. None (the DeltaNet models) means read + write of the
+    # whole state, 2 x deltanet_state. A model whose deltanet_state is fixed
+    # STORAGE that decode does not re-stream — DSv4.1-Flash's windows are
+    # already read inside kv_decode_const, and a step writes one 528-B ring
+    # slot per layer — sets the true per-step figure here instead
+    # (codex review of the V4.1 swap, 2026-09-10: 2 x 2.9 MB was charged on
+    # top of the windows' own read).
+    state_step_bytes: float | None = None
     # Largest max_seq_len the study allows for this model (tokens). The
     # workload cap (Workload.cap) may not exceed it — warm_capacity and
     # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
@@ -342,6 +351,12 @@ class Model:
     @property
     def is_moe(self) -> bool:
         return self.w_route_total > 0
+
+    @property
+    def state_traffic(self) -> float:
+        """Recurrent-state bytes moved per active sequence per decode step."""
+        return (2.0 * self.deltanet_state if self.state_step_bytes is None
+                else self.state_step_bytes)
 
     def w_decode(self, n: int, union: str = "linear") -> float:
         """Weight bytes read per decode step with n concurrent decoders."""
@@ -500,49 +515,57 @@ MODELS = {
         # and flagged. 64 heads x 256 (qk_nope 192 + rope 64 = v_head_dim).
         params_prefill=37.4e9, attn_layers=78, attn_d=64 * 256,
     ),
-    # MoE 284B-A13B (304B on disk incl. 3 DSpark stages), MQA over a 512-dim
-    # latent + per-layer-class compression (2 SWA / 21 CSA ratio-4 / 20 HCA
-    # ratio-128), open weights (2026-07-31). Only COMPRESSED caches grow:
-    # 3,450 B/token — ~10x below V3-class MLA — plus a fixed ~14.9 MiB/session
-    # (128-entry windows on 46 layers + fp32 compressor state), carried in
-    # deltanet_state. Decode reads the FP4 indexer scan + dense-HCA compressed
-    # axis (426 B/ctx-token) and top-512 latents + windows (9.36 MB/seq).
-    # Native checkpoint is already mixed FP8/FP4 (experts FP4 + E8M0 scales,
-    # servable on H200 per the vLLM recipe). NVIDIA's 0731 NVFP4 repack
-    # (E4M3 block-16 scales) is HEAVIER than native — see nvfp4_w below and
-    # research/nvfp4_2026-09.md; research/model_dsv4flash.md for the rest.
-    "DSV4F": Model(
-        name="DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
-        kv_bpt=3_450,                    # 21 x 576/4 + 20 x 576/128 + 21 x 64/4 (fp8 latent+fp4 idx)
-        deltanet_state=15_597_568,       # 46 x 128 x 576 windows + 12,206,080 fp32 compressor state
-        state_fp32_ok=False,             # already fp32/fp8-mixed; doubling models nothing
-        w_resident=166.88e9,             # measured safetensors total 166,878,536,440 B
-        w_decode_shared=7.66e9,          # attn 4.60 + shared exp 1.08 + compressors/indexers/
-                                         # gates/mHC 0.92 + lm_head 1.06 (research note 4)
-        w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
-        w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
-        mtp=1.7,                         # DSpark drafts 7 tokens; transplanted fit, unmeasured
-        # nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
-        # shard header. Routed experts repacked NVFP4 (E4M3 block-16 scales):
-        # 14,155,800 B/expert vs 13,369,344 native (E8M0 block-32) — this arm
-        # is 5.2% HEAVIER than FP8; MTP experts and everything else identical.
-        # research/nvfp4_2026-09.md.
-        nvfp4_w=(175_535_844_088, 7.66e9,
-                 3_652_196_400,           # 6 experts x 14,155,800 B x 43
-                 155_827_046_400),        # 256 experts x 14,155,800 B x 43
-        kv_decode_bpt=426,               # 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA
-        kv_decode_const=9_363_456,       # 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
-        kv_decode_topk=2_048,            # 512 compressed entries x ratio 4, in token space
-        kv_fp16_ok=False,                # vLLM's V4 path asserts fp8 main KV; SGLang's bf16
-                                         # KV-decode is unfinished (research note 6)
+    # MoE 552B backbone + 196B Engram tables (510.3 GB on disk incl. 3 DSpark
+    # stages and a 0.5B ViT), open weights (2026-09-10, MIT). Causal Encoder-
+    # Decoder: 20 encoder + 20 decoder layers, the decoder's global KV
+    # PROJECTED from the encoder output, so prefill runs the encoder only
+    # (8B active) while decode runs all 40 (16B). CSA2 shares FOUR compressed
+    # caches across layers (sources 2/8/14 at ratio 2, 20 at ratio 1), main KV
+    # in FP4 (E2M1 + E4M3/16 = 288 B/entry) and indexer keys in FP4 (68 B) ->
+    # 890 B/token, the paper's own figure; plus 2.8 MiB/session of fp8
+    # 128-entry windows on 43 layers and fp32 compressor state, carried in
+    # deltanet_state. Decode reads four full-axis indexer scans (170 B/ctx
+    # token) + top-512 latents on 38 layers, four candidate-pool (16,384
+    # entry) indexer reads and the windows (12.8 MB/seq). The 384 routed
+    # experts are native MXFP4 (kink at n = 384/6 = 64); vLLM keeps the
+    # Engram tables in HBM ("plan capacity for them" — recipe), so the fit
+    # starts at 5xH200 / 2xB300. No official NVFP4 checkpoint (2026-09-10).
+    # research/model_dsv41flash.md.
+    "DSV41F": Model(
+        name="DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
+        kv_bpt=890,                      # 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1 cache
+        deltanet_state=2_930_688,        # 43 x 128 x 528 fp8 windows + 24,576 fp32 compressor state
+        state_step_bytes=45_696,         # per step: 40 x 528 ring-slot writes + 24,576 compressor
+                                         # state r/w — the window READS are in kv_decode_const
+        state_fp32_ok=False,             # already fp8/fp32-mixed; doubling models nothing
+        w_resident=510_286_023_000,      # measured safetensors total (header-verified), Engram in HBM
+        w_decode_shared=8_522_921_408,   # exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/
+                                         # compressors/indexers/engram-proj 0.71 + lm_head 1.32
+        w_route_pertok=4_512_153_600,    # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
+        w_route_total=288_777_830_400,   # 384 experts (kink at n = 384/6 = 64)
+        mtp=1.7,                         # DSpark drafts 5 tokens; transplanted fit, unmeasured
+        # No official NVFP4 checkpoint exists (2026-09-10; only same-day community
+        # repacks). The routed experts already ship 4-bit with E8M0 block-32
+        # scales, so an NVFP4 repack (E4M3 block-16) would again be HEAVIER, as
+        # NVIDIA's 0731 repack was (research/nvfp4_2026-09.md). Left unpriced.
+        nvfp4_w=None,
+        kv_decode_bpt=170,               # 3 x 68/2 + 68: full-axis fp4 indexer scans (layers 2/8/14/20)
+        kv_decode_const=12_763_136,      # 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool
+                                         # + 40 x 128 x 528 windows
+        kv_decode_topk=1_024,            # 512 compressed entries x ratio 2, in token space
+        kv_fp16_ok=False,                # FP4 main KV is the TRAINED cache format (QAT, tech
+                                         # report 2.4.4); no stack serves a BF16 main KV
         max_ctx=1_048_576,               # native 1M (YaRN x16 over 65,536 baked into the config)
-        # prefill: MoE active GEMM params excl embed/lm_head (12.703e9 from the
-        # param ledger). Quadratic term: the indexer scores the full compressed
-        # axis (equiv. attn_d 1024 x 21 CSA layers) and HCA attends it densely
-        # (equiv. 256 x 20); the CSA top-512 and window reads are LINEAR per
-        # token and deliberately left out — prefill priced cheaper, biased
-        # AGAINST the thrash hypothesis (research/model_dsv4flash.md #6).
-        params_prefill=12.70e9, attn_layers=41, attn_d=26_624 / 41,
+        # prefill: CED runs the 20 encoder layers only — active GEMM params
+        # excl embed/lm_head 7.90e9 (encoder ledger + the layer-20 CED
+        # projection). Quadratic term: the three encoder indexers (layers
+        # 2/8/14) score the full ratio-2 compressed axis at 32 x 128 — QK
+        # only, no AV, so half the 2 T^2 d convention -> 1,024-equiv per
+        # token each; the top-512 and window reads are LINEAR per token and
+        # left out; the 128-token decoder replay is a fixed cost per prefill
+        # and left out — both price prefill cheaper, biased AGAINST the
+        # thrash hypothesis (research/model_dsv41flash.md #6).
+        params_prefill=7.90e9, attn_layers=3, attn_d=1_024,
     ),
     # MoE 125B-A6B (180B on disk incl. the 51B FP8 n-gram table, 2.7B MTP and
     # a never-executed vision tower), open weights (2026-08). Qwen3.6-style
@@ -669,7 +692,7 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
         raise ValueError(
             f"{model.name}: FP16 KV is not servable (vLLM requires a quantized "
             "KV cache on this model's sparse-attention path — GLM-5.3's DSA, "
-            "DSv4-Flash's CSA; see the model's research note)")
+            "DSv4.1-Flash's CSA2; see the model's research note)")
     # On a sparse-decode model the top-k gathers read MAIN-KV bytes and double
     # with the cache dtype; the indexer scan (kv_decode_bpt) keeps its own
     # quantized width. kv_bpt doubles wholesale — the indexer share inside it
@@ -1927,7 +1950,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
         else:
             topk_bytes = n * model.kv_decode_const
         kv_bytes = full.sum(axis=1) * kv_read_bpt + topk_bytes
-        state_bytes = 2.0 * n * model.deltanet_state
+        state_bytes = n * model.state_traffic
         step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
         pu = model.mtp * bw / step_bytes
         a, b, c = np.percentile(pu, [5, 50, 95])
@@ -2763,7 +2786,7 @@ def _selfcheck():
         pass
 
     # ---- the grid is what makes DP expressible for the 2026-07+ models ------
-    # MM35, GLM-5.3, DSv4-Flash, Qwen3.8-Flash-Next and GLM-5.3-Flash fit no
+    # MM35, GLM-5.3, DSv4.1-Flash, Qwen3.8-Flash-Next and GLM-5.3-Flash fit no
     # single H200, so pure DP is a 0 pool at every N -- the study's existing
     # "does not fit" sentinel, and it stands.
     # (GLM-5.3-Flash appears as its BF16-KV arm wherever an H200 topology is
@@ -2773,7 +2796,7 @@ def _selfcheck():
         m_ = MODELS[mk]
         return (with_kv_dtype(m_, "fp16")
                 if m_.kv_fp8_blackwell_only and gk == "H200" else m_)
-    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"],
+    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV41F"],
                 MODELS["Q38FN"], _arm("GLM53F", "H200")):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
@@ -2782,8 +2805,10 @@ def _selfcheck():
     assert min_tp_for(MODELS["MM35"], "B300") == 1
     assert min_tp_for(MODELS["GLM52"], "H200") == 7
     assert min_tp_for(MODELS["GLM52"], "B300") == 3
-    assert min_tp_for(MODELS["DSV4F"], "H200") == 2
-    assert min_tp_for(MODELS["DSV4F"], "B300") == 1
+    # DSv4.1-Flash: 510.3 GB resident (the 203 GB Engram tables live in HBM
+    # under vLLM) — 5 x 121.7 GB usable H200, 2 x 259.3 GB usable B300
+    assert min_tp_for(MODELS["DSV41F"], "H200") == 5
+    assert min_tp_for(MODELS["DSV41F"], "B300") == 2
     assert min_tp_for(MODELS["Q38FN"], "H200") == 2
     assert min_tp_for(MODELS["Q38FN"], "B300") == 1
     assert min_tp_for(_arm("GLM53F", "H200"), "H200") == 3
@@ -2793,7 +2818,7 @@ def _selfcheck():
     # min_tp is exactly the boundary: one GPU less holds nothing
     for mk, gk in (("MM35", "H200"), ("MM35", "B300"),
                    ("GLM52", "H200"), ("GLM52", "B300"),
-                   ("DSV4F", "H200"), ("DSV4F", "B300"),
+                   ("DSV41F", "H200"), ("DSV41F", "B300"),
                    ("Q38FN", "H200"), ("Q38FN", "B300"),
                    ("GLM53F", "H200"), ("GLM53F", "B300")):
         need = min_tp_for(_arm(mk, gk), gk)
@@ -2805,8 +2830,8 @@ def _selfcheck():
                          ("MM35",  "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
                          ("GLM52", "H200", [(1, 8)]),
                          ("GLM52", "B300", [(2, 4), (1, 8)]),
-                         ("DSV4F", "H200", [(4, 2), (2, 4), (1, 8)]),
-                         ("DSV4F", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
+                         ("DSV41F", "H200", [(1, 8)]),
+                         ("DSV41F", "B300", [(4, 2), (2, 4), (1, 8)]),
                          ("Q38FN", "H200", [(4, 2), (2, 4), (1, 8)]),
                          ("Q38FN", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
                          ("GLM53F", "H200", [(2, 4), (1, 8)]),
@@ -2918,29 +2943,36 @@ def _selfcheck():
     assert mm.mtp == 1.0, "no MTP module on Mistral Medium 3.5"
     assert mm.deltanet_state == 0.0 and glm.deltanet_state == 0.0
 
-    # DSv4-Flash identities (research/model_dsv4flash.md): compressed caches
-    dsf = MODELS["DSV4F"]
-    assert dsf.kv_bpt == 21 * 576 / 4 + 20 * 576 / 128 + 21 * 64 / 4   # 3,450 B
-    assert dsf.deltanet_state == 46 * 128 * 576 + 12_206_080    # windows + fp32 state
+    # DSv4.1-Flash identities (research/model_dsv41flash.md): four shared
+    # compressed caches (CSA2), FP4 main KV, CED prefill
+    dsf = MODELS["DSV41F"]
+    assert dsf.kv_bpt == 3 * (288 + 68) / 2 + (288 + 68)           # 890 B, the paper's figure
+    assert dsf.deltanet_state == 43 * 128 * 528 + 3 * 2 * 2 * 512 * 4  # windows + fp32 state
+    assert dsf.state_step_bytes == 40 * 528 + 3 * 2 * 2 * 512 * 4        # slot writes + state r/w
+    assert dsf.state_traffic == dsf.state_step_bytes and all(
+        MODELS[k].state_step_bytes is None and
+        MODELS[k].state_traffic == 2 * MODELS[k].deltanet_state
+        for k in MODELS if k != "DSV41F")
     assert not dsf.state_fp32_ok and all(
-        MODELS[k].state_fp32_ok for k in MODELS if k != "DSV4F")
-    assert dsf.w_route_pertok == 6 * 13_369_344 * 43            # FP4 experts + E8M0 scales
-    assert dsf.w_route_total == 256 * 13_369_344 * 43
-    assert abs(dsf.w_route_total / dsf.w_route_pertok - 256 / 6) < 1e-9  # kink ~42.7
-    assert dsf.kv_decode_bpt == 21 * 64 / 4 + 20 * 576 / 128    # scan + dense HCA
-    assert dsf.kv_decode_const == 21 * 512 * 576 + 43 * 128 * 576
-    assert dsf.kv_decode_topk == 2_048
-    assert abs(dsf.attn_layers * dsf.attn_d - (21 * 1024 + 20 * 256)) < 1e-9
-    # NVIDIA's 0731 NVFP4 repacks the natively-4-bit experts with denser
-    # scales: the arm is HEAVIER than FP8 everywhere but the fixed read
-    dsf4 = with_weight_dtype(dsf, "nvfp4")
-    assert dsf4.w_route_total == 256 * 14_155_800 * 43
-    assert dsf4.w_route_pertok == 6 * 14_155_800 * 43
-    assert dsf4.w_route_total > dsf.w_route_total and dsf4.w_resident > dsf.w_resident
-    assert dsf4.w_decode_shared == dsf.w_decode_shared
-    # only the routed experts moved: the resident delta IS the expert delta
-    # (w_resident's FP8 figure is rounded to 166.88e9, hence the tolerance)
-    assert abs((dsf4.w_resident - dsf.w_resident) - (155_827_046_400 - 147_169_738_752)) < 1e7
+        MODELS[k].state_fp32_ok for k in MODELS if k != "DSV41F")
+    assert dsf.w_route_pertok == 6 * 18_800_640 * 40            # MXFP4 experts + E8M0 scales
+    assert dsf.w_route_total == 384 * 18_800_640 * 40
+    assert abs(dsf.w_route_total / dsf.w_route_pertok - 64) < 1e-9  # kink at n = 64
+    assert dsf.kv_decode_bpt == 3 * 68 / 2 + 68                 # four full-axis scans
+    assert dsf.kv_decode_const == (38 * 512 * 288 + 4 * 16_384 * 68
+                                   + 40 * 128 * 528)
+    assert dsf.kv_decode_topk == 1_024
+    assert abs(dsf.attn_layers * dsf.attn_d - 3 * (32 * 128 / 2 / 2)) < 1e-9  # 3 QK-only indexers
+    # CED: prefill activates ~half of decode's 16B (8B), and the Engram
+    # tables are 40% of the resident bytes — the fit is set by them
+    assert 7.5e9 < dsf.params_prefill < 8.5e9
+    assert dsf.w_resident > 2 * (dsf.w_route_total + dsf.w_decode_shared) * 0.8
+    # no NVFP4 arm: the experts are already 4-bit and no official repack exists
+    assert dsf.nvfp4_w is None
+    try:
+        with_weight_dtype(dsf, "nvfp4"); raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
 
     # Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md)
     q38 = MODELS["Q38FN"]
@@ -3021,8 +3053,8 @@ def _selfcheck():
     assert kv_pool_tokens(g53_16, topology("tp", 4)) > 0
     assert kv_pool_tokens(g53, b2) > 0 and kv_pool_tokens(g53_16, b2) > 0
 
-    # KV dtype: Mistral doubles like the Qwens; GLM's DSA path and DSv4-Flash's
-    # CSA path must refuse FP16 (both serve only with a quantized main KV)
+    # KV dtype: Mistral doubles like the Qwens; GLM's DSA path and DSv4.1-Flash's
+    # CSA2 path must refuse FP16 (both serve only with a quantized main KV)
     assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
     for quant_only in (glm, dsf):
         try:
@@ -3033,7 +3065,7 @@ def _selfcheck():
 
     # context caps (owner decision 2026-07): Qwens + GLM allow up to 1M
     # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144;
-    # DSv4-Flash is natively 1M (YaRN x16 baked into its config)
+    # DSv4.1-Flash is natively 1M (YaRN x16 baked into its config)
     assert (m27.max_ctx == m35.max_ctx == glm.max_ctx == dsf.max_ctx
             == q38.max_ctx == g53.max_ctx == 1_048_576)
     assert mm.max_ctx == 262_144
@@ -3054,16 +3086,17 @@ def _selfcheck():
 
     # sparse-attention decode: GLM's DSA pricing must beat the dense-read
     # pricing of the same bytes at long context (that is DSA's entire point);
-    # same check for DSv4-Flash's compressed-sparse reads
+    # same check for DSv4.1-Flash's compressed-sparse reads (8xH200: the
+    # smallest H200 node split that holds its 510 GB)
     glm_dense_read = replace(glm, kv_decode_bpt=None, kv_decode_const=0.0)
     t8 = topology("tp", 8)
     _, p_dsa, _, _ = decode_curves(glm, t8, wl, [64], n_iter=300)
     _, p_dense, _, _ = decode_curves(glm_dense_read, t8, wl, [64], n_iter=300)
     assert p_dsa[0] > p_dense[0], "DSA decode must out-speed full-cache reads"
     dsf_dense_read = replace(dsf, kv_decode_bpt=None, kv_decode_const=0.0)
-    _, p_csa, _, _ = decode_curves(dsf, tp2, wl, [64], n_iter=300)
-    _, p_full, _, _ = decode_curves(dsf_dense_read, tp2, wl, [64], n_iter=300)
-    assert p_csa[0] > p_full[0], "CSA decode must out-speed full-cache reads"
+    _, p_csa, _, _ = decode_curves(dsf, t8, wl, [64], n_iter=300)
+    _, p_full, _, _ = decode_curves(dsf_dense_read, t8, wl, [64], n_iter=300)
+    assert p_csa[0] > p_full[0], "CSA2 decode must out-speed full-cache reads"
     q38_dense_read = replace(q38, kv_decode_bpt=None, kv_decode_const=0.0)
     _, p_qsa, _, _ = decode_curves(q38, tp2, wl, [64], n_iter=300)
     _, p_qfull, _, _ = decode_curves(q38_dense_read, tp2, wl, [64], n_iter=300)
@@ -3088,7 +3121,7 @@ def _selfcheck():
     assert p_g53_b16[0] < p_g53_b8[0], \
         "BF16 KV (the Hopper-required arm) must decode slower than fp8 KV"
     # decode monotonicity holds for the new models on hardware they fit
-    for mdl, topo_fit in ((mm, tp2), (glm, t8), (dsf, tp2), (q38, tp2),
+    for mdl, topo_fit in ((mm, tp2), (glm, t8), (dsf, t8), (q38, tp2),
                           (g53_h200, t4), (with_weight_dtype(glm, "nvfp4"), b4)):
         _, p50n, _, aggn = decode_curves(mdl, topo_fit, wl, [1, 8, 64], n_iter=300)
         assert p50n[0] > p50n[1] > p50n[2] > 0
@@ -3694,7 +3727,7 @@ def _selfcheck():
     for dtype in KV_DTYPES:
         for mk in MODELS:
             if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:
-                continue   # GLM-5.3 (DSA) / DSv4-Flash (CSA): FP16 KV not servable
+                continue   # GLM-5.3 (DSA) / DSv4.1-Flash (CSA2): FP16 KV not servable
             if dtype == "fp8" and MODELS[mk].kv_fp8_blackwell_only:
                 continue   # GLM-5.3-Flash: fp8 KV is Blackwell-only and these
                            # legacy topologies are all H200 — its H200 arm is
@@ -3709,7 +3742,7 @@ def _selfcheck():
             pools = []
             for wd in WEIGHT_DTYPES:
                 if wd == "nvfp4" and MODELS[mk].nvfp4_w is None:
-                    pools.append("   n/a")   # DSv4-Flash: no NVFP4 variant exists
+                    pools.append("   n/a")   # DSv4.1-Flash: no NVFP4 variant exists
                     continue
                 mdl = with_weight_dtype(MODELS[mk], wd)
                 pools.append(f"{kv_pool_tokens(mdl, t) / 1e6:6.2f}")

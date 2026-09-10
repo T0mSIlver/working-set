@@ -41,7 +41,8 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` field),
 | `MM35` | `mistral-medium-3-5` | Mistral Medium 3.5 (high) | **50.6%** | 135 | 2026-04-29 |
 | `GLM52` | `glm-5-3` | GLM-5.3 (max) | **83.9%** | 224 | 2026-08-18 |
 | — | `glm-5-2` | GLM-5.2 (max) — the model `GLM52` was until 2026-09-06 | 77.9% | 208 | 2026-06-16 |
-| `DSV4F` | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) | **78.7%** | 210 | 2026-07-31 |
+| — | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) — the model `DSV4F` was until 2026-09-10 | 78.7% | 210 | 2026-07-31 |
+| `DSV41F` | — | DeepSeek V4.1 Flash — **no AA run as of 2026-09-10** (released that day; the card's own 90.6 on the DeepSeek harness is not comparable, § 1). `tb21: null`: the frontier reports it as *unscored* until AA publishes. | — | — | 2026-09-10 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | 2026-08-26 |
 
@@ -66,6 +67,8 @@ key; the pages were used because no key was on hand.
   (`research/workload_agentic_poc.md`). A cheaper effort setting would
   score lower and generate fewer tokens; neither side of that trade is in
   the model yet.
-- It moves. Seven models released between April and August 2026 span 45 to
-  86 points; the two newest sit at the top. Re-read the ledger when a model
-  is added, and record the date.
+- It moves. Six scored models released between April and August 2026 span
+  45 to 86 points; the two newest sit at the top. Re-read the ledger when a
+  model is added, and record the date. A model without an AA run (DeepSeek
+  V4.1 Flash, 2026-09-10) is carried as `null` and left off the chart rather
+  than scored from its vendor card.

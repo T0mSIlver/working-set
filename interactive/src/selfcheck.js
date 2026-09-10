@@ -1,5 +1,5 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
-         effective_bw, kv_pool_tokens, makeGrid, makeTopo, minTpFor, servableKv, tpEff,
+         effective_bw, kv_pool_tokens, makeGrid, makeTopo, minTpFor, servableKv, state_traffic, tpEff,
          withKvDtype } from './config.js';
 import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, coldRequestSeconds,
          contextStats, liveThink, liveTurn, maxUsersLatency, maxUsersSaturation, mfuEff,
@@ -85,15 +85,15 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["MM35"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["GLM52"],"H200")===7 &&
                  minTpFor(CONFIG.MODELS["GLM52"],"B300")===3 &&
-                 minTpFor(CONFIG.MODELS["DSV4F"],"H200")===2 &&
-                 minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1 &&
+                 minTpFor(CONFIG.MODELS["DSV41F"],"H200")===5 &&
+                 minTpFor(CONFIG.MODELS["DSV41F"],"B300")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"B300")===1 &&
                  minTpFor(withKvDtype(CONFIG.MODELS["GLM53F"],"fp16"),"H200")===3 &&
                  minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2, "min TP per model/part");
   // (GLM-5.3-Flash prices as its BF16-KV arm on any H200 topology — the fp8
   // arm THROWS there, asserted below with the rest of its identities)
-  for (const mk of ["MM35","GLM52","DSV4F","Q38FN","GLM53F"])
+  for (const mk of ["MM35","GLM52","DSV41F","Q38FN","GLM53F"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(
           mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk],
@@ -145,9 +145,11 @@ export function unitChecks(){
   console.assert(Math.abs(glm.nvfp4_w[0]/465e9 - 1) < 0.005,
     "GLM-5.2 NVFP4 resident must match the vLLM recipe's ~465 GB");
   // every model but GLM-5.3 (nvidia's 5.2 recipe kept as a projection there)
-  // has a measured NVFP4 checkpoint as of 2026-09-06
+  // has a measured NVFP4 checkpoint as of 2026-09-06 — except DSv4.1-Flash,
+  // which has no official one at all (2026-09-10) and is deliberately unpriced
   for (const mk of Object.keys(CONFIG.MODELS))
-    console.assert(!!CONFIG.MODELS[mk].nvfp4_w, mk+" must be NVFP4-selectable");
+    console.assert(mk === "DSV41F" ? CONFIG.MODELS[mk].nvfp4_w === null : !!CONFIG.MODELS[mk].nvfp4_w,
+      mk === "DSV41F" ? "DSV41F must have NO NVFP4 arm" : mk+" must be NVFP4-selectable");
   let gateThrew = false;
   try { kv_pool_tokens({...CONFIG.MODELS["27B"], weight_dtype:"nvfp4"}, makeTopo("tp",1,"H200")); }
   catch(e){ gateThrew = true; }
@@ -155,10 +157,11 @@ export function unitChecks(){
   console.assert(kv_pool_tokens(glm, makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(glm, makeTopo("tp",8,"H200")) > 0,
     "GLM-5.3 FP8 must not fit 1 GPU but fit 8xH200");
-  console.assert(kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"H200")) === 0 &&
-                 kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",2,"H200")) > 0 &&
-                 kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"B300")) > 0,
-    "DSv4-Flash must fit from 2xH200 and a single B300");
+  console.assert(kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",4,"H200")) === 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",8,"H200")) > 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",1,"B300")) === 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",2,"B300")) > 0,
+    "DSv4.1-Flash (510 GB incl. Engram) must fit from 8xH200 (5 by arithmetic) and 2xB300");
   console.assert(kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",2,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",1,"B300")) > 0,
@@ -190,31 +193,29 @@ export function unitChecks(){
   console.assert(Math.abs(glm.kv_decode_const/(78*2048*576) - 1) < 0.001,
     "GLM top-k read = 78 layers x top-2048 x 576 B");
   console.assert(glm.kv_decode_topk === 2048, "GLM top-k window");
-  // DSv4-Flash identities (research/model_dsv4flash.md; mirror _selfcheck)
-  const dsf = CONFIG.MODELS["DSV4F"];
-  console.assert(dsf.kv_bpt === 21*576/4 + 20*576/128 + 21*64/4,
-    "DSV4F kv_bpt = CSA + HCA + fp4 indexer = 3,450 B/token");
-  console.assert(dsf.deltanet_state === 46*128*576 + 12206080,
-    "DSV4F per-session state = windows + fp32 compressor buffers");
+  // DSv4.1-Flash identities (research/model_dsv41flash.md; mirror _selfcheck)
+  const dsf = CONFIG.MODELS["DSV41F"];
+  console.assert(dsf.kv_bpt === 3*(288+68)/2 + (288+68),
+    "DSV41F kv_bpt = four shared FP4 caches (3 ratio-2 + 1 ratio-1) = 890 B/token");
+  console.assert(dsf.deltanet_state === 43*128*528 + 3*2*2*512*4,
+    "DSV41F per-session state = fp8 windows + fp32 compressor buffers");
+  console.assert(dsf.state_step_bytes === 40*528 + 3*2*2*512*4 && state_traffic(dsf) === dsf.state_step_bytes
+    && Object.keys(CONFIG.MODELS).every(k => k === "DSV41F" || state_traffic(CONFIG.MODELS[k]) === 2*CONFIG.MODELS[k].deltanet_state),
+    "DSV41F per-step state traffic = ring-slot writes + compressor r/w; every other model streams 2 x its state");
   console.assert(dsf.state_fp32_ok === false && dsf.kv_fp16_ok === false,
-    "DSV4F: fixed-precision state, quantized-only main KV");
-  console.assert(dsf.w_route_pertok === 6*13369344*43 &&
-                 dsf.w_route_total === 256*13369344*43 &&
-                 Math.abs(dsf.w_route_total/dsf.w_route_pertok - 256/6) < 1e-9,
-    "DSV4F expert bytes (FP4 packed + E8M0 scales); kink at n = 256/6");
-  console.assert(dsf.kv_decode_bpt === 21*64/4 + 20*576/128 &&
-                 dsf.kv_decode_const === 21*512*576 + 43*128*576 &&
-                 dsf.kv_decode_topk === 2048, "DSV4F sparse-decode pricing");
-  console.assert(Math.abs(dsf.attn_layers*dsf.attn_d - (21*1024 + 20*256)) < 1e-9,
-    "DSV4F prefill quadratic term = indexer + dense-HCA equivalents");
-  // NVIDIA's 0731 NVFP4 repacks the natively-4-bit experts with denser
-  // scales: heavier than FP8 on every expert byte, identical elsewhere
-  console.assert(dsf.nvfp4_w[3] === 256*14155800*43 && dsf.nvfp4_w[2] === 6*14155800*43,
-    "DSV4F NVFP4 expert bytes are the measured 14,155,800 B/expert x 43 layers");
-  console.assert(dsf.nvfp4_w[3] > dsf.w_route_total && dsf.nvfp4_w[1] === dsf.w_decode_shared,
-    "DSV4F NVFP4 is heavier on experts and unchanged on the fixed read");
-  console.assert(Math.abs((dsf.nvfp4_w[0] - dsf.w_resident) - (dsf.nvfp4_w[3] - dsf.w_route_total)) < 1e7,
-    "DSV4F NVFP4 resident delta is the expert delta alone");
+    "DSV41F: fixed-precision state, quantized-only main KV");
+  console.assert(dsf.w_route_pertok === 6*18800640*40 &&
+                 dsf.w_route_total === 384*18800640*40 &&
+                 Math.abs(dsf.w_route_total/dsf.w_route_pertok - 64) < 1e-9,
+    "DSV41F expert bytes (MXFP4 packed + E8M0 scales); kink at n = 64");
+  console.assert(dsf.kv_decode_bpt === 3*68/2 + 68 &&
+                 dsf.kv_decode_const === 38*512*288 + 4*16384*68 + 40*128*528 &&
+                 dsf.kv_decode_topk === 1024, "DSV41F sparse-decode pricing");
+  console.assert(Math.abs(dsf.attn_layers*dsf.attn_d - 3*(32*128/2/2)) < 1e-9,
+    "DSV41F prefill quadratic term = three QK-only encoder indexers over the ratio-2 axis");
+  console.assert(dsf.params_prefill > 7.5e9 && dsf.params_prefill < 8.5e9,
+    "DSV41F CED prefill activates ~8B (the encoder half of decode's 16B)");
+  console.assert(dsf.nvfp4_w === null, "DSV41F has no NVFP4 arm (no official checkpoint)");
   // Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md; mirror _selfcheck)
   const q38 = CONFIG.MODELS["Q38FN"];
   console.assert(q38.kv_bpt === 12*2*256*2 + 12*128/4,

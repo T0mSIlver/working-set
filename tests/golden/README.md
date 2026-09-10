@@ -8,15 +8,17 @@ and the explorer would publish numbers the package would not.
 
 **`vectors.json` is what the Python model says.** Every deployment the explorer
 can reach — 7 models x 2 GPU parts x 1-8 GPUs x every DP/TP split of those that
-holds the weights x the servable weight/KV dtype arms, **594 of them, each
-priced at least once** — plus a one-knob-at-a-time sweep on four anchors and
-the all-defaults reference of each model/part. Each state is priced by
+holds the weights x the servable weight/KV dtype arms, **558 of them, each
+priced at least once** — plus a one-knob-at-a-time sweep on four anchors, the
+all-defaults reference of each model/part, and the 25 spread-probe states. Each state is priced by
 `workingset.model` and written out with its inputs, its outputs, a `cond` block
 of conditioning diagnostics, and the tolerance class of each output.
 
 The knobs are stratified over the deployments rather than crossed with them
 (the full product is astronomical); the one-at-a-time sweep is what isolates
-which control a disagreement follows. Every sweep value is inside its control's
+which control a disagreement follows. Each deployment's knob draw is seeded by
+the deployment itself, so a model added, removed or re-fitted moves only its
+own vectors. Every sweep value is inside its control's
 real range in `interactive/index.html`, so no vector describes a state a user
 cannot produce.
 
@@ -40,7 +42,7 @@ regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
 the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
-(821 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
+(798 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
 plus a 25-state named spread probe at three seeds and two sampling scales). The JS
 side is ~80 s. That is the price of pricing every legal deployment rather than
 a sample of them.
@@ -128,6 +130,16 @@ noise its twin absorbs.
 
 `flag` — booleans (`steady_saturated`, `max_users_decode_censored`). Equal or
 not.
+
+**Censored warm fills.** `capacity.js`'s `warmOnce` stops a single fill at
+60,000 draws and the page prints the count as a lower bound ("≥ N"); Python's
+fixture instead grows its draw until the fill is uncensored. Where the
+explorer reports a censored fill the test compares `warm_p5_all` and
+`max_users_cache` as bound-against-value — Python must sit at or above the
+bound, within the band — and counts them in its summary line. The cap is a UI
+cost guard, not a modelling difference: it is only reached by DeepSeek-V4.1-
+Flash's 890 B/token cache on the largest pools, where the count binds nothing
+the page decides (the users slider ends at 1,024).
 
 Two quantities have their bands derived from the probe states with
 `warm_p5 >= 12` only (`max_users_cache`, `warm_p5_all`): below that a fill

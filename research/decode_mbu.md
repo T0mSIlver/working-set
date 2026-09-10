@@ -233,7 +233,7 @@ Proposed, not yet applied:
   it, `MBU_DEFAULT` absorbs whichever it is, which is why that constant is
   documented as travelling with `mtp`. Every model in the study with
   DeltaNet / KDA / linear-attention layers is affected either way: 35B-A3B
-  (30 of 40), Q38FN (36 of 48), GLM53F (34 of 45), DSV4F. A dense row is not.
+  (30 of 40), Q38FN (36 of 48), GLM53F (34 of 45), DSV41F. A dense row is not.
 - **A decode MBU constant**, the counterpart to `MFU_DEFAULT`. With the
   verify cost priced, this deployment sits at **eta = 0.41-0.48** of
   advertised — close enough to prefill's 0.40 that one shared efficiency
@@ -260,7 +260,7 @@ only in a mechanism no black-box measurement here could resolve (sec 3). What
 the measurement does establish unconditionally is that the decode ceiling
 falls a long way from 309 and that per-user speed near production batch sizes
 is a third of what the study predicted. Every hybrid model in the study —
-`35B-A3B` (30 DeltaNet layers), `Q38FN` (36), `GLM53F` (34 KDA), `DSV4F` —
+`35B-A3B` (30 DeltaNet layers), `Q38FN` (36), `GLM53F` (34 KDA), `DSV41F` —
 is priced on the same dense-transformer roofline and carries the same
 unpriced assumption.
 

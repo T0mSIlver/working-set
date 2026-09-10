@@ -1,5 +1,5 @@
 import { CONFIG, DECODE_MBU, GIB, PREFILL_MFU, effective_bw, is_moe, kv_pool_tokens,
-         w_decode } from './config.js';
+         state_traffic, w_decode } from './config.js';
 import { percentiles } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
@@ -192,8 +192,8 @@ export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   const perTok = topk ? model.kv_decode_const/topk : 0;
   for (let k=0;k<K;k++){
     const n=ns[k];
-    // weights + DeltaNet recurrent-state read+write for every active sequence
-    const wd = w_decode(model, n) + 2*n*model.deltanet_state
+    // weights + recurrent-state traffic for every active sequence
+    const wd = w_decode(model, n) + n*state_traffic(model)
              + (topk ? 0 : n*(model.kv_decode_const ?? 0));
     const col=kvsum[k], tcol=topk?tksum[k]:null;
     for (let it=0; it<n_iter; it++)

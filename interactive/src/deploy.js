@@ -31,7 +31,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const sug = Math.max(1, Math.round(Math.min(decodeUsers, lastWarmCur.g5)));
   // draft counts mirror the research notes; a model missing here must not
   // emit num_speculative_tokens:undefined, so it gates specOn too
-  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "Q38FN":3, "GLM53F":5}[state.model];
+  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV41F":5, "Q38FN":3, "GLM53F":5}[state.model];
   const specOn = state.mtp>1 && m0.mtp>1 && specDrafts !== undefined;
   const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
   const ramGrp = ramPerCache(topo);
@@ -71,7 +71,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   if (state.model==="GLM53F" && topo.tp<4)
     cmts.push(`# TP<4 is this study's pool arithmetic; the vLLM recipe only demonstrates TP4 (one GB200 tray)`);
   if (state.kv==='fp16') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
-  if (specOn) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${state.model==='DSV4F'?' (DSpark drafts)':''}`);
+  if (specOn) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${state.model==='DSV41F'?' (DSpark drafts)':''}`);
   if (eagle) cmts.push(`# the modelled ${state.mtp.toFixed(2)}× speedup assumes an EXTERNAL EAGLE-style draft (no MTP module; unmeasured)`);
   if (state.ram>0) cmts.push(`# --kv-offloading-size is GiB per group${dp>1?` (${fmt(state.ram,0)} GiB total across ${dp} groups)`:''}; a storage tier — restore latency unpriced`);
   deployCmdText = lines.join(' \\\n') + (cmts.length ? '\n'+cmts.join('\n') : '');

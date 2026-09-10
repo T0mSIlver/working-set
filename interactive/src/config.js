@@ -201,31 +201,28 @@ export const CONFIG = {
       attn_layers: 78, attn_d: 64*256,
       max_ctx: 1048576,            // native 1M context
     },
-    "DSV4F": {                     // research/model_dsv4flash.md
-      name: "DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
-      kv_bpt: 3450,                // 21 x 576/4 CSA + 20 x 576/128 HCA + 21 x 64/4 fp4 indexer
-      deltanet_state: 15597568,    // NOT DeltaNet: 46 x 128 x 576 windows + 12.2e6 fp32 compressor state
+    "DSV41F": {                    // research/model_dsv41flash.md
+      name: "DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
+      kv_bpt: 890,                 // 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1: FP4 main KV + FP4 indexer K
+      deltanet_state: 2930688,     // NOT DeltaNet: 43 x 128 x 528 fp8 windows + 24,576 fp32 compressor state
+      state_step_bytes: 45696,     // per step: 40 x 528 ring-slot writes + compressor state r/w (window READS sit in kv_decode_const)
       state_fp32_ok: false,        // fixed mixed-precision state — the fp32 toggle models nothing
-      w_resident: 166.88e9,        // measured safetensors total (native mixed FP8/FP4 checkpoint)
-      w_decode_shared: 7.66e9,     // attn 4.60 + shared exp 1.08 + comp/idx/gates/mHC 0.92 + lm_head 1.06
-      w_route_pertok: 3449290752,  // 6 experts x 13,369,344 B (FP4 packed + E8M0 scales) x 43
-      w_route_total: 147169738752, // 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
-      mtp: 1.7,                    // DSpark drafts 7 tokens; transplanted fit, unmeasured
-      // nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
-      // shard header (research/nvfp4_2026-09.md). Only the 43 main layers'
-      // routed experts change: the native checkpoint already packs them 4-bit
-      // with E8M0 block-32 scales (13,369,344 B/expert), NVFP4 repacks them
-      // with E4M3 block-16 scales (14,155,800 B/expert, +5.9%). Everything
-      // else byte-identical, MTP experts stay native. So this arm is 5.2%
-      // HEAVIER than FP8 — it exists for the NVFP4 kernel path, not for
-      // bytes; the explorer prices what the checkpoint weighs.
-      nvfp4_w: [175535844088, 7.66e9, 3652196400, 155827046400],
-      kv_decode_bpt: 426,          // 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA read
-      kv_decode_const: 9363456,    // 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
-      kv_decode_topk: 2048,        // 512 compressed entries x ratio 4, in token space
-      kv_fp16_ok: false,           // vLLM V4 path asserts fp8 main KV; SGLang bf16 decode unfinished
-      params_prefill: 12.70e9,     // MoE: active GEMM params excl embed + lm_head
-      attn_layers: 41, attn_d: 26624/41,  // 21 indexer layers @1024-equiv + 20 HCA @256-equiv
+      w_resident: 510286023000,    // measured safetensors total; the 203 GB Engram tables live in HBM (vLLM recipe)
+      w_decode_shared: 8522921408, // exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/comp/idx/engram-proj 0.71 + lm_head 1.32
+      w_route_pertok: 4512153600,  // 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
+      w_route_total: 288777830400, // 384 experts (kink at n = 384/6 = 64)
+      mtp: 1.7,                    // DSpark drafts 5 tokens; transplanted fit, unmeasured
+      // No official NVFP4 checkpoint (2026-09-10; same-day community repacks
+      // only). The experts already ship 4-bit with E8M0 block-32 scales, so
+      // an NVFP4 repack (E4M3 block-16) would again be HEAVIER, as NVIDIA's
+      // 0731 repack was (research/nvfp4_2026-09.md). Not priced.
+      nvfp4_w: null,
+      kv_decode_bpt: 170,          // 3 x 68/2 + 68: full-axis fp4 indexer scans at layers 2/8/14/20
+      kv_decode_const: 12763136,   // 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool + 40 x 128 x 528 windows
+      kv_decode_topk: 1024,        // 512 compressed entries x ratio 2, in token space
+      kv_fp16_ok: false,           // FP4 main KV is the TRAINED cache format (QAT); no BF16 main-KV path
+      params_prefill: 7.90e9,      // CED: the 20 encoder layers only (+ the layer-20 projection), excl embed + lm_head
+      attn_layers: 3, attn_d: 1024, // 3 encoder indexers (2/8/14), QK-only over the ratio-2 axis: 32 x 128 / 2 / 2
       max_ctx: 1048576,            // native 1M (YaRN x16 baked into the config)
     },
     "Q38FN": {                     // research/model_qwen38flashnext.md
@@ -303,7 +300,7 @@ export const CONFIG = {
     "35BA3B": { tb21: 120/267, aa: "qwen3-6-35b-a3b" },
     "MM35":   { tb21: 135/267, aa: "mistral-medium-3-5" },
     "GLM52":  { tb21: 224/267, aa: "glm-5-3" },   // max effort (the index run); 5.2 was 208/267
-    "DSV4F":  { tb21: 210/267, aa: "deepseek-v4-flash" },
+    "DSV41F": { tb21: null, aa: null },           // released 2026-09-10; no AA run yet — unscored on the frontier
     "Q38FN":  { tb21: 230/267, aa: "qwen3-8-flash-next" },
     "GLM53F": { tb21: 225/267, aa: "glm-5-3-flash" },
   },
@@ -357,6 +354,10 @@ export function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / m.
 // Conservative (no-overlap) expert-union bound, the study's planning default;
 // the expected-union "coverage" model is the optimistic bracket (see docs).
 export function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_pertok, m.w_route_total); }
+// recurrent / fixed-state bytes moved per active sequence per decode step:
+// read + write of the whole state unless the model says otherwise (mirrors
+// Model.state_traffic — DSv4.1-Flash's windows are read inside kv_decode_const)
+export function state_traffic(m){ return m.state_step_bytes ?? 2 * m.deltanet_state; }
 // FP16-KV transform (mirrors Python's with_kv_dtype): doubles kv_bpt AND the
 // top-k main-KV gathers (kv_decode_const) of a sparse-decode model; the
 // quantized indexer scan (kv_decode_bpt) keeps its own width. Identity for

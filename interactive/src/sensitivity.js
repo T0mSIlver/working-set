@@ -1,5 +1,5 @@
 import { DECODE_MBU, GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, effective_bw,
-         kv_pool_tokens, w_decode } from './config.js';
+         kv_pool_tokens, state_traffic, w_decode } from './config.js';
 import { contextStats, decodeFloor, liveTurn, maxUsersLatency, maxUsersSaturation,
          prefillChunk, prefillServiceMoments, setLiveTurn } from './prefill.js';
 import { clip, seedFor } from './mathlib.js';
@@ -66,7 +66,7 @@ function decodeUsersApprox(model, topo, samples, floor){
   }
   mL /= samples.length; if (tk) mT /= samples.length;
   const kvReadBpt = model.kv_decode_bpt ?? model.kv_bpt;
-  const perSeq = mL * kvReadBpt + 2 * model.deltanet_state
+  const perSeq = mL * kvReadBpt + state_traffic(model)
     + (model.kv_decode_const ? (tk ? mT * (model.kv_decode_const / tk)
                                    : model.kv_decode_const) : 0);
   const speed = n => model.mtp * bw / (w_decode(model, n) + n * perSeq);

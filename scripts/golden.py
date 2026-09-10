@@ -543,7 +543,7 @@ SPREAD_PROBE = [
          cap=262, mbu=0.3, chunk='4096', sub_ratio=0.4, sys=30, inval=0.5,
          turn=6000, burst=200, out=200),
     # B300 large-MoE deployment with DP4, short cap, and low decode floor.
-    dict(model='DSV4F', gpu='B300', wdt='fp8', kv='fp8', ngpu=8, tp=2,
+    dict(model='DSV41F', gpu='B300', wdt='fp8', kv='fp8', ngpu=8, tp=2,
          cap=64, mfu=0.35, chunk='16384', user_median=60, sub_ratio=0.0, sys=3,
          inval=10.0, sla=20, turn=1000, burst=200, decode_floor=10),
     # H200 FP16-KV DP4 deployment under a tight SLA.
@@ -666,8 +666,13 @@ def build_states() -> list[dict]:
     #    cheap to rule out. The knobs are stratified rather than crossed - the
     #    full product is astronomically large, and the one-at-a-time sweep
     #    above already isolates which control a disagreement follows.
-    rng = random.Random(20260906)
+    #    The draw is seeded by the DEPLOYMENT, not by its position in the
+    #    enumeration: a model added, removed or re-fitted (2026-09-10: the
+    #    DSv4.1-Flash swap changed how many deployments hold its weights)
+    #    then moves only its own states, never the knobs drawn for every
+    #    deployment enumerated after it.
     for dep in legal_deployments():
+        rng = random.Random(f"20260906:{json.dumps(dep, sort_keys=True)}")
         st = base_state(dep)
         st["chunk"] = rng.choice([str(c) for c in CHUNKS])
         st["users"] = rng.choice([16, 32, 64, 128, 400])
@@ -687,6 +692,13 @@ def build_states() -> list[dict]:
         st["ram"] = rng.choice([0, 0, 256])
         st["cap"] = min(rng.choice([64, 180, 262]), cap_slider_max(st["model"]))
         add(st)
+
+    # 4. the spread-probe states themselves, so the bands are measured on
+    #    states the vectors also price. Named by content, they do not depend
+    #    on what step 3 happened to draw for their deployment — which is what
+    #    keeps a band from moving when another model's fit changes.
+    for entry in SPREAD_PROBE:
+        add(resolve_probe(entry))
 
     states.sort(key=lambda s: json.dumps(s, sort_keys=True))
     return states
@@ -816,17 +828,24 @@ def resolve_probe(entry: dict) -> dict:
 def validate_spread_probe(probe: list[dict], states: list[dict]) -> None:
     """Require reachable probe states and coverage of every model and GPU.
 
-    Reachability is checked on the RESOLVED state, so a probe entry only
-    breaks when its own values stop being a state the explorer can reach —
-    never because a new axis added a default-valued key to every state."""
+    Reachability is checked on the RESOLVED state: its deployment must be one
+    the explorer can reach (legal_deployments) and the state must be priced
+    by the vectors (build_states adds every probe entry), so a probe entry
+    only breaks when its own values stop being a state the explorer can reach
+    — never because a new axis added a default-valued key to every state, and
+    never because another model's fit moved what step 3 draws."""
+    legal = {json.dumps(d, sort_keys=True) for d in legal_deployments()}
     # by value, not by JSON text: a sweep may write 40 where the default is
     # 40.0, and the model prices both identically
-    unreachable = [i for i, st in enumerate(probe) if st not in states]
+    unreachable = [i for i, st in enumerate(probe)
+                   if json.dumps({k: st[k] for k in PROBE_DEPLOYMENT_KEYS},
+                                 sort_keys=True) not in legal
+                   or st not in states]
     if unreachable:
         shown = ", ".join(f"[{i}] {SPREAD_PROBE[i] if i < len(SPREAD_PROBE) else probe[i]}"
                           for i in unreachable)
         raise ValueError(
-            f"SPREAD_PROBE entries are not states build_states() produces: {shown}"
+            f"SPREAD_PROBE entries are not deployments the explorer reaches: {shown}"
         )
     # two entries that resolve to one state would double-weight it in every
     # p50 / p90 / max without any signal — the failure mode this list exists
@@ -900,7 +919,11 @@ BAND_CAP = 0.25       # above this, name the states instead of widening for all
 # same number, but the clamp shrinks d_p's measured spread on the probe, so an
 # independent derivation hands the identical figure a tighter band and it trips
 # on noise its twin absorbs.
-BAND_GROUPS = [("prefill_duty", "power_d_p")]
+# power_draw's d_d is the output demand over (decode ceiling x floor) below
+# the 1 - d_p clamp, i.e. the reciprocal of max_users_decode: it cannot be
+# pinned tighter than the ceiling's own bisection, and the probe's decode
+# ceilings happen to sit where the ceiling's spread is small.
+BAND_GROUPS = [("prefill_duty", "power_d_p"), ("max_users_decode", "power_d_d")]
 
 
 def bands_from_spread(spread: dict) -> dict:

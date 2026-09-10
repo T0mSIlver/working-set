@@ -314,10 +314,10 @@ def test_knob_gates_are_refusals_not_no_ops():
     with pytest.raises(ValueError, match="calibration.mtp must be"):
         RunConfig.from_dict({"deployment": {"model": "27B"},
                              "calibration": {"mtp": 0}}).validate()
-    # DSv4-Flash's state is a fixed mixed-precision buffer, not a bf16 one
-    assert M.MODELS["DSV4F"].state_fp32_ok is False
+    # DSv4.1-Flash's state is a fixed mixed-precision buffer, not a bf16 one
+    assert M.MODELS["DSV41F"].state_fp32_ok is False
     with pytest.raises(ValueError, match="no bf16 recurrent state"):
-        RunConfig.from_dict({"deployment": {"model": "DSV4F", "gpu": "H200",
+        RunConfig.from_dict({"deployment": {"model": "DSV41F", "gpu": "H200",
                                             "tensor_parallel": 8,
                                             "recurrent_state_dtype": "fp32"}}).validate()
 
