@@ -268,7 +268,11 @@ export function renderFrontierChart(rows, curKey){
   if (!rows.some(r => r.key === curKey)) notes.push('your split is not in the grid');
   g+=`<text class="axtick" x="${mL+pw-4}" y="${mT+11}" text-anchor="end">${esc(notes.join(' · '))}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">Terminal-Bench 2.1, pass@1 (Artificial Analysis)</text>`;
+  // a row scored from its vendor card (QUALITY[mk].source) is not an AA
+  // measurement: the axis title names it rather than label it AA
+  const vendor = [...new Set(live.filter(r => CONFIG.QUALITY[r.mk].source).map(r => FRONTIER_SHORT[r.mk] || r.mk))];
+  const axisSrc = 'Artificial Analysis' + (vendor.length ? `; ${vendor.join(', ')}: vendor card` : '');
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">Terminal-Bench 2.1, pass@1 (${esc(axisSrc)})</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">€ per seat per month, configuration full (log)</text>`;
   box.innerHTML = svgEl(g, W, H,
     'Every configuration that carries the load as Terminal-Bench score versus monthly cost per seat at capacity, with the Pareto-efficient set joined as a staircase');

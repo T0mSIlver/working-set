@@ -16,6 +16,22 @@ protocol** — Artificial Analysis — and ignores the vendor figures. The
 cost of that choice is a lower absolute level (AA's numbers run 3–9 points
 under the cards); the frontier only needs the ordering and the gaps.
 
+**One exception, by owner decision (2026-09-10):** DeepSeek-V4.1-Flash was
+released that day with no AA run, and the owner chose to carry the vendor
+card's own **90.6** (DeepSeek Harness, Minimal mode, `reasoning_effort=100`,
+1M-token context, N=3 samples per task, no network) rather than leave the
+row unscored. It is the only row not measured under AA's protocol, and the
+card itself shows why the one-harness rule exists: the same model at the
+same effort scores 84.1 (Codex scaffold) to 90.6 (DSH Minimal) on the same
+benchmark, a 6.5-point spread from the scaffold alone
+(`research/model_dsv41flash.md` § 5). Going by the other six models, AA's
+number will likely land 3–9 points lower (an expectation, not a
+measurement) — and the same card's figures for the two models AA has also
+run sit 4.3 and 4.0 points above AA's (GLM-5.3 88.2 vs 83.9; V4-Flash-0731
+82.7 vs 78.7). The vendor figure is to be
+**replaced by the AA number the day it publishes**, and the ledger row and
+`CONFIG.QUALITY.DSV41F.source` carry the provenance until then.
+
 **Protocol (AA methodology page, read 2026-09-05):** Terminal-Bench v2.1,
 89 tasks, Terminus 2 agent harness in an E2B sandbox, pass@1 averaged over
 3 repeats per task. Every fraction below is an exact multiple of 1/267
@@ -42,7 +58,7 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` field),
 | `GLM52` | `glm-5-3` | GLM-5.3 (max) | **83.9%** | 224 | 2026-08-18 |
 | — | `glm-5-2` | GLM-5.2 (max) — the model `GLM52` was until 2026-09-06 | 77.9% | 208 | 2026-06-16 |
 | — | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) — the model `DSV4F` was until 2026-09-10 | 78.7% | 210 | 2026-07-31 |
-| `DSV41F` | — | DeepSeek V4.1 Flash — **no AA run as of 2026-09-10** (released that day; the card's own 90.6 on the DeepSeek harness is not comparable, § 1). `tb21: null`: the frontier reports it as *unscored* until AA publishes. | — | — | 2026-09-10 |
+| `DSV41F` | — | DeepSeek V4.1 Flash — **vendor figure, not an AA run** (§ 1 exception): the model card's Terminal-Bench 2.1 pass@1 on the **DeepSeek Harness, Minimal mode, max reasoning effort, 1M context**. Source: `https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash` (README, read 2026-09-10). **No AA run as of 2026-09-10**; replace when it publishes. | **90.6%** (vendor) | — | 2026-09-10 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | 2026-08-26 |
 
@@ -67,8 +83,11 @@ key; the pages were used because no key was on hand.
   (`research/workload_agentic_poc.md`). A cheaper effort setting would
   score lower and generate fewer tokens; neither side of that trade is in
   the model yet.
-- It moves. Six scored models released between April and August 2026 span
-  45 to 86 points; the two newest sit at the top. Re-read the ledger when a
-  model is added, and record the date. A model without an AA run (DeepSeek
-  V4.1 Flash, 2026-09-10) is carried as `null` and left off the chart rather
-  than scored from its vendor card.
+- It moves. Six AA-scored models released between April and August 2026
+  span 45 to 86 points; the two newest sit at the top. Re-read the ledger
+  when a model is added, and record the date. The default for a model
+  without an AA run is `null` (left off the chart, `—` in the table); the
+  one departure from that default is DeepSeek V4.1 Flash's vendor 90.6
+  (§ 1), which puts it at the top of the axis on a number that is not
+  measured like the other six — read its lead over Qwen3.8-Flash-Next
+  (86.1, AA) as *unknown*, not as 4.5 points, until AA publishes.
