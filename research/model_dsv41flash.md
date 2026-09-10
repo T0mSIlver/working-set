@@ -232,12 +232,154 @@ rather than project a heavier arm.
   missing — Encoder SWA Bounded Replay); the decoder runs over the last 128
   tokens only. Global KV persists for ≥ 72 h; SWA KV lives in a host-DRAM pool
   with a minutes-scale TTL and is never written to SSD.
-- Positioning: the paper reports Terminal-Bench 2.1 **90.6** (DeepSeek
-  harness, max effort), DeepSWE v1.1 74.2, vs 0731's 82.7 / 54.4 on the same
-  card. **No Artificial Analysis run exists yet** — the frontier's quality
-  axis (`research/terminal_bench.md`) takes one lab under one protocol, so the
-  model is *unscored* there until AA publishes (`CONFIG.QUALITY.DSV41F.tb21 =
-  null`; the chart reports it as unscored).
+- **Persistent footprint (card, architecture paragraph):** because the SWA KV
+  is replayed from the last `n_win` tokens rather than persisted, the card
+  puts the *persistent* KV footprint at roughly **1/8** of V4-Flash's, against
+  1/4 for the global (HBM) cache priced in § 2; the figure caption adds a
+  **437×** reduction relative to DeepSeek-V1. The card's own positioning is
+  "input-heavy agentic workloads" — the study's workload (57k in / 400 out,
+  `research/workload_agentic_poc.md`).
+
+### Positioning — what the model card reports (README, read 2026-09-10)
+
+**Frontier score.** The card's Terminal-Bench 2.1 pass@1 is **90.6**
+(DeepSeek Harness, Minimal mode, `reasoning_effort=100`, 1M context). **No
+Artificial Analysis run exists as of 2026-09-10**; the frontier's quality
+axis takes one lab under one protocol (`research/terminal_bench.md`), and
+by **owner decision on release day the vendor figure is carried** —
+`CONFIG.QUALITY.DSV41F = { tb21: 0.906, source: "vendor card …" }` — as the
+one non-AA row, to be replaced when AA publishes. The card gives the size of
+the caveat directly: its figures for the two models that are also in AA's
+ledger sit 4 points above AA's (GLM-5.3 88.2 vs 83.9; V4-Flash-0731 82.7 vs
+78.7), so an AA number in the mid-80s would be the expectation, not a
+surprise.
+
+**Frontier-comparison table (max reasoning effort; the seven columns are
+Opus-5.0 / GPT-5.6 Sol / K3 / GLM-5.3 / DS-V4-Pro / DS-V4-Flash /
+DS-V4.1-Flash).** The rows that bear on a coding-agent serving study:
+
+| Benchmark | Opus-5.0 | GPT-5.6 Sol | K3 | GLM-5.3 | V4-Pro | V4-Flash | **V4.1-Flash** |
+|---|---|---|---|---|---|---|---|
+| Terminal-Bench 2.1 (Pass@1) | 89.1 | 88.8 | 88.3 | 88.2 | 87.9 | 82.7 | **90.6** |
+| Terminal-Bench 3.0 (Pass@1) | **43.3** | 34.4 | 17.7 | 28.3 | 11.8 | 7.6 | 30.0 |
+| Terminal-Bench 4.0 (Pass@1) | **51.8** | 39.9 | 12.6 | 37.9 | 12.4 | 7.0 | 31.2 |
+| DeepSWE v1.1 (Resolved) | 74.0 | 73.0 | 67.5 | 66.9 | 62.7 | 54.4 | **74.2** |
+| SEC-Bench Pro (Pass@1) | — | **74.3** | — | — | 56.4 | 30.9 | 62.8 |
+| HLE w/ tools (Pass@1) | 63.6 | — | 59.8 | 62.5 | 60.0 | 51.5 | **63.9** |
+| AutomationBench (Pass@1) | 50.3 | 45.8 | 46.7 | 48.8 | 43.2 | 37.7 | **54.8** |
+| Chartography w/ tools (Pass@1) | **84.0** | 79.9 | 68.1 | — | — | — | 78.9 |
+| BabyVision w/ tools (Pass@1) | **94.1** | 88.9 | 85.7 | — | — | — | 89.6 |
+| ZeroBench-main w/ tools (Pass@5) | 52.0 | **53.0** | 41.0 | — | — | — | 49.0 |
+
+Also on the card: GPQA Diamond 90.9, HLE 36.8 (39.1 text-only), Codeforces
+**3471** (the column's best), MathArena Apex 65.6 (tied best with K3),
+ProgramBench 20.3, NL2Repo-Bench 64.0, CyberGym **88.1** (best), ExploitGym
+15.3, Agent's Last Exam **31.8** (best). Two readings for the study: (i) the
+model leads the table on TB 2.1, DeepSWE, HLE-with-tools, AutomationBench,
+CyberGym, Agent's Last Exam and Codeforces — the coding workload the
+explorer prices is the one it was built for — while GPT-5.6 Sol leads it
+clearly on SEC-Bench Pro (74.3 vs 62.8) and ExploitGym (33.7 vs 15.3); (ii) on the two
+newer Terminal-Bench versions it trails Opus-5.0 by 13–21 points (30.0 vs
+43.3; 31.2 vs 51.8) — the 2.1 lead is a lead on the saturated version. The
+multimodal rows (GLM-5.3 and the other DeepSeeks have none) are the first
+in the DeepSeek V4 line; the study's text workload never runs the ViT.
+
+**Per-scaffold table (DeepSWE v1.1 / Terminal-Bench 2.1, max effort).** The
+same model, same effort, eight agent scaffolds:
+
+| Scaffold | Claude Code | Codex | OpenCode | Pi | mini-SWE | DSH Minimal | DSH Standard | DSH PTC |
+|---|---|---|---|---|---|---|---|---|
+| DeepSWE v1.1 | 69.8 | 65.6 | 65.5 | 66.2 | **74.2** | 72.6 | 70.5 | 67.6 |
+| Terminal-Bench 2.1 | 88.0 | 84.1 | 85.0 | 86.1 | 90.3 | **90.6** | 85.8 | 85.8 |
+
+The scaffold alone moves TB 2.1 by **6.5 points** (84.1–90.6) and DeepSWE by
+**8.7** (65.5–74.2) — as much as separates the whole top half of the
+frontier table — which is exactly why the ledger's one-harness rule exists,
+and why the vendor 90.6 is flagged rather than trusted. Note the headline
+pair is not from one scaffold: the frontier table's DeepSWE 74.2 is the
+mini-SWE harness ("to align with official setup requirements"), where DSH
+Minimal gives 72.6; TB 2.1's 90.6 is DSH Minimal, where mini-SWE gives 90.3.
+On the two scaffolds an explorer user is likeliest to run (Claude Code,
+Codex), the card's own numbers are 88.0 and 84.1.
+
+**Evaluation setup (card, "Instruct Model").** Every instruct result is at
+`reasoning_effort=100`, `temperature=1.0`, `top_p=0.95`. Code-agent
+benchmarks (TB 2.1/3.0/4.0, DeepSWE, NL2Repo-Bench, ProgramBench): DSH
+Minimal with a **1M-token context window**; DeepSWE additionally on
+mini-SWE and SEC-Bench Pro on the Claude Code harness (official setups);
+the visual agent benchmarks on Claude Code at 512k; Agent's Last Exam and
+AutomationBench on their official scaffolds. The scaffold table: **N=8**
+samples per task on DeepSWE, **N=3** on TB 2.1, Linux containers,
+**max_steps=500** per agent, TB 2.1 without network access. (AA's protocol
+is 3 repeats on 89 tasks in the Terminus 2 harness — a different harness
+and, for a 1M-context model, very likely a smaller window.)
+
+**Recommended sampling parameters (card, "Minimal Inference"):**
+`temperature` 1.0, `top_p` 0.95 or 1.0, `context_window` 1M tokens,
+**`max_tokens` ≥ 256K**. The last is a serving fact, not a tuning hint: the
+vendor expects a single response (thinking + answer) to be allowed a
+quarter of the context. The study prices **404 output tokens per request**
+on average (`research/workload_agentic_poc.md`, a production trace on the
+Qwen 27B deployment, effort setting unknown); nothing in this note changes
+that constant, but at effort 100 this model's own responses are of a
+different order, and a deployment that ran it as the card was evaluated
+would sit far to the decode-heavy side of the study's workload.
+
+**Continuously controllable reasoning effort (card, "Post-training" and
+"Instruct Model"):** an integer **1–100**, "trading inference cost for
+accuracy"; **all card results use 100**. The frontier score and the
+explorer's tokens-per-request therefore come from opposite ends of one
+knob — the ledger's § 3 caveat ("a cheaper effort setting would score lower
+and generate fewer tokens; neither side of that trade is in the model yet")
+applies to this row more literally than to any other, because here the
+knob is a request parameter rather than a model variant. The card gives no
+effort-vs-tokens curve.
+
+**Prompt encoding (card, "Prompt Encoding"):** the release ships **no
+Jinja chat template**. The `encoding/` folder holds a self-contained Python
+reference (`encoding.py`) with test cases for multi-turn conversations, tool
+calling, thinking mode, numeric reasoning effort, mid-conversation system
+messages and interleaved image content; for production DeepSeek releases
+**`deepseek-recipe`** (github.com/deepseek-ai/deepseek-recipe), Rust
+libraries with Python bindings that convert Messages / Chat Completions /
+Responses API requests into a Conversation, encode them into V4 and V4.1
+prompts or token IDs, and parse output back (thinking, tool calls, images,
+generation settings) as complete or streamed responses. Presumably this is
+what vLLM's `--tokenizer-mode deepseek_v41` wraps (the recipe names the
+mode, not the library); a serving stack without an equivalent cannot form
+a valid prompt. Weight conversion and local inference are in
+`inference/`; the `evaluation/` folder reproduces DeepSWE v1.1 with both
+`dsh-minimal` and `mini-swe-agent` (with the patch to run `dsh-minimal`
+under Pier).
+
+**Pre-training and base model (card, "Pre-training" and "Base Model"):**
+trained from scratch on a **45T-token multimodal** corpus, sparse attention
+trained at 64K and context extended to 1M at 34T tokens; images are joint
+with text from the start of language-model pre-training (DeepSeek-ViT,
+2D-RoPE, 3×3 pixel-unshuffle, two-layer MLP projector). Post-training is
+"standard SFT → RL → on-policy distillation without algorithmic
+modifications" — the changes are in the data pipeline (automated synthesis
+of agent tasks and environments). The base-model table is the card's own
+statement of the parameter counts this note reproduces from the shards
+(§ 4, § 6):
+
+| | V4-Flash-Base | V4-Pro-Base | **V4.1-Flash-Base** |
+|---|---|---|---|
+| Backbone params | 284B | 1.6T | **552B** |
+| Activated params | 13B | 49B | **8B / 16B** (prefill / decode) |
+| MMLU-Pro (5-shot) | 68.3 | 73.5 | **74.1** |
+| HumanEval (0-shot) | 69.5 | 76.8 | **79.4** |
+| LongBench-V2 (1-shot) | 44.7 | **51.5** | 45.2 |
+| MMMU-Pro (4-shot) | — | — | 56.5 |
+
+(All base models on DeepSeek's internal framework; "scores within 0.3 are
+equivalent".) The base matches or beats the 1.6T Pro on most code/math rows
+while activating a sixth of its parameters — and trails it on world
+knowledge and long context (SimpleQA-Verified 42.3 vs 55.2; LongBench-V2
+45.2 vs 51.5), the rows a 196B Engram is presumably meant to shore up.
+
+**License:** MIT, repository and weights (card front matter `license: mit`,
+"License" section); `pipeline_tag: image-text-to-text`.
 
 ## 6. Remaining assumptions / re-verification ledger
 
@@ -329,7 +471,11 @@ Primary (read directly, exact bytes, 2026-09-10):
   (196B, host prefetch), § 2.4.3 DSpark, § 2.4.4 FP4 main KV (E2M1 + E4M3/16,
   windows stay FP8), § 3.2 inference system and SWA Bounded Replay
 - https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/raw/main/README.md
-  (552B / 8B-16B, 890 B/token, benchmarks, MIT license)
+  (read in full 2026-09-10, re-fetched the same day, unchanged: 552B /
+  8B-16B, 890 B/token, 45T-token pre-training, base-model and
+  frontier-comparison tables, the eight-scaffold table and its evaluation
+  setup, reasoning effort 1–100, recommended sampling parameters incl.
+  `max_tokens` ≥ 256K, prompt encoding / `deepseek-recipe`, MIT license)
 - https://huggingface.co/api/models?search=DeepSeek-V4.1-Flash (no `nvidia/`
   NVFP4 repo; three community repacks created 2026-09-10)
 
