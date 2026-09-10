@@ -205,6 +205,7 @@ export const CONFIG = {
       name: "DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
       kv_bpt: 890,                 // 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1: FP4 main KV + FP4 indexer K
       deltanet_state: 2930688,     // NOT DeltaNet: 43 x 128 x 528 fp8 windows + 24,576 fp32 compressor state
+      state_step_bytes: 45696,     // per step: 40 x 528 ring-slot writes + compressor state r/w (window READS sit in kv_decode_const)
       state_fp32_ok: false,        // fixed mixed-precision state — the fp32 toggle models nothing
       w_resident: 510286023000,    // measured safetensors total; the 203 GB Engram tables live in HBM (vLLM recipe)
       w_decode_shared: 8522921408, // exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/comp/idx/engram-proj 0.71 + lm_head 1.32
@@ -221,7 +222,7 @@ export const CONFIG = {
       kv_decode_topk: 1024,        // 512 compressed entries x ratio 2, in token space
       kv_fp16_ok: false,           // FP4 main KV is the TRAINED cache format (QAT); no BF16 main-KV path
       params_prefill: 7.90e9,      // CED: the 20 encoder layers only (+ the layer-20 projection), excl embed + lm_head
-      attn_layers: 3, attn_d: 2048, // 3 encoder indexers (2/8/14) over the ratio-2 axis @ 32 x 128 / 2
+      attn_layers: 3, attn_d: 1024, // 3 encoder indexers (2/8/14), QK-only over the ratio-2 axis: 32 x 128 / 2 / 2
       max_ctx: 1048576,            // native 1M (YaRN x16 baked into the config)
     },
     "Q38FN": {                     // research/model_qwen38flashnext.md
@@ -353,6 +354,10 @@ export function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / m.
 // Conservative (no-overlap) expert-union bound, the study's planning default;
 // the expected-union "coverage" model is the optimistic bracket (see docs).
 export function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_pertok, m.w_route_total); }
+// recurrent / fixed-state bytes moved per active sequence per decode step:
+// read + write of the whole state unless the model says otherwise (mirrors
+// Model.state_traffic — DSv4.1-Flash's windows are read inside kv_decode_const)
+export function state_traffic(m){ return m.state_step_bytes ?? 2 * m.deltanet_state; }
 // FP16-KV transform (mirrors Python's with_kv_dtype): doubles kv_bpt AND the
 // top-k main-KV gathers (kv_decode_const) of a sparse-decode model; the
 // quantized indexer scan (kv_decode_bpt) keeps its own width. Identity for

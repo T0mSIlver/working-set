@@ -17,7 +17,24 @@ explorer. It **replaces** DeepSeek-V4-Flash-0731 in the study
 > to the byte (§ 2), the 552B backbone / 196B Engram parameter counts and the
 > 8B-prefill / 16B-decode active counts (§ 4, § 6). Serving facts come from
 > the vLLM recipe (`recipes/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml`,
-> added 2026-09-09).
+> added 2026-09-09). Codex (gpt-5.6-sol, high) reviewed the derivation
+> against the same cached sources on 2026-09-10; its six findings are
+> applied (two constants: the per-step state traffic and the indexer's
+> quadratic width) or recorded in § 6 (three provenance / convention
+> points, one ledger typo).
+>
+> **What the reference implementation is and is not evidence for.**
+> `inference/model.py` is a minimal single-process reference: it allocates
+> every cache in **BF16** and its `fp4_act_quant(..., inplace=True)` /
+> `act_quant(..., inplace=True)` calls quantize-then-dequantize into that
+> BF16 tensor, discarding the scales. Read literally, it stores 1,280 B per
+> compressed entry (3,200 B/token) and 5.66 MB of windows per session. It
+> is therefore authoritative for **which tensors are cached, their shapes,
+> which layers own them, and the quantization groups** (E2M1 per-16 with
+> E4M3 scales on the latent, per-32 with E8M0 on the indexer keys and the
+> fp8 windows) — and the technical report (§ 2.4.4, "FP4 main KV cache",
+> "890 bytes per token") is the authority for the **packed byte layout** a
+> production stack stores. The constants below price the packed layout.
 
 ## 1. Architecture table (config.json + inference/model.py + tech report § 2)
 
@@ -54,7 +71,9 @@ The two ideas that set the constants (tech report § 2.2–2.3):
 
 ## 2. KV bytes per token — four shared FP4 caches: 890 B, the paper's figure
 
-Cached-entry layout (from `inference/model.py`):
+Cached-entry layout (tensors and quantization groups from `inference/model.py`;
+packed byte widths from the technical report § 2.4.4, which the reference
+implementation dequantizes into BF16 — see the provenance note):
 
 - **Main KV latent**, 512 dims, quantized *after* RoPE to **E2M1 with one E4M3
   scale per 16 channels** (`fp4_act_quant(latent, 16, True, scale_dtype=
@@ -99,7 +118,10 @@ models (`research/nvfp4.md` § 3).
 
 Per decode step a query reads: (a) on the four Full-mode layers, the indexer-K
 cache over the whole compressed axis (the scan); (b) on the four Reindex
-layers, the indexer-K rows of the 16,384-position candidate pool (a constant);
+layers, the indexer-K rows of the 16,384-position candidate pool (a constant
+— the deployment the report describes, § 2.3.2: "changes the per-query cost
+of deeper indexers from linear in context length to constant"; the reference
+implementation instead scores every position and masks afterwards, § 6);
 (c) on every CSA2 layer (2–39), its top-512 selected latent entries; (d) on
 every layer, the 128-entry window.
 
@@ -112,7 +134,16 @@ kv_decode_const = 38 x 512 x 288   (top-512 latent reads, layers 2-39) =  5,603,
 kv_decode_topk  = 1,024 original tokens (512 compressed entries x ratio 2 — the
                   encoder majority; the decoder's ratio-1 layers saturate at 512);
                   sequences shorter scale the constant by min(len, 1024)/1024
+state_step_bytes = 40 x 528 (one ring slot written per main layer)      =  21,120
+                 + 3 x 2 x 2 x 512 x 4 (compressor partial-group r/w)   =  24,576
+                                                                        =  45,696 B per ACTIVE SEQ per step
 ```
+
+`state_step_bytes` is new with this model: the study's DeltaNet models stream
+their whole recurrent state twice per step (read + write, `2 x deltanet_state`,
+the default when the field is unset). Here `deltanet_state` is fixed
+*storage* whose reads are already inside `kv_decode_const`; charging 2 x 2.9 MB
+on top would count the windows twice (codex finding F1).
 
 At the reference 31k-median workload the scan is ~5.3 MB/seq and the constant
 12.8 MB/seq — against 27.6 MB/seq if decode streamed the whole 890 B/token
@@ -128,7 +159,8 @@ of the shared read per decoding sequence).
 ## 4. Weight bytes (all 48 shard headers, byte-exact)
 
 ```
-attention (wq_a/wq_b/wkv/wo_a/wo_b, sinks, norms; FP8)    5,070,131,200
+attention (wq_a/wq_b/wkv/wo_a/wo_b, q/kv norms, sinks; FP8) 5,069,721,600
+layer norms (attn_norm + ffn_norm, 40 layers; BF16)             819,200
 compressors (4 sources; BF16)                                36,704,256
 indexers (8; wq_b FP8, rest BF16)                            45,130,752
 shared experts (40 x 3 x 2304x5120; FP8)                  1,416,960,000
@@ -221,12 +253,37 @@ rather than project a heavier arm.
   128-token decoder replay per prefill (~2 TFLOP) and the encoder replay on an
   SWA-state miss are fixed costs, left out: prefill priced cheaper, biased
   AGAINST the thrash hypothesis, per `research/prefill.md` convention.
-- **Prefill quadratic term** `attn_layers=3, attn_d=2,048`: the three encoder
+- **Prefill quadratic term** `attn_layers=3, attn_d=1,024`: the three encoder
   Full-mode indexers (layers 2/8/14) score the full ratio-2 compressed axis at
-  32 heads × 128 dims (4,096 per compressed position ÷ 2 per token). The
-  top-512 + window attention on all 18 encoder CSA2 layers is *linear* per
-  token and left out; layer 20's indexer runs only in decode (and the
-  replay). Same bias direction as above.
+  32 heads × 128 dims — 4,096 MACs per (query, compressed position), ÷ 2 for
+  the ratio, ÷ 2 again because the study's `2 T² d` convention prices QK
+  **and** AV and an indexer has no AV (a first draft wrote 2,048 and priced
+  the term twice; codex F2). At a 32k chunk the whole quadratic term is 2%
+  of the prefill FLOPs. The top-512 + window attention on all 18 encoder
+  CSA2 layers is *linear* per token and left out; layer 20's indexer runs
+  only in decode (and the replay). Same bias direction as above.
+- **Candidate-pool indexing modelled as the paper's deployment, not the
+  reference code.** `inference/model.py`'s Reindex layers compute scores over
+  the *whole* indexer-K axis and only then mask to the candidate pool. Priced
+  that way, the scan would be 3 × 68/2 + 5 × 68 = **442 B/ctx-token** with no
+  4.46 MB candidate constant (8.31 MB/seq). The report's stated design and
+  the reason the hierarchy exists is the gathered, constant-cost form, so 170
+  B + 4.46 MB is modelled; at the 31k reference workload the two differ by
+  4 MB/seq against a ≥ 297 GB weight read per step (< 0.1% at n = 64).
+- **Single-KV-head caches under tensor parallelism.** Every cache here is
+  one latent per position (MQA), and the reference implementation keeps
+  the full `compress_kv_cache` / `k_cache` / `window_kv_cache` on every
+  rank while splitting only the query heads. The study's pool arithmetic
+  (`tp × VRAM − weights − tp × reserve`) assumes a deployment where each
+  rank owns the caches of its *own* sequences — the attention-DP /
+  expert-EP layout the vLLM recipe lists as `single_node_dep` and
+  DeepSeek's own serving uses. Under plain TP the caches replicate and the
+  pool divides by `tp` (8×H200: 520M → 65M tokens; 2×B300: 9.4M → 4.7M). The
+  same convention already prices GLM-5.3 (MLA), GLM-5.3-Flash and the 0731
+  model; it is a study-wide reading, flagged here for the owner rather than
+  changed in this note. It moves no decision on this model: the cache never
+  binds (§ 5 of the PR), the weight-set fit thresholds are TP-independent,
+  and the decode plateau is a weight read.
 - **Cached-entry scale bytes are charged** (E4M3/16 on the latent, E8M0/32
   on the indexer keys and windows) — the layout `fp4_act_quant` writes. A
   stack storing scales elsewhere or at a different granularity moves

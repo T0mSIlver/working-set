@@ -313,6 +313,15 @@ class Model:
     # Python charges deltanet_state as-is either way; the flag exists for
     # mirror parity with the explorer, which gates its fp32-state control on it.
     state_fp32_ok: bool = True
+    # Bytes the recurrent / fixed per-session state moves PER ACTIVE SEQUENCE
+    # PER DECODE STEP. None (the DeltaNet models) means read + write of the
+    # whole state, 2 x deltanet_state. A model whose deltanet_state is fixed
+    # STORAGE that decode does not re-stream — DSv4.1-Flash's windows are
+    # already read inside kv_decode_const, and a step writes one 528-B ring
+    # slot per layer — sets the true per-step figure here instead
+    # (codex review of the V4.1 swap, 2026-09-10: 2 x 2.9 MB was charged on
+    # top of the windows' own read).
+    state_step_bytes: float | None = None
     # Largest max_seq_len the study allows for this model (tokens). The
     # workload cap (Workload.cap) may not exceed it — warm_capacity and
     # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
@@ -342,6 +351,12 @@ class Model:
     @property
     def is_moe(self) -> bool:
         return self.w_route_total > 0
+
+    @property
+    def state_traffic(self) -> float:
+        """Recurrent-state bytes moved per active sequence per decode step."""
+        return (2.0 * self.deltanet_state if self.state_step_bytes is None
+                else self.state_step_bytes)
 
     def w_decode(self, n: int, union: str = "linear") -> float:
         """Weight bytes read per decode step with n concurrent decoders."""
@@ -520,6 +535,8 @@ MODELS = {
         name="DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
         kv_bpt=890,                      # 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1 cache
         deltanet_state=2_930_688,        # 43 x 128 x 528 fp8 windows + 24,576 fp32 compressor state
+        state_step_bytes=45_696,         # per step: 40 x 528 ring-slot writes + 24,576 compressor
+                                         # state r/w — the window READS are in kv_decode_const
         state_fp32_ok=False,             # already fp8/fp32-mixed; doubling models nothing
         w_resident=510_286_023_000,      # measured safetensors total (header-verified), Engram in HBM
         w_decode_shared=8_522_921_408,   # exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/
@@ -542,12 +559,13 @@ MODELS = {
         # prefill: CED runs the 20 encoder layers only — active GEMM params
         # excl embed/lm_head 7.90e9 (encoder ledger + the layer-20 CED
         # projection). Quadratic term: the three encoder indexers (layers
-        # 2/8/14) score the full ratio-2 compressed axis at 32 x 128 -> 2,048-
-        # equiv per token each; the top-512 and window reads are LINEAR per
-        # token and left out; the 128-token decoder replay is a fixed cost
-        # per prefill and left out — both price prefill cheaper, biased
-        # AGAINST the thrash hypothesis (research/model_dsv41flash.md #6).
-        params_prefill=7.90e9, attn_layers=3, attn_d=2_048,
+        # 2/8/14) score the full ratio-2 compressed axis at 32 x 128 — QK
+        # only, no AV, so half the 2 T^2 d convention -> 1,024-equiv per
+        # token each; the top-512 and window reads are LINEAR per token and
+        # left out; the 128-token decoder replay is a fixed cost per prefill
+        # and left out — both price prefill cheaper, biased AGAINST the
+        # thrash hypothesis (research/model_dsv41flash.md #6).
+        params_prefill=7.90e9, attn_layers=3, attn_d=1_024,
     ),
     # MoE 125B-A6B (180B on disk incl. the 51B FP8 n-gram table, 2.7B MTP and
     # a never-executed vision tower), open weights (2026-08). Qwen3.6-style
@@ -1932,7 +1950,7 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
         else:
             topk_bytes = n * model.kv_decode_const
         kv_bytes = full.sum(axis=1) * kv_read_bpt + topk_bytes
-        state_bytes = 2.0 * n * model.deltanet_state
+        state_bytes = n * model.state_traffic
         step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
         pu = model.mtp * bw / step_bytes
         a, b, c = np.percentile(pu, [5, 50, 95])
@@ -2930,6 +2948,11 @@ def _selfcheck():
     dsf = MODELS["DSV41F"]
     assert dsf.kv_bpt == 3 * (288 + 68) / 2 + (288 + 68)           # 890 B, the paper's figure
     assert dsf.deltanet_state == 43 * 128 * 528 + 3 * 2 * 2 * 512 * 4  # windows + fp32 state
+    assert dsf.state_step_bytes == 40 * 528 + 3 * 2 * 2 * 512 * 4        # slot writes + state r/w
+    assert dsf.state_traffic == dsf.state_step_bytes and all(
+        MODELS[k].state_step_bytes is None and
+        MODELS[k].state_traffic == 2 * MODELS[k].deltanet_state
+        for k in MODELS if k != "DSV41F")
     assert not dsf.state_fp32_ok and all(
         MODELS[k].state_fp32_ok for k in MODELS if k != "DSV41F")
     assert dsf.w_route_pertok == 6 * 18_800_640 * 40            # MXFP4 experts + E8M0 scales
@@ -2939,7 +2962,7 @@ def _selfcheck():
     assert dsf.kv_decode_const == (38 * 512 * 288 + 4 * 16_384 * 68
                                    + 40 * 128 * 528)
     assert dsf.kv_decode_topk == 1_024
-    assert abs(dsf.attn_layers * dsf.attn_d - 3 * (32 * 128 / 2)) < 1e-9  # 3 encoder indexers
+    assert abs(dsf.attn_layers * dsf.attn_d - 3 * (32 * 128 / 2 / 2)) < 1e-9  # 3 QK-only indexers
     # CED: prefill activates ~half of decode's 16B (8B), and the Engram
     # tables are 40% of the resident bytes — the fit is set by them
     assert 7.5e9 < dsf.params_prefill < 8.5e9

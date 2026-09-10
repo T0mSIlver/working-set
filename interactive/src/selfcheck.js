@@ -1,5 +1,5 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
-         effective_bw, kv_pool_tokens, makeGrid, makeTopo, minTpFor, servableKv, tpEff,
+         effective_bw, kv_pool_tokens, makeGrid, makeTopo, minTpFor, servableKv, state_traffic, tpEff,
          withKvDtype } from './config.js';
 import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, coldRequestSeconds,
          contextStats, liveThink, liveTurn, maxUsersLatency, maxUsersSaturation, mfuEff,
@@ -199,6 +199,9 @@ export function unitChecks(){
     "DSV41F kv_bpt = four shared FP4 caches (3 ratio-2 + 1 ratio-1) = 890 B/token");
   console.assert(dsf.deltanet_state === 43*128*528 + 3*2*2*512*4,
     "DSV41F per-session state = fp8 windows + fp32 compressor buffers");
+  console.assert(dsf.state_step_bytes === 40*528 + 3*2*2*512*4 && state_traffic(dsf) === dsf.state_step_bytes
+    && Object.keys(CONFIG.MODELS).every(k => k === "DSV41F" || state_traffic(CONFIG.MODELS[k]) === 2*CONFIG.MODELS[k].deltanet_state),
+    "DSV41F per-step state traffic = ring-slot writes + compressor r/w; every other model streams 2 x its state");
   console.assert(dsf.state_fp32_ok === false && dsf.kv_fp16_ok === false,
     "DSV41F: fixed-precision state, quantized-only main KV");
   console.assert(dsf.w_route_pertok === 6*18800640*40 &&
@@ -208,8 +211,8 @@ export function unitChecks(){
   console.assert(dsf.kv_decode_bpt === 3*68/2 + 68 &&
                  dsf.kv_decode_const === 38*512*288 + 4*16384*68 + 40*128*528 &&
                  dsf.kv_decode_topk === 1024, "DSV41F sparse-decode pricing");
-  console.assert(Math.abs(dsf.attn_layers*dsf.attn_d - 3*(32*128/2)) < 1e-9,
-    "DSV41F prefill quadratic term = three encoder indexers over the ratio-2 axis");
+  console.assert(Math.abs(dsf.attn_layers*dsf.attn_d - 3*(32*128/2/2)) < 1e-9,
+    "DSV41F prefill quadratic term = three QK-only encoder indexers over the ratio-2 axis");
   console.assert(dsf.params_prefill > 7.5e9 && dsf.params_prefill < 8.5e9,
     "DSV41F CED prefill activates ~8B (the encoder half of decode's 16B)");
   console.assert(dsf.nvfp4_w === null, "DSV41F has no NVFP4 arm (no official checkpoint)");
