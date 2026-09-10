@@ -322,6 +322,21 @@ class Model:
     # (codex review of the V4.1 swap, 2026-09-10: 2 x 2.9 MB was charged on
     # top of the windows' own read).
     state_step_bytes: float | None = None
+    # KV heads the attention cache can be SHARDED across under tensor
+    # parallelism. A GQA model splits its KV heads over the TP ranks; once tp
+    # exceeds them (or always, for the single-latent MQA / MLA caches: 1) the
+    # cache is REPLICATED on every rank instead — vLLM's plain --tensor-
+    # parallel-size keeps a full copy per rank, and only decode context
+    # parallelism (--decode-context-parallel-size, sharding along the
+    # sequence) or attention-DP + expert-EP removes the copies.
+    # kv_replication() turns this into the factor the pool and the per-step
+    # KV reads are multiplied by. research/kv_tp_sharding.md.
+    kv_heads: int = 1
+    # Same for the per-session recurrent / fixed state: None = it shards
+    # across the TP ranks at every tp the study prices (DeltaNet / KDA value
+    # heads, 32-64 of them); DSv4.1-Flash's windows are the single latent and
+    # replicate with the cache (1).
+    state_heads: int | None = None
     # Largest max_seq_len the study allows for this model (tokens). The
     # workload cap (Workload.cap) may not exceed it — warm_capacity and
     # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
@@ -413,6 +428,7 @@ MODELS = {
         # 35B-A3B ledger reads from config.json — x hidden 5,120, x2).
         # 64 layers, interval 4 -> 16 full-attention; 24 Q heads x 256.
         params_prefill=24.5e9, attn_layers=16, attn_d=24 * 256,
+        kv_heads=4,                      # GQA 24/4 on the 16 full-attention layers
     ),
     # MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
     "35BA3B": Model(
@@ -444,6 +460,7 @@ MODELS = {
         # published "~3B active" includes embed + lm_head.)
         # 40 layers, 10 full-attention; 16 Q heads x 256.
         params_prefill=2.44e9, attn_layers=10, attn_d=16 * 256,
+        kv_heads=2,                      # GQA 16/2 on the 10 full-attention layers
     ),
     # Dense 128B, open weights (2026-04), 88 uniform full-attention GQA layers
     # (8 KV heads x 128) — the study's KV-hungriest model: 176 KiB/token FP8,
@@ -474,6 +491,7 @@ MODELS = {
         # tower inside the GEMM). ALL 88 layers are full GQA -> the study's
         # heaviest quadratic term by far; 96 Q heads x 128.
         params_prefill=121.8e9, attn_layers=88, attn_d=96 * 128,
+        kv_heads=8,                      # GQA 96/8 — shards on every TP the study prices
     ),
     # MoE 744B-A40B (753B incl. MTP), MLA + DeepSeek Sparse Attention, open
     # weights (2026-06). Cached: 576-B MLA latent/layer + 132-B indexer keys
@@ -514,6 +532,7 @@ MODELS = {
         # research/model_glm52.md, so the quadratic term here is pessimistic
         # and flagged. 64 heads x 256 (qk_nope 192 + rope 64 = v_head_dim).
         params_prefill=37.4e9, attn_layers=78, attn_d=64 * 256,
+        kv_heads=1,                      # MLA: one 576-B latent per token, replicated under plain TP
     ),
     # MoE 552B backbone + 196B Engram tables (510.3 GB on disk incl. 3 DSpark
     # stages and a 0.5B ViT), open weights (2026-09-10, MIT). Causal Encoder-
@@ -566,6 +585,7 @@ MODELS = {
         # and left out — both price prefill cheaper, biased AGAINST the
         # thrash hypothesis (research/model_dsv41flash.md #6).
         params_prefill=7.90e9, attn_layers=3, attn_d=1_024,
+        kv_heads=1, state_heads=1,       # MQA latent caches AND the latent windows replicate under plain TP
     ),
     # MoE 125B-A6B (180B on disk incl. the 51B FP8 n-gram table, 2.7B MTP and
     # a never-executed vision tower), open weights (2026-08). Qwen3.6-style
@@ -604,6 +624,7 @@ MODELS = {
         # Quadratic term priced as DENSE attention on the 12 QSA layers: an
         # upper bound, QSA prefill sparsity uncharacterised (note #6).
         params_prefill=6.04e9, attn_layers=12, attn_d=24 * 256,
+        kv_heads=2,                      # GQA 24/2 on the 12 QSA layers; the DeltaNet state shards (48 v-heads)
     ),
     # MoE 320B-A18B (321B on disk incl. a 7.4B MTP draft layer and a vision
     # tower), open weights (2026-08-25, MIT). GLM-5.2's DSA married to a
@@ -648,6 +669,7 @@ MODELS = {
         # priced as DENSE attention on the 11 DSA layers: an upper bound,
         # DSA prefill sparsity uncharacterised (note #6).
         params_prefill=16.11e9, attn_layers=11, attn_d=64 * 256,
+        kv_heads=1,                      # NoPE sparse-MLA: one latent per token; the KDA state shards (64 heads)
     ),
 }
 
@@ -787,12 +809,27 @@ def check_dtype_supported(model: Model, topo: Topology) -> None:
 #   cache    : one KV pool per group; dp groups means dp independent pools
 #   bandwidth: a group has tp GPUs' worth, less tp_efficiency(tp)
 # ============================================================================
+KV_SHARDS = ("dcp", "replicate")
+
+
 @dataclass
 class Topology:
     name: str
     dp: int                          # replica groups; each owns one KV cache
     tp: int                          # GPUs per group (weights sharded across these)
     gpu: GPU = GPUS["H200"]
+    # How the KV cache is laid out across the tp ranks of a group.
+    #   "dcp"       decode context parallelism: ranks beyond the model's KV
+    #               heads split the cache along the SEQUENCE, so the group
+    #               stores one copy (--decode-context-parallel-size
+    #               tp // kv_heads). The study's default — the layout its
+    #               capacity numbers have always assumed; the deploy recipe
+    #               now emits the flag that achieves it.
+    #   "replicate" plain --tensor-parallel-size: every rank past the KV
+    #               heads keeps a full copy. The pool divides by tp/kv_heads
+    #               and every rank re-reads the whole cache each step.
+    # research/kv_tp_sharding.md (codex finding F5 on the V4.1-Flash swap).
+    kv_shard: str = "dcp"
 
     @property
     def n_gpu(self) -> int:
@@ -821,7 +858,8 @@ class Topology:
         return self.tp > self.gpu.nvlink_domain
 
 
-def topology_grid(dp: int, tp: int, gpu: str = "H200") -> Topology:
+def topology_grid(dp: int, tp: int, gpu: str = "H200",
+                  kv_shard: str = "dcp") -> Topology:
     """Build an arbitrary DP x TP topology of `gpu` parts.
 
     dp : independent replica groups. They exchange NOTHING at inference (there
@@ -839,6 +877,8 @@ def topology_grid(dp: int, tp: int, gpu: str = "H200") -> Topology:
             raise ValueError(f"{label} must be a positive integer, got {v!r}")
     if gpu not in GPUS:
         raise ValueError(f"gpu must be one of {tuple(GPUS)}, got {gpu!r}")
+    if kv_shard not in KV_SHARDS:
+        raise ValueError(f"kv_shard must be one of {KV_SHARDS}, got {kv_shard!r}")
     g = GPUS[gpu]
     dp, tp = int(dp), int(tp)
     if dp * tp == 1:
@@ -849,10 +889,61 @@ def topology_grid(dp: int, tp: int, gpu: str = "H200") -> Topology:
         name = f"{dp}x{g.name} data-par"
     else:
         name = f"{dp * tp}x{g.name} DP{dp}xTP{tp}"
-    return Topology(name, dp, tp, g)
+    if kv_shard == "replicate" and tp > 1:
+        name += " [KV replicated]"
+    return Topology(name, dp, tp, g, kv_shard)
 
 
-def topology(kind: str, n_gpu: int, gpu: str = "H200") -> Topology:
+def kv_replication(model: Model, topo: Topology) -> tuple:
+    """(cache factor, state factor): how many copies of each token's cache
+    and of each session's state the TP group stores and re-reads per step.
+
+    A cache with h shardable heads splits across min(tp, h) ranks and is
+    replicated on the tp / h rank groups beyond that — 1.0 while tp <= h,
+    tp / h past it (continuous for the odd TP widths the study prices; vLLM
+    itself only accepts tp a multiple of h there). Decode context
+    parallelism splits the replicated dimension along the sequence, so the
+    "dcp" layout stores ONE copy: 1.0 at every tp. (At an odd width the
+    heads do not divide, dcp_size() rounds down and a real engine would
+    refuse the width; the study extrapolates it as sharded, exactly as it
+    did before this layout existed — no published number moves.)
+    """
+    def factor(heads):
+        if topo.kv_shard == "dcp" or heads is None or topo.tp <= heads:
+            return 1.0
+        return topo.tp / heads
+    return factor(model.kv_heads), factor(model.state_heads)
+
+
+def dcp_size(model: Model, topo: Topology) -> int:
+    """The --decode-context-parallel-size a "dcp" topology needs: the rank
+    groups beyond the KV heads, 1 (no flag) when the cache already shards."""
+    if topo.kv_shard != "dcp":
+        return 1
+    return max(1, topo.tp // max(1, model.kv_heads))
+
+
+def _replicated(model: Model, topo: Topology) -> Model:
+    """The model with its cache and state bytes multiplied by the copies the
+    group holds — what the pool and the decode step actually pay. Internal:
+    kv_pool_tokens, warm_capacity and decode_curves apply it to the CALLER'S
+    model, and nothing returns it, so it cannot be applied twice."""
+    r_kv, r_st = kv_replication(model, topo)
+    if r_kv == 1.0 and r_st == 1.0:
+        return model
+    return replace(
+        model,
+        kv_bpt=model.kv_bpt * r_kv,
+        kv_decode_bpt=(None if model.kv_decode_bpt is None
+                       else model.kv_decode_bpt * r_kv),
+        kv_decode_const=model.kv_decode_const * r_kv,
+        deltanet_state=model.deltanet_state * r_st,
+        state_step_bytes=(None if model.state_step_bytes is None
+                          else model.state_step_bytes * r_st))
+
+
+def topology(kind: str, n_gpu: int, gpu: str = "H200",
+             kv_shard: str = "dcp") -> Topology:
     """Build a single-axis topology for `n_gpu` GPUs of the given part.
 
     kind="tp" : ONE engine — weights sharded (stored once), ONE shared prefix
@@ -868,9 +959,9 @@ def topology(kind: str, n_gpu: int, gpu: str = "H200") -> Topology:
         raise ValueError(f"n_gpu must be a positive integer, got {n_gpu!r}")
     n_gpu = int(n_gpu)
     if kind == "tp":
-        return topology_grid(1, n_gpu, gpu)
+        return topology_grid(1, n_gpu, gpu, kv_shard)
     if kind == "dp":
-        return topology_grid(n_gpu, 1, gpu)
+        return topology_grid(n_gpu, 1, gpu, kv_shard)
     raise ValueError(f"kind must be 'tp' or 'dp', got {kind!r}")
 
 
@@ -975,7 +1066,11 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     # pre-grid code (tp=1 reproduces the old single/DP branch, tp=n the old TP
     # branch) rather than merely equal after formatting.
     pool_bytes = topo.tp * topo.gpu.vram - model.w_resident - topo.tp * reserve
-    return max(pool_bytes, 0.0) / model.kv_bpt
+    # ...in tokens of the cache the group STORES: a replicated layout pays
+    # kv_bpt x copies per token (kv_replication), so the same bytes hold
+    # fewer tokens. 1.0 on every default ("dcp") topology at a TP the KV
+    # heads divide, i.e. every published number.
+    return max(pool_bytes, 0.0) / _replicated(model, topo).kv_bpt
 
 
 def effective_bw(topo: Topology) -> float:
@@ -1848,7 +1943,8 @@ def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
     n_res = n_gpu
     if ram_gib > 0:
         rem = unique[n_gpu:]
-        # CPU cost per offloaded session: KV bytes + DeltaNet state
+        # CPU cost per offloaded session: KV bytes + DeltaNet state (per
+        # stored copy — the caller passes the replicated model)
         cost = rem * model.kv_bpt + model.deltanet_state
         cb = np.cumsum(cost)
         ram_budget = ram_gib * GIB - reserved * model.kv_bpt
@@ -1898,6 +1994,11 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     if pool <= 0:
         return np.zeros(3)
     counts = np.empty(n_iter)
+    # Both budgets pay per stored copy: vLLM's native offload
+    # (--kv-offloading-size) is RANK-LOCAL, each rank spilling its own blocks,
+    # so a replicated cache is replicated in host memory too. A deduplicating
+    # store (LMCache-style) that kept one copy is not modelled (codex F1).
+    model = _replicated(model, topo)
     for i in range(n_iter):
         full, prefix, cold, sub = wl.sample(rng, draw)
         n_all, n_user, n_gpu, censored = _warm_once(full, prefix, cold, sub,
@@ -1929,6 +2030,9 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     if kv_pool_tokens(model, topo) <= 0:
         raise ValueError(f"{model.name}: weights do not fit {topo.name} — "
                          "no context can be resident, decode is undefined")
+    # a replicated cache is re-read by every rank that holds a copy: the
+    # per-step KV and state bytes scale by the same factor as the storage
+    model = _replicated(model, topo)
     rng = np.random.default_rng(seed)
     # MEASURED decode efficiency (research/decode_mbu.md). Before 2026-08-28
     # this line read `bw = effective_bw(topo)` -- a pure roofline, 4.1x
@@ -2971,6 +3075,52 @@ def _selfcheck():
     assert dsf.nvfp4_w is None
     try:
         with_weight_dtype(dsf, "nvfp4"); raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+    # KV sharding under TP (research/kv_tp_sharding.md): every default
+    # ("dcp") topology at a TP the KV heads divide stores ONE copy, so every
+    # published number is untouched; the "replicate" arm pays tp/kv_heads
+    # copies past the heads, and the single-latent models pay it at every tp > 1
+    for mk, heads in (("27B", 4), ("35BA3B", 2), ("MM35", 8), ("GLM52", 1),
+                      ("DSV41F", 1), ("Q38FN", 2), ("GLM53F", 1)):
+        assert MODELS[mk].kv_heads == heads, mk
+        for tp_ in (1, 2, 4, 8):
+            assert kv_replication(MODELS[mk], topology_grid(1, tp_, "B300")) == (1.0, 1.0)
+            rep = topology_grid(1, tp_, "B300", "replicate")
+            r_kv, r_st = kv_replication(MODELS[mk], rep)
+            assert r_kv == max(1.0, tp_ / heads), (mk, tp_, r_kv)
+            assert r_st == (r_kv if mk == "DSV41F" else 1.0), (mk, tp_, r_st)
+            assert dcp_size(MODELS[mk], topology_grid(1, tp_, "B300")) == max(1, tp_ // heads)
+            assert dcp_size(MODELS[mk], rep) == 1
+    assert MODELS["DSV41F"].state_heads == 1 and all(
+        MODELS[k].state_heads is None for k in MODELS if k != "DSV41F")
+    # odd TP: the default layout is one copy at every width (an extrapolation
+    # where the heads do not divide); "replicate" pays the continuous ratio
+    assert kv_replication(m27, topology_grid(1, 6, "B300")) == (1.0, 1.0)
+    assert kv_replication(m27, topology_grid(1, 6, "B300", "replicate"))[0] == 1.5
+    assert kv_replication(glm, topology_grid(1, 3, "B300", "replicate"))[0] == 3.0
+    assert dcp_size(m27, topology_grid(1, 6, "B300")) == 1
+    # the pool of a replicated group divides by the factor, the host offload
+    # buffer does not (one copy), and the per-step KV read grows by it
+    b8r = topology_grid(1, 8, "B300", "replicate")
+    b8 = topology_grid(1, 8, "B300")
+    assert abs(kv_pool_tokens(glm, b8r) * 8 - kv_pool_tokens(glm, b8)) < 1e-6
+    assert kv_pool_tokens(mm, b8r) == kv_pool_tokens(mm, b8)          # 8 heads: no copies
+    assert abs(kv_pool_tokens(m35, b8r) * 4 - kv_pool_tokens(m35, b8)) < 1e-6
+    assert "[KV replicated]" in b8r.name and "[KV replicated]" not in b8.name
+    assert topology_grid(1, 1, "B300", "replicate").name == "1xB300"
+    p_r = warm_capacity(glm, b8r, wl, n_iter=60)[1]
+    p_d = warm_capacity(glm, b8, wl, n_iter=60)[1]
+    assert 0 < p_r < p_d / 4, (p_r, p_d)
+    off_r = warm_capacity(glm, b8r, wl, ram_gib=512, n_iter=60, which="offload")[1]
+    off_d = warm_capacity(glm, b8, wl, ram_gib=512, n_iter=60, which="offload")[1]
+    assert 0 < off_r < off_d / 4, "rank-local host offload replicates with the cache"
+    _, v_r, _, _ = decode_curves(glm, b8r, wl, [64], n_iter=200)
+    _, v_d, _, _ = decode_curves(glm, b8, wl, [64], n_iter=200)
+    assert v_r[0] < v_d[0], "eight ranks re-reading the whole MLA cache must decode slower"
+    try:
+        topology_grid(1, 2, "B300", "sharded"); raise AssertionError("expected ValueError")
     except ValueError:
         pass
 

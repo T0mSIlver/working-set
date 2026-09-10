@@ -91,6 +91,7 @@ export function workingsetConfig(state, model, topo, wl){
       // moves the page's numbers must be visible in the file that claims to
       // reproduce them.
       ['recurrent_state_dtype', state.state_dt],
+      ['kv_sharding', state.kvshard],
       ['weight_overhead', state.wover === 'p15' ? 0.15 : 0],
     ]],
     ['workload', [

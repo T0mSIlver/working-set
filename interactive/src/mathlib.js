@@ -31,10 +31,15 @@ function _hash(str){
 // the fields that change what gets sampled — deliberately NOT users/think/
 // sla/turn/burst, none of which touch the workload or the pool
 export function samplingSig(){
+  // kvshard joins the signature only off its default: the seed string is
+  // what every golden vector's JS draw was measured under, and a new field
+  // in it would reseed all 800 of them (a fixture re-tune, not a finding).
+  // The replicated arm still gets its own seed and its own cache key.
   return [state.model,state.gpu,state.wdt,state.kv,state.state_dt,state.wover,
           state.mtp,state.mbu,state.mfu,state.ngpu,state.tp,state.ram,state.cap,
           state.user_median,state.user_sigma,state.sub_median,state.sub_sigma,
-          state.sub_ratio,state.sub_shares_prefix,state.sys,state.inval].join('|');
+          state.sub_ratio,state.sub_shares_prefix,state.sys,state.inval,
+          ...(state.kvshard && state.kvshard !== "dcp" ? [state.kvshard] : [])].join('|');
 }
 // _spare must be dropped too: a half-used Box-Muller pair carried across a
 // reseed makes the section's draws depend on whatever sampled BEFORE it, so

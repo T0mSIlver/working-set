@@ -103,7 +103,7 @@ CHUNKS = (2048, 4096, 8192, 16384, 32768, 65536)
 # state.js defaults, verbatim — the published reference configuration
 DEFAULT_STATE = {
     "model": "27B", "gpu": "H200", "wdt": "fp8", "ngpu": 1, "tp": 1, "ram": 0,
-    "kv": "fp8", "cap": 180, "mtp": 2.94,
+    "kv": "fp8", "cap": 180, "mtp": 2.94, "kvshard": "dcp",
     "mbu": M.MBU_DEFAULT, "mfu": M.MFU_DEFAULT, "chunk": "32768",
     "user_median": 31, "user_sigma": 0.81, "sub_median": 8, "sub_sigma": 0.90,
     "sub_ratio": 0.10, "sub_shares_prefix": False, "sys": 15, "inval": 1.0,
@@ -148,7 +148,8 @@ def state_model(st: dict) -> M.Model:
 
 
 def state_topo(st: dict) -> M.Topology:
-    return M.topology_grid(st["ngpu"] // st["tp"], st["tp"], st["gpu"])
+    return M.topology_grid(st["ngpu"] // st["tp"], st["tp"], st["gpu"],
+                           st.get("kvshard", "dcp"))
 
 
 def state_wl(st: dict) -> M.Workload:
@@ -506,6 +507,10 @@ KNOB_SWEEP = [
     ("ekwh", [0.08, 0.26]),
     ("pue", ["1.2", "2.0"]),
     ("gpuh", [1.0, 12.0]),
+    # KV layout across the TP ranks: "replicate" prices plain TP's copies
+    # (a no-op on anchors whose tp <= kv_heads — the GLM-5.3 TP8 anchor is
+    # the one that moves, by 8x on the pool)
+    ("kvshard", ["replicate"]),
 ]
 
 # Deployments the knob sweep is run on: a dense single GPU, an MoE on TP2, a
@@ -516,6 +521,17 @@ SWEEP_ANCHORS = [
     dict(model="35BA3B", gpu="H200", wdt="fp8", kv="fp8", ngpu=2, tp=2),
     dict(model="GLM52", gpu="H200", wdt="fp8", kv="fp8", ngpu=8, tp=8),
     dict(model="MM35", gpu="H200", wdt="fp8", kv="fp8", ngpu=8, tp=2),
+    # the KV-layout axis where it bites hardest: a single-latent cache AND a
+    # single-latent per-session state on eight ranks (kvshard "replicate"
+    # pays 8x on both); the 27B / 35B-A3B anchors sit at tp <= kv_heads
+    # where the axis is a no-op, and the GLM-5.3 anchor covers MLA at TP8
+    dict(model="DSV41F", gpu="B300", wdt="fp8", kv="fp8", ngpu=8, tp=8),
+    # GQA past its heads: 2 KV heads on 8 ranks replicate the cache 4x while
+    # the DeltaNet state still shards (r_kv != r_state), and Q38FN's cache
+    # carries a one-head indexer the single kv_heads under-replicates
+    # (research/kv_tp_sharding.md, codex F6/F8)
+    dict(model="Q38FN", gpu="B300", wdt="fp8", kv="fp8", ngpu=8, tp=8),
+    dict(model="35BA3B", gpu="B300", wdt="fp8", kv="fp8", ngpu=8, tp=8),
 ]
 
 # The states the Monte-Carlo bands are measured on, named by content: a
@@ -626,9 +642,21 @@ SPREAD_PROBE = [
 # them; the others cover the knobs most likely to interact with topology)
 ANCHOR_KNOBS = {
     1: {"chunk", "inval", "sla", "decode_floor", "mbu", "users", "out", "ram"},
-    2: {"chunk", "inval", "sla", "decode_floor", "users", "mbu"},
+    2: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "kvshard"},
     3: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "out"},
+    4: {"kvshard", "users", "decode_floor", "ram"},
+    5: {"kvshard"},
+    6: {"kvshard"},
 }
+
+# knob COMBINATIONS the one-at-a-time sweep cannot reach and the layout axis
+# needs: a replicated cache with host offload on (the offload is rank-local,
+# so it replicates too) on the three anchors where the layout bites
+KNOB_COMBOS = [
+    (4, {"kvshard": "replicate", "ram": 256}),
+    (5, {"kvshard": "replicate", "ram": 256}),
+    (6, {"kvshard": "replicate", "ram": 256}),
+]
 
 
 def build_states() -> list[dict]:
@@ -659,6 +687,12 @@ def build_states() -> list[dict]:
                          else min(v, cap_slider_max(st["model"])))
                 st[knob] = v
                 add(st)
+
+    # 2b. the named knob combinations
+    for idx, knobs in KNOB_COMBOS:
+        st = base_state(SWEEP_ANCHORS[idx])
+        st.update(knobs)
+        add(st)
 
     # 3. EVERY legal deployment, each with a seeded knob draw. Not subsampled:
     #    a deployment the fixture never prices is a deployment the mirror is

@@ -1,5 +1,5 @@
 import { CONFIG, DECODE_MBU, GIB, PREFILL_MFU, effective_bw, is_moe, kv_pool_tokens,
-         state_traffic, w_decode } from './config.js';
+         replicated, state_traffic, w_decode } from './config.js';
 import { percentiles } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
@@ -13,6 +13,8 @@ function warmOnce(pool, ram_gib, model, wl){
   let reserved = wl.sys_user;
   if (!wl.sub_shares_prefix && wl.sub_ratio > 0) reserved += wl.sys_sub;
   const gpu_budget = pool - reserved;
+  // the host offload buffer pays per stored copy too: vLLM's native offload
+  // is rank-local (the caller passes the replicated model; mirrors _warm_once)
   const ram_budget = ram_gib > 0 ? ram_gib*GIB - reserved*model.kv_bpt : 0;
 
   // every resident session also holds its constant DeltaNet recurrent state
@@ -66,6 +68,9 @@ export function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
   // CPU-offload buffer (mirrors warm_capacity in scenario_model.py).
   if (pool <= 0)
     return { all:[0,0,0], gpu:[0,0,0], off:[0,0,0], censored:false };
+  // every budget pays per stored copy — the host offload is rank-local
+  // (mirrors warm_capacity)
+  model = replicated(model, topo);
   // One fill costs one draw per resident session, so a big pool full of small
   // sessions (a 91M-token TP8 pool at a 5k median holds ~30k of them) makes a
   // 700-iteration run a multi-second freeze. Probe one fill for its true cost,
@@ -133,6 +138,9 @@ export function prefillMfu(){
 }
 
 export function decodeCurves(model, topo, wl, nMax, step, n_iter){
+  // a replicated cache is re-read by every rank that holds a copy: per-step
+  // KV and state bytes scale by the storage factor (mirrors decode_curves)
+  model = replicated(model, topo);
   // MEASURED efficiency, not a roofline: see DECODE_MBU.
   const bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU), scale = topo.replicas;
   const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);

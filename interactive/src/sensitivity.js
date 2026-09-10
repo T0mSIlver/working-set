@@ -1,5 +1,5 @@
 import { DECODE_MBU, GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, effective_bw,
-         kv_pool_tokens, state_traffic, w_decode } from './config.js';
+         kv_pool_tokens, replicated, state_traffic, w_decode } from './config.js';
 import { contextStats, decodeFloor, liveTurn, maxUsersLatency, maxUsersSaturation,
          prefillChunk, prefillServiceMoments, setLiveTurn } from './prefill.js';
 import { clip, seedFor } from './mathlib.js';
@@ -35,6 +35,8 @@ function warmUsersApprox(model, topo, wl, nSamp){
   if (pool <= 0) return 0;
   let reserved = wl.sys_user;
   if (!wl.sub_shares_prefix && wl.sub_ratio > 0) reserved += wl.sys_sub;
+  // both budgets in the replicated model's units, as warmOnce prices them
+  model = replicated(model, topo);
   const stateTok = model.deltanet_state / model.kv_bpt;
   let s = 0; const r = {full:0, prefix:0, isCold:false};
   for (let i = 0; i < nSamp; i++){
@@ -57,6 +59,7 @@ function decodeUsersApprox(model, topo, samples, floor){
   // argument, and a fixed 40 would leave the sensitivity panel's stand-in on a
   // different threshold from the MC ceiling it is calibrated against — calD
   // would silently absorb the mismatch at the anchor and be wrong everywhere else
+  model = replicated(model, topo);   // per-step KV/state reads per stored copy
   const F = floor || decodeFloor(), bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU);
   const tk = (model.kv_decode_const && model.kv_decode_topk) ? model.kv_decode_topk : 0;
   let mL = 0, mT = 0;

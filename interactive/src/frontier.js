@@ -102,6 +102,7 @@ export function frontierRowName(r){
   const tags = (r.label.split(' · ')[0].match(/\[[^\]]+\]/g) || []).join(' ');
   return CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '') + (tags ? ' ' + tags : '') + ' · '
        + makeGrid(r.dp, r.tp, state.gpu).name.replace(' tensor-par', ' TP').replace(' data-par', ' DP');
+       // (the un-suffixed name: the KV layout is a page-wide setting, not a row label)
 }
 function frontierShortLabel(r){
   const m = FRONTIER_SHORT[r.mk] || CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '');

@@ -54,7 +54,9 @@ def cmd_predict(args) -> int:
         print(json.dumps(out, indent=2, allow_nan=False))
         return 0
     d, w = cfg.deployment, cfg.workload
-    print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}), "
+    layout = (" [KV replicated]" if d.kv_sharding == "replicate" and d.tensor_parallel > 1
+              else "")
+    print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}{layout}), "
           f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}")
     users = cfg.users_per_group()
     print(f"operating point: {users:g} users/group, think {w.think_time_s} s, "

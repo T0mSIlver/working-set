@@ -15,6 +15,13 @@ export const state = {
   // mtp follows the SELECTED model's own value (the model segment resets it);
   // the seed here is the 27B's measured 2.94 (decode_mbu.md), was 1.7.
   state_dt: "bf16", wover: "pub", mtp: 2.94,
+  // kvshard: how a group's KV cache is laid out across its TP ranks. "dcp"
+  // (decode context parallelism, the layout every published number assumes;
+  // the recipe emits --decode-context-parallel-size) stores one copy;
+  // "replicate" is plain tensor parallelism, where every rank past the
+  // model's KV heads keeps a full copy — the MLA / MQA models pay tp copies.
+  // research/kv_tp_sharding.md.
+  kvshard: "dcp",
   // Efficiency knobs. mbu (decode) and mfu (prefill) are the study's two
   // measured-efficiency constants, exposed because both are single-deployment
   // anchors rather than brackets and the reader should be able to argue with
@@ -85,7 +92,7 @@ export function peopleFromSessions(sessions){
 // different models at the very top, by design. The clamp on model switch is
 // one-way: a 1024k cap snaps down to 262 for Mistral and is NOT restored on
 // switching back (the user sees the clamped value and can re-raise it).
-export function currentTopo(){ return makeGrid(state.ngpu / state.tp, state.tp, state.gpu); }
+export function currentTopo(){ return makeGrid(state.ngpu / state.tp, state.tp, state.gpu, state.kvshard); }
 export function capSliderMax(){ return Math.round(CONFIG.MODELS[state.model].max_ctx/1000); }
 // the host-RAM offload buffer is shared: DP replicas each get 1/N of it
 export function ramPerCache(topo){ return topo.replicas>1 ? state.ram/topo.replicas : state.ram; }

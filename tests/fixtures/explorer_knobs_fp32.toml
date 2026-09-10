@@ -16,6 +16,7 @@ max_num_batched_tokens = 32768
 max_model_len = 180000
 ram_gib = 0
 recurrent_state_dtype = "fp32"
+kv_sharding = "dcp"
 weight_overhead = 0
 
 [workload]

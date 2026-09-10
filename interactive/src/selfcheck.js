@@ -1,6 +1,6 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
-         effective_bw, kv_pool_tokens, makeGrid, makeTopo, minTpFor, servableKv, state_traffic, tpEff,
-         withKvDtype } from './config.js';
+         dcpSize, effective_bw, kvReplication, kv_pool_tokens, makeGrid, makeTopo, minTpFor,
+         servableKv, state_traffic, tpEff, withKvDtype } from './config.js';
 import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, coldRequestSeconds,
          contextStats, liveThink, liveTurn, maxUsersLatency, maxUsersSaturation, mfuEff,
          missContextSeconds, prefillContextSeconds, prefillSeconds,
@@ -103,6 +103,40 @@ export function unitChecks(){
     "MM35 DP4xTP2 on H200 must hold a real pool");
   console.assert(kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(2,4,"B300")) > 0,
     "GLM-5.3 DP2xTP4 on B300 must hold a real pool");
+  // KV sharding under TP (research/kv_tp_sharding.md; mirror _selfcheck):
+  // every default ("dcp") topology at a TP the KV heads divide stores ONE
+  // copy; "replicate" pays tp/kv_heads copies past the heads, and the
+  // single-latent models pay it at every tp > 1
+  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV41F",1],["Q38FN",2],["GLM53F",1]]){
+    const m = CONFIG.MODELS[mk];
+    console.assert(m.kv_heads === heads, mk+" kv_heads");
+    for (const tp of [1,2,4,8]){
+      const d = makeGrid(1,tp,"B300"), r = makeGrid(1,tp,"B300","replicate");
+      const [dk, ds] = kvReplication(m, d), [rk, rs] = kvReplication(m, r);
+      console.assert(dk === 1 && ds === 1, mk+" TP"+tp+" dcp = one copy");
+      console.assert(rk === Math.max(1, tp/heads) && rs === (mk==="DSV41F" ? rk : 1), mk+" TP"+tp+" replicate factor");
+      console.assert(dcpSize(m, d) === Math.max(1, Math.floor(tp/heads)) && dcpSize(m, r) === 1, mk+" dcp size");
+    }
+  }
+  console.assert(CONFIG.MODELS["DSV41F"].state_heads === 1
+    && Object.keys(CONFIG.MODELS).every(k => k === "DSV41F" || CONFIG.MODELS[k].state_heads === undefined),
+    "only DSv4.1-Flash's state replicates with its cache");
+  console.assert(kvReplication(CONFIG.MODELS["27B"], makeGrid(1,6,"B300"))[0] === 1
+    && kvReplication(CONFIG.MODELS["27B"], makeGrid(1,6,"B300","replicate"))[0] === 1.5
+    && kvReplication(CONFIG.MODELS["GLM52"], makeGrid(1,3,"B300","replicate"))[0] === 3
+    && dcpSize(CONFIG.MODELS["27B"], makeGrid(1,6,"B300")) === 1,
+    "odd TP: one copy under dcp (extrapolated), the continuous ratio under replicate");
+  {
+    const glm = CONFIG.MODELS["GLM52"], b8 = makeGrid(1,8,"B300"), b8r = makeGrid(1,8,"B300","replicate");
+    console.assert(approx(kv_pool_tokens(glm, b8r)*8, kv_pool_tokens(glm, b8), 1e-12),
+      "a replicated MLA cache on 8 ranks holds 1/8 of the tokens");
+    console.assert(kv_pool_tokens(CONFIG.MODELS["MM35"], b8r) === kv_pool_tokens(CONFIG.MODELS["MM35"], b8),
+      "8 KV heads on 8 ranks: no copies either way");
+    console.assert(b8r.name.endsWith(" [KV replicated]") && !b8.name.includes("replicated")
+      && makeGrid(1,1,"B300","replicate").name === "1×B300", "topology names carry the layout only when it costs");
+    let threw = false; try { makeGrid(1,2,"B300","sharded"); } catch(e){ threw = true; }
+    console.assert(threw, "an unknown kv_shard must throw");
+  }
   // widening TP raises the SYSTEM total: each DP group re-pays for the weights
   const sys = tp => tp>0 ? (8/tp)*kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(8/tp,tp,"B300")) : 0;
   console.assert(sys(8) > sys(4), "GLM-5.3 TP8 must beat DP2xTP4 on system total");

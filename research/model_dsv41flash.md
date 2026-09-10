@@ -430,10 +430,14 @@ card does not say.
   DeepSeek's own serving uses. Under plain TP the caches replicate and the
   pool divides by `tp` (8×H200: 520M → 65M tokens; 2×B300: 9.4M → 4.7M). The
   same convention already prices GLM-5.3 (MLA), GLM-5.3-Flash and the 0731
-  model; it is a study-wide reading, flagged here for the owner rather than
-  changed in this note. It moves no decision on this model: the cache never
-  binds (§ 5 of the PR), the weight-set fit thresholds are TP-independent,
-  and the decode plateau is a weight read.
+  model. **Resolved (research/kv_tp_sharding.md):** the study now carries
+  the layout explicitly — `kv_heads=1, state_heads=1` here — with the
+  default "dcp" layout pricing one copy (vLLM decode context parallelism,
+  emitted in the recipe) and a "replicate" arm pricing plain TP's copies
+  (8×B300: pool 1,758M → 220M tokens; the windows replicate too, so the
+  decode ceiling there moves from "≥ 4,096" to 885). It moves no decision
+  under the default: the cache never binds, the fit thresholds are
+  weight-set, and the decode plateau is a weight read.
 - **Cached-entry scale bytes are charged** (E4M3/16 on the latent, E8M0/32
   on the indexer keys and windows) — the layout `fp4_act_quant` writes. A
   stack storing scales elsewhere or at a different granularity moves
