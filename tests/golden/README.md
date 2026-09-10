@@ -42,7 +42,7 @@ regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
 the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
-(798 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
+(814 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
 plus a 25-state named spread probe at three seeds and two sampling scales). The JS
 side is ~80 s. That is the price of pricing every legal deployment rather than
 a sample of them.

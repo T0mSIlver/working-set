@@ -164,7 +164,7 @@ function enforceConstraints(){
       ? "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels, quantization-aware trained) and the sliding windows FP8 — that native layout is what the FP8 arm prices; no serving stack offers a BF16 main KV, so the toggle is disabled."
       : "GLM-5.3: vLLM's sparse-MLA path requires a quantized (FP8) KV cache — FP16 KV is not servable, so the toggle is disabled."));
   document.getElementById('state-tip').setAttribute('data-tip', stateOk
-    ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence: method page, "The two un-measured structural knobs".`
+    ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence: method page, "The three un-measured structural knobs".`
     : (state.model === "DSV41F"
       ? `DeepSeek-V4.1-Flash pays a fixed ${fmt(m.deltanet_state/MIB,1)} MiB/session (fp8 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.`
       : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention — so this control is disabled.`));

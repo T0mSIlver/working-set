@@ -32714,6 +32714,220 @@
   },
   {
    "id": 294,
+   "label": "35BA3B/8xB300 tensor-par [KV replicated]/fp8/fp8KV",
+   "state": {
+    "model": "35BA3B",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "ngpu": 8,
+    "tp": 8,
+    "ram": 0,
+    "kv": "fp8",
+    "cap": 180,
+    "mtp": 1.7,
+    "kvshard": "replicate",
+    "mbu": 0.22,
+    "mfu": 0.45,
+    "chunk": "32768",
+    "user_median": 31,
+    "user_sigma": 0.81,
+    "sub_median": 8,
+    "sub_sigma": 0.9,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sys": 15,
+    "inval": 1.0,
+    "users": 64,
+    "think": 30,
+    "sla": 10,
+    "turn": 2000,
+    "burst": 32,
+    "out": 400,
+    "decode_floor": 40.0,
+    "ekwh": 0.19,
+    "pue": "1.5",
+    "gpuh": 6.8
+   },
+   "out": {
+    "kv_pool_tokens": 49785864.1663,
+    "effective_bw": 46656000000000.0,
+    "peak_flops": 2.6244e+16,
+    "tp_efficiency": 0.729,
+    "w_decode_n64": 34152254720,
+    "prefill_overhead_seconds": 0.000760888203018,
+    "mfu_ceiling": 0.46692742768,
+    "mfu_effective_at_chunk": 0.45,
+    "prefill_flops_2048": 10337837383700.0,
+    "prefill_seconds_2048": 0.000875360919209,
+    "prefill_flops_32768": 247868770222000.0,
+    "prefill_seconds_32768": 0.0209883969434,
+    "prefill_flops_180000": 3532608000000000.0,
+    "prefill_seconds_180000": 0.299125133364,
+    "prefill_context_seconds_120k": 0.149473149418,
+    "miss_context_seconds_120k": 0.147097881709,
+    "warm_pass_seconds_turn": 0.000854178732917,
+    "ctx_mean": 40140.9255977,
+    "ctx_mean_sq": 2796284594.38,
+    "mean_passes": 1.722075,
+    "cold_request_seconds": 0.0359894191193,
+    "warm_request_seconds": 0.00196794683228,
+    "moments_miss": 0.0359894191193,
+    "moments_miss_sq": 0.00381449223383,
+    "moments_hit": 0.00196794683228,
+    "moments_hit_sq": 4.785098027e-06,
+    "prefill_duty": 0.00541648578275,
+    "queue_wait_seconds": 5.05890938527e-05,
+    "ttft_miss_fcfs": 0.0360400082132,
+    "ttft_hit_fcfs": 0.00201853592613,
+    "ttft_hit_ps": 0.001978664239,
+    "breakeven_miss_rate": 12.4676678665,
+    "spike_tolerance": 276.354422649,
+    "spike_tolerance_sla10": 276.354422649,
+    "max_users_latency": 11804.7738364,
+    "max_users_saturation": 11815.779191,
+    "sla_miss_rate_sla10": 1.0,
+    "burst_drain_seconds_b32": 1.1579333413,
+    "max_users_cache": 1569.95,
+    "warm_p5_all": 1731.75,
+    "max_users_decode": 235.0,
+    "max_users_decode_censored": false,
+    "decode_p50_n1": 4392.01029391,
+    "decode_p50_n8": 762.320966047,
+    "decode_p50_n64": 122.758365783,
+    "steady_n": 0.213721417723,
+    "steady_per_user_tok_s": 4392.01029391,
+    "steady_saturated": false,
+    "power_d_p": 0.00541648578275,
+    "power_d_d": 0.0998581560284,
+    "power_per_gpu_w": 217.924355956,
+    "power_kw": 8.61509227148,
+    "energy_eur_month": 1178.54462274,
+    "energy_hw_month": 39168.0,
+    "energy_total_month": 40346.5446227,
+    "energy_eur_user": 630.41475973,
+    "energy_eur_mtok": 16.582879833
+   },
+   "cond": {
+    "duty": 0.00541648578275,
+    "sla_headroom": 0.996401058088,
+    "sla10_headroom": 0.996401058088,
+    "warm_p5": 1731.75,
+    "decode_ceiling": 235.0,
+    "sla_f_unreachable": 1.0,
+    "ctx_cv2": 0.735428018913,
+    "steady_cap": 1904.1,
+    "steady_cap_ratio": 0.0928166576028
+   }
+  },
+  {
+   "id": 295,
+   "label": "35BA3B/8xB300 tensor-par [KV replicated]/fp8/fp8KV",
+   "state": {
+    "model": "35BA3B",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "ngpu": 8,
+    "tp": 8,
+    "ram": 256,
+    "kv": "fp8",
+    "cap": 180,
+    "mtp": 1.7,
+    "kvshard": "replicate",
+    "mbu": 0.22,
+    "mfu": 0.45,
+    "chunk": "32768",
+    "user_median": 31,
+    "user_sigma": 0.81,
+    "sub_median": 8,
+    "sub_sigma": 0.9,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sys": 15,
+    "inval": 1.0,
+    "users": 64,
+    "think": 30,
+    "sla": 10,
+    "turn": 2000,
+    "burst": 32,
+    "out": 400,
+    "decode_floor": 40.0,
+    "ekwh": 0.19,
+    "pue": "1.5",
+    "gpuh": 6.8
+   },
+   "out": {
+    "kv_pool_tokens": 49785864.1663,
+    "effective_bw": 46656000000000.0,
+    "peak_flops": 2.6244e+16,
+    "tp_efficiency": 0.729,
+    "w_decode_n64": 34152254720,
+    "prefill_overhead_seconds": 0.000760888203018,
+    "mfu_ceiling": 0.46692742768,
+    "mfu_effective_at_chunk": 0.45,
+    "prefill_flops_2048": 10337837383700.0,
+    "prefill_seconds_2048": 0.000875360919209,
+    "prefill_flops_32768": 247868770222000.0,
+    "prefill_seconds_32768": 0.0209883969434,
+    "prefill_flops_180000": 3532608000000000.0,
+    "prefill_seconds_180000": 0.299125133364,
+    "prefill_context_seconds_120k": 0.149473149418,
+    "miss_context_seconds_120k": 0.147097881709,
+    "warm_pass_seconds_turn": 0.000854178732917,
+    "ctx_mean": 40140.9255977,
+    "ctx_mean_sq": 2796284594.38,
+    "mean_passes": 1.722075,
+    "cold_request_seconds": 0.0359894191193,
+    "warm_request_seconds": 0.00196794683228,
+    "moments_miss": 0.0359894191193,
+    "moments_miss_sq": 0.00381449223383,
+    "moments_hit": 0.00196794683228,
+    "moments_hit_sq": 4.785098027e-06,
+    "prefill_duty": 0.00541648578275,
+    "queue_wait_seconds": 5.05890938527e-05,
+    "ttft_miss_fcfs": 0.0360400082132,
+    "ttft_hit_fcfs": 0.00201853592613,
+    "ttft_hit_ps": 0.001978664239,
+    "breakeven_miss_rate": 12.4676678665,
+    "spike_tolerance": 276.354422649,
+    "spike_tolerance_sla10": 276.354422649,
+    "max_users_latency": 11804.7738364,
+    "max_users_saturation": 11815.779191,
+    "sla_miss_rate_sla10": 1.0,
+    "burst_drain_seconds_b32": 1.1579333413,
+    "max_users_cache": 1790.0,
+    "warm_p5_all": 1969.9,
+    "max_users_decode": 235.0,
+    "max_users_decode_censored": false,
+    "decode_p50_n1": 4392.01029391,
+    "decode_p50_n8": 762.320966047,
+    "decode_p50_n64": 122.758365783,
+    "steady_n": 0.213721417723,
+    "steady_per_user_tok_s": 4392.01029391,
+    "steady_saturated": false,
+    "power_d_p": 0.00541648578275,
+    "power_d_d": 0.0998581560284,
+    "power_per_gpu_w": 217.924355956,
+    "power_kw": 8.61509227148,
+    "energy_eur_month": 1178.54462274,
+    "energy_hw_month": 39168.0,
+    "energy_total_month": 40346.5446227,
+    "energy_eur_user": 630.41475973,
+    "energy_eur_mtok": 16.582879833
+   },
+   "cond": {
+    "duty": 0.00541648578275,
+    "sla_headroom": 0.996401058088,
+    "sla10_headroom": 0.996401058088,
+    "warm_p5": 1969.9,
+    "decode_ceiling": 235.0,
+    "sla_f_unreachable": 1.0,
+    "ctx_cv2": 0.735428018913,
+    "steady_cap": 1904.1,
+    "steady_cap_ratio": 0.0928166576028
+   }
+  },
+  {
+   "id": 296,
    "label": "DSV41F/8xB300 tensor-par [KV replicated]/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -32820,7 +33034,328 @@
    }
   },
   {
-   "id": 295,
+   "id": 297,
+   "label": "DSV41F/8xB300 tensor-par [KV replicated]/fp8/fp8KV",
+   "state": {
+    "model": "DSV41F",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "ngpu": 8,
+    "tp": 8,
+    "ram": 256,
+    "kv": "fp8",
+    "cap": 180,
+    "mtp": 1.7,
+    "kvshard": "replicate",
+    "mbu": 0.22,
+    "mfu": 0.45,
+    "chunk": "32768",
+    "user_median": 31,
+    "user_sigma": 0.81,
+    "sub_median": 8,
+    "sub_sigma": 0.9,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sys": 15,
+    "inval": 1.0,
+    "users": 64,
+    "think": 30,
+    "sla": 10,
+    "turn": 2000,
+    "burst": 32,
+    "out": 400,
+    "decode_floor": 40.0,
+    "ekwh": 0.19,
+    "pue": "1.5",
+    "gpuh": 6.8
+   },
+   "out": {
+    "kv_pool_tokens": 219725136.692,
+    "effective_bw": 46656000000000.0,
+    "peak_flops": 2.6244e+16,
+    "tp_efficiency": 0.729,
+    "w_decode_n64": 297300751808,
+    "prefill_overhead_seconds": 0.0109372004244,
+    "mfu_ceiling": 0.597089747852,
+    "mfu_effective_at_chunk": 0.45,
+    "prefill_flops_2048": 32384169803800.0,
+    "prefill_seconds_2048": 0.00274214379615,
+    "prefill_flops_32768": 524331469767000.0,
+    "prefill_seconds_32768": 0.0443979974061,
+    "prefill_flops_180000": 3043065600000000.0,
+    "prefill_seconds_180000": 0.257672915714,
+    "prefill_context_seconds_120k": 0.168036173348,
+    "miss_context_seconds_120k": 0.17039019569,
+    "warm_pass_seconds_turn": 0.00267782485732,
+    "ctx_mean": 40140.9255977,
+    "ctx_mean_sq": 2796284594.38,
+    "mean_passes": 1.722075,
+    "cold_request_seconds": 0.0604049427669,
+    "warm_request_seconds": 0.00276135746477,
+    "moments_miss": 0.0604049427669,
+    "moments_miss_sq": 0.00597648002706,
+    "moments_hit": 0.00276135746477,
+    "moments_hit_sq": 7.63022664178e-06,
+    "prefill_duty": 0.00783268831909,
+    "queue_wait_seconds": 7.96108707218e-05,
+    "ttft_miss_fcfs": 0.0604845536376,
+    "ttft_hit_fcfs": 0.0028409683355,
+    "ttft_hit_ps": 0.00278315706662,
+    "breakeven_miss_rate": 7.34470286594,
+    "spike_tolerance": 164.252669771,
+    "spike_tolerance_sla10": 164.252669771,
+    "max_users_latency": 8162.60412307,
+    "max_users_saturation": 8170.88557501,
+    "sla_miss_rate_sla10": 1.0,
+    "burst_drain_seconds_b32": 1.94821795254,
+    "max_users_cache": 7712.0,
+    "warm_p5_all": 8490.0,
+    "max_users_decode": 885.0,
+    "max_users_decode_censored": false,
+    "decode_p50_n1": 1324.99118061,
+    "decode_p50_n8": 380.571483649,
+    "decode_p50_n64": 56.7823068862,
+    "steady_n": 0.708432388385,
+    "steady_per_user_tok_s": 1324.99118061,
+    "steady_saturated": false,
+    "power_d_p": 0.00783268831909,
+    "power_d_d": 0.026516007533,
+    "power_per_gpu_w": 175.134208705,
+    "power_kw": 8.10161050446,
+    "energy_eur_month": 1108.30031701,
+    "energy_hw_month": 39168.0,
+    "energy_total_month": 40276.300317,
+    "energy_eur_user": 629.317192453,
+    "energy_eur_mtok": 16.5540086399
+   },
+   "cond": {
+    "duty": 0.00783268831909,
+    "sla_headroom": 0.993959505723,
+    "sla10_headroom": 0.993959505723,
+    "warm_p5": 8490.0,
+    "decode_ceiling": 885.0,
+    "sla_f_unreachable": 1.0,
+    "ctx_cv2": 0.735428018913,
+    "steady_cap": 7505.1,
+    "steady_cap_ratio": 0.0105744461617
+   }
+  },
+  {
+   "id": 298,
+   "label": "Q38FN/8xB300 tensor-par [KV replicated]/fp8/fp8KV",
+   "state": {
+    "model": "Q38FN",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "ngpu": 8,
+    "tp": 8,
+    "ram": 0,
+    "kv": "fp8",
+    "cap": 180,
+    "mtp": 1.7,
+    "kvshard": "replicate",
+    "mbu": 0.22,
+    "mfu": 0.45,
+    "chunk": "32768",
+    "user_median": 31,
+    "user_sigma": 0.81,
+    "sub_median": 8,
+    "sub_sigma": 0.9,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sys": 15,
+    "inval": 1.0,
+    "users": 64,
+    "think": 30,
+    "sla": 10,
+    "turn": 2000,
+    "burst": 32,
+    "out": 400,
+    "decode_floor": 40.0,
+    "ekwh": 0.19,
+    "pue": "1.5",
+    "gpuh": 6.8
+   },
+   "out": {
+    "kv_pool_tokens": 37271676.9981,
+    "effective_bw": 46656000000000.0,
+    "peak_flops": 2.6244e+16,
+    "tp_efficiency": 0.729,
+    "w_decode_n64": 129434699800,
+    "prefill_overhead_seconds": 0.00397595663087,
+    "mfu_ceiling": 0.491658851598,
+    "mfu_effective_at_chunk": 0.45,
+    "prefill_flops_2048": 25358315290600.0,
+    "prefill_seconds_2048": 0.0021472264806,
+    "prefill_flops_32768": 554167114400000.0,
+    "prefill_seconds_32768": 0.0469243437145,
+    "prefill_flops_180000": 6951974400000000.0,
+    "prefill_seconds_180000": 0.58866148453,
+    "prefill_context_seconds_120k": 0.302542498603,
+    "miss_context_seconds_120k": 0.292811531793,
+    "warm_pass_seconds_turn": 0.00209570221342,
+    "ctx_mean": 40140.9255977,
+    "ctx_mean_sq": 2796284594.38,
+    "mean_passes": 1.722075,
+    "cold_request_seconds": 0.0763830284529,
+    "warm_request_seconds": 0.00410048479227,
+    "moments_miss": 0.0763830284529,
+    "moments_miss_sq": 0.0152634792147,
+    "moments_hit": 0.00410048479227,
+    "moments_hit_sq": 1.97697733988e-05,
+    "prefill_duty": 0.0113187013371,
+    "queue_wait_seconds": 0.000204369252767,
+    "ttft_miss_fcfs": 0.0765873977057,
+    "ttft_hit_fcfs": 0.00430485404504,
+    "ttft_hit_ps": 0.00414742829445,
+    "breakeven_miss_rate": 5.83869711096,
+    "spike_tolerance": 129.437300234,
+    "spike_tolerance_sla10": 129.437300234,
+    "max_users_latency": 5644.20561082,
+    "max_users_saturation": 5654.35893164,
+    "sla_miss_rate_sla10": 1.0,
+    "burst_drain_seconds_b32": 2.47223945047,
+    "max_users_cache": 1151.9,
+    "warm_p5_all": 1267.8,
+    "max_users_decode": 1090.0,
+    "max_users_decode_censored": false,
+    "decode_p50_n1": 1552.51951109,
+    "decode_p50_n8": 587.071155728,
+    "decode_p50_n64": 118.387601881,
+    "steady_n": 0.604608611976,
+    "steady_per_user_tok_s": 1552.51951109,
+    "steady_saturated": false,
+    "power_d_p": 0.0113187013371,
+    "power_d_d": 0.0215290519878,
+    "power_per_gpu_w": 175.911770717,
+    "power_kw": 8.1109412486,
+    "energy_eur_month": 1109.57676281,
+    "energy_hw_month": 39168.0,
+    "energy_total_month": 40277.5767628,
+    "energy_eur_user": 629.337136919,
+    "energy_eur_mtok": 16.5545332733
+   },
+   "cond": {
+    "duty": 0.0113187013371,
+    "sla_headroom": 0.992361697155,
+    "sla10_headroom": 0.992361697155,
+    "warm_p5": 1267.8,
+    "decode_ceiling": 1090.0,
+    "sla_f_unreachable": 1.0,
+    "ctx_cv2": 0.735428018913,
+    "steady_cap": 1406.05,
+    "steady_cap_ratio": 0.0201066497669
+   }
+  },
+  {
+   "id": 299,
+   "label": "Q38FN/8xB300 tensor-par [KV replicated]/fp8/fp8KV",
+   "state": {
+    "model": "Q38FN",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "ngpu": 8,
+    "tp": 8,
+    "ram": 256,
+    "kv": "fp8",
+    "cap": 180,
+    "mtp": 1.7,
+    "kvshard": "replicate",
+    "mbu": 0.22,
+    "mfu": 0.45,
+    "chunk": "32768",
+    "user_median": 31,
+    "user_sigma": 0.81,
+    "sub_median": 8,
+    "sub_sigma": 0.9,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sys": 15,
+    "inval": 1.0,
+    "users": 64,
+    "think": 30,
+    "sla": 10,
+    "turn": 2000,
+    "burst": 32,
+    "out": 400,
+    "decode_floor": 40.0,
+    "ekwh": 0.19,
+    "pue": "1.5",
+    "gpuh": 6.8
+   },
+   "out": {
+    "kv_pool_tokens": 37271676.9981,
+    "effective_bw": 46656000000000.0,
+    "peak_flops": 2.6244e+16,
+    "tp_efficiency": 0.729,
+    "w_decode_n64": 129434699800,
+    "prefill_overhead_seconds": 0.00397595663087,
+    "mfu_ceiling": 0.491658851598,
+    "mfu_effective_at_chunk": 0.45,
+    "prefill_flops_2048": 25358315290600.0,
+    "prefill_seconds_2048": 0.0021472264806,
+    "prefill_flops_32768": 554167114400000.0,
+    "prefill_seconds_32768": 0.0469243437145,
+    "prefill_flops_180000": 6951974400000000.0,
+    "prefill_seconds_180000": 0.58866148453,
+    "prefill_context_seconds_120k": 0.302542498603,
+    "miss_context_seconds_120k": 0.292811531793,
+    "warm_pass_seconds_turn": 0.00209570221342,
+    "ctx_mean": 40140.9255977,
+    "ctx_mean_sq": 2796284594.38,
+    "mean_passes": 1.722075,
+    "cold_request_seconds": 0.0763830284529,
+    "warm_request_seconds": 0.00410048479227,
+    "moments_miss": 0.0763830284529,
+    "moments_miss_sq": 0.0152634792147,
+    "moments_hit": 0.00410048479227,
+    "moments_hit_sq": 1.97697733988e-05,
+    "prefill_duty": 0.0113187013371,
+    "queue_wait_seconds": 0.000204369252767,
+    "ttft_miss_fcfs": 0.0765873977057,
+    "ttft_hit_fcfs": 0.00430485404504,
+    "ttft_hit_ps": 0.00414742829445,
+    "breakeven_miss_rate": 5.83869711096,
+    "spike_tolerance": 129.437300234,
+    "spike_tolerance_sla10": 129.437300234,
+    "max_users_latency": 5644.20561082,
+    "max_users_saturation": 5654.35893164,
+    "sla_miss_rate_sla10": 1.0,
+    "burst_drain_seconds_b32": 2.47223945047,
+    "max_users_cache": 1322.9,
+    "warm_p5_all": 1456.65,
+    "max_users_decode": 1090.0,
+    "max_users_decode_censored": false,
+    "decode_p50_n1": 1552.51951109,
+    "decode_p50_n8": 587.071155728,
+    "decode_p50_n64": 118.387601881,
+    "steady_n": 0.604608611976,
+    "steady_per_user_tok_s": 1552.51951109,
+    "steady_saturated": false,
+    "power_d_p": 0.0113187013371,
+    "power_d_d": 0.0215290519878,
+    "power_per_gpu_w": 175.911770717,
+    "power_kw": 8.1109412486,
+    "energy_eur_month": 1109.57676281,
+    "energy_hw_month": 39168.0,
+    "energy_total_month": 40277.5767628,
+    "energy_eur_user": 629.337136919,
+    "energy_eur_mtok": 16.5545332733
+   },
+   "cond": {
+    "duty": 0.0113187013371,
+    "sla_headroom": 0.992361697155,
+    "sla10_headroom": 0.992361697155,
+    "warm_p5": 1456.65,
+    "decode_ceiling": 1090.0,
+    "sla_f_unreachable": 1.0,
+    "ctx_cv2": 0.735428018913,
+    "steady_cap": 1406.05,
+    "steady_cap_ratio": 0.0201066497669
+   }
+  },
+  {
+   "id": 300,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -32927,7 +33462,7 @@
    }
   },
   {
-   "id": 296,
+   "id": 301,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -33034,7 +33569,7 @@
    }
   },
   {
-   "id": 297,
+   "id": 302,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -33141,7 +33676,7 @@
    }
   },
   {
-   "id": 298,
+   "id": 303,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -33248,7 +33783,7 @@
    }
   },
   {
-   "id": 299,
+   "id": 304,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -33355,7 +33890,7 @@
    }
   },
   {
-   "id": 300,
+   "id": 305,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -33462,7 +33997,7 @@
    }
   },
   {
-   "id": 301,
+   "id": 306,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -33569,7 +34104,7 @@
    }
   },
   {
-   "id": 302,
+   "id": 307,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -33676,7 +34211,7 @@
    }
   },
   {
-   "id": 303,
+   "id": 308,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -33783,7 +34318,7 @@
    }
   },
   {
-   "id": 304,
+   "id": 309,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -33890,7 +34425,7 @@
    }
   },
   {
-   "id": 305,
+   "id": 310,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -33997,7 +34532,7 @@
    }
   },
   {
-   "id": 306,
+   "id": 311,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34104,7 +34639,7 @@
    }
   },
   {
-   "id": 307,
+   "id": 312,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34211,7 +34746,7 @@
    }
   },
   {
-   "id": 308,
+   "id": 313,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34318,7 +34853,7 @@
    }
   },
   {
-   "id": 309,
+   "id": 314,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34425,7 +34960,7 @@
    }
   },
   {
-   "id": 310,
+   "id": 315,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34532,7 +35067,7 @@
    }
   },
   {
-   "id": 311,
+   "id": 316,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34639,7 +35174,7 @@
    }
   },
   {
-   "id": 312,
+   "id": 317,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34746,7 +35281,7 @@
    }
   },
   {
-   "id": 313,
+   "id": 318,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34853,7 +35388,7 @@
    }
   },
   {
-   "id": 314,
+   "id": 319,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -34960,7 +35495,7 @@
    }
   },
   {
-   "id": 315,
+   "id": 320,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35067,7 +35602,7 @@
    }
   },
   {
-   "id": 316,
+   "id": 321,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35174,7 +35709,7 @@
    }
   },
   {
-   "id": 317,
+   "id": 322,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35281,7 +35816,7 @@
    }
   },
   {
-   "id": 318,
+   "id": 323,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35388,7 +35923,7 @@
    }
   },
   {
-   "id": 319,
+   "id": 324,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35495,7 +36030,7 @@
    }
   },
   {
-   "id": 320,
+   "id": 325,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35602,7 +36137,7 @@
    }
   },
   {
-   "id": 321,
+   "id": 326,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35709,7 +36244,7 @@
    }
   },
   {
-   "id": 322,
+   "id": 327,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35816,7 +36351,7 @@
    }
   },
   {
-   "id": 323,
+   "id": 328,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -35923,7 +36458,7 @@
    }
   },
   {
-   "id": 324,
+   "id": 329,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36030,7 +36565,7 @@
    }
   },
   {
-   "id": 325,
+   "id": 330,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36137,7 +36672,7 @@
    }
   },
   {
-   "id": 326,
+   "id": 331,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36244,7 +36779,7 @@
    }
   },
   {
-   "id": 327,
+   "id": 332,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36351,7 +36886,7 @@
    }
   },
   {
-   "id": 328,
+   "id": 333,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36458,7 +36993,7 @@
    }
   },
   {
-   "id": 329,
+   "id": 334,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36565,7 +37100,7 @@
    }
   },
   {
-   "id": 330,
+   "id": 335,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36672,7 +37207,7 @@
    }
   },
   {
-   "id": 331,
+   "id": 336,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36779,7 +37314,7 @@
    }
   },
   {
-   "id": 332,
+   "id": 337,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36886,7 +37421,7 @@
    }
   },
   {
-   "id": 333,
+   "id": 338,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -36993,7 +37528,7 @@
    }
   },
   {
-   "id": 334,
+   "id": 339,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37100,7 +37635,7 @@
    }
   },
   {
-   "id": 335,
+   "id": 340,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37207,7 +37742,7 @@
    }
   },
   {
-   "id": 336,
+   "id": 341,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37314,7 +37849,7 @@
    }
   },
   {
-   "id": 337,
+   "id": 342,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37421,7 +37956,7 @@
    }
   },
   {
-   "id": 338,
+   "id": 343,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37528,7 +38063,7 @@
    }
   },
   {
-   "id": 339,
+   "id": 344,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37635,7 +38170,7 @@
    }
   },
   {
-   "id": 340,
+   "id": 345,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37742,7 +38277,7 @@
    }
   },
   {
-   "id": 341,
+   "id": 346,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37849,7 +38384,7 @@
    }
   },
   {
-   "id": 342,
+   "id": 347,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -37956,7 +38491,7 @@
    }
   },
   {
-   "id": 343,
+   "id": 348,
    "label": "27B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -38063,7 +38598,7 @@
    }
   },
   {
-   "id": 344,
+   "id": 349,
    "label": "27B/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -38170,7 +38705,7 @@
    }
   },
   {
-   "id": 345,
+   "id": 350,
    "label": "27B/4xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -38277,7 +38812,7 @@
    }
   },
   {
-   "id": 346,
+   "id": 351,
    "label": "27B/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -38384,7 +38919,7 @@
    }
   },
   {
-   "id": 347,
+   "id": 352,
    "label": "27B/6xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -38491,7 +39026,7 @@
    }
   },
   {
-   "id": 348,
+   "id": 353,
    "label": "27B/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -38598,7 +39133,7 @@
    }
   },
   {
-   "id": 349,
+   "id": 354,
    "label": "27B/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -38705,7 +39240,7 @@
    }
   },
   {
-   "id": 350,
+   "id": 355,
    "label": "35BA3B/1xH200/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -38812,7 +39347,7 @@
    }
   },
   {
-   "id": 351,
+   "id": 356,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -38919,7 +39454,7 @@
    }
   },
   {
-   "id": 352,
+   "id": 357,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39026,7 +39561,7 @@
    }
   },
   {
-   "id": 353,
+   "id": 358,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39133,7 +39668,7 @@
    }
   },
   {
-   "id": 354,
+   "id": 359,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39240,7 +39775,7 @@
    }
   },
   {
-   "id": 355,
+   "id": 360,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39347,7 +39882,7 @@
    }
   },
   {
-   "id": 356,
+   "id": 361,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39454,7 +39989,7 @@
    }
   },
   {
-   "id": 357,
+   "id": 362,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39561,7 +40096,7 @@
    }
   },
   {
-   "id": 358,
+   "id": 363,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39668,7 +40203,7 @@
    }
   },
   {
-   "id": 359,
+   "id": 364,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39775,7 +40310,7 @@
    }
   },
   {
-   "id": 360,
+   "id": 365,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39882,7 +40417,7 @@
    }
   },
   {
-   "id": 361,
+   "id": 366,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -39989,7 +40524,7 @@
    }
   },
   {
-   "id": 362,
+   "id": 367,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -40096,7 +40631,7 @@
    }
   },
   {
-   "id": 363,
+   "id": 368,
    "label": "35BA3B/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -40203,7 +40738,7 @@
    }
   },
   {
-   "id": 364,
+   "id": 369,
    "label": "35BA3B/4xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -40310,7 +40845,7 @@
    }
   },
   {
-   "id": 365,
+   "id": 370,
    "label": "35BA3B/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -40417,7 +40952,7 @@
    }
   },
   {
-   "id": 366,
+   "id": 371,
    "label": "35BA3B/6xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -40524,7 +41059,7 @@
    }
   },
   {
-   "id": 367,
+   "id": 372,
    "label": "35BA3B/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -40631,7 +41166,7 @@
    }
   },
   {
-   "id": 368,
+   "id": 373,
    "label": "35BA3B/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -40738,7 +41273,7 @@
    }
   },
   {
-   "id": 369,
+   "id": 374,
    "label": "DSV41F/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -40845,7 +41380,7 @@
    }
   },
   {
-   "id": 370,
+   "id": 375,
    "label": "DSV41F/6xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -40952,7 +41487,7 @@
    }
   },
   {
-   "id": 371,
+   "id": 376,
    "label": "DSV41F/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -41059,7 +41594,7 @@
    }
   },
   {
-   "id": 372,
+   "id": 377,
    "label": "DSV41F/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -41166,7 +41701,7 @@
    }
   },
   {
-   "id": 373,
+   "id": 378,
    "label": "GLM52/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -41273,7 +41808,7 @@
    }
   },
   {
-   "id": 374,
+   "id": 379,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -41380,7 +41915,7 @@
    }
   },
   {
-   "id": 375,
+   "id": 380,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -41487,7 +42022,7 @@
    }
   },
   {
-   "id": 376,
+   "id": 381,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -41594,7 +42129,7 @@
    }
   },
   {
-   "id": 377,
+   "id": 382,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -41701,7 +42236,7 @@
    }
   },
   {
-   "id": 378,
+   "id": 383,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -41808,7 +42343,7 @@
    }
   },
   {
-   "id": 379,
+   "id": 384,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -41915,7 +42450,7 @@
    }
   },
   {
-   "id": 380,
+   "id": 385,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -42022,7 +42557,7 @@
    }
   },
   {
-   "id": 381,
+   "id": 386,
    "label": "MM35/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42129,7 +42664,7 @@
    }
   },
   {
-   "id": 382,
+   "id": 387,
    "label": "MM35/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42236,7 +42771,7 @@
    }
   },
   {
-   "id": 383,
+   "id": 388,
    "label": "MM35/4xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42343,7 +42878,7 @@
    }
   },
   {
-   "id": 384,
+   "id": 389,
    "label": "MM35/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42450,7 +42985,7 @@
    }
   },
   {
-   "id": 385,
+   "id": 390,
    "label": "MM35/6xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42557,7 +43092,7 @@
    }
   },
   {
-   "id": 386,
+   "id": 391,
    "label": "MM35/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42664,7 +43199,7 @@
    }
   },
   {
-   "id": 387,
+   "id": 392,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42771,7 +43306,7 @@
    }
   },
   {
-   "id": 388,
+   "id": 393,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42878,7 +43413,7 @@
    }
   },
   {
-   "id": 389,
+   "id": 394,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -42985,7 +43520,7 @@
    }
   },
   {
-   "id": 390,
+   "id": 395,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -43092,7 +43627,7 @@
    }
   },
   {
-   "id": 391,
+   "id": 396,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -43199,7 +43734,7 @@
    }
   },
   {
-   "id": 392,
+   "id": 397,
    "label": "MM35/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -43306,7 +43841,7 @@
    }
   },
   {
-   "id": 393,
+   "id": 398,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -43413,7 +43948,7 @@
    }
   },
   {
-   "id": 394,
+   "id": 399,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -43520,7 +44055,7 @@
    }
   },
   {
-   "id": 395,
+   "id": 400,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -43627,7 +44162,7 @@
    }
   },
   {
-   "id": 396,
+   "id": 401,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -43734,7 +44269,7 @@
    }
   },
   {
-   "id": 397,
+   "id": 402,
    "label": "Q38FN/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -43841,7 +44376,7 @@
    }
   },
   {
-   "id": 398,
+   "id": 403,
    "label": "Q38FN/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -43948,7 +44483,7 @@
    }
   },
   {
-   "id": 399,
+   "id": 404,
    "label": "Q38FN/4xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -44055,7 +44590,7 @@
    }
   },
   {
-   "id": 400,
+   "id": 405,
    "label": "Q38FN/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -44162,7 +44697,7 @@
    }
   },
   {
-   "id": 401,
+   "id": 406,
    "label": "Q38FN/6xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -44269,7 +44804,7 @@
    }
   },
   {
-   "id": 402,
+   "id": 407,
    "label": "Q38FN/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -44376,7 +44911,7 @@
    }
   },
   {
-   "id": 403,
+   "id": 408,
    "label": "Q38FN/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -44483,7 +45018,7 @@
    }
   },
   {
-   "id": 404,
+   "id": 409,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -44590,7 +45125,7 @@
    }
   },
   {
-   "id": 405,
+   "id": 410,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -44697,7 +45232,7 @@
    }
   },
   {
-   "id": 406,
+   "id": 411,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -44804,7 +45339,7 @@
    }
   },
   {
-   "id": 407,
+   "id": 412,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -44911,7 +45446,7 @@
    }
   },
   {
-   "id": 408,
+   "id": 413,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -45018,7 +45553,7 @@
    }
   },
   {
-   "id": 409,
+   "id": 414,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -45125,7 +45660,7 @@
    }
   },
   {
-   "id": 410,
+   "id": 415,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -45232,7 +45767,7 @@
    }
   },
   {
-   "id": 411,
+   "id": 416,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -45339,7 +45874,7 @@
    }
   },
   {
-   "id": 412,
+   "id": 417,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -45446,7 +45981,7 @@
    }
   },
   {
-   "id": 413,
+   "id": 418,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -45553,7 +46088,7 @@
    }
   },
   {
-   "id": 414,
+   "id": 419,
    "label": "GLM52/8xH200 tensor-par [KV replicated]/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -45660,7 +46195,7 @@
    }
   },
   {
-   "id": 415,
+   "id": 420,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -45767,7 +46302,7 @@
    }
   },
   {
-   "id": 416,
+   "id": 421,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -45874,7 +46409,7 @@
    }
   },
   {
-   "id": 417,
+   "id": 422,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -45981,7 +46516,7 @@
    }
   },
   {
-   "id": 418,
+   "id": 423,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -46088,7 +46623,7 @@
    }
   },
   {
-   "id": 419,
+   "id": 424,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -46195,7 +46730,7 @@
    }
   },
   {
-   "id": 420,
+   "id": 425,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -46302,7 +46837,7 @@
    }
   },
   {
-   "id": 421,
+   "id": 426,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -46409,7 +46944,7 @@
    }
   },
   {
-   "id": 422,
+   "id": 427,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -46516,7 +47051,7 @@
    }
   },
   {
-   "id": 423,
+   "id": 428,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -46623,7 +47158,7 @@
    }
   },
   {
-   "id": 424,
+   "id": 429,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -46730,7 +47265,7 @@
    }
   },
   {
-   "id": 425,
+   "id": 430,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -46837,7 +47372,7 @@
    }
   },
   {
-   "id": 426,
+   "id": 431,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -46944,7 +47479,7 @@
    }
   },
   {
-   "id": 427,
+   "id": 432,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -47051,7 +47586,7 @@
    }
   },
   {
-   "id": 428,
+   "id": 433,
    "label": "DSV41F/8xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -47158,7 +47693,7 @@
    }
   },
   {
-   "id": 429,
+   "id": 434,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -47265,7 +47800,7 @@
    }
   },
   {
-   "id": 430,
+   "id": 435,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -47372,7 +47907,7 @@
    }
   },
   {
-   "id": 431,
+   "id": 436,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -47479,7 +48014,7 @@
    }
   },
   {
-   "id": 432,
+   "id": 437,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -47586,7 +48121,7 @@
    }
   },
   {
-   "id": 433,
+   "id": 438,
    "label": "27B/5xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -47693,7 +48228,7 @@
    }
   },
   {
-   "id": 434,
+   "id": 439,
    "label": "27B/3xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -47800,7 +48335,7 @@
    }
   },
   {
-   "id": 435,
+   "id": 440,
    "label": "DSV41F/8xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -47907,7 +48442,7 @@
    }
   },
   {
-   "id": 436,
+   "id": 441,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -48014,7 +48549,7 @@
    }
   },
   {
-   "id": 437,
+   "id": 442,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -48121,7 +48656,7 @@
    }
   },
   {
-   "id": 438,
+   "id": 443,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -48228,7 +48763,7 @@
    }
   },
   {
-   "id": 439,
+   "id": 444,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -48335,7 +48870,7 @@
    }
   },
   {
-   "id": 440,
+   "id": 445,
    "label": "MM35/6xH200 DP2xTP3/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -48442,7 +48977,7 @@
    }
   },
   {
-   "id": 441,
+   "id": 446,
    "label": "27B/6xH200 DP3xTP2/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -48549,7 +49084,7 @@
    }
   },
   {
-   "id": 442,
+   "id": 447,
    "label": "27B/4xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -48656,7 +49191,7 @@
    }
   },
   {
-   "id": 443,
+   "id": 448,
    "label": "Q38FN/7xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -48763,7 +49298,7 @@
    }
   },
   {
-   "id": 444,
+   "id": 449,
    "label": "MM35/4xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -48870,7 +49405,7 @@
    }
   },
   {
-   "id": 445,
+   "id": 450,
    "label": "35BA3B/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -48977,7 +49512,7 @@
    }
   },
   {
-   "id": 446,
+   "id": 451,
    "label": "MM35/3xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -49084,7 +49619,7 @@
    }
   },
   {
-   "id": 447,
+   "id": 452,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -49191,7 +49726,7 @@
    }
   },
   {
-   "id": 448,
+   "id": 453,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -49298,7 +49833,7 @@
    }
   },
   {
-   "id": 449,
+   "id": 454,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -49405,7 +49940,7 @@
    }
   },
   {
-   "id": 450,
+   "id": 455,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -49512,7 +50047,7 @@
    }
   },
   {
-   "id": 451,
+   "id": 456,
    "label": "Q38FN/6xB300 DP3xTP2/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -49619,7 +50154,7 @@
    }
   },
   {
-   "id": 452,
+   "id": 457,
    "label": "35BA3B/8xB300 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -49726,7 +50261,7 @@
    }
   },
   {
-   "id": 453,
+   "id": 458,
    "label": "GLM52/6xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -49833,7 +50368,7 @@
    }
   },
   {
-   "id": 454,
+   "id": 459,
    "label": "MM35/1xB300/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -49940,7 +50475,7 @@
    }
   },
   {
-   "id": 455,
+   "id": 460,
    "label": "Q38FN/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -50047,7 +50582,7 @@
    }
   },
   {
-   "id": 456,
+   "id": 461,
    "label": "MM35/6xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -50154,7 +50689,7 @@
    }
   },
   {
-   "id": 457,
+   "id": 462,
    "label": "35BA3B/7xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -50261,7 +50796,7 @@
    }
   },
   {
-   "id": 458,
+   "id": 463,
    "label": "35BA3B/6xH200 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -50368,7 +50903,7 @@
    }
   },
   {
-   "id": 459,
+   "id": 464,
    "label": "27B/2xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -50475,7 +51010,7 @@
    }
   },
   {
-   "id": 460,
+   "id": 465,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -50582,7 +51117,7 @@
    }
   },
   {
-   "id": 461,
+   "id": 466,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -50689,7 +51224,7 @@
    }
   },
   {
-   "id": 462,
+   "id": 467,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -50796,7 +51331,7 @@
    }
   },
   {
-   "id": 463,
+   "id": 468,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -50903,7 +51438,7 @@
    }
   },
   {
-   "id": 464,
+   "id": 469,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -51010,7 +51545,7 @@
    }
   },
   {
-   "id": 465,
+   "id": 470,
    "label": "Q38FN/2xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -51117,7 +51652,7 @@
    }
   },
   {
-   "id": 466,
+   "id": 471,
    "label": "MM35/3xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -51224,7 +51759,7 @@
    }
   },
   {
-   "id": 467,
+   "id": 472,
    "label": "27B/5xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -51331,7 +51866,7 @@
    }
   },
   {
-   "id": 468,
+   "id": 473,
    "label": "GLM53F/7xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -51438,7 +51973,7 @@
    }
   },
   {
-   "id": 469,
+   "id": 474,
    "label": "MM35/6xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -51545,7 +52080,7 @@
    }
   },
   {
-   "id": 470,
+   "id": 475,
    "label": "Q38FN/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -51652,7 +52187,7 @@
    }
   },
   {
-   "id": 471,
+   "id": 476,
    "label": "GLM53F/7xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -51759,7 +52294,7 @@
    }
   },
   {
-   "id": 472,
+   "id": 477,
    "label": "GLM52/4xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -51866,7 +52401,7 @@
    }
   },
   {
-   "id": 473,
+   "id": 478,
    "label": "27B/6xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -51973,7 +52508,7 @@
    }
   },
   {
-   "id": 474,
+   "id": 479,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -52080,7 +52615,7 @@
    }
   },
   {
-   "id": 475,
+   "id": 480,
    "label": "27B/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -52187,7 +52722,7 @@
    }
   },
   {
-   "id": 476,
+   "id": 481,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -52294,7 +52829,7 @@
    }
   },
   {
-   "id": 477,
+   "id": 482,
    "label": "35BA3B/2xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -52401,7 +52936,7 @@
    }
   },
   {
-   "id": 478,
+   "id": 483,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -52508,7 +53043,7 @@
    }
   },
   {
-   "id": 479,
+   "id": 484,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -52615,7 +53150,7 @@
    }
   },
   {
-   "id": 480,
+   "id": 485,
    "label": "Q38FN/8xB300 DP2xTP4/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -52722,7 +53257,7 @@
    }
   },
   {
-   "id": 481,
+   "id": 486,
    "label": "27B/5xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -52829,7 +53364,7 @@
    }
   },
   {
-   "id": 482,
+   "id": 487,
    "label": "GLM53F/5xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -52936,7 +53471,7 @@
    }
   },
   {
-   "id": 483,
+   "id": 488,
    "label": "GLM52/6xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -53043,7 +53578,7 @@
    }
   },
   {
-   "id": 484,
+   "id": 489,
    "label": "Q38FN/6xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -53150,7 +53685,7 @@
    }
   },
   {
-   "id": 485,
+   "id": 490,
    "label": "Q38FN/8xB300 DP4xTP2/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -53257,7 +53792,7 @@
    }
   },
   {
-   "id": 486,
+   "id": 491,
    "label": "GLM53F/8xB300 DP2xTP4/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -53364,7 +53899,7 @@
    }
   },
   {
-   "id": 487,
+   "id": 492,
    "label": "35BA3B/7xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -53471,7 +54006,7 @@
    }
   },
   {
-   "id": 488,
+   "id": 493,
    "label": "GLM53F/3xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -53578,7 +54113,7 @@
    }
   },
   {
-   "id": 489,
+   "id": 494,
    "label": "Q38FN/2xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -53685,7 +54220,7 @@
    }
   },
   {
-   "id": 490,
+   "id": 495,
    "label": "GLM52/8xB300 DP4xTP2/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -53792,7 +54327,7 @@
    }
   },
   {
-   "id": 491,
+   "id": 496,
    "label": "Q38FN/2xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -53899,7 +54434,7 @@
    }
   },
   {
-   "id": 492,
+   "id": 497,
    "label": "GLM52/6xB300 DP2xTP3/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -54006,7 +54541,7 @@
    }
   },
   {
-   "id": 493,
+   "id": 498,
    "label": "MM35/4xB300 DP2xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -54113,7 +54648,7 @@
    }
   },
   {
-   "id": 494,
+   "id": 499,
    "label": "27B/8xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -54220,7 +54755,7 @@
    }
   },
   {
-   "id": 495,
+   "id": 500,
    "label": "MM35/2xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -54327,7 +54862,7 @@
    }
   },
   {
-   "id": 496,
+   "id": 501,
    "label": "MM35/7xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -54434,7 +54969,7 @@
    }
   },
   {
-   "id": 497,
+   "id": 502,
    "label": "35BA3B/4xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -54541,7 +55076,7 @@
    }
   },
   {
-   "id": 498,
+   "id": 503,
    "label": "35BA3B/4xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -54648,7 +55183,7 @@
    }
   },
   {
-   "id": 499,
+   "id": 504,
    "label": "MM35/4xB300 DP2xTP2/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -54755,7 +55290,7 @@
    }
   },
   {
-   "id": 500,
+   "id": 505,
    "label": "GLM53F/6xB300 DP3xTP2/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -54862,7 +55397,7 @@
    }
   },
   {
-   "id": 501,
+   "id": 506,
    "label": "Q38FN/4xB300 DP2xTP2/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -54969,7 +55504,7 @@
    }
   },
   {
-   "id": 502,
+   "id": 507,
    "label": "MM35/4xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -55076,7 +55611,7 @@
    }
   },
   {
-   "id": 503,
+   "id": 508,
    "label": "MM35/6xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -55183,7 +55718,7 @@
    }
   },
   {
-   "id": 504,
+   "id": 509,
    "label": "35BA3B/1xH200/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -55290,7 +55825,7 @@
    }
   },
   {
-   "id": 505,
+   "id": 510,
    "label": "27B/5xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -55397,7 +55932,7 @@
    }
   },
   {
-   "id": 506,
+   "id": 511,
    "label": "27B/4xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -55504,7 +56039,7 @@
    }
   },
   {
-   "id": 507,
+   "id": 512,
    "label": "35BA3B/3xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -55611,7 +56146,7 @@
    }
   },
   {
-   "id": 508,
+   "id": 513,
    "label": "MM35/2xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -55718,7 +56253,7 @@
    }
   },
   {
-   "id": 509,
+   "id": 514,
    "label": "Q38FN/5xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -55825,7 +56360,7 @@
    }
   },
   {
-   "id": 510,
+   "id": 515,
    "label": "Q38FN/8xB300 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -55932,7 +56467,7 @@
    }
   },
   {
-   "id": 511,
+   "id": 516,
    "label": "GLM53F/3xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -56039,7 +56574,7 @@
    }
   },
   {
-   "id": 512,
+   "id": 517,
    "label": "GLM53F/4xB300 DP2xTP2/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -56146,7 +56681,7 @@
    }
   },
   {
-   "id": 513,
+   "id": 518,
    "label": "Q38FN/5xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -56253,7 +56788,7 @@
    }
   },
   {
-   "id": 514,
+   "id": 519,
    "label": "Q38FN/6xB300 DP2xTP3/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -56360,7 +56895,7 @@
    }
   },
   {
-   "id": 515,
+   "id": 520,
    "label": "35BA3B/2xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -56467,7 +57002,7 @@
    }
   },
   {
-   "id": 516,
+   "id": 521,
    "label": "27B/6xH200 data-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -56574,7 +57109,7 @@
    }
   },
   {
-   "id": 517,
+   "id": 522,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -56681,7 +57216,7 @@
    }
   },
   {
-   "id": 518,
+   "id": 523,
    "label": "35BA3B/4xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -56788,7 +57323,7 @@
    }
   },
   {
-   "id": 519,
+   "id": 524,
    "label": "27B/2xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -56895,7 +57430,7 @@
    }
   },
   {
-   "id": 520,
+   "id": 525,
    "label": "35BA3B/4xB300 DP2xTP2/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -57002,7 +57537,7 @@
    }
   },
   {
-   "id": 521,
+   "id": 526,
    "label": "GLM53F/2xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -57109,7 +57644,7 @@
    }
   },
   {
-   "id": 522,
+   "id": 527,
    "label": "MM35/7xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -57216,7 +57751,7 @@
    }
   },
   {
-   "id": 523,
+   "id": 528,
    "label": "MM35/1xB300/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -57323,7 +57858,7 @@
    }
   },
   {
-   "id": 524,
+   "id": 529,
    "label": "DSV41F/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -57430,7 +57965,7 @@
    }
   },
   {
-   "id": 525,
+   "id": 530,
    "label": "35BA3B/6xH200 DP3xTP2/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -57537,7 +58072,7 @@
    }
   },
   {
-   "id": 526,
+   "id": 531,
    "label": "35BA3B/2xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -57644,7 +58179,7 @@
    }
   },
   {
-   "id": 527,
+   "id": 532,
    "label": "27B/8xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -57751,7 +58286,7 @@
    }
   },
   {
-   "id": 528,
+   "id": 533,
    "label": "Q38FN/3xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -57858,7 +58393,7 @@
    }
   },
   {
-   "id": 529,
+   "id": 534,
    "label": "MM35/2xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -57965,7 +58500,7 @@
    }
   },
   {
-   "id": 530,
+   "id": 535,
    "label": "GLM52/7xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -58072,7 +58607,7 @@
    }
   },
   {
-   "id": 531,
+   "id": 536,
    "label": "Q38FN/3xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -58179,7 +58714,7 @@
    }
   },
   {
-   "id": 532,
+   "id": 537,
    "label": "GLM53F/8xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -58286,7 +58821,7 @@
    }
   },
   {
-   "id": 533,
+   "id": 538,
    "label": "Q38FN/8xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -58393,7 +58928,7 @@
    }
   },
   {
-   "id": 534,
+   "id": 539,
    "label": "27B/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -58500,7 +59035,7 @@
    }
   },
   {
-   "id": 535,
+   "id": 540,
    "label": "Q38FN/6xH200 DP2xTP3/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -58607,7 +59142,7 @@
    }
   },
   {
-   "id": 536,
+   "id": 541,
    "label": "35BA3B/3xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -58714,7 +59249,7 @@
    }
   },
   {
-   "id": 537,
+   "id": 542,
    "label": "35BA3B/6xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -58821,7 +59356,7 @@
    }
   },
   {
-   "id": 538,
+   "id": 543,
    "label": "GLM53F/6xB300 DP2xTP3/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -58928,7 +59463,7 @@
    }
   },
   {
-   "id": 539,
+   "id": 544,
    "label": "GLM53F/5xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -59035,7 +59570,7 @@
    }
   },
   {
-   "id": 540,
+   "id": 545,
    "label": "Q38FN/6xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -59142,7 +59677,7 @@
    }
   },
   {
-   "id": 541,
+   "id": 546,
    "label": "27B/8xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -59249,7 +59784,7 @@
    }
   },
   {
-   "id": 542,
+   "id": 547,
    "label": "GLM53F/8xB300 DP4xTP2/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -59356,7 +59891,7 @@
    }
   },
   {
-   "id": 543,
+   "id": 548,
    "label": "GLM53F/8xB300 DP4xTP2/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -59463,7 +59998,7 @@
    }
   },
   {
-   "id": 544,
+   "id": 549,
    "label": "MM35/8xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -59570,7 +60105,7 @@
    }
   },
   {
-   "id": 545,
+   "id": 550,
    "label": "MM35/4xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -59677,7 +60212,7 @@
    }
   },
   {
-   "id": 546,
+   "id": 551,
    "label": "DSV41F/8xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -59784,7 +60319,7 @@
    }
   },
   {
-   "id": 547,
+   "id": 552,
    "label": "Q38FN/6xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -59891,7 +60426,7 @@
    }
   },
   {
-   "id": 548,
+   "id": 553,
    "label": "27B/6xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -59998,7 +60533,7 @@
    }
   },
   {
-   "id": 549,
+   "id": 554,
    "label": "Q38FN/5xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -60105,7 +60640,7 @@
    }
   },
   {
-   "id": 550,
+   "id": 555,
    "label": "Q38FN/4xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -60212,7 +60747,7 @@
    }
   },
   {
-   "id": 551,
+   "id": 556,
    "label": "Q38FN/6xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -60319,7 +60854,7 @@
    }
   },
   {
-   "id": 552,
+   "id": 557,
    "label": "MM35/4xB300 DP2xTP2/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -60426,7 +60961,7 @@
    }
   },
   {
-   "id": 553,
+   "id": 558,
    "label": "27B/6xB300 DP3xTP2/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -60533,7 +61068,7 @@
    }
   },
   {
-   "id": 554,
+   "id": 559,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -60640,7 +61175,7 @@
    }
   },
   {
-   "id": 555,
+   "id": 560,
    "label": "GLM53F/6xH200 DP2xTP3/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -60747,7 +61282,7 @@
    }
   },
   {
-   "id": 556,
+   "id": 561,
    "label": "MM35/5xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -60854,7 +61389,7 @@
    }
   },
   {
-   "id": 557,
+   "id": 562,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -60961,7 +61496,7 @@
    }
   },
   {
-   "id": 558,
+   "id": 563,
    "label": "35BA3B/2xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -61068,7 +61603,7 @@
    }
   },
   {
-   "id": 559,
+   "id": 564,
    "label": "27B/1xB300/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -61175,7 +61710,7 @@
    }
   },
   {
-   "id": 560,
+   "id": 565,
    "label": "MM35/6xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -61282,7 +61817,7 @@
    }
   },
   {
-   "id": 561,
+   "id": 566,
    "label": "Q38FN/5xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -61389,7 +61924,7 @@
    }
   },
   {
-   "id": 562,
+   "id": 567,
    "label": "GLM52/5xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -61496,7 +62031,7 @@
    }
   },
   {
-   "id": 563,
+   "id": 568,
    "label": "MM35/6xB300 DP2xTP3/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -61603,7 +62138,7 @@
    }
   },
   {
-   "id": 564,
+   "id": 569,
    "label": "27B/4xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -61710,7 +62245,7 @@
    }
   },
   {
-   "id": 565,
+   "id": 570,
    "label": "27B/8xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -61817,7 +62352,7 @@
    }
   },
   {
-   "id": 566,
+   "id": 571,
    "label": "27B/8xH200 DP2xTP4/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -61924,7 +62459,7 @@
    }
   },
   {
-   "id": 567,
+   "id": 572,
    "label": "35BA3B/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -62031,7 +62566,7 @@
    }
   },
   {
-   "id": 568,
+   "id": 573,
    "label": "27B/5xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -62138,7 +62673,7 @@
    }
   },
   {
-   "id": 569,
+   "id": 574,
    "label": "GLM53F/4xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -62245,7 +62780,7 @@
    }
   },
   {
-   "id": 570,
+   "id": 575,
    "label": "Q38FN/6xB300 DP3xTP2/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -62352,7 +62887,7 @@
    }
   },
   {
-   "id": 571,
+   "id": 576,
    "label": "35BA3B/4xH200 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -62459,7 +62994,7 @@
    }
   },
   {
-   "id": 572,
+   "id": 577,
    "label": "GLM53F/2xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -62566,7 +63101,7 @@
    }
   },
   {
-   "id": 573,
+   "id": 578,
    "label": "MM35/4xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -62673,7 +63208,7 @@
    }
   },
   {
-   "id": 574,
+   "id": 579,
    "label": "27B/6xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -62780,7 +63315,7 @@
    }
   },
   {
-   "id": 575,
+   "id": 580,
    "label": "35BA3B/6xB300 DP2xTP3/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -62887,7 +63422,7 @@
    }
   },
   {
-   "id": 576,
+   "id": 581,
    "label": "27B/7xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -62994,7 +63529,7 @@
    }
   },
   {
-   "id": 577,
+   "id": 582,
    "label": "35BA3B/7xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -63101,7 +63636,7 @@
    }
   },
   {
-   "id": 578,
+   "id": 583,
    "label": "GLM52/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -63208,7 +63743,7 @@
    }
   },
   {
-   "id": 579,
+   "id": 584,
    "label": "27B/8xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -63315,7 +63850,7 @@
    }
   },
   {
-   "id": 580,
+   "id": 585,
    "label": "MM35/8xH200 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -63422,7 +63957,7 @@
    }
   },
   {
-   "id": 581,
+   "id": 586,
    "label": "Q38FN/5xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -63529,7 +64064,7 @@
    }
   },
   {
-   "id": 582,
+   "id": 587,
    "label": "Q38FN/7xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -63636,7 +64171,7 @@
    }
   },
   {
-   "id": 583,
+   "id": 588,
    "label": "MM35/7xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -63743,7 +64278,7 @@
    }
   },
   {
-   "id": 584,
+   "id": 589,
    "label": "GLM52/8xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -63850,7 +64385,7 @@
    }
   },
   {
-   "id": 585,
+   "id": 590,
    "label": "35BA3B/6xB300 DP2xTP3/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -63957,7 +64492,7 @@
    }
   },
   {
-   "id": 586,
+   "id": 591,
    "label": "DSV41F/2xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -64064,7 +64599,7 @@
    }
   },
   {
-   "id": 587,
+   "id": 592,
    "label": "MM35/4xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -64171,7 +64706,7 @@
    }
   },
   {
-   "id": 588,
+   "id": 593,
    "label": "MM35/3xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -64278,7 +64813,7 @@
    }
   },
   {
-   "id": 589,
+   "id": 594,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -64385,7 +64920,7 @@
    }
   },
   {
-   "id": 590,
+   "id": 595,
    "label": "35BA3B/2xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -64492,7 +65027,7 @@
    }
   },
   {
-   "id": 591,
+   "id": 596,
    "label": "MM35/5xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -64599,7 +65134,7 @@
    }
   },
   {
-   "id": 592,
+   "id": 597,
    "label": "GLM52/6xB300 DP3xTP2/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -64706,7 +65241,7 @@
    }
   },
   {
-   "id": 593,
+   "id": 598,
    "label": "GLM53F/8xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -64813,7 +65348,7 @@
    }
   },
   {
-   "id": 594,
+   "id": 599,
    "label": "Q38FN/8xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -64920,7 +65455,7 @@
    }
   },
   {
-   "id": 595,
+   "id": 600,
    "label": "Q38FN/8xB300 DP2xTP4/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -65027,7 +65562,7 @@
    }
   },
   {
-   "id": 596,
+   "id": 601,
    "label": "DSV41F/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -65134,7 +65669,7 @@
    }
   },
   {
-   "id": 597,
+   "id": 602,
    "label": "35BA3B/4xH200 DP2xTP2/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -65241,7 +65776,7 @@
    }
   },
   {
-   "id": 598,
+   "id": 603,
    "label": "GLM53F/8xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -65348,7 +65883,7 @@
    }
   },
   {
-   "id": 599,
+   "id": 604,
    "label": "27B/6xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -65455,7 +65990,7 @@
    }
   },
   {
-   "id": 600,
+   "id": 605,
    "label": "35BA3B/4xB300 DP2xTP2/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -65562,7 +66097,7 @@
    }
   },
   {
-   "id": 601,
+   "id": 606,
    "label": "MM35/8xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -65669,7 +66204,7 @@
    }
   },
   {
-   "id": 602,
+   "id": 607,
    "label": "35BA3B/4xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -65776,7 +66311,7 @@
    }
   },
   {
-   "id": 603,
+   "id": 608,
    "label": "27B/7xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -65883,7 +66418,7 @@
    }
   },
   {
-   "id": 604,
+   "id": 609,
    "label": "Q38FN/1xB300/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -65990,7 +66525,7 @@
    }
   },
   {
-   "id": 605,
+   "id": 610,
    "label": "27B/3xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -66097,7 +66632,7 @@
    }
   },
   {
-   "id": 606,
+   "id": 611,
    "label": "35BA3B/3xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -66204,7 +66739,7 @@
    }
   },
   {
-   "id": 607,
+   "id": 612,
    "label": "GLM53F/5xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -66311,7 +66846,7 @@
    }
   },
   {
-   "id": 608,
+   "id": 613,
    "label": "GLM53F/3xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -66418,7 +66953,7 @@
    }
   },
   {
-   "id": 609,
+   "id": 614,
    "label": "GLM53F/6xB300 DP2xTP3/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -66525,7 +67060,7 @@
    }
   },
   {
-   "id": 610,
+   "id": 615,
    "label": "MM35/4xB300 DP2xTP2/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -66632,7 +67167,7 @@
    }
   },
   {
-   "id": 611,
+   "id": 616,
    "label": "35BA3B/5xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -66739,7 +67274,7 @@
    }
   },
   {
-   "id": 612,
+   "id": 617,
    "label": "35BA3B/8xB300 DP2xTP4/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -66846,7 +67381,7 @@
    }
   },
   {
-   "id": 613,
+   "id": 618,
    "label": "Q38FN/6xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -66953,7 +67488,7 @@
    }
   },
   {
-   "id": 614,
+   "id": 619,
    "label": "27B/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -67060,7 +67595,7 @@
    }
   },
   {
-   "id": 615,
+   "id": 620,
    "label": "GLM53F/5xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -67167,7 +67702,7 @@
    }
   },
   {
-   "id": 616,
+   "id": 621,
    "label": "MM35/7xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -67274,7 +67809,7 @@
    }
   },
   {
-   "id": 617,
+   "id": 622,
    "label": "35BA3B/2xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -67381,7 +67916,7 @@
    }
   },
   {
-   "id": 618,
+   "id": 623,
    "label": "MM35/6xB300 DP3xTP2/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -67488,7 +68023,7 @@
    }
   },
   {
-   "id": 619,
+   "id": 624,
    "label": "DSV41F/4xB300 DP2xTP2/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -67595,7 +68130,7 @@
    }
   },
   {
-   "id": 620,
+   "id": 625,
    "label": "27B/6xB300 DP2xTP3/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -67702,7 +68237,7 @@
    }
   },
   {
-   "id": 621,
+   "id": 626,
    "label": "35BA3B/7xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -67809,7 +68344,7 @@
    }
   },
   {
-   "id": 622,
+   "id": 627,
    "label": "27B/1xH200/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -67916,7 +68451,7 @@
    }
   },
   {
-   "id": 623,
+   "id": 628,
    "label": "27B/4xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -68023,7 +68558,7 @@
    }
   },
   {
-   "id": 624,
+   "id": 629,
    "label": "27B/5xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -68130,7 +68665,7 @@
    }
   },
   {
-   "id": 625,
+   "id": 630,
    "label": "GLM53F/2xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -68237,7 +68772,7 @@
    }
   },
   {
-   "id": 626,
+   "id": 631,
    "label": "27B/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -68344,7 +68879,7 @@
    }
   },
   {
-   "id": 627,
+   "id": 632,
    "label": "35BA3B/2xH200 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -68451,7 +68986,7 @@
    }
   },
   {
-   "id": 628,
+   "id": 633,
    "label": "Q38FN/7xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -68558,7 +69093,7 @@
    }
   },
   {
-   "id": 629,
+   "id": 634,
    "label": "35BA3B/2xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -68665,7 +69200,7 @@
    }
   },
   {
-   "id": 630,
+   "id": 635,
    "label": "GLM53F/2xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -68772,7 +69307,7 @@
    }
   },
   {
-   "id": 631,
+   "id": 636,
    "label": "27B/4xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -68879,7 +69414,7 @@
    }
   },
   {
-   "id": 632,
+   "id": 637,
    "label": "GLM53F/6xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -68986,7 +69521,7 @@
    }
   },
   {
-   "id": 633,
+   "id": 638,
    "label": "35BA3B/8xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -69093,7 +69628,7 @@
    }
   },
   {
-   "id": 634,
+   "id": 639,
    "label": "27B/2xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -69200,7 +69735,7 @@
    }
   },
   {
-   "id": 635,
+   "id": 640,
    "label": "MM35/3xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -69307,7 +69842,7 @@
    }
   },
   {
-   "id": 636,
+   "id": 641,
    "label": "GLM53F/4xB300 DP2xTP2/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -69414,7 +69949,7 @@
    }
   },
   {
-   "id": 637,
+   "id": 642,
    "label": "GLM53F/7xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -69521,7 +70056,7 @@
    }
   },
   {
-   "id": 638,
+   "id": 643,
    "label": "Q38FN/4xH200 DP2xTP2/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -69628,7 +70163,7 @@
    }
   },
   {
-   "id": 639,
+   "id": 644,
    "label": "35BA3B/5xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -69735,7 +70270,7 @@
    }
   },
   {
-   "id": 640,
+   "id": 645,
    "label": "Q38FN/1xB300/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -69842,7 +70377,7 @@
    }
   },
   {
-   "id": 641,
+   "id": 646,
    "label": "Q38FN/8xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -69949,7 +70484,7 @@
    }
   },
   {
-   "id": 642,
+   "id": 647,
    "label": "MM35/6xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -70056,7 +70591,7 @@
    }
   },
   {
-   "id": 643,
+   "id": 648,
    "label": "MM35/7xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -70163,7 +70698,7 @@
    }
   },
   {
-   "id": 644,
+   "id": 649,
    "label": "GLM53F/6xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -70270,7 +70805,7 @@
    }
   },
   {
-   "id": 645,
+   "id": 650,
    "label": "35BA3B/3xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -70377,7 +70912,7 @@
    }
   },
   {
-   "id": 646,
+   "id": 651,
    "label": "Q38FN/3xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -70484,7 +71019,7 @@
    }
   },
   {
-   "id": 647,
+   "id": 652,
    "label": "Q38FN/2xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -70591,7 +71126,7 @@
    }
   },
   {
-   "id": 648,
+   "id": 653,
    "label": "GLM52/8xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -70698,7 +71233,7 @@
    }
   },
   {
-   "id": 649,
+   "id": 654,
    "label": "MM35/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -70805,7 +71340,7 @@
    }
   },
   {
-   "id": 650,
+   "id": 655,
    "label": "35BA3B/3xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -70912,7 +71447,7 @@
    }
   },
   {
-   "id": 651,
+   "id": 656,
    "label": "Q38FN/6xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -71019,7 +71554,7 @@
    }
   },
   {
-   "id": 652,
+   "id": 657,
    "label": "MM35/6xB300 DP2xTP3/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -71126,7 +71661,7 @@
    }
   },
   {
-   "id": 653,
+   "id": 658,
    "label": "MM35/2xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -71233,7 +71768,7 @@
    }
   },
   {
-   "id": 654,
+   "id": 659,
    "label": "Q38FN/5xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -71340,7 +71875,7 @@
    }
   },
   {
-   "id": 655,
+   "id": 660,
    "label": "27B/4xB300 DP2xTP2/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -71447,7 +71982,7 @@
    }
   },
   {
-   "id": 656,
+   "id": 661,
    "label": "27B/4xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -71554,7 +72089,7 @@
    }
   },
   {
-   "id": 657,
+   "id": 662,
    "label": "35BA3B/6xB300 DP3xTP2/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -71661,7 +72196,7 @@
    }
   },
   {
-   "id": 658,
+   "id": 663,
    "label": "MM35/8xB300 DP4xTP2/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -71768,7 +72303,7 @@
    }
   },
   {
-   "id": 659,
+   "id": 664,
    "label": "27B/4xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -71875,7 +72410,7 @@
    }
   },
   {
-   "id": 660,
+   "id": 665,
    "label": "Q38FN/4xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -71982,7 +72517,7 @@
    }
   },
   {
-   "id": 661,
+   "id": 666,
    "label": "Q38FN/6xB300 DP3xTP2/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -72089,7 +72624,7 @@
    }
   },
   {
-   "id": 662,
+   "id": 667,
    "label": "35BA3B/6xB300 DP3xTP2/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -72196,7 +72731,7 @@
    }
   },
   {
-   "id": 663,
+   "id": 668,
    "label": "GLM53F/6xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -72303,7 +72838,7 @@
    }
   },
   {
-   "id": 664,
+   "id": 669,
    "label": "MM35/6xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -72410,7 +72945,7 @@
    }
   },
   {
-   "id": 665,
+   "id": 670,
    "label": "MM35/4xH200 DP2xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -72517,7 +73052,7 @@
    }
   },
   {
-   "id": 666,
+   "id": 671,
    "label": "27B/4xB300 DP2xTP2/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -72624,7 +73159,7 @@
    }
   },
   {
-   "id": 667,
+   "id": 672,
    "label": "GLM53F/5xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -72731,7 +73266,7 @@
    }
   },
   {
-   "id": 668,
+   "id": 673,
    "label": "MM35/8xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -72838,7 +73373,7 @@
    }
   },
   {
-   "id": 669,
+   "id": 674,
    "label": "27B/2xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -72945,7 +73480,7 @@
    }
   },
   {
-   "id": 670,
+   "id": 675,
    "label": "27B/8xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -73052,7 +73587,7 @@
    }
   },
   {
-   "id": 671,
+   "id": 676,
    "label": "GLM53F/7xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -73159,7 +73694,7 @@
    }
   },
   {
-   "id": 672,
+   "id": 677,
    "label": "GLM53F/3xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -73266,7 +73801,7 @@
    }
   },
   {
-   "id": 673,
+   "id": 678,
    "label": "27B/4xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -73373,7 +73908,7 @@
    }
   },
   {
-   "id": 674,
+   "id": 679,
    "label": "Q38FN/2xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -73480,7 +74015,7 @@
    }
   },
   {
-   "id": 675,
+   "id": 680,
    "label": "MM35/5xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -73587,7 +74122,7 @@
    }
   },
   {
-   "id": 676,
+   "id": 681,
    "label": "27B/7xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -73694,7 +74229,7 @@
    }
   },
   {
-   "id": 677,
+   "id": 682,
    "label": "MM35/1xB300/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -73801,7 +74336,7 @@
    }
   },
   {
-   "id": 678,
+   "id": 683,
    "label": "Q38FN/8xB300 DP4xTP2/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -73908,7 +74443,7 @@
    }
   },
   {
-   "id": 679,
+   "id": 684,
    "label": "MM35/2xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -74015,7 +74550,7 @@
    }
   },
   {
-   "id": 680,
+   "id": 685,
    "label": "35BA3B/8xB300 DP4xTP2/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -74122,7 +74657,7 @@
    }
   },
   {
-   "id": 681,
+   "id": 686,
    "label": "Q38FN/4xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -74229,7 +74764,7 @@
    }
   },
   {
-   "id": 682,
+   "id": 687,
    "label": "35BA3B/8xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -74336,7 +74871,7 @@
    }
   },
   {
-   "id": 683,
+   "id": 688,
    "label": "27B/2xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -74443,7 +74978,7 @@
    }
   },
   {
-   "id": 684,
+   "id": 689,
    "label": "GLM53F/4xB300 DP2xTP2/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -74550,7 +75085,7 @@
    }
   },
   {
-   "id": 685,
+   "id": 690,
    "label": "Q38FN/8xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -74657,7 +75192,7 @@
    }
   },
   {
-   "id": 686,
+   "id": 691,
    "label": "GLM53F/6xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -74764,7 +75299,7 @@
    }
   },
   {
-   "id": 687,
+   "id": 692,
    "label": "27B/6xB300 DP3xTP2/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -74871,7 +75406,7 @@
    }
   },
   {
-   "id": 688,
+   "id": 693,
    "label": "35BA3B/8xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -74978,7 +75513,7 @@
    }
   },
   {
-   "id": 689,
+   "id": 694,
    "label": "27B/8xB300 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -75085,7 +75620,7 @@
    }
   },
   {
-   "id": 690,
+   "id": 695,
    "label": "Q38FN/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -75192,7 +75727,7 @@
    }
   },
   {
-   "id": 691,
+   "id": 696,
    "label": "MM35/2xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -75299,7 +75834,7 @@
    }
   },
   {
-   "id": 692,
+   "id": 697,
    "label": "GLM52/8xB300 DP2xTP4/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -75406,7 +75941,7 @@
    }
   },
   {
-   "id": 693,
+   "id": 698,
    "label": "35BA3B/7xH200 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -75513,7 +76048,7 @@
    }
   },
   {
-   "id": 694,
+   "id": 699,
    "label": "35BA3B/4xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -75620,7 +76155,7 @@
    }
   },
   {
-   "id": 695,
+   "id": 700,
    "label": "MM35/4xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -75727,7 +76262,7 @@
    }
   },
   {
-   "id": 696,
+   "id": 701,
    "label": "MM35/3xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -75834,7 +76369,7 @@
    }
   },
   {
-   "id": 697,
+   "id": 702,
    "label": "Q38FN/4xB300 DP2xTP2/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -75941,7 +76476,7 @@
    }
   },
   {
-   "id": 698,
+   "id": 703,
    "label": "GLM53F/6xB300 DP3xTP2/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -76048,7 +76583,7 @@
    }
   },
   {
-   "id": 699,
+   "id": 704,
    "label": "Q38FN/5xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -76155,7 +76690,7 @@
    }
   },
   {
-   "id": 700,
+   "id": 705,
    "label": "27B/3xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -76262,7 +76797,7 @@
    }
   },
   {
-   "id": 701,
+   "id": 706,
    "label": "GLM53F/1xB300/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -76369,7 +76904,7 @@
    }
   },
   {
-   "id": 702,
+   "id": 707,
    "label": "Q38FN/2xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -76476,7 +77011,7 @@
    }
   },
   {
-   "id": 703,
+   "id": 708,
    "label": "27B/6xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -76583,7 +77118,7 @@
    }
   },
   {
-   "id": 704,
+   "id": 709,
    "label": "Q38FN/7xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -76690,7 +77225,7 @@
    }
   },
   {
-   "id": 705,
+   "id": 710,
    "label": "35BA3B/6xB300 DP2xTP3/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -76797,7 +77332,7 @@
    }
   },
   {
-   "id": 706,
+   "id": 711,
    "label": "35BA3B/4xB300 DP2xTP2/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -76904,7 +77439,7 @@
    }
   },
   {
-   "id": 707,
+   "id": 712,
    "label": "Q38FN/3xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -77011,7 +77546,7 @@
    }
   },
   {
-   "id": 708,
+   "id": 713,
    "label": "27B/8xB300 DP2xTP4/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -77118,7 +77653,7 @@
    }
   },
   {
-   "id": 709,
+   "id": 714,
    "label": "GLM53F/6xB300 DP2xTP3/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -77225,7 +77760,7 @@
    }
   },
   {
-   "id": 710,
+   "id": 715,
    "label": "35BA3B/5xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -77332,7 +77867,7 @@
    }
   },
   {
-   "id": 711,
+   "id": 716,
    "label": "35BA3B/5xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -77439,7 +77974,7 @@
    }
   },
   {
-   "id": 712,
+   "id": 717,
    "label": "27B/6xB300 DP2xTP3/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -77546,7 +78081,7 @@
    }
   },
   {
-   "id": 713,
+   "id": 718,
    "label": "35BA3B/4xB300 DP2xTP2/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -77653,7 +78188,7 @@
    }
   },
   {
-   "id": 714,
+   "id": 719,
    "label": "35BA3B/3xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -77760,7 +78295,7 @@
    }
   },
   {
-   "id": 715,
+   "id": 720,
    "label": "35BA3B/7xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -77867,7 +78402,7 @@
    }
   },
   {
-   "id": 716,
+   "id": 721,
    "label": "35BA3B/1xB300/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -77974,7 +78509,7 @@
    }
   },
   {
-   "id": 717,
+   "id": 722,
    "label": "MM35/8xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -78081,7 +78616,7 @@
    }
   },
   {
-   "id": 718,
+   "id": 723,
    "label": "MM35/6xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -78188,7 +78723,7 @@
    }
   },
   {
-   "id": 719,
+   "id": 724,
    "label": "35BA3B/3xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -78295,7 +78830,7 @@
    }
   },
   {
-   "id": 720,
+   "id": 725,
    "label": "Q38FN/8xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -78402,7 +78937,7 @@
    }
   },
   {
-   "id": 721,
+   "id": 726,
    "label": "35BA3B/5xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -78509,7 +79044,7 @@
    }
   },
   {
-   "id": 722,
+   "id": 727,
    "label": "35BA3B/6xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -78616,7 +79151,7 @@
    }
   },
   {
-   "id": 723,
+   "id": 728,
    "label": "GLM53F/8xB300 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -78723,7 +79258,7 @@
    }
   },
   {
-   "id": 724,
+   "id": 729,
    "label": "27B/6xH200 DP3xTP2/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -78830,7 +79365,7 @@
    }
   },
   {
-   "id": 725,
+   "id": 730,
    "label": "MM35/4xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -78937,7 +79472,7 @@
    }
   },
   {
-   "id": 726,
+   "id": 731,
    "label": "35BA3B/4xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -79044,7 +79579,7 @@
    }
   },
   {
-   "id": 727,
+   "id": 732,
    "label": "GLM53F/4xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -79151,7 +79686,7 @@
    }
   },
   {
-   "id": 728,
+   "id": 733,
    "label": "GLM53F/4xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -79258,7 +79793,7 @@
    }
   },
   {
-   "id": 729,
+   "id": 734,
    "label": "27B/2xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -79365,7 +79900,7 @@
    }
   },
   {
-   "id": 730,
+   "id": 735,
    "label": "27B/5xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -79472,7 +80007,7 @@
    }
   },
   {
-   "id": 731,
+   "id": 736,
    "label": "27B/7xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -79579,7 +80114,7 @@
    }
   },
   {
-   "id": 732,
+   "id": 737,
    "label": "27B/6xB300 DP2xTP3/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -79686,7 +80221,7 @@
    }
   },
   {
-   "id": 733,
+   "id": 738,
    "label": "Q38FN/4xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -79793,7 +80328,7 @@
    }
   },
   {
-   "id": 734,
+   "id": 739,
    "label": "MM35/5xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -79900,7 +80435,7 @@
    }
   },
   {
-   "id": 735,
+   "id": 740,
    "label": "27B/4xH200 data-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -80007,7 +80542,7 @@
    }
   },
   {
-   "id": 736,
+   "id": 741,
    "label": "Q38FN/6xH200 DP2xTP3/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -80114,7 +80649,7 @@
    }
   },
   {
-   "id": 737,
+   "id": 742,
    "label": "Q38FN/8xH200 DP4xTP2/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -80221,7 +80756,7 @@
    }
   },
   {
-   "id": 738,
+   "id": 743,
    "label": "35BA3B/4xH200 DP2xTP2/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -80328,7 +80863,7 @@
    }
   },
   {
-   "id": 739,
+   "id": 744,
    "label": "27B/2xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -80435,7 +80970,7 @@
    }
   },
   {
-   "id": 740,
+   "id": 745,
    "label": "GLM52/4xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM52",
@@ -80542,7 +81077,7 @@
    }
   },
   {
-   "id": 741,
+   "id": 746,
    "label": "Q38FN/8xH200 DP2xTP4/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -80649,7 +81184,7 @@
    }
   },
   {
-   "id": 742,
+   "id": 747,
    "label": "Q38FN/8xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -80756,7 +81291,7 @@
    }
   },
   {
-   "id": 743,
+   "id": 748,
    "label": "GLM53F/8xB300 DP4xTP2/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -80863,7 +81398,7 @@
    }
   },
   {
-   "id": 744,
+   "id": 749,
    "label": "Q38FN/3xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -80970,7 +81505,7 @@
    }
   },
   {
-   "id": 745,
+   "id": 750,
    "label": "MM35/8xH200 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -81077,7 +81612,7 @@
    }
   },
   {
-   "id": 746,
+   "id": 751,
    "label": "35BA3B/6xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -81184,7 +81719,7 @@
    }
   },
   {
-   "id": 747,
+   "id": 752,
    "label": "GLM52/3xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM52",
@@ -81291,7 +81826,7 @@
    }
   },
   {
-   "id": 748,
+   "id": 753,
    "label": "27B/5xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -81398,7 +81933,7 @@
    }
   },
   {
-   "id": 749,
+   "id": 754,
    "label": "MM35/5xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -81505,7 +82040,7 @@
    }
   },
   {
-   "id": 750,
+   "id": 755,
    "label": "Q38FN/8xH200 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -81612,7 +82147,7 @@
    }
   },
   {
-   "id": 751,
+   "id": 756,
    "label": "MM35/6xH200 DP3xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -81719,7 +82254,7 @@
    }
   },
   {
-   "id": 752,
+   "id": 757,
    "label": "27B/1xB300/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -81826,7 +82361,7 @@
    }
   },
   {
-   "id": 753,
+   "id": 758,
    "label": "27B/7xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -81933,7 +82468,7 @@
    }
   },
   {
-   "id": 754,
+   "id": 759,
    "label": "27B/8xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -82040,7 +82575,7 @@
    }
   },
   {
-   "id": 755,
+   "id": 760,
    "label": "DSV41F/5xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -82147,7 +82682,7 @@
    }
   },
   {
-   "id": 756,
+   "id": 761,
    "label": "35BA3B/5xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -82254,7 +82789,7 @@
    }
   },
   {
-   "id": 757,
+   "id": 762,
    "label": "MM35/8xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -82361,7 +82896,7 @@
    }
   },
   {
-   "id": 758,
+   "id": 763,
    "label": "35BA3B/7xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -82468,7 +83003,7 @@
    }
   },
   {
-   "id": 759,
+   "id": 764,
    "label": "GLM53F/7xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -82575,7 +83110,7 @@
    }
   },
   {
-   "id": 760,
+   "id": 765,
    "label": "35BA3B/1xB300/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -82682,7 +83217,7 @@
    }
   },
   {
-   "id": 761,
+   "id": 766,
    "label": "27B/8xH200 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -82789,7 +83324,7 @@
    }
   },
   {
-   "id": 762,
+   "id": 767,
    "label": "MM35/7xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -82896,7 +83431,7 @@
    }
   },
   {
-   "id": 763,
+   "id": 768,
    "label": "35BA3B/6xB300 DP3xTP2/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -83003,7 +83538,7 @@
    }
   },
   {
-   "id": 764,
+   "id": 769,
    "label": "Q38FN/6xB300 DP2xTP3/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -83110,7 +83645,7 @@
    }
   },
   {
-   "id": 765,
+   "id": 770,
    "label": "Q38FN/5xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -83217,7 +83752,7 @@
    }
   },
   {
-   "id": 766,
+   "id": 771,
    "label": "DSV41F/4xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -83324,7 +83859,7 @@
    }
   },
   {
-   "id": 767,
+   "id": 772,
    "label": "MM35/8xB300 DP4xTP2/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -83431,7 +83966,7 @@
    }
   },
   {
-   "id": 768,
+   "id": 773,
    "label": "DSV41F/6xB300 DP3xTP2/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -83538,7 +84073,7 @@
    }
   },
   {
-   "id": 769,
+   "id": 774,
    "label": "27B/6xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -83645,7 +84180,7 @@
    }
   },
   {
-   "id": 770,
+   "id": 775,
    "label": "27B/8xB300 DP2xTP4/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -83752,7 +84287,7 @@
    }
   },
   {
-   "id": 771,
+   "id": 776,
    "label": "27B/3xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -83859,7 +84394,7 @@
    }
   },
   {
-   "id": 772,
+   "id": 777,
    "label": "35BA3B/8xH200 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -83966,7 +84501,7 @@
    }
   },
   {
-   "id": 773,
+   "id": 778,
    "label": "27B/8xB300 DP2xTP4/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -84073,7 +84608,7 @@
    }
   },
   {
-   "id": 774,
+   "id": 779,
    "label": "35BA3B/8xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -84180,7 +84715,7 @@
    }
   },
   {
-   "id": 775,
+   "id": 780,
    "label": "35BA3B/6xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -84287,7 +84822,7 @@
    }
   },
   {
-   "id": 776,
+   "id": 781,
    "label": "MM35/6xB300 DP3xTP2/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -84394,7 +84929,7 @@
    }
   },
   {
-   "id": 777,
+   "id": 782,
    "label": "MM35/3xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -84501,7 +85036,7 @@
    }
   },
   {
-   "id": 778,
+   "id": 783,
    "label": "MM35/8xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -84608,7 +85143,7 @@
    }
   },
   {
-   "id": 779,
+   "id": 784,
    "label": "Q38FN/6xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -84715,7 +85250,7 @@
    }
   },
   {
-   "id": 780,
+   "id": 785,
    "label": "GLM53F/6xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -84822,7 +85357,7 @@
    }
   },
   {
-   "id": 781,
+   "id": 786,
    "label": "27B/5xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -84929,7 +85464,7 @@
    }
   },
   {
-   "id": 782,
+   "id": 787,
    "label": "35BA3B/8xB300 DP4xTP2/nvfp4/fp16KV",
    "state": {
     "model": "35BA3B",
@@ -85036,7 +85571,7 @@
    }
   },
   {
-   "id": 783,
+   "id": 788,
    "label": "Q38FN/6xB300 DP2xTP3/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -85143,7 +85678,7 @@
    }
   },
   {
-   "id": 784,
+   "id": 789,
    "label": "35BA3B/4xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -85250,7 +85785,7 @@
    }
   },
   {
-   "id": 785,
+   "id": 790,
    "label": "27B/3xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -85357,7 +85892,7 @@
    }
   },
   {
-   "id": 786,
+   "id": 791,
    "label": "Q38FN/8xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -85464,7 +85999,7 @@
    }
   },
   {
-   "id": 787,
+   "id": 792,
    "label": "Q38FN/7xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -85571,7 +86106,7 @@
    }
   },
   {
-   "id": 788,
+   "id": 793,
    "label": "35BA3B/6xH200 data-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -85678,7 +86213,7 @@
    }
   },
   {
-   "id": 789,
+   "id": 794,
    "label": "MM35/4xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -85785,7 +86320,7 @@
    }
   },
   {
-   "id": 790,
+   "id": 795,
    "label": "GLM53F/2xB300 data-par/nvfp4/fp16KV",
    "state": {
     "model": "GLM53F",
@@ -85892,7 +86427,7 @@
    }
   },
   {
-   "id": 791,
+   "id": 796,
    "label": "35BA3B/4xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -85999,7 +86534,7 @@
    }
   },
   {
-   "id": 792,
+   "id": 797,
    "label": "27B/6xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "27B",
@@ -86106,7 +86641,7 @@
    }
   },
   {
-   "id": 793,
+   "id": 798,
    "label": "MM35/8xB300 DP2xTP4/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -86213,7 +86748,7 @@
    }
   },
   {
-   "id": 794,
+   "id": 799,
    "label": "Q38FN/6xB300 data-par/nvfp4/fp8KV",
    "state": {
     "model": "Q38FN",
@@ -86320,7 +86855,7 @@
    }
   },
   {
-   "id": 795,
+   "id": 800,
    "label": "27B/5xB300 data-par/fp8/fp16KV",
    "state": {
     "model": "27B",
@@ -86427,7 +86962,7 @@
    }
   },
   {
-   "id": 796,
+   "id": 801,
    "label": "35BA3B/6xH200 tensor-par/fp8/fp8KV",
    "state": {
     "model": "35BA3B",
@@ -86534,7 +87069,7 @@
    }
   },
   {
-   "id": 797,
+   "id": 802,
    "label": "DSV41F/8xB300 DP4xTP2/fp8/fp8KV",
    "state": {
     "model": "DSV41F",
@@ -86641,7 +87176,7 @@
    }
   },
   {
-   "id": 798,
+   "id": 803,
    "label": "Q38FN/2xB300 tensor-par/nvfp4/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -86748,7 +87283,7 @@
    }
   },
   {
-   "id": 799,
+   "id": 804,
    "label": "GLM53F/3xB300 tensor-par/fp8/fp8KV",
    "state": {
     "model": "GLM53F",
@@ -86855,7 +87390,7 @@
    }
   },
   {
-   "id": 800,
+   "id": 805,
    "label": "27B/1xB300/nvfp4/fp16KV",
    "state": {
     "model": "27B",
@@ -86962,7 +87497,7 @@
    }
   },
   {
-   "id": 801,
+   "id": 806,
    "label": "Q38FN/6xB300 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -87069,7 +87604,7 @@
    }
   },
   {
-   "id": 802,
+   "id": 807,
    "label": "MM35/8xB300 data-par/fp8/fp8KV",
    "state": {
     "model": "MM35",
@@ -87176,7 +87711,7 @@
    }
   },
   {
-   "id": 803,
+   "id": 808,
    "label": "Q38FN/7xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "Q38FN",
@@ -87283,7 +87818,7 @@
    }
   },
   {
-   "id": 804,
+   "id": 809,
    "label": "MM35/8xH200 tensor-par/fp8/fp16KV",
    "state": {
     "model": "MM35",
@@ -87390,7 +87925,7 @@
    }
   },
   {
-   "id": 805,
+   "id": 810,
    "label": "MM35/1xB300/nvfp4/fp8KV",
    "state": {
     "model": "MM35",
@@ -87497,7 +88032,7 @@
    }
   },
   {
-   "id": 806,
+   "id": 811,
    "label": "MM35/8xB300 DP4xTP2/nvfp4/fp16KV",
    "state": {
     "model": "MM35",
@@ -87604,7 +88139,7 @@
    }
   },
   {
-   "id": 807,
+   "id": 812,
    "label": "27B/2xB300 tensor-par/nvfp4/fp8KV",
    "state": {
     "model": "27B",
@@ -87711,7 +88246,7 @@
    }
   },
   {
-   "id": 808,
+   "id": 813,
    "label": "27B/5xH200 data-par/fp8/fp16KV",
    "state": {
     "model": "27B",

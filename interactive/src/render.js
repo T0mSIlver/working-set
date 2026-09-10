@@ -133,9 +133,9 @@ export function computeAndRender(draft, deferFrontierDecode){
     const tp5=[],tp95=[],dp5=[];
     for(const n of scaleNs){
       const it=Math.max(80, Math.round(warmIter/n));
-      const [a,,c]=warmCapacity(model,makeTopo("tp",n,state.gpu),wl,state.ram,it,scanB).all;
+      const [a,,c]=warmCapacity(model,makeTopo("tp",n,state.gpu,state.kvshard),wl,state.ram,it,scanB).all;
       tp5.push(a); tp95.push(c);
-      const [r5]=warmCapacity(model,makeTopo("dp",n,state.gpu),wl,state.ram/n,dpIt,scanB).all;
+      const [r5]=warmCapacity(model,makeTopo("dp",n,state.gpu,state.kvshard),wl,state.ram/n,dpIt,scanB).all;
       dp5.push(r5*n);
     }
     sc={ns:scaleNs, tp5, tp95, dp5};
@@ -310,7 +310,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   // context lines on the spike chart: the same model at other widths that fit
   const others = [];
   for (const n of [1,2,4,8]){
-    const t2 = makeTopo('tp', n, state.gpu);
+    const t2 = makeTopo('tp', n, state.gpu, state.kvshard);
     if (t2.name === topo.name) continue;   // skip only the CURRENT topology:
     // skipping every topology with the same GPU count hid the TP curve from
     // DP users, which is exactly the comparison they are looking for
@@ -354,7 +354,9 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
    budget knob that touches neither. Splitting them puts the floor slider back
    in the cheap class. */
 function frontierWarmSig(wl){
-  return `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|`
+  // kvshard changes every row's pool and decode reads (codex F4 on the
+  // layout change: without it a Replicated page reused Sharded rows)
+  return `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|${state.kvshard}|`
        + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
        + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
        + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;

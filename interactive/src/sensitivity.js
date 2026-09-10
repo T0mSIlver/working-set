@@ -35,10 +35,9 @@ function warmUsersApprox(model, topo, wl, nSamp){
   if (pool <= 0) return 0;
   let reserved = wl.sys_user;
   if (!wl.sub_shares_prefix && wl.sub_ratio > 0) reserved += wl.sys_sub;
-  // GPU copies for the state's token-equivalent; the host buffer holds one
-  // copy (the un-replicated model), as in warmOnce
-  const gm = replicated(model, topo);
-  const stateTok = gm.deltanet_state / gm.kv_bpt;
+  // both budgets in the replicated model's units, as warmOnce prices them
+  model = replicated(model, topo);
+  const stateTok = model.deltanet_state / model.kv_bpt;
   let s = 0; const r = {full:0, prefix:0, isCold:false};
   for (let i = 0; i < nSamp; i++){
     sampleReqInto(wl, r);

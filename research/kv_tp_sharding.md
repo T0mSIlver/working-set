@@ -52,16 +52,38 @@ prices (≤ 8), so only DeepSeek-V4.1-Flash's fixed per-session state — the
 - **`kv_shard = "replicate"`** (plain TP): `r = max(1, tp / kv_heads)` on the
   cache (`kv_bpt`, `kv_decode_bpt`, `kv_decode_const`) and
   `max(1, tp / state_heads)` on the state (`deltanet_state`,
-  `state_step_bytes`). Applied inside `kv_pool_tokens`, `warm_capacity` (GPU
-  budget only — the host offload buffer holds one copy, a restore
-  re-replicates) and `decode_curves` (every rank re-reads its copy per
+  `state_step_bytes`). Applied inside `kv_pool_tokens`, `warm_capacity`
+  (both budgets: vLLM's native `--kv-offloading-size` is **rank-local**,
+  each rank spilling its own blocks, so a replicated cache is replicated in
+  host memory too — a deduplicating store that kept one copy is not
+  modelled; codex F1) and `decode_curves` (every rank re-reads its copy per
   step). Nothing returns the multiplied model, so it cannot be applied
   twice. The topology name gains ` [KV replicated]`.
 
 At an odd TP width the heads do not divide (TP6 on 4 heads): vLLM refuses
 the width outright; the study keeps pricing it as sharded under "dcp"
 (an extrapolation, unchanged from before this note) and charges the
-continuous ratio (1.5×) under "replicate".
+continuous ratio (1.5×) under "replicate". The deploy recipe says so on
+those widths — it cannot emit a command that realizes the priced layout
+(codex F2).
+
+**Speculative decoding under DCP** had no vLLM support at the cited date,
+so the recipe never emits `--decode-context-parallel-size` and
+`--speculative-config` together: with DCP ≥ 2 and the MTP slider above
+1.0 the speculative flag is withheld and the recipe says why. The page's
+numbers keep the slider's multiplier — the MTP transplant is an unmeasured
+headroom assumption everywhere in the study, and the slider is where a
+reader takes it out (codex F3).
+
+**One approximation left in place (codex F6):** Qwen3.8-Flash-Next's
+cache has two components with different head counts — the GQA main K/V
+(2 heads, 12,288 B/token) and the compressed indexer keys (1 head,
+384 B/token). A single `kv_heads = 2` under-replicates the indexer: at
+TP8 the exact figures are 13,056 B/token under DCP (priced 12,672) and
+52,224 under plain TP (priced 50,688), 0.5–3% on the pool and 2.6% on the
+replicated per-user speed at n = 64. Splitting the two components would
+add a second head field to every model for one model's 3%; recorded
+instead.
 
 ## 4. What replication costs (reference workload, fp8 KV)
 

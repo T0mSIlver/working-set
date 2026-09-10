@@ -8,7 +8,7 @@
   "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
   "hypothesis": "one line on the cause"
  },
- "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 798 vectors / 45,486 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 174 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself.",
+ "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 814 vectors / 46,398 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 176 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself. 2026-09-10 (KV layout): +16 vectors on the kvshard axis (three anchors' sweeps and three replicate+offload combinations); no band or entry moved.",
  "entries": [
   {
    "quantity": "steady_n",

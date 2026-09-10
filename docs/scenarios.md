@@ -1722,9 +1722,13 @@ Ordered roughly by how much each could move the numbers:
     not modelled at all** — for GLM-5.2's 256 experts that is the axis a real
     large deployment would shard the FFN on, and the study instead prices all
     experts as one resident blob (correct for the reported configurations, and
-    not correct for a rack-scale one). Likewise no attention-DP: a TP group is
-    assumed to shard KV heads cleanly, which stops being true once `tp` exceeds
-    the KV-head count. For DP, the shared CPU-offload buffer is split evenly
+    not correct for a rack-scale one). Likewise no attention-DP; past the
+    model's KV-head count a TP group either shards the cache along the
+    sequence (decode context parallelism, the default the study prices and
+    the recipe emits) or replicates it — both are priced explicitly since
+    2026-09-10 (`research/kv_tp_sharding.md`), and a width the heads neither
+    divide nor are divided by is an extrapolation vLLM will not run. For DP,
+    the shared CPU-offload buffer is split evenly
     across replicas — a simplification of real host-memory contention. Treat
     every N > 2 number as a shape, not a quote, until one multi-GPU measurement
     anchors it.

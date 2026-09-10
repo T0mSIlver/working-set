@@ -1902,7 +1902,7 @@ class Workload:
 # CAPACITY  (warm, *reusable* sessions kept in one KV cache)
 # ============================================================================
 def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
-               model: Model, wl: Workload, ram_model: Model = None):
+               model: Model, wl: Workload):
     """Fill one KV cache (+ optional CPU offload) in arrival order; count the
     resident sessions that are *reusable* (i.e. not cold/unmatchable), total,
     user-class only, and GPU-resident only.
@@ -1942,12 +1942,12 @@ def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
 
     n_res = n_gpu
     if ram_gib > 0:
-        rm = model if ram_model is None else ram_model
         rem = unique[n_gpu:]
-        # CPU cost per offloaded session: KV bytes + DeltaNet state, ONE copy
-        cost = rem * rm.kv_bpt + rm.deltanet_state
+        # CPU cost per offloaded session: KV bytes + DeltaNet state (per
+        # stored copy — the caller passes the replicated model)
+        cost = rem * model.kv_bpt + model.deltanet_state
         cb = np.cumsum(cost)
-        ram_budget = ram_gib * GIB - reserved * rm.kv_bpt
+        ram_budget = ram_gib * GIB - reserved * model.kv_bpt
         n_cpu = int(np.searchsorted(cb, ram_budget, side="right"))
         n_res = n_gpu + min(n_cpu, len(rem))
     warm = ~is_cold[:n_res]
@@ -1994,15 +1994,15 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     if pool <= 0:
         return np.zeros(3)
     counts = np.empty(n_iter)
-    # GPU-side costs are paid per stored copy; the host offload buffer holds
-    # ONE copy (a restore re-replicates onto the ranks), so _warm_once prices
-    # the two budgets from the two models
-    gpu_model = _replicated(model, topo)
+    # Both budgets pay per stored copy: vLLM's native offload
+    # (--kv-offloading-size) is RANK-LOCAL, each rank spilling its own blocks,
+    # so a replicated cache is replicated in host memory too. A deduplicating
+    # store (LMCache-style) that kept one copy is not modelled (codex F1).
+    model = _replicated(model, topo)
     for i in range(n_iter):
         full, prefix, cold, sub = wl.sample(rng, draw)
         n_all, n_user, n_gpu, censored = _warm_once(full, prefix, cold, sub,
-                                                    pool, ram_gib, gpu_model, wl,
-                                                    ram_model=model)
+                                                    pool, ram_gib, model, wl)
         if censored:
             raise ValueError(f"draw={draw} too small: budget not exhausted "
                              "(censored result); re-run with a larger draw")
@@ -3115,7 +3115,7 @@ def _selfcheck():
     assert 0 < p_r < p_d / 4, (p_r, p_d)
     off_r = warm_capacity(glm, b8r, wl, ram_gib=512, n_iter=60, which="offload")[1]
     off_d = warm_capacity(glm, b8, wl, ram_gib=512, n_iter=60, which="offload")[1]
-    assert off_r >= off_d * 0.9, "host RAM holds one copy either way"
+    assert 0 < off_r < off_d / 4, "rank-local host offload replicates with the cache"
     _, v_r, _, _ = decode_curves(glm, b8r, wl, [64], n_iter=200)
     _, v_d, _, _ = decode_curves(glm, b8, wl, [64], n_iter=200)
     assert v_r[0] < v_d[0], "eight ranks re-reading the whole MLA cache must decode slower"
