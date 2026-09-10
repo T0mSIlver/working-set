@@ -293,29 +293,42 @@ export const CONFIG = {
   },
 
   // ---- QUALITY ----
-  // One coding-agent score per model, so the frontier ranks on what a
-  // configuration delivers and not only on what it costs. Terminal-Bench
-  // 2.1 pass@1 as MEASURED BY ARTIFICIAL ANALYSIS (one lab, one harness:
-  // Terminus 2, 89 tasks x 3 repeats), read 2026-09-05 — vendor cards
-  // quote other harnesses and other versions and are not comparable, so
-  // they are deliberately not used — with ONE exception by owner decision
-  // (2026-09-10): DSV41F carries its vendor card's 90.6 (DeepSeek Harness
-  // Minimal mode, max effort, 1M context) because AA had no run on release
-  // day. It is a percentage, not a /267 run count; the `source` key says
-  // so and the ledger flags it for replacement when AA publishes. Reasoning
-  // variant at the effort AA ran for its index. The FP16-KV / NVFP4 arms
-  // inherit the base score: the quantisation loss is unmeasured, and a
-  // per-arm guess would rank the frontier on the guess. Ledger and
-  // protocol: research/terminal_bench.md.
+  // Coding-agent scores per model, so the frontier ranks on what a
+  // configuration delivers and not only on what it costs. TWO Terminal-Bench
+  // versions, both pass@1 as MEASURED BY ARTIFICIAL ANALYSIS (one lab, one
+  // harness per version) — vendor cards quote other harnesses and other
+  // versions and are not comparable, so they are deliberately not used, with
+  // ONE exception by owner decision (2026-09-10): DSV41F carries its vendor
+  // card's figures on BOTH versions because AA has no run of it at all. Those
+  // two are percentages, not run counts; the `source` key says so and the
+  // ledger flags them for replacement when AA publishes. Reasoning variant at
+  // the effort AA ran for its index. The FP16-KV / NVFP4 arms inherit the base
+  // score: the quantisation loss is unmeasured, and a per-arm guess would rank
+  // the frontier on the guess. Ledger and protocol: research/terminal_bench.md.
+  //
+  // 2.1 is AA's LEGACY agentic-coding eval and 4.0 the one carrying the
+  // Intelligence Index v4.3; they disagree about the top of this frontier
+  // (2.1 puts Q38FN first, 4.0 puts GLM-5.3 first by 9 points), which is why
+  // the explorer offers both rather than picking one. Read 2026-09-10.
+  BENCHES: {
+    tb21: { label: "TB 2.1", name: "Terminal-Bench 2.1", runs: 267,
+            harness: "Terminus 2", protocol: "89 tasks × 3 repeats, Terminus 2",
+            status: "AA legacy eval" },
+    tb40: { label: "TB 4.0", name: "Terminal-Bench 4.0", runs: 198,
+            harness: "mini-SWE-agent v2.4.6", protocol: "66 tasks × 3 repeats, mini-SWE-agent v2.4.6",
+            status: "AA Intelligence Index v4.3" },
+  },
   QUALITY: {
-    "27B":    { tb21: 213/267, aa: "qwen3-8-27b" },   // xhigh effort (the index run); 3.6 was 162/267
-    "35BA3B": { tb21: 120/267, aa: "qwen3-6-35b-a3b" },
-    "MM35":   { tb21: 135/267, aa: "mistral-medium-3-5" },
-    "GLM52":  { tb21: 224/267, aa: "glm-5-3" },   // max effort (the index run); 5.2 was 208/267
-    "DSV41F": { tb21: 0.906, aa: null,            // vendor figure, not an AA run (see above); likely 3-9 points above AA's protocol
-                source: "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — no Artificial Analysis run as of 2026-09-10" },
-    "Q38FN":  { tb21: 230/267, aa: "qwen3-8-flash-next" },
-    "GLM53F": { tb21: 225/267, aa: "glm-5-3-flash" },
+    // tb21 is n/267 (89 × 3), tb40 is n/198 (66 × 3) — the run counts the AA
+    // pages' `terminalbenchV21` / `terminalbenchV40` fields reduce to exactly
+    "27B":    { tb21: 213/267, tb40:  11/198, aa: "qwen3-8-27b" },   // xhigh effort (the index run); 3.6 was 162/267, no 4.0 run
+    "35BA3B": { tb21: 120/267, tb40:   0/198, aa: "qwen3-6-35b-a3b" },  // 0/198 is a MEASURED zero, not a missing run
+    "MM35":   { tb21: 135/267, tb40:   0/198, aa: "mistral-medium-3-5" },  // likewise
+    "GLM52":  { tb21: 224/267, tb40:  83/198, aa: "glm-5-3" },   // max effort (the index run); 5.2 was 208/267, no 4.0 run
+    "DSV41F": { tb21: 0.906,   tb40: 0.312,   aa: null,   // vendor figures, not AA runs (see above)
+                source: "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — no Artificial Analysis run of any Terminal-Bench version as of 2026-09-10" },
+    "Q38FN":  { tb21: 230/267, tb40:  50/198, aa: "qwen3-8-flash-next" },
+    "GLM53F": { tb21: 225/267, tb40:  65/198, aa: "glm-5-3-flash" },
   },
 
   // ---- TOPOLOGY ----

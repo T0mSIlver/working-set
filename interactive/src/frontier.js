@@ -18,7 +18,12 @@ export function renderFrontierTable(rows, curKey){
   const ceilHead = state.showCeil
     ? `<th class="num">cache</th><th class="num">decode</th>`
       + `<th class="num">latency</th><th class="num">saturation</th>` : '';
-  const head = `<tr><th>configuration</th><th class="num">TB 2.1</th><th>your load</th><th class="num">${hasHeadcount()?'max sessions / people':'max users'}</th>`
+  // both benchmark columns, always: the reader compares the two orderings
+  // without touching the toggle, which only moves chart H's axis. The active
+  // one is emphasised so the column driving the chart is unambiguous.
+  const benchHead = Object.entries(CONFIG.BENCHES).map(([k, b]) =>
+    `<th class="num"${k===state.bench?' style="color:var(--text)"':` style="color:${muted};font-weight:500"`}>${esc(b.label)}</th>`).join('');
+  const head = `<tr><th>configuration</th>${benchHead}<th>your load</th><th class="num">${hasHeadcount()?'max sessions / people':'max users'}</th>`
              + `<th>binds on</th><th class="num">headroom</th>${ceilHead}`
              + `<th class="num">B*</th><th class="num">€/mo</th><th class="num">€/seat</th></tr>`;   // .num headers right-align over their digits
   const body = rows.map(r=>{
@@ -41,10 +46,13 @@ export function renderFrontierTable(rows, curKey){
     // a censored decode search is a floor, not an estimate — carry the '≥'
     // through every figure derived from it, not just the headline
     const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
-    const q = frontierScore(r);
-    return `<tr${you}><td>${esc(frontierRowName(r))}</td>`
-         // the model's score, not the row's: every split of a model shares it
-         + `<td class="num">${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</td>`
+    // the model's scores, not the row's: every split of a model shares them
+    const benchCells = Object.keys(CONFIG.BENCHES).map(k => {
+      const q = frontierScore(r, k);
+      return `<td class="num"${k===state.bench?'':` style="color:${muted}"`}>`
+           + `${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</td>`;
+    }).join('');
+    return `<tr${you}><td>${esc(frontierRowName(r))}</td>${benchCells}`
          + (viable
             ? `<td class="v" style="color:${fits?good:crit}">${fits?'✓ fits':'✗ over'}</td>`
             : `<td class="v" style="color:${muted}">—</td>`)
@@ -78,9 +86,11 @@ export function renderFrontierTable(rows, curKey){
    (log; seats span more than a decade). Not the bill at your load over your
    users: that is the GPU count again, and every row on a topology would
    price the same. x =
-   the model's Terminal-Bench 2.1 score (research/terminal_bench.md; one
-   value per model, so a model's rows stack in a column and the column is
-   the price of the topology choice). The Pareto-efficient set (no other
+   the model's Terminal-Bench score on the version state.bench selects
+   (research/terminal_bench.md; one value per model, so a model's rows stack
+   in a column and the column is the price of the topology choice). The two
+   versions rank the top of this field differently — 2.1 is saturated, 4.0
+   is not — so the toggle is part of the reading, not a preference. The Pareto-efficient set (no other
    row scores >= for <= money) is a staircase: for any capability floor,
    the cheapest seat. Rows that cannot carry the load have no seat price
    and are counted, not drawn. Drawn from EXACTLY the rows the table was
@@ -112,9 +122,11 @@ function frontierShortLabel(r){
 }
 // NaN, never null, for a model without a run: isFinite(null) is true in JS
 // (null coerces to 0), which would plot an unscored model at 0% instead of
-// leaving it off the chart and printing '—' in the table
-export const frontierScore = r => {
-  const q = (CONFIG.QUALITY[r.mk] || {}).tb21;
+// leaving it off the chart and printing '—' in the table. A MEASURED zero
+// (two models score 0/198 on 4.0) is a score and must survive this — hence
+// Number.isFinite and not a truthiness test.
+export const frontierScore = (r, bench = state.bench) => {
+  const q = (CONFIG.QUALITY[r.mk] || {})[bench];
   return Number.isFinite(q) ? q : NaN;
 };
 export function renderFrontierChart(rows, curKey){
@@ -131,7 +143,7 @@ export function renderFrontierChart(rows, curKey){
   const perUser = r => r.eurSeat;
   if (!live.length){
     const W=560,H=120;
-    const why = carries.length ? `no configuration that carries ${fmt(users,0)} users has a Terminal-Bench score`
+    const why = carries.length ? `no configuration that carries ${fmt(users,0)} users has a ${CONFIG.BENCHES[state.bench].name} score`
                                : `no configuration on this GPU can carry ${fmt(users,0)} users at these settings`;
     box.innerHTML = svgEl(`<text x="${W/2}" y="${H/2+4}" text-anchor="middle" class="axlbl" font-size="13">${esc(why)}</text>`,
                           W, H, 'Nothing to plot');
@@ -159,8 +171,11 @@ export function renderFrontierChart(rows, curKey){
       && (frontierScore(b) > frontierScore(a) || perUser(b) < perUser(a)))));
   const qs = live.map(r => frontierScore(r)*100), es = live.map(perUser);
   // right-hand slack is for the direct labels, which sit to the upper right;
-  // the axis is a percentage, so it never runs past 100
-  const xLo = Math.max(0, Math.floor((Math.min(...qs)-4)/5)*5), xHi = Math.min(100, Math.max(...qs) + (wide ? 8 : 14));
+  // the axis is a percentage, so it never runs past 100. The low end floors at
+  // -5 rather than 0: two models score a MEASURED 0.0% on 4.0, and clamping to
+  // 0 drew their dots half on top of the price ticks. No tick is labelled below
+  // 0 (the loop starts at ceil(xLo/10)*10), so the slack is drawing room only.
+  const xLo = Math.max(-5, Math.floor((Math.min(...qs)-4)/5)*5), xHi = Math.min(100, Math.max(...qs) + (wide ? 8 : 14));
   const yLo = Math.min(...es)*0.7, yHi = Math.max(...es)*1.5;
   const sx = linScale(xLo, xHi, mL, mL+pw), sy = logScale(yLo, yHi, mT+ph, mT);
   let g='';
@@ -272,10 +287,11 @@ export function renderFrontierChart(rows, curKey){
   // a row scored from its vendor card (QUALITY[mk].source) is not an AA
   // measurement: the axis title names it rather than label it AA
   const vendor = [...new Set(live.filter(r => CONFIG.QUALITY[r.mk].source).map(r => FRONTIER_SHORT[r.mk] || r.mk))];
-  const axisSrc = 'Artificial Analysis' + (vendor.length ? `; ${vendor.join(', ')}: vendor card` : '');
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">Terminal-Bench 2.1, pass@1 (${esc(axisSrc)})</text>`;
+  const bench = CONFIG.BENCHES[state.bench];
+  const axisSrc = `Artificial Analysis, ${bench.harness}` + (vendor.length ? `; ${vendor.join(', ')}: vendor card` : '');
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">${esc(bench.name)}, pass@1 (${esc(axisSrc)})</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">€ per seat per month, configuration full (log)</text>`;
   box.innerHTML = svgEl(g, W, H,
-    'Every configuration that carries the load as Terminal-Bench score versus monthly cost per seat at capacity, with the Pareto-efficient set joined as a staircase');
+    `Every configuration that carries the load as ${bench.name} score versus monthly cost per seat at capacity, with the Pareto-efficient set joined as a staircase`);
   frontierChartGeom = { W,H,mL,mR,mT,pw,ph, pts, par, curKey };
 }
