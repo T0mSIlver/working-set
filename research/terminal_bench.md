@@ -25,9 +25,10 @@ card itself shows why the one-harness rule exists: the same model at the
 same effort scores 84.1 (Codex scaffold) to 90.6 (DSH Minimal) on the same
 benchmark, a 6.5-point spread from the scaffold alone
 (`research/model_dsv41flash.md` § 5). Going by the other six models, AA's
-number will likely land 3–9 points lower — and the same card's figures for
-the two models AA has also run sit 4 points above AA's (GLM-5.3 88.2 vs
-83.9; V4-Flash-0731 82.7 vs 78.7). The vendor figure is to be
+number will likely land 3–9 points lower (an expectation, not a
+measurement) — and the same card's figures for the two models AA has also
+run sit 4.3 and 4.0 points above AA's (GLM-5.3 88.2 vs 83.9; V4-Flash-0731
+82.7 vs 78.7). The vendor figure is to be
 **replaced by the AA number the day it publishes**, and the ledger row and
 `CONFIG.QUALITY.DSV41F.source` carry the provenance until then.
 

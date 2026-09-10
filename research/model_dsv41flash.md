@@ -250,9 +250,9 @@ by **owner decision on release day the vendor figure is carried** —
 `CONFIG.QUALITY.DSV41F = { tb21: 0.906, source: "vendor card …" }` — as the
 one non-AA row, to be replaced when AA publishes. The card gives the size of
 the caveat directly: its figures for the two models that are also in AA's
-ledger sit 4 points above AA's (GLM-5.3 88.2 vs 83.9; V4-Flash-0731 82.7 vs
-78.7), so an AA number in the mid-80s would be the expectation, not a
-surprise.
+ledger sit 4.3 and 4.0 points above AA's (GLM-5.3 88.2 vs 83.9;
+V4-Flash-0731 82.7 vs 78.7). *Hypothesis, not a card fact:* an AA number a
+few points below 90.6 is the expectation, not a surprise.
 
 **Frontier-comparison table (max reasoning effort; the seven columns are
 Opus-5.0 / GPT-5.6 Sol / K3 / GLM-5.3 / DS-V4-Pro / DS-V4-Flash /
@@ -280,7 +280,9 @@ CyberGym, Agent's Last Exam and Codeforces — the coding workload the
 explorer prices is the one it was built for — while GPT-5.6 Sol leads it
 clearly on SEC-Bench Pro (74.3 vs 62.8) and ExploitGym (33.7 vs 15.3); (ii) on the two
 newer Terminal-Bench versions it trails Opus-5.0 by 13–21 points (30.0 vs
-43.3; 31.2 vs 51.8) — the 2.1 lead is a lead on the saturated version. The
+43.3; 31.2 vs 51.8) — read here (the card says nothing of the kind) as a
+lead on the version the field has closed in on: seven models within 8
+points on 2.1, a 44-point spread on 4.0. The
 multimodal rows (GLM-5.3 and the other DeepSeeks have none) are the first
 in the DeepSeek V4 line; the study's text workload never runs the ViT.
 
@@ -311,29 +313,32 @@ the visual agent benchmarks on Claude Code at 512k; Agent's Last Exam and
 AutomationBench on their official scaffolds. The scaffold table: **N=8**
 samples per task on DeepSWE, **N=3** on TB 2.1, Linux containers,
 **max_steps=500** per agent, TB 2.1 without network access. (AA's protocol
-is 3 repeats on 89 tasks in the Terminus 2 harness — a different harness
-and, for a 1M-context model, very likely a smaller window.)
+is 3 repeats on 89 tasks in the Terminus 2 harness — a different harness;
+AA does not publish the context window it ran.)
 
 **Recommended sampling parameters (card, "Minimal Inference"):**
 `temperature` 1.0, `top_p` 0.95 or 1.0, `context_window` 1M tokens,
-**`max_tokens` ≥ 256K**. The last is a serving fact, not a tuning hint: the
-vendor expects a single response (thinking + answer) to be allowed a
-quarter of the context. The study prices **404 output tokens per request**
-on average (`research/workload_agentic_poc.md`, a production trace on the
-Qwen 27B deployment, effort setting unknown); nothing in this note changes
-that constant, but at effort 100 this model's own responses are of a
-different order, and a deployment that ran it as the card was evaluated
-would sit far to the decode-heavy side of the study's workload.
+**`max_tokens` ≥ 256K**. The last is a serving-relevant fact: the vendor
+recommends allowing a single response (thinking + answer) a quarter of the
+context. The card gives no observed response-length distribution, so how
+long responses *are* at effort 100 is not known from it. The study prices
+**404 output tokens per request** on average
+(`research/workload_agentic_poc.md`, a production trace on the Qwen 27B
+deployment, effort setting unknown); nothing in this note changes that
+constant. *Hypothesis:* a deployment run as the card was evaluated would
+sit to the decode-heavy side of the study's workload; the card cannot say
+by how much.
 
 **Continuously controllable reasoning effort (card, "Post-training" and
 "Instruct Model"):** an integer **1–100**, "trading inference cost for
-accuracy"; **all card results use 100**. The frontier score and the
-explorer's tokens-per-request therefore come from opposite ends of one
-knob — the ledger's § 3 caveat ("a cheaper effort setting would score lower
-and generate fewer tokens; neither side of that trade is in the model yet")
-applies to this row more literally than to any other, because here the
-knob is a request parameter rather than a model variant. The card gives no
-effort-vs-tokens curve.
+accuracy"; **every instruct result on the card uses 100** (the base-model
+table has no effort setting). The frontier score is therefore an
+effort-100 number, while the effort behind the explorer's tokens-per-request
+trace is unknown — the ledger's § 3 caveat ("a cheaper effort setting would
+score lower and generate fewer tokens; neither side of that trade is in the
+model yet") applies to this row with an extra degree of freedom, because
+here the knob is a request parameter rather than a model variant. The card
+gives no effort-vs-tokens curve.
 
 **Prompt encoding (card, "Prompt Encoding"):** the release ships **no
 Jinja chat template**. The `encoding/` folder holds a self-contained Python
@@ -344,10 +349,11 @@ messages and interleaved image content; for production DeepSeek releases
 libraries with Python bindings that convert Messages / Chat Completions /
 Responses API requests into a Conversation, encode them into V4 and V4.1
 prompts or token IDs, and parse output back (thinking, tool calls, images,
-generation settings) as complete or streamed responses. Presumably this is
-what vLLM's `--tokenizer-mode deepseek_v41` wraps (the recipe names the
-mode, not the library); a serving stack without an equivalent cannot form
-a valid prompt. Weight conversion and local inference are in
+generation settings) as complete or streamed responses. Neither the card
+nor the vLLM recipe says what vLLM's `--tokenizer-mode deepseek_v41`
+implements (unverified: whether it wraps `deepseek-recipe` or reimplements
+the format); what the card does establish is that a serving stack needs
+one of these to form a valid prompt. Weight conversion and local inference are in
 `inference/`; the `evaluation/` folder reproduces DeepSWE v1.1 with both
 `dsh-minimal` and `mini-swe-agent` (with the patch to run `dsh-minimal`
 under Pier).
@@ -374,9 +380,11 @@ statement of the parameter counts this note reproduces from the shards
 
 (All base models on DeepSeek's internal framework; "scores within 0.3 are
 equivalent".) The base matches or beats the 1.6T Pro on most code/math rows
-while activating a sixth of its parameters — and trails it on world
-knowledge and long context (SimpleQA-Verified 42.3 vs 55.2; LongBench-V2
-45.2 vs 51.5), the rows a 196B Engram is presumably meant to shore up.
+while activating a sixth of its parameters in prefill (8B vs 49B) and a
+third in decode (16B vs 49B) — and trails it on world knowledge and long
+context (SimpleQA-Verified 42.3 vs 55.2; LongBench-V2 45.2 vs 51.5).
+*Hypothesis:* those are the rows a 196B Engram is meant to shore up; the
+card does not say.
 
 **License:** MIT, repository and weights (card front matter `license: mit`,
 "License" section); `pipeline_tag: image-text-to-text`.
