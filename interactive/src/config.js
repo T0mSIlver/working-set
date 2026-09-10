@@ -307,8 +307,11 @@ export const CONFIG = {
   // the frontier on the guess. Ledger and protocol: research/terminal_bench.md.
   //
   // 2.1 is AA's LEGACY agentic-coding eval and 4.0 the one carrying the
-  // Intelligence Index v4.3; they disagree about the top of this frontier
-  // (2.1 puts Q38FN first, 4.0 puts GLM-5.3 first by 9 points), which is why
+  // Intelligence Index v4.3; they disagree about the top of this frontier.
+  // Among the AA-MEASURED six, 2.1 ranks Q38FN first and GLM52 fourth while
+  // 4.0 reverses them: GLM52 leads Q38FN by 16.7 points there and trails it
+  // by 2.2 on 2.1. (DSV41F's vendor pair tops 2.1 outright and sits second
+  // on 4.0, but it is not measured like the others — § source.) That is why
   // the explorer offers both rather than picking one. Read 2026-09-10.
   BENCHES: {
     tb21: { label: "TB 2.1", name: "Terminal-Bench 2.1", runs: 267,

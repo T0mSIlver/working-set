@@ -33,7 +33,8 @@ measured under AA's protocol, and the card itself shows why the one-harness
 rule exists: the same model at the same effort scores 84.1 (Codex scaffold)
 to 90.6 (DSH Minimal) on 2.1, a 6.5-point spread from the scaffold alone
 (`research/model_dsv41flash.md` § 5); the card publishes no per-scaffold
-split for 4.0, so that version's caveat is the same size but unquantified.
+split for 4.0, so that version's caveat is the same in kind and unknown in
+size.
 Going by the other six models, AA's numbers will likely land lower (an
 expectation, not a measurement) — and the same card's 2.1 figures for the
 two models AA has also run sit 4.3 and 4.0 points above AA's (GLM-5.3 88.2
@@ -129,15 +130,19 @@ is not noise:
 | | 2.1 | 4.0 |
 |---|---|---|
 | spread over the seven study models | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
-| spread over the **top four** | 6.7 pts (83.9–90.6) | 16.6 pts (25.3–41.9) |
+| spread over the **top four** | 6.7 pts (83.9–90.6) | 16.7 pts (25.3–41.9) |
 | best AA-measured model | Qwen3.8-Flash-Next 86.1 | GLM-5.3 41.9 |
 | GLM-5.3 vs Qwen3.8-Flash-Next | −2.2 | **+16.7** |
 | models scoring 0 | none | two |
 
 On 2.1 the four strongest models are inside 7 points, which is roughly the
 spread one scaffold change produces on the same model (§ 1) — the version
-has saturated for this field, and chart H's staircase on it is two steps
-wide. On 4.0 the same four are inside 17 and the staircase has four steps.
+has saturated for this field. On 4.0 the same four are inside 17. How many
+steps chart H's staircase then has depends on the explorer state, not on the
+benchmark alone: the efficient set is recomputed per GPU, load and price, so
+at the 64-user H200 default both versions collapse to a single step
+(Qwen3.8-Flash-Next TP8), while at 8 users on 8×H200 the 2.1 staircase has
+two steps and the 4.0 staircase four — the same rows, reordered by the axis.
 Reading 4.0 as "the harder, therefore better" axis is tempting and wrong in
 one direction: it is also a *different harness* (mini-SWE-agent, not
 Terminus 2) and a *smaller* task set (66, not 89), so a 0.0% is 0 of 198
