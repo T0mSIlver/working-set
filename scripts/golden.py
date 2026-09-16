@@ -637,6 +637,10 @@ SPREAD_PROBE = [
          cap=64, mbu=0.15, mfu=0.55, chunk='8192', user_median=12, user_sigma=1.1,
          sub_ratio=0.4, inval=0.5, users=32, think=90, sla=20, turn=6000, burst=8,
          out=900, decode_floor=60),
+    # H200 compressed-sparse MoE deployment with DP2 x TP4 and a heavy
+    # subagent share (DSv4-Flash-0731, back alongside V4.1 on 2026-09-16).
+    dict(model='DSV4F', gpu='H200', wdt='fp8', kv='fp8', ngpu=8, tp=4,
+         user_median=60, sub_ratio=0.4, users=128, think=45, decode_floor=60),
 ]
 # how many knobs of the sweep each anchor gets (the first anchor gets all of
 # them; the others cover the knobs most likely to interact with topology)

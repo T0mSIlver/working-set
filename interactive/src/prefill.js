@@ -154,7 +154,7 @@ export function missContextSeconds(m, topo, context, chunk, prior){
 // at the cap makes the fractional parts anything but uniform.
 // Memoised on the draw itself: a contextStats object is immutable once made,
 // and one render asks for the same C many times over (chart E's 41-point
-// sweep, E3's seven models on the same grid, every tile at the priced chunk).
+// sweep, E3's models on the same grid, every tile at the priced chunk).
 // The scan is 20,000 ceils, so the memo is what keeps E3 free on drag frames.
 export function meanPasses(cs, C){
   const memo = cs.passMemo || (cs.passMemo = new Map());

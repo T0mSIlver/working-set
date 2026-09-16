@@ -32,7 +32,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const sug = Math.max(1, Math.round(Math.min(decodeUsers, lastWarmCur.g5)));
   // draft counts mirror the research notes; a model missing here must not
   // emit num_speculative_tokens:undefined, so it gates specOn too
-  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV41F":5, "Q38FN":3, "GLM53F":5}[state.model];
+  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "DSV41F":5, "Q38FN":3, "GLM53F":5}[state.model];
   const specOn = state.mtp>1 && m0.mtp>1 && specDrafts !== undefined;
   const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
   const ramGrp = ramPerCache(topo);
@@ -87,7 +87,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   if (state.kv==='fp16') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
   if (dcp > 1) cmts.push(`# DCP ${dcp}: ${m0.kv_heads===1?'a single-latent (MQA/MLA) cache':`${m0.kv_heads} KV heads`} would replicate on ${dcp}× the ranks under plain TP${topo.tp}; the page prices ONE copy (speculative decoding under DCP is still in development in vLLM, 2026-08)`);
   if (rKv > 1) cmts.push(`# KV REPLICATED: plain TP${topo.tp} keeps ${rKv}× copies of every session's cache — the page prices the pool ÷ ${rKv} and ${rKv}× per-step cache reads; --decode-context-parallel-size ${Math.max(1, Math.floor(topo.tp/(m0.kv_heads||1)))} would remove them`);
-  if (specOn && !specBlocked) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${state.model==='DSV41F'?' (DSpark drafts)':''}`);
+  if (specOn && !specBlocked) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${(state.model==='DSV4F'||state.model==='DSV41F')?' (DSpark drafts)':''}`);
   if (specBlocked) cmts.push(`# NOT EMITTED: --speculative-config — the page prices ${state.mtp.toFixed(2)}× speculative decoding, but vLLM's DCP path had no speculative-decoding support as of 2026-08; set the MTP slider to 1.0 for a recipe that matches, or choose Replicated`);
   if (illegalTp) cmts.push(`# TP${topo.tp} is not a width vLLM accepts for ${heads} KV heads (tp must divide the heads or the heads divide tp): the page prices this as if the cache sharded — an extrapolation no command realizes`);
   if (eagle) cmts.push(`# the modelled ${state.mtp.toFixed(2)}× speedup assumes an EXTERNAL EAGLE-style draft (no MTP module; unmeasured)`);

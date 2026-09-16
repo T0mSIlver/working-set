@@ -3,8 +3,9 @@
 **Purpose:** defensible KV-cache / decode-bandwidth / prefill constants for
 **DeepSeek-V4.1-Flash** (`deepseek-ai/DeepSeek-V4.1-Flash`, MIT weights,
 released 2026-09-10) as used by `workingset.model` (`MODELS["DSV41F"]`) and the
-explorer. It **replaces** DeepSeek-V4-Flash-0731 in the study
-(`research/model_dsv4flash.md`, kept as the superseded record).
+explorer. It replaced DeepSeek-V4-Flash-0731 in the study on release day;
+since 2026-09-16 both are modelled side by side (`research/model_dsv4flash.md`,
+`MODELS["DSV4F"]`) — the two are different architectures, not revisions.
 
 > **Provenance (2026-09-10, release day):** every primary artifact was read
 > directly from huggingface.co: `config.json`, `inference/config.json`,

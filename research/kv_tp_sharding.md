@@ -33,12 +33,13 @@ hardened" — the two caveats the explorer's tooltip carries.
 | `35BA3B` | Qwen3.6-35B-A3B | GQA 16/2 on 10 layers | 2 | DeltaNet, 32 v-heads | shards |
 | `MM35` | Mistral-Medium-3.5 | GQA 96/8 on 88 layers | 8 | — | — |
 | `GLM52` | GLM-5.3 | MLA, one 576-B latent | **1** | — | — |
+| `DSV4F` | DeepSeek-V4-Flash-0731 | MQA, one 512-dim latent (CSA + HCA) | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `DSV41F` | DeepSeek-V4.1-Flash | MQA, one 512-dim latent per cache | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `Q38FN` | Qwen3.8-Flash-Next | GQA 24/2 on 12 QSA layers | 2 | DeltaNet, 48 v-heads | shards |
 | `GLM53F` | GLM-5.3-Flash | NoPE sparse-MLA, one latent | **1** | KDA, 64 heads | shards |
 
 The DeltaNet / KDA states shard by value head at every width the study
-prices (≤ 8), so only DeepSeek-V4.1-Flash's fixed per-session state — the
+prices (≤ 8), so only the DeepSeek Flash models' fixed per-session state — the
 128-entry windows of the same single latent — replicates.
 
 ## 3. The two layouts, as priced
@@ -90,6 +91,8 @@ instead.
 | Configuration | Pool, sharded | Pool, replicated | Warm p5, sharded → replicated |
 |---|---|---|---|
 | GLM-5.3 · 8×B300 TP8 | 27.3M tok | 3.4M tok | 957 → 105 sessions |
+| DeepSeek-V4-Flash-0731 · 8×B300 TP8 | 553M tok | 69M tok | 17.5k → 2.1k sessions |
+| DeepSeek-V4-Flash-0731 · 8×H200 TP8 | 234M tok | 29M tok | 7.3k → 880 sessions |
 | DeepSeek-V4.1-Flash · 8×B300 TP8 | 1,758M tok | 220M tok | 58k → 7.2k sessions |
 | DeepSeek-V4.1-Flash · 8×H200 TP8 | 520M tok | 65M tok | 17k → 2.1k sessions |
 | Qwen3.6-35B-A3B · 8×B300 TP8 (2 heads) | ÷ 1 | ÷ 4 | |

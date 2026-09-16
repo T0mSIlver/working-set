@@ -594,7 +594,7 @@ function chartE3Data(topo, wl, cs){
     let ref;
     try{ ref=coldRequestSeconds(m, topo, wl, cs, PREFILL_CHUNK); }
     catch(e){ continue; }
-    // meanPasses is memoised on `cs`, so the seven sweeps share chart E's scans
+    // meanPasses is memoised on `cs`, so the per-model sweeps share chart E's scans
     models.push({key, dense:!is_moe(m), sel:key===state.model,
                  rel:Cs.map(C=>ref/coldRequestSeconds(m, topo, wl, cs, C))});
   }

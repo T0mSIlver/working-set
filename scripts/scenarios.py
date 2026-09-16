@@ -291,6 +291,7 @@ def fig_prefill_thrash():
                ("35BA3B", 1, 2, "H200", ORANGE, "35B-A3B TP2"),
                ("MM35", 1, 4, "H200", RED, "Mistral-3.5 TP4"),
                ("GLM52", 1, 8, "H200", AQUA, "GLM-5.3 TP8"),
+               ("DSV4F", 1, 2, "H200", GREEN, "DSv4-Flash TP2"),
                ("DSV41F", 1, 8, "H200", YELLOW, "DSv4.1-Flash TP8"),
                ("Q38FN", 1, 2, "H200", PURPLE, "Q3.8-Flash TP2"),
                ("GLM53F", 1, 4, "H200", MAGENTA, "G5.3-Flash TP4 (BF16 KV)")]
@@ -323,8 +324,9 @@ def fig_prefill_thrash():
     axL.set_xlim(0, 50); axL.set_ylim(0, 185)
     axL.set_xlabel("cache-miss rate  f  (%)")
     axL.set_ylabel("share of the replica group spent prefilling (%)")
-    axL.legend(frameon=False, fontsize=8.5, loc="upper left",
-               bbox_to_anchor=(0.30, 1.0))
+    # two columns: nine configs in one column ran through the 100% line
+    axL.legend(fontsize=8, loc="upper left", bbox_to_anchor=(0.24, 1.0), ncol=2,
+               frameon=True, facecolor="white", edgecolor="none", framealpha=.9)
     axL.set_title(f"Prefill duty cycle at {RATE:.2f} req/s\n"
                   "(64 users, one turn every 30 s; warm turns included)",
                   fontsize=10.5)
