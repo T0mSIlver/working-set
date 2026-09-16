@@ -209,7 +209,7 @@ export const CONFIG = {
       name: "DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
       kv_bpt: 3450,                // 21 x 576/4 CSA + 20 x 576/128 HCA + 21 x 64/4 fp4 indexer
       deltanet_state: 15597568,    // NOT DeltaNet: 46 x 128 x 576 windows + 12.2e6 fp32 compressor state
-      state_step_bytes: 833728,    // per step: 43 x 576 ring-slot writes + compressor slot writes and group flushes amortized over their ratio (window READS sit in kv_decode_const)
+      state_step_bytes: 1048768,   // per step: 43 x 576 ring-slot writes + compressor slot writes, pooling reads and (ratio 4) overlap-half copies amortized over their ratio (window READS sit in kv_decode_const)
       state_fp32_ok: false,        // fixed mixed-precision state — the fp32 toggle models nothing
       w_resident: 166.88e9,        // measured safetensors total (native mixed FP8/FP4 checkpoint)
       w_decode_shared: 7.66e9,     // attn 4.60 + shared exp 1.08 + comp/idx/gates/mHC 0.92 + lm_head 1.06

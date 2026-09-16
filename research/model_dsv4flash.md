@@ -141,30 +141,39 @@ reads are already inside `kv_decode_const` above, so 2 × 14.9 MiB counted
 them again (codex finding F1 on the V4.1 card, which has the same layout).
 What a decode step actually moves in that state:
 
+The fp32 compressor buffers (`inference/model.py` `Compressor`, l.309–310):
+`kv_state` and `score_state`, each `coff × ratio` slots of `coff × head_dim`,
+with `coff = 2` on the overlapping ratio-4 compressors and 1 on HCA —
+21 × 65,536 (CSA main, head_dim 512) + 21 × 16,384 (CSA indexer, 128) +
+20 × 524,288 (HCA, 512) = 12,206,080 B, the § 2 total. The decode branch
+(l.350–365) does, per sequence:
+
+- **write** one slot into both buffers every step;
+- **pool** when a group completes (every `ratio` steps): read the
+  half-selected slices — `2 × ratio × head_dim` elements per buffer with
+  overlap, the whole `ratio × head_dim` buffer without;
+- **roll** (overlap only): `state[:, :ratio] = state[:, ratio:]` in both
+  buffers — `ratio × 2 × head_dim` elements read and the same written.
+
 ```
-ring-slot writes      43 x 576                                  =     24,768
-fp32 compressor buffers, kv + score each (they sum to 12,206,080):
-  CSA main    21 x (1 slot x 1,024 x 4 x 2  +  8 x 1,024 x 4 x 2 / 4)  =  516,096
-  CSA indexer 21 x (1 slot x   256 x 4 x 2  +  8 x   256 x 4 x 2 / 4)  =  129,024
-  HCA         20 x (1 slot x   512 x 4 x 2  +  128 x 512 x 4 x 2 / 128) = 163,840
-                                                                 -----------
-state_step_bytes                                                 =    833,728 B per ACTIVE SEQ per step
+ring-slot writes          43 x 576                                         =     24,768
+CSA main    21 x (8,192 write + 32,768 pool / 4 + 65,536 roll / 4)         =    688,128
+CSA indexer 21 x (2,048 write +  8,192 pool / 4 + 16,384 roll / 4)         =    172,032
+HCA         20 x (4,096 write + 524,288 pool / 128)                        =    163,840
+                                                                           -----------
+state_step_bytes                                                           =  1,048,768 B per ACTIVE SEQ per step
 ```
 
-Each compressor writes one slot per step and reads its whole buffer once a
-group completes, every `ratio` tokens; across a batch whose sequences sit
-at different offsets that flush averages to buffer ÷ ratio per step. The
-buffer geometry (CSA: 2 × ratio slots at 2 × head_dim, overlapping groups;
-HCA: ratio slots at head_dim) is read from the three buffer sizes' exact
-sum to the § 2 compressor total, not from a second pass over `model.py` —
-the split between them is inferred, the total is not. The V4.1 card charges
-its compressor state whole every step instead; at ratio 2 the two
-conventions differ by 25% of 24.6 kB, while at ratio 128 the whole-buffer
-rule would charge 12.2 MB against 0.16 MB of mechanism, so the amortized
-form is used here. Against the pre-correction charge (31.2 MB/seq/step) this
-raises decode speed wherever the per-sequence term matters: ~54 → ~23 MB
-per sequence at the 31k reference context, next to a 7.7–155 GB weight
-read.
+Pool and roll happen once per group; across a batch whose sequences sit at
+different offsets they average to their size ÷ ratio per step. V4.1-Flash's
+compressors (`research/model_dsv41flash.md`) are ratio 2 without overlap, so
+the same accounting — write + pool ÷ 2 — comes to exactly one buffer-size per
+step, which is how its card charges them: the two notes follow one mechanism.
+(A first draft of this section billed the pool read as the whole buffer and
+omitted the roll: 833,728 B, 20% light — codex review of PR #75.) Against the
+pre-correction charge (31.2 MB/seq/step) this raises decode speed wherever
+the per-sequence term matters: ~54 → ~24 MB per sequence at the 31k
+reference context, next to a 7.7–155 GB weight read.
 
 ## 4. Weight bytes
 
@@ -269,9 +278,10 @@ checkpoint.
   (vllm#42876) + SGLang roadmap; the vLLM recipe's "recommended" phrasing
   disagrees. If BF16 KV ships, kv_fp16_ok flips to True and ×2 overstates
   the true BF16 layout by only 0.3%.
-- `state_step_bytes` (§ 3) amortizes the compressor group flushes over their
-  ratio and infers the per-buffer split from the total; charging the whole
-  12.2 MB every step (the V4.1 card's convention) would be the upper bound.
+- `state_step_bytes` (§ 3) amortizes each compressor's pooling read and
+  overlap roll over its ratio, the batch-average of a per-sequence burst.
+  Charging the whole 12.2 MB state every step would be the upper bound; the
+  bursts themselves (a 0.5 MB HCA flush once per 128 steps) are not priced.
 - The FP32 compressor state (11.65 MiB/seq) is charged per *resident* session;
   a serving stack could plausibly keep it only for *active* sequences. Biases
   capacity DOWN (conservative).

@@ -241,10 +241,18 @@ export function unitChecks(){
     "DSV4F kv_bpt = CSA + HCA + fp4 indexer = 3,450 B/token");
   console.assert(ds4.deltanet_state === 46*128*576 + 12206080,
     "DSV4F per-session state = windows + fp32 compressor buffers");
-  console.assert(ds4.state_step_bytes === 43*576 + 21*(2*1024*4 + 8*1024*4*2/4)
-                   + 21*(2*256*4 + 8*256*4*2/4) + 20*(2*512*4 + 128*512*4*2/128)
+  // Compressor.forward's decode branch per sequence, amortized over the
+  // ratio: one-slot write, the pooling read when a group completes, and
+  // (ratio 4, overlapping) the roll state[:ratio] = state[ratio:] — read + write
+  const compStep = (ratio, d) => {
+    const c = ratio === 4 ? 2 : 1;
+    return 2*c*d*4 + 2*c*ratio*d*4/ratio + (c === 2 ? 2*2*ratio*2*d*4/ratio : 0);
+  };
+  console.assert(compStep(4,512) === 32768 && compStep(4,128) === 8192 && compStep(128,512) === 8192,
+    "DSV4F compressor step components (write + pool + overlap roll)");
+  console.assert(ds4.state_step_bytes === 43*576 + 21*compStep(4,512) + 21*compStep(4,128) + 20*compStep(128,512)
                  && state_traffic(ds4) === ds4.state_step_bytes,
-    "DSV4F per-step state traffic = ring-slot writes + amortized compressor writes/flushes");
+    "DSV4F per-step state traffic = ring-slot writes + compressor write/pool/roll");
   console.assert(ds4.state_fp32_ok === false && ds4.kv_fp16_ok === false,
     "DSV4F: fixed-precision state, quantized-only main KV");
   console.assert(ds4.w_route_pertok === 6*13369344*43 &&

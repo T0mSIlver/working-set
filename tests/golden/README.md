@@ -322,8 +322,9 @@ same two field edits `modelFor()` makes (`deltanet_state` x2,
 `w_resident` x1.15), so a downloaded `workingset.toml` reproduces the page.
 
 They remain unsampled by this fixture, but the spread probe no longer blocks
-adding them. `SPREAD_PROBE` names the 25 states the old positional probe
-happened to select (the switch moved no band), so adding a sweep axis or a
+adding them. `SPREAD_PROBE` started as the 25 states the old positional probe
+happened to select (the switch moved no band; a 26th, DSV4F's, was added on
+its return), so adding a sweep axis or a
 state key no longer changes which states derive every `mc` band. What the
 coverage rule guarantees is a floor, not a cross-product: every model and GPU
 appears at least once, and a new model is represented only by the entry

@@ -553,10 +553,10 @@ MODELS = {
         name="DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
         kv_bpt=3_450,                    # 21 x 576/4 + 20 x 576/128 + 21 x 64/4 (fp8 latent+fp4 idx)
         deltanet_state=15_597_568,       # 46 x 128 x 576 windows + 12,206,080 fp32 compressor state
-        state_step_bytes=833_728,        # per step: 43 x 576 ring-slot writes + the compressor
-                                         # buffers' slot writes and group flushes amortized over
-                                         # their ratio (808,960) — the window READS are in
-                                         # kv_decode_const (research/model_dsv4flash.md #3)
+        state_step_bytes=1_048_768,      # per step: 43 x 576 ring-slot writes + each compressor's
+                                         # slot write, its pooling read and (ratio 4) overlap-half
+                                         # copy, amortized over the ratio (1,024,000) — the window
+                                         # READS are in kv_decode_const (research/model_dsv4flash.md #3)
         state_fp32_ok=False,             # already fp32/fp8-mixed; doubling models nothing
         w_resident=166.88e9,             # measured safetensors total 166,878,536,440 B
         w_decode_shared=7.66e9,          # attn 4.60 + shared exp 1.08 + compressors/indexers/
@@ -3111,16 +3111,35 @@ def _selfcheck():
     ds4 = MODELS["DSV4F"]
     assert ds4.kv_bpt == 21 * 576 / 4 + 20 * 576 / 128 + 21 * 64 / 4   # 3,450 B
     assert ds4.deltanet_state == 46 * 128 * 576 + 12_206_080    # windows + fp32 state
-    # the fp32 compressor state: CSA main (2x4 slots x 1024), CSA indexer
-    # (2x4 x 256) and HCA (128 x 512), kv + score buffers each, 4 B/elem
-    assert 12_206_080 == (21 * 8 * 1024 * 4 * 2 + 21 * 8 * 256 * 4 * 2
-                          + 20 * 128 * 512 * 4 * 2)
-    # per step: one 576-B ring slot per main layer, and each compressor
-    # buffer's one-slot write plus its whole-buffer flush every `ratio` steps
-    assert ds4.state_step_bytes == (43 * 576
-                                    + 21 * (2 * 1024 * 4 + 8 * 1024 * 4 * 2 / 4)
-                                    + 21 * (2 * 256 * 4 + 8 * 256 * 4 * 2 / 4)
-                                    + 20 * (2 * 512 * 4 + 128 * 512 * 4 * 2 / 128))
+    # the fp32 compressor state (inference/model.py Compressor): kv_state and
+    # score_state, each (1 + overlap) x ratio slots of (1 + overlap) x d
+    # elements, overlap = (ratio == 4). CSA main d=512, CSA indexer d=128
+    # (ratio 4, overlapping), HCA d=512 (ratio 128)
+    def _buf(ratio, d):
+        c = 2 if ratio == 4 else 1
+        return 2 * (c * ratio) * (c * d) * 4
+    assert 12_206_080 == 21 * _buf(4, 512) + 21 * _buf(4, 128) + 20 * _buf(128, 512)
+
+    # per decode step, per sequence (the operations of Compressor.forward's
+    # decode branch, each group's work amortized over `ratio` steps):
+    #   write  one slot of c x d into both buffers, every step
+    #   pool   read, when a group completes: both halves-selected slices
+    #          (2 x ratio slots x d with overlap, ratio x d without)
+    #   roll   overlap only: state[:, :ratio] = state[:, ratio:] in both
+    #          buffers — ratio x 2d read AND ratio x 2d written
+    def _compressor_step(ratio, d):
+        c = 2 if ratio == 4 else 1
+        write = 2 * (c * d) * 4
+        pool = 2 * (c * ratio) * d * 4 / ratio
+        roll = (2 * 2 * ratio * (2 * d) * 4 / ratio) if c == 2 else 0
+        return write + pool + roll
+    assert _compressor_step(4, 512) == 32_768       # 8,192 write + 8,192 pool + 16,384 roll
+    assert _compressor_step(4, 128) == 8_192
+    assert _compressor_step(128, 512) == 8_192      # no overlap: write + whole-buffer pool
+    assert ds4.state_step_bytes == (43 * 576          # one ring-buffer window slot per main layer
+                                    + 21 * _compressor_step(4, 512)
+                                    + 21 * _compressor_step(4, 128)
+                                    + 20 * _compressor_step(128, 512))
     assert ds4.w_route_pertok == 6 * 13_369_344 * 43            # FP4 experts + E8M0 scales
     assert ds4.w_route_total == 256 * 13_369_344 * 43
     assert abs(ds4.w_route_total / ds4.w_route_pertok - 256 / 6) < 1e-9  # kink ~42.7

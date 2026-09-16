@@ -32,6 +32,13 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const sug = Math.max(1, Math.round(Math.min(decodeUsers, lastWarmCur.g5)));
   // draft counts mirror the research notes; a model missing here must not
   // emit num_speculative_tokens:undefined, so it gates specOn too
+  // the DeepSeek Flash models draft with DSpark, not MTP — V4.1 has no MTP
+  // module at all. Configs as their sources give them: 0731's model card
+  // (greedy drafts), V4.1's vLLM recipe on NVIDIA (adaptive verification)
+  const SPEC_CONFIG = {
+    "DSV4F": '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"greedy"}',
+    "DSV41F": '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block","enable_adaptive_verification":true}',
+  };
   const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "DSV41F":5, "Q38FN":3, "GLM53F":5}[state.model];
   const specOn = state.mtp>1 && m0.mtp>1 && specDrafts !== undefined;
   const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
@@ -71,7 +78,8 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   // cited date (2026-08-07): never emit the two flags together
   const specBlocked = specOn && dcp > 1;
   if (specOn && !specBlocked)
-    lines.push(`  --speculative-config '{"method":"mtp","num_speculative_tokens":${specDrafts}}'`);
+    lines.push(`  --speculative-config '${SPEC_CONFIG[state.model]
+      ?? `{"method":"mtp","num_speculative_tokens":${specDrafts}}`}'`);
   if (state.ram>0)
     lines.push(`  --kv-offloading-size ${fmt(ramGrp,0)}`);
   const cmts = [];
@@ -102,7 +110,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     ['max_model_len', `${fmt(wl.cap,0)} tok`],
     ['max_num_seqs', `${fmt(sug,0)}${reps>1?' per group':''}`],
     ['CPU offload', state.ram>0?`${fmt(state.ram,0)} GiB${dp>1?` (${fmt(ramGrp,0)}/group)`:''}`:'off'],
-    ['Speculative', specOn?`MTP ${state.mtp.toFixed(2)}× (${specDrafts} drafts)`
+    ['Speculative', specOn?`${SPEC_CONFIG[state.model] ? 'DSpark' : 'MTP'} ${state.mtp.toFixed(2)}× (${specDrafts} drafts)`
                    :(eagle?`EAGLE-style ${state.mtp.toFixed(2)}× (external, unmeasured)`:'off')],
   ].map(([k,v])=>`<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
   const out = [
