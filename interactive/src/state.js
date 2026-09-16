@@ -60,6 +60,12 @@ export const state = {
   // UI-only: whether the frontier table shows the four per-ceiling columns.
   // Not part of any compute signature — toggling re-renders from cached rows.
   showCeil: false,
+  // UI-only: which Terminal-Bench version is chart H's x-axis (CONFIG.BENCHES
+  // key). The table prints BOTH columns whichever way this sits, so the toggle
+  // only moves the axis, the staircase and the emphasis. Default 2.1: it is
+  // the version every model in the study has a run on and the one the write-up
+  // is built around. Not a compute input — re-renders from cached rows.
+  bench: "tb21",
   // electricity price and facility PUE the cost card multiplies by — pricing
   // constants, so deliberately NOT in samplingSig (they move no sampled draw).
   // Defaults: Eurostat EU non-household average and the Uptime-survey colo
