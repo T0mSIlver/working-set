@@ -73,7 +73,7 @@ function modelFor(key){
   // so no code path — the frontier included — ever prices an unservable arm.
   m = withKvDtype(m, servableKv(m, state.kv, state.gpu));
   // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.3
-  // carry no state at all) and on DSv4.1-Flash (its per-session state is a
+  // carry no state at all) and on the DeepSeek Flash models (their per-session state is a
   // fixed mixed-precision buffer, state_fp32_ok) — the UI disables both.
   if (state.state_dt === "fp32" && m.deltanet_state > 0 && m.state_fp32_ok !== false)
     m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [fp32 state]" };
@@ -366,7 +366,7 @@ function frontierWarmSig(wl){
 function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}|${state.mbu}`; }
 /* Chunked rebuild: a settle used to recompute every stale row in ONE task —
    measured at 500–900 ms of main-thread block once the table reached 27 rows
-   (7 models) — so the page froze after each drag. The rebuild now walks the
+   (7 models at the time) — so the page froze after each drag. The rebuild now walks the
    rows in ~40 ms time slices on the macrotask queue: the longest block is one
    slice, the table repaints when the last row lands, and a knob moved
    mid-rebuild abandons the run (the next settle starts a fresh one).

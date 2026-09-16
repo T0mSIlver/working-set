@@ -1,13 +1,16 @@
 # DeepSeek-V4-Flash-0731 (284B-A13B, CSA/HCA compressed sparse attention) — parameterization note
 
-> **Superseded 2026-09-10:** the study now models **DeepSeek-V4.1-Flash**
-> (`MODELS["DSV41F"]`, `research/model_dsv41flash.md`), released that day —
-> a different architecture (Causal Encoder-Decoder, CSA2 cross-layer cache
-> reuse, FP4 main KV, 196B Engram tables) rather than a refresh of this one.
-> The `DSV4F` key, its explorer button and its golden vectors are gone; this
-> note stays as the record of the 0731 constants and of the derivation
-> conventions the V4.1 card inherits (per-layer cache re-reads, token-space
-> top-k scaling, the prefill bias direction).
+> **Status (2026-09-16): modelled, alongside DeepSeek-V4.1-Flash.** On
+> 2026-09-10 **DeepSeek-V4.1-Flash** (`MODELS["DSV41F"]`,
+> `research/model_dsv41flash.md`) replaced this model in the study. V4.1 is a
+> different architecture (Causal Encoder-Decoder, CSA2 cross-layer cache
+> reuse, FP4 main KV, 196B Engram tables), not a refresh of this one, so on
+> 2026-09-16 the owner put `DSV4F` back: its key, explorer button, golden
+> vectors and frontier scores are restored. Every constant below is the
+> 2026-08-03 derivation except `state_step_bytes` (§ 3), a correction first
+> found on V4.1 that applies here unchanged; the TP layout fields
+> (`kv_heads = state_heads = 1`, `research/kv_tp_sharding.md`) postdate this
+> note and follow from § 1's single-latent MQA.
 
 **Purpose:** defensible KV-cache / decode-bandwidth constants for
 **DeepSeek-V4-Flash-0731** (`deepseek-ai/DeepSeek-V4-Flash-0731`, MIT weights,
@@ -128,9 +131,49 @@ kv_decode_topk  = 2,048 original tokens (512 compressed entries x ratio 4);
 At the reference 31k-median workload the context scan is ~13 MB/seq and the
 constant reads 9.4 MB/seq — versus 107 MB/seq if decode streamed the full
 cache at kv_bpt, and ~1.1 GB/seq for a dense-attention model with V3-class
-MLA. The MTP layers' window reads and the bursty compressor writes (one
-compression every 4/128 tokens) are folded into the MTP speedup / ignored,
-as MTP-module costs are everywhere in this study.
+MLA. The MTP layers' window reads are folded into the MTP speedup, as MTP-module
+costs are everywhere in this study.
+
+**Per-step state traffic (`state_step_bytes`, added 2026-09-16).** The study's
+default charges a per-session state twice per step (read + write of all of
+`deltanet_state`) — right for a DeltaNet state, wrong here: the windows'
+reads are already inside `kv_decode_const` above, so 2 × 14.9 MiB counted
+them again (codex finding F1 on the V4.1 card, which has the same layout).
+What a decode step actually moves in that state:
+
+The fp32 compressor buffers (`inference/model.py` `Compressor`, l.309–310):
+`kv_state` and `score_state`, each `coff × ratio` slots of `coff × head_dim`,
+with `coff = 2` on the overlapping ratio-4 compressors and 1 on HCA —
+21 × 65,536 (CSA main, head_dim 512) + 21 × 16,384 (CSA indexer, 128) +
+20 × 524,288 (HCA, 512) = 12,206,080 B, the § 2 total. The decode branch
+(l.350–365) does, per sequence:
+
+- **write** one slot into both buffers every step;
+- **pool** when a group completes (every `ratio` steps): read the
+  half-selected slices — `2 × ratio × head_dim` elements per buffer with
+  overlap, the whole `ratio × head_dim` buffer without;
+- **roll** (overlap only): `state[:, :ratio] = state[:, ratio:]` in both
+  buffers — `ratio × 2 × head_dim` elements read and the same written.
+
+```
+ring-slot writes          43 x 576                                         =     24,768
+CSA main    21 x (8,192 write + 32,768 pool / 4 + 65,536 roll / 4)         =    688,128
+CSA indexer 21 x (2,048 write +  8,192 pool / 4 + 16,384 roll / 4)         =    172,032
+HCA         20 x (4,096 write + 524,288 pool / 128)                        =    163,840
+                                                                           -----------
+state_step_bytes                                                           =  1,048,768 B per ACTIVE SEQ per step
+```
+
+Pool and roll happen once per group; across a batch whose sequences sit at
+different offsets they average to their size ÷ ratio per step. V4.1-Flash's
+compressors (`research/model_dsv41flash.md`) are ratio 2 without overlap, so
+the same accounting — write + pool ÷ 2 — comes to exactly one buffer-size per
+step, which is how its card charges them: the two notes follow one mechanism.
+(A first draft of this section billed the pool read as the whole buffer and
+omitted the roll: 833,728 B, 20% light — codex review of PR #75.) Against the
+pre-correction charge (31.2 MB/seq/step) this raises decode speed wherever
+the per-sequence term matters: ~54 → ~24 MB per sequence at the 31k
+reference context, next to a 7.7–155 GB weight read.
 
 ## 4. Weight bytes
 
@@ -235,6 +278,10 @@ checkpoint.
   (vllm#42876) + SGLang roadmap; the vLLM recipe's "recommended" phrasing
   disagrees. If BF16 KV ships, kv_fp16_ok flips to True and ×2 overstates
   the true BF16 layout by only 0.3%.
+- `state_step_bytes` (§ 3) amortizes each compressor's pooling read and
+  overlap roll over its ratio, the batch-average of a per-sequence burst.
+  Charging the whole 12.2 MB state every step would be the upper bound; the
+  bursts themselves (a 0.5 MB HCA flush once per 128 steps) are not priced.
 - The FP32 compressor state (11.65 MiB/seq) is charged per *resident* session;
   a serving stack could plausibly keep it only for *active* sequences. Biases
   capacity DOWN (conservative).

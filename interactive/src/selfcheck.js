@@ -85,6 +85,8 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["MM35"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["GLM52"],"H200")===7 &&
                  minTpFor(CONFIG.MODELS["GLM52"],"B300")===3 &&
+                 minTpFor(CONFIG.MODELS["DSV4F"],"H200")===2 &&
+                 minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["DSV41F"],"H200")===5 &&
                  minTpFor(CONFIG.MODELS["DSV41F"],"B300")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"H200")===2 &&
@@ -93,7 +95,7 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2, "min TP per model/part");
   // (GLM-5.3-Flash prices as its BF16-KV arm on any H200 topology — the fp8
   // arm THROWS there, asserted below with the rest of its identities)
-  for (const mk of ["MM35","GLM52","DSV41F","Q38FN","GLM53F"])
+  for (const mk of ["MM35","GLM52","DSV4F","DSV41F","Q38FN","GLM53F"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(
           mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk],
@@ -103,24 +105,25 @@ export function unitChecks(){
     "MM35 DP4xTP2 on H200 must hold a real pool");
   console.assert(kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(2,4,"B300")) > 0,
     "GLM-5.3 DP2xTP4 on B300 must hold a real pool");
+  const DEEPSEEK_FLASH = ["DSV4F", "DSV41F"];   // fixed window + compressor state
   // KV sharding under TP (research/kv_tp_sharding.md; mirror _selfcheck):
   // every default ("dcp") topology at a TP the KV heads divide stores ONE
   // copy; "replicate" pays tp/kv_heads copies past the heads, and the
   // single-latent models pay it at every tp > 1
-  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV41F",1],["Q38FN",2],["GLM53F",1]]){
+  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV4F",1],["DSV41F",1],["Q38FN",2],["GLM53F",1]]){
     const m = CONFIG.MODELS[mk];
     console.assert(m.kv_heads === heads, mk+" kv_heads");
     for (const tp of [1,2,4,8]){
       const d = makeGrid(1,tp,"B300"), r = makeGrid(1,tp,"B300","replicate");
       const [dk, ds] = kvReplication(m, d), [rk, rs] = kvReplication(m, r);
       console.assert(dk === 1 && ds === 1, mk+" TP"+tp+" dcp = one copy");
-      console.assert(rk === Math.max(1, tp/heads) && rs === (mk==="DSV41F" ? rk : 1), mk+" TP"+tp+" replicate factor");
+      console.assert(rk === Math.max(1, tp/heads) && rs === (DEEPSEEK_FLASH.includes(mk) ? rk : 1), mk+" TP"+tp+" replicate factor");
       console.assert(dcpSize(m, d) === Math.max(1, Math.floor(tp/heads)) && dcpSize(m, r) === 1, mk+" dcp size");
     }
   }
-  console.assert(CONFIG.MODELS["DSV41F"].state_heads === 1
-    && Object.keys(CONFIG.MODELS).every(k => k === "DSV41F" || CONFIG.MODELS[k].state_heads === undefined),
-    "only DSv4.1-Flash's state replicates with its cache");
+  console.assert(DEEPSEEK_FLASH.every(k => CONFIG.MODELS[k].state_heads === 1)
+    && Object.keys(CONFIG.MODELS).every(k => DEEPSEEK_FLASH.includes(k) || CONFIG.MODELS[k].state_heads === undefined),
+    "only the DeepSeek Flash models' state replicates with their cache");
   console.assert(kvReplication(CONFIG.MODELS["27B"], makeGrid(1,6,"B300"))[0] === 1
     && kvReplication(CONFIG.MODELS["27B"], makeGrid(1,6,"B300","replicate"))[0] === 1.5
     && kvReplication(CONFIG.MODELS["GLM52"], makeGrid(1,3,"B300","replicate"))[0] === 3
@@ -179,7 +182,8 @@ export function unitChecks(){
   console.assert(Math.abs(glm.nvfp4_w[0]/465e9 - 1) < 0.005,
     "GLM-5.2 NVFP4 resident must match the vLLM recipe's ~465 GB");
   // every model but GLM-5.3 (nvidia's 5.2 recipe kept as a projection there)
-  // has a measured NVFP4 checkpoint as of 2026-09-06 — except DSv4.1-Flash,
+  // has a measured NVFP4 checkpoint as of 2026-09-06 (DSv4-Flash-0731's is
+  // NVIDIA's, heavier than native) — except DSv4.1-Flash,
   // which has no official one at all (2026-09-10) and is deliberately unpriced
   for (const mk of Object.keys(CONFIG.MODELS))
     console.assert(mk === "DSV41F" ? CONFIG.MODELS[mk].nvfp4_w === null : !!CONFIG.MODELS[mk].nvfp4_w,
@@ -196,6 +200,10 @@ export function unitChecks(){
                  kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",1,"B300")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",2,"B300")) > 0,
     "DSv4.1-Flash (510 GB incl. Engram) must fit from 8xH200 (5 by arithmetic) and 2xB300");
+  console.assert(kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"H200")) === 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",2,"H200")) > 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"B300")) > 0,
+    "DSv4-Flash must fit from 2xH200 and a single B300");
   console.assert(kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",2,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["Q38FN"], makeTopo("tp",1,"B300")) > 0,
@@ -227,6 +235,43 @@ export function unitChecks(){
   console.assert(Math.abs(glm.kv_decode_const/(78*2048*576) - 1) < 0.001,
     "GLM top-k read = 78 layers x top-2048 x 576 B");
   console.assert(glm.kv_decode_topk === 2048, "GLM top-k window");
+  // DSv4-Flash-0731 identities (research/model_dsv4flash.md; mirror _selfcheck)
+  const ds4 = CONFIG.MODELS["DSV4F"];
+  console.assert(ds4.kv_bpt === 21*576/4 + 20*576/128 + 21*64/4,
+    "DSV4F kv_bpt = CSA + HCA + fp4 indexer = 3,450 B/token");
+  console.assert(ds4.deltanet_state === 46*128*576 + 12206080,
+    "DSV4F per-session state = windows + fp32 compressor buffers");
+  // Compressor.forward's decode branch per sequence, amortized over the
+  // ratio: one-slot write, the pooling read when a group completes, and
+  // (ratio 4, overlapping) the roll state[:ratio] = state[ratio:] — read + write
+  const compStep = (ratio, d) => {
+    const c = ratio === 4 ? 2 : 1;
+    return 2*c*d*4 + 2*c*ratio*d*4/ratio + (c === 2 ? 2*2*ratio*2*d*4/ratio : 0);
+  };
+  console.assert(compStep(4,512) === 32768 && compStep(4,128) === 8192 && compStep(128,512) === 8192,
+    "DSV4F compressor step components (write + pool + overlap roll)");
+  console.assert(ds4.state_step_bytes === 43*576 + 21*compStep(4,512) + 21*compStep(4,128) + 20*compStep(128,512)
+                 && state_traffic(ds4) === ds4.state_step_bytes,
+    "DSV4F per-step state traffic = ring-slot writes + compressor write/pool/roll");
+  console.assert(ds4.state_fp32_ok === false && ds4.kv_fp16_ok === false,
+    "DSV4F: fixed-precision state, quantized-only main KV");
+  console.assert(ds4.w_route_pertok === 6*13369344*43 &&
+                 ds4.w_route_total === 256*13369344*43 &&
+                 Math.abs(ds4.w_route_total/ds4.w_route_pertok - 256/6) < 1e-9,
+    "DSV4F expert bytes (FP4 packed + E8M0 scales); kink at n = 256/6");
+  console.assert(ds4.kv_decode_bpt === 21*64/4 + 20*576/128 &&
+                 ds4.kv_decode_const === 21*512*576 + 43*128*576 &&
+                 ds4.kv_decode_topk === 2048, "DSV4F sparse-decode pricing");
+  console.assert(Math.abs(ds4.attn_layers*ds4.attn_d - (21*64*128/4/2 + 20*64*512/128)) < 1e-9,
+    "DSV4F prefill quadratic term = QK-only indexer + dense-HCA equivalents");
+  // NVIDIA's 0731 NVFP4 repacks the natively-4-bit experts with denser
+  // scales: heavier than FP8 on every expert byte, identical elsewhere
+  console.assert(ds4.nvfp4_w[3] === 256*14155800*43 && ds4.nvfp4_w[2] === 6*14155800*43,
+    "DSV4F NVFP4 expert bytes are the measured 14,155,800 B/expert x 43 layers");
+  console.assert(ds4.nvfp4_w[3] > ds4.w_route_total && ds4.nvfp4_w[1] === ds4.w_decode_shared,
+    "DSV4F NVFP4 is heavier on experts and unchanged on the fixed read");
+  console.assert(Math.abs((ds4.nvfp4_w[0] - ds4.w_resident) - (ds4.nvfp4_w[3] - ds4.w_route_total)) < 1e7,
+    "DSV4F NVFP4 resident delta is the expert delta alone");
   // DSv4.1-Flash identities (research/model_dsv41flash.md; mirror _selfcheck)
   const dsf = CONFIG.MODELS["DSV41F"];
   console.assert(dsf.kv_bpt === 3*(288+68)/2 + (288+68),
@@ -234,8 +279,8 @@ export function unitChecks(){
   console.assert(dsf.deltanet_state === 43*128*528 + 3*2*2*512*4,
     "DSV41F per-session state = fp8 windows + fp32 compressor buffers");
   console.assert(dsf.state_step_bytes === 40*528 + 3*2*2*512*4 && state_traffic(dsf) === dsf.state_step_bytes
-    && Object.keys(CONFIG.MODELS).every(k => k === "DSV41F" || state_traffic(CONFIG.MODELS[k]) === 2*CONFIG.MODELS[k].deltanet_state),
-    "DSV41F per-step state traffic = ring-slot writes + compressor r/w; every other model streams 2 x its state");
+    && Object.keys(CONFIG.MODELS).every(k => DEEPSEEK_FLASH.includes(k) || state_traffic(CONFIG.MODELS[k]) === 2*CONFIG.MODELS[k].deltanet_state),
+    "DSV41F per-step state traffic = ring-slot writes + compressor r/w; every non-DeepSeek model streams 2 x its state");
   console.assert(dsf.state_fp32_ok === false && dsf.kv_fp16_ok === false,
     "DSV41F: fixed-precision state, quantized-only main KV");
   console.assert(dsf.w_route_pertok === 6*18800640*40 &&

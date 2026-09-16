@@ -205,6 +205,35 @@ export const CONFIG = {
       attn_layers: 78, attn_d: 64*256,
       max_ctx: 1048576,            // native 1M context
     },
+    "DSV4F": {                     // research/model_dsv4flash.md
+      name: "DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
+      kv_bpt: 3450,                // 21 x 576/4 CSA + 20 x 576/128 HCA + 21 x 64/4 fp4 indexer
+      deltanet_state: 15597568,    // NOT DeltaNet: 46 x 128 x 576 windows + 12.2e6 fp32 compressor state
+      state_step_bytes: 1048768,   // per step: 43 x 576 ring-slot writes + compressor slot writes, pooling reads and (ratio 4) overlap-half copies amortized over their ratio (window READS sit in kv_decode_const)
+      state_fp32_ok: false,        // fixed mixed-precision state — the fp32 toggle models nothing
+      w_resident: 166.88e9,        // measured safetensors total (native mixed FP8/FP4 checkpoint)
+      w_decode_shared: 7.66e9,     // attn 4.60 + shared exp 1.08 + comp/idx/gates/mHC 0.92 + lm_head 1.06
+      w_route_pertok: 3449290752,  // 6 experts x 13,369,344 B (FP4 packed + E8M0 scales) x 43
+      w_route_total: 147169738752, // 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+      mtp: 1.7,                    // DSpark drafts 7 tokens; transplanted fit, unmeasured
+      // nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
+      // shard header (research/nvfp4_2026-09.md). Only the 43 main layers'
+      // routed experts change: the native checkpoint already packs them 4-bit
+      // with E8M0 block-32 scales (13,369,344 B/expert), NVFP4 repacks them
+      // with E4M3 block-16 scales (14,155,800 B/expert, +5.9%). Everything
+      // else byte-identical, MTP experts stay native. So this arm is 5.2%
+      // HEAVIER than FP8 — it exists for the NVFP4 kernel path, not for
+      // bytes; the explorer prices what the checkpoint weighs.
+      nvfp4_w: [175535844088, 7.66e9, 3652196400, 155827046400],
+      kv_decode_bpt: 426,          // 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA read
+      kv_decode_const: 9363456,    // 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
+      kv_decode_topk: 2048,        // 512 compressed entries x ratio 4, in token space
+      kv_fp16_ok: false,           // vLLM V4 path asserts fp8 main KV; SGLang bf16 decode unfinished
+      kv_heads: 1, state_heads: 1, // MQA latent caches AND the latent windows replicate under plain TP
+      params_prefill: 12.70e9,     // MoE: active GEMM params excl embed + lm_head
+      attn_layers: 41, attn_d: 26624/41,  // 21 QK-only indexers @1024-equiv + 20 dense HCA @256-equiv
+      max_ctx: 1048576,            // native 1M (YaRN x16 baked into the config)
+    },
     "DSV41F": {                    // research/model_dsv41flash.md
       name: "DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
       kv_bpt: 890,                 // 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1: FP4 main KV + FP4 indexer K
@@ -308,7 +337,7 @@ export const CONFIG = {
   //
   // 2.1 is AA's LEGACY agentic-coding eval and 4.0 the one carrying the
   // Intelligence Index v4.3; they disagree about the top of this frontier.
-  // Among the AA-MEASURED six, 2.1 ranks Q38FN first and GLM52 fourth while
+  // Among the AA-MEASURED seven, 2.1 ranks Q38FN first and GLM52 third while
   // 4.0 reverses them: GLM52 leads Q38FN by 16.7 points there and trails it
   // by 2.2 on 2.1. (DSV41F's vendor pair tops 2.1 outright and sits second
   // on 4.0, but it is not measured like the others — § source.) That is why
@@ -328,6 +357,7 @@ export const CONFIG = {
     "35BA3B": { tb21: 120/267, tb40:   0/198, aa: "qwen3-6-35b-a3b" },  // 0/198 is a MEASURED zero, not a missing run
     "MM35":   { tb21: 135/267, tb40:   0/198, aa: "mistral-medium-3-5" },  // likewise
     "GLM52":  { tb21: 224/267, tb40:  83/198, aa: "glm-5-3" },   // max effort (the index run); 5.2 was 208/267, no 4.0 run
+    "DSV4F":  { tb21: 210/267, tb40:  24/198, aa: "deepseek-v4-flash" },   // 0731, max effort
     "DSV41F": { tb21: 0.906,   tb40: 0.312,   aa: null,   // vendor figures, not AA runs (see above)
                 source: "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — no Artificial Analysis run of any Terminal-Bench version as of 2026-09-10" },
     "Q38FN":  { tb21: 230/267, tb40:  50/198, aa: "qwen3-8-flash-next" },
@@ -385,7 +415,7 @@ export function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / m.
 export function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_pertok, m.w_route_total); }
 // recurrent / fixed-state bytes moved per active sequence per decode step:
 // read + write of the whole state unless the model says otherwise (mirrors
-// Model.state_traffic — DSv4.1-Flash's windows are read inside kv_decode_const)
+// Model.state_traffic — the DeepSeek Flash models' windows are read inside kv_decode_const)
 export function state_traffic(m){ return m.state_step_bytes ?? 2 * m.deltanet_state; }
 // FP16-KV transform (mirrors Python's with_kv_dtype): doubles kv_bpt AND the
 // top-k main-KV gathers (kv_decode_const) of a sparse-decode model; the

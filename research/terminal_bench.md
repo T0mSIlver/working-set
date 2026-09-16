@@ -35,7 +35,7 @@ to 90.6 (DSH Minimal) on 2.1, a 6.5-point spread from the scaffold alone
 (`research/model_dsv41flash.md` § 5); the card publishes no per-scaffold
 split for 4.0, so that version's caveat is the same in kind and unknown in
 size.
-Going by the other six models, AA's numbers will likely land lower (an
+Going by the other seven models, AA's numbers will likely land lower (an
 expectation, not a measurement) — and the same card's 2.1 figures for the
 two models AA has also run sit 4.3 and 4.0 points above AA's (GLM-5.3 88.2
 vs 83.9; V4-Flash-0731 82.7 vs 78.7). On 4.0 the gap runs the *other* way for both models AA has
@@ -80,7 +80,7 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` and
 | `MM35` | `mistral-medium-3-5` | Mistral Medium 3.5 (high) | **50.6%** | 135 | **0.0%** | 0 | 2026-04-29 |
 | `GLM52` | `glm-5-3` | GLM-5.3 (max) | **83.9%** | 224 | **41.9%** | 83 | 2026-08-18 |
 | — | `glm-5-2` | GLM-5.2 (max) — the model `GLM52` was until 2026-09-06 | 77.9% | 208 | — | — | 2026-06-16 |
-| — | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) — the model `DSV4F` was until 2026-09-10 | 78.7% | 210 | 12.1% | 24 | 2026-07-31 |
+| `DSV4F` | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) — out of the study 2026-09-10 → 09-16, figures unchanged | **78.7%** | 210 | **12.1%** | 24 | 2026-07-31 |
 | `DSV41F` | — | DeepSeek V4.1 Flash — **vendor figures, not AA runs** (§ 1 exception): the model card's pass@1 on the **DeepSeek Harness, Minimal mode, max reasoning effort, 1M context**. Source: `https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash` (README, read 2026-09-10). **No AA run of either version as of 2026-09-10**; replace when it publishes. | **90.6%** (vendor) | — | **31.2%** (vendor) | — | 2026-09-10 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | **25.3%** | 50 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | **32.8%** | 65 | 2026-08-26 |
@@ -95,8 +95,8 @@ Not taken, for the record: Qwen3.8 27B's other effort levels (2.1 low 67.4%,
 medium 65.2%, non-reasoning 49.1%; 4.0 low 2.5%, medium 5.1%, non-reasoning
 no run — xhigh is the level AA's index runs), the non-reasoning variants
 (Qwen3.6 27B 51.3%, 35B-A3B 41.6%, GLM-5.2 51.7% on 2.1, none of which has a
-4.0 run) and AA's *Terminal-Bench Hard* (only four of the seven models have a
-run, so it cannot be an axis).
+4.0 run) and AA's *Terminal-Bench Hard* (only four of the seven models in the
+study on 2026-09-10 have a run, so it cannot be an axis).
 
 Source pages: `https://artificialanalysis.ai/models/<AA slug>`; protocols
 `https://artificialanalysis.ai/methodology/intelligence-benchmarking`;
@@ -113,7 +113,7 @@ free key; the pages were used because no key was on hand.
   (`research/workload_agentic_poc.md`). A cheaper effort setting would
   score lower and generate fewer tokens; neither side of that trade is in
   the model yet.
-- It moves. Six AA-scored models released between April and August 2026
+- It moves. Seven AA-scored models released between April and August 2026
   span 45 to 86 points on 2.1 and 0 to 42 on 4.0; the two newest lead 2.1 but
   on 4.0 they trail GLM-5.3, released eight days earlier. Re-read the ledger when a model is added, and record the date.
   The default for a model without a run on a version is `null` (left off that
@@ -129,7 +129,7 @@ is not noise:
 
 | | 2.1 | 4.0 |
 |---|---|---|
-| spread over the seven study models | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
+| spread over the eight study models | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
 | spread over the **top four** | 6.7 pts (83.9–90.6) | 16.7 pts (25.3–41.9) |
 | best AA-measured model | Qwen3.8-Flash-Next 86.1 | GLM-5.3 41.9 |
 | GLM-5.3 vs Qwen3.8-Flash-Next | −2.2 | **+16.7** |
