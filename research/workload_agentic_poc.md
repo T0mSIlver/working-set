@@ -89,5 +89,6 @@ Deliberately NOT changed:
 - Speculative-decoding acceptance is reported but not yet consumed by the
   model (the decode roofline prices no speculative speedup for the 27B).
 - The capacity table is per replica group at MFU 0.45; the [0.35, 0.55]
-  bracket moves the latency/saturation columns ~1.6× end to end and leaves
+  bracket (since 2026-09-18: [0.30, 0.55] and ~1.8×, research/prefill.md #1)
+  moves the latency/saturation columns ~1.6× end to end and leaves
   cache and decode untouched.

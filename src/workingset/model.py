@@ -95,7 +95,7 @@ class GPU:
     #   tolerant of a 700->350 W cap; mixed vLLM serving measured 229-477 W
     #   on H200-class parts. B300 transfers the FRACTION, not the watts.
     # p_prefill_w: compute-bound prefill is POWER-CAP-limited, 0.90 x TDP
-    #   central (band 0.80-1.00) — FLAT across the study's MFU 35-55% bracket,
+    #   central (band 0.80-1.00) — FLAT across the study's MFU 30-55% bracket,
     #   because the cap binds before the FLOP peak does. MEASURED anchor:
     #   saturated vLLM inference at ~0.85-0.89 of summed GPU TDP (NLR).
     # host_w: flat per-GPU chassis adder (CPUs/NVSwitch/NICs/fans/PSU loss),
@@ -263,6 +263,57 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 # per-model guess would rank configurations on the guess. Mirrors DECODE_MBU
 # in the explorer, where the slider moves every row at once.
 MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
+
+
+# ----------------------------------------------------------------------------
+# OPT-IN decode pricing: bytes + compute + latency (research/decode_mbu.md § 8,
+# 2026-09-18). NOT the default: every published decode figure still comes from
+# the single-constant fold above. This is the form a held-batch sweep to n=64
+# at two context lengths supports, offered as a CALIBRATION a deployment can
+# select ([calibration] decode_pricing = "latency") until a second deployment
+# says whether its constants travel.
+#
+#     t_step = step_bytes / (effective_bw x bw_eff)      every byte, ONE efficiency
+#            + n x (1 + spec_tokens) x t_token            the verify is compute
+#            + fixed_s                                     collectives, draft, launches
+#     per-user tok/s = mtp / t_step
+#
+# The fold misfits (it returns a NEGATIVE fixed cost on every batch sweep, in
+# August and again in September) because it has the bytes and nothing else:
+#   * speculative decoding verifies 1 + k positions per sequence per step.
+#     That is 1 + k tokens of GEMM compute per sequence, priced here at the
+#     SAME per-token time prefill achieves (2 x params / (peak x mfu)) — an
+#     independent measurement, which predicts the fitted per-sequence slope to
+#     ~10% without having been fitted to it;
+#   * a TP group pays two all-reduces per layer whatever the batch, and the
+#     draft head runs k more passes: a latency, not a byte count.
+# With those two terms present ONE bandwidth efficiency serves weights and KV
+# alike — § 4.3's reading B, and its parsimony argument, confirmed.
+#
+# NOT modelled: above ~64 sequences the measured step jumped 1.2-1.6x and then
+# stayed flat to 96 (mechanism unknown, one deployment). Ceilings from this
+# pricing are therefore the LINEAR regime's and optimistic past that batch.
+# ----------------------------------------------------------------------------
+DECODE_BW_EFF = 0.36        # model convention; 0.29 of the raw advertised aggregate at TP4
+DECODE_FIXED_S = 2.7e-3     # TP4, 64 layers, MTP depth 3: what bytes and compute leave over
+DECODE_SPEC_TOKENS = 3      # the depth the constants above were read at
+
+
+@dataclass(frozen=True)
+class DecodeLatency:
+    """Constants of the opt-in latency pricing (see the block above)."""
+    bw_eff: float = DECODE_BW_EFF
+    fixed_s: float = DECODE_FIXED_S
+    spec_tokens: int = DECODE_SPEC_TOKENS
+    mfu: float = None           # None = MFU_DEFAULT; the per-token compute leg
+
+    def __post_init__(self):
+        if not 0 < self.bw_eff <= 1:
+            raise ValueError(f"bw_eff must be in (0, 1], got {self.bw_eff!r}")
+        if self.fixed_s < 0:
+            raise ValueError("fixed_s must be >= 0")
+        if self.spec_tokens < 0:
+            raise ValueError("spec_tokens must be >= 0")
 
 
 @dataclass
@@ -1169,9 +1220,15 @@ def effective_bw(topo: Topology) -> float:
 # module's convention — mfu divides peak_flops(topo), which already carries
 # the tp_efficiency haircut — those same points read 44.4% (TP2) and 49.4%
 # (TP4) against the 45% central. State the convention when quoting. The
-# bracket tightened [0.30,0.60] → [0.35,0.55]: the plausible range now moves
-# every figure here by ~1.6x (was 2x). Still bounds that rank
-# configurations, not latency commitments.
+# bracket tightened [0.30,0.60] → [0.35,0.55]: the plausible range then moved
+# every figure here by ~1.6x (was 2x). LOW EDGE RE-OPENED to 0.30 on
+# 2026-09-18: a third point, the first CONTROLLED Hopper-FP8 one (4xH200 TP4,
+# 16k chunk, 16k-160k cold prompts, three methods agreeing), reads 0.30-0.34
+# in this convention — under the old bracket. The central stays 0.45 until
+# that point and the August implied one (which re-prices to 0.44 as a
+# hit/miss mixture, not 0.49) are reconciled; the bracket now spans ~1.8x.
+# research/prefill.md #1. Still bounds that rank configurations, not latency
+# commitments.
 # ============================================================================
 
 # Model FLOP Utilisation: achieved FLOPs / dense peak on a large prefill GEMM.
@@ -1180,7 +1237,7 @@ def effective_bw(topo: Topology) -> float:
 # convention only: 44.4% / 49.4%) by the two calibration points above rather
 # than by published-benchmark spread alone. Every prefill
 # number in this study should be read with the bracket, not the point.
-MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.35, 0.45, 0.55
+MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.30, 0.45, 0.55
 
 
 
@@ -2069,8 +2126,22 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 # ============================================================================
 # CONCURRENCY  (per-user / aggregate decode tok/s vs max_num_seqs)
 # ============================================================================
+def decode_token_seconds(model: Model, topo: Topology, mfu: float = None) -> float:
+    """GEMM compute time of ONE token position, at prefill's achieved rate.
+    No attention term: a decode position's attention is the KV READ, which the
+    byte ledger already carries."""
+    if model.params_prefill <= 0:
+        raise ValueError(f"{model.name}: no prefill constants "
+                         "(params_prefill unset — see research/prefill.md)")
+    mfu = MFU_DEFAULT if mfu is None else mfu
+    if not 0 < mfu <= 1:
+        raise ValueError(f"mfu must be in (0, 1], got {mfu!r}")
+    return 2.0 * model.params_prefill / (peak_flops(topo) * mfu)
+
+
 def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
-                  n_iter=3000, seed=0, union="linear", mbu: float = None):
+                  n_iter=3000, seed=0, union="linear", mbu: float = None,
+                  latency: "DecodeLatency | None" = None):
     """Per-user tok/s percentiles (p5,p50,p95) and aggregate p50 vs max_num_seqs.
 
     step_bytes(n) = weights (MoE: shared + expert union, see Model.w_decode)
@@ -2111,7 +2182,15 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
         kv_bytes = full.sum(axis=1) * kv_read_bpt + topk_bytes
         state_bytes = n * model.state_traffic
         step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
-        pu = model.mtp * bw / step_bytes
+        if latency is None:
+            pu = model.mtp * bw / step_bytes
+        else:
+            # opt-in: bytes at one efficiency + verify compute + fixed latency
+            t_step = (step_bytes / (effective_bw(topo) * latency.bw_eff)
+                      + n * (1 + latency.spec_tokens)
+                      * decode_token_seconds(model, topo, latency.mfu)
+                      + latency.fixed_s)
+            pu = model.mtp / t_step
         a, b, c = np.percentile(pu, [5, 50, 95])
         p5.append(a); p50.append(b); p95.append(c)
         # aggregate tok/s of one engine; for DP the *system* is replicas x this
@@ -2300,7 +2379,8 @@ def max_users_cache(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 def max_users_decode(model: Model, topo: Topology, wl: Workload,
                      floor: float = DECODE_FLOOR_TOKS, union: str = "linear",
                      n_iter: int = 400, seed: int = 0, hi: int = 4096,
-                     mbu: float = None) -> float:
+                     mbu: float = None,
+                     latency: "DecodeLatency | None" = None) -> float:
     """Concurrent decoders at which per-user p50 tok/s falls to `floor`.
 
     Bisection, not the linear scan tables.py uses: per-user speed is monotone
@@ -2311,7 +2391,7 @@ def max_users_decode(model: Model, topo: Topology, wl: Workload,
     """
     def p50(n):
         return decode_curves(model, topo, wl, [n], n_iter=n_iter, seed=seed,
-                             union=union, mbu=mbu)[1][0]
+                             union=union, mbu=mbu, latency=latency)[1][0]
     if p50(1) < floor:
         return 0.0
     if p50(hi) >= floor:
@@ -2332,7 +2412,8 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
                         union: str = "linear", n_iter: int = 400,
                         seed: int = 0, hi: int = 4096,
                         mbu: float = None,
-                        resident: float = None) -> dict:
+                        resident: float = None,
+                        latency: "DecodeLatency | None" = None) -> dict:
     """The decode batch a given LOAD actually produces, and its per-user speed.
 
     Every other decode figure in this model is a stress test: max_users_decode
@@ -2416,7 +2497,8 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
 
     def v(n: int) -> float:
         return float(decode_curves(model, topo, wl, [n], n_iter=n_iter,
-                                   seed=seed, union=union, mbu=mbu)[1][0])
+                                   seed=seed, union=union, mbu=mbu,
+                                   latency=latency)[1][0])
 
     out = {"demand_tok_s": demand, "saturated": False}
     if demand == 0:                        # no load: nothing is decoding

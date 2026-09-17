@@ -153,7 +153,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       fmt: v => fmt(v / 1000, v < 1000 ? 2 : 1) + 'k tok', approx: false, pts });
   }
   // 5 · prefill MFU — the study's softest input; not a slider, a structural
-  //     unknown, so the sweep runs over the whole stated [35%, 55%] bracket
+  //     unknown, so the sweep runs over the whole stated [30%, 55%] bracket
   axes.push({ label: 'Prefill MFU', cur: PREFILL_MFU, lo: PREFILL_MFU_LO, hi: PREFILL_MFU_HI,
     fmt: v => fmt(v * 100, 0) + '%', approx: false,
     pts: sweep(16, PREFILL_MFU_LO, PREFILL_MFU_HI, v => {

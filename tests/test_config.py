@@ -191,6 +191,9 @@ def test_explorer_toml_names_every_field():
         want = {f.name for f in dataclass_fields(typ)}
         want -= {"metrics_url"}          # optional: no /metrics on the page
         want -= {"max_num_seqs"}         # optional: no such control; unset = no cap
+        # opt-in decode pricing: Python-only until it is a default, so the
+        # page has no control for it and its TOML leaves the defaults implied
+        want -= {"decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens"}
         if block == "workload":
             want -= {"headcount", "peak_active_share", "sessions_per_active_user"}
         assert want == set(raw[block]), f"{block}: {want ^ set(raw[block])}"
@@ -469,6 +472,57 @@ def test_max_num_seqs_round_trips_and_validates(tmp_path):
         {"deployment": {"model": "27B"}}).dumps("toml")
     with pytest.raises(ValueError, match="max_num_seqs"):
         RunConfig.from_dict({"deployment": {"model": "27B", "max_num_seqs": 0}}).validate()
+def test_latency_decode_pricing_is_opt_in_and_reproduces_its_calibration():
+    """The three-leg decode pricing: off by default (nothing published moves),
+    and when selected it must reproduce the held-batch step times it was read
+    from — 27B / 4xH200 TP4, fp32 state, MTP depth 3, prefill MFU 0.32 — from
+    its physical terms, not from a fit to them."""
+    dep = {"model": "27B", "gpu": "H200", "tensor_parallel": 4,
+           "recurrent_state_dtype": "fp32"}
+    base = RunConfig.from_dict({"deployment": dep})
+    assert base.decode_latency() is None
+    cfg = RunConfig.from_dict({"deployment": dep,
+                               "calibration": {"decode_pricing": "latency",
+                                               "mfu": 0.32}})
+    lat = cfg.decode_latency()
+    m, t = cfg.to_model(), cfg.to_topology()
+    # (sequences, context per sequence) -> measured ms per step, rounded
+    for (n, ctx), ms in {(1, 46e3): 8.6, (8, 47e3): 11.1, (32, 40e3): 19.7,
+                         (64, 37e3): 31.3, (8, 111e3): 14.4, (32, 105e3): 31.7,
+                         (64, 103e3): 56.0}.items():
+        step_bytes = m.w_decode(n, "linear") + n * ctx * m.kv_bpt + n * m.state_traffic
+        t_step = (step_bytes / (M.effective_bw(t) * lat.bw_eff)
+                  + n * (1 + lat.spec_tokens) * M.decode_token_seconds(m, t, lat.mfu)
+                  + lat.fixed_s)
+        assert abs(1e3 * t_step / ms - 1) < 0.06, (n, ctx, 1e3 * t_step, ms)
+    # the documented exception: one long sequence alone reads its cache less
+    # efficiently than a batch does, and the form has no term for it
+    lone = (m.w_decode(1, "linear") + 114e3 * m.kv_bpt + m.state_traffic) \
+        / (M.effective_bw(t) * lat.bw_eff) \
+        + (1 + lat.spec_tokens) * M.decode_token_seconds(m, t, lat.mfu) + lat.fixed_s
+    assert 0.85 < 1e3 * lone / 10.2 < 0.92
+    # `ws test` reads its ladder curve through the same pricing `ws predict` shows
+    from workingset.shared import ladder_model_curve
+    assert (ladder_model_curve(cfg, 32, n_iter=48)["decode_tok_s"]
+            > ladder_model_curve(base, 32, n_iter=48)["decode_tok_s"])
+    # a default config still writes the file it always wrote
+    assert "decode_pricing" not in base.dumps("toml")
+    assert "spec_tokens" not in base.dumps("json")
+    assert 'decode_pricing = "latency"' in cfg.dumps("toml")
+    # it moves the decode ceiling and the steady point, and nothing else
+    p0, p1 = predict(base, n_iter=200), predict(cfg, n_iter=200)
+    assert p1.decode_ceiling_users > p0.decode_ceiling_users
+    assert p1.warm_capacity_p5 == p0.warm_capacity_p5
+    assert p1.itl_normal_ms != p0.itl_normal_ms
+    # spec off: no verify width, one token of compute per sequence per step
+    off = RunConfig.from_dict({"deployment": dep, "calibration": {
+        "decode_pricing": "latency", "spec_tokens": 0}})
+    assert off.decode_latency().spec_tokens == 0
+    with pytest.raises(ValueError, match="decode_pricing"):
+        RunConfig.from_dict({"calibration": {"decode_pricing": "fast"}}).validate()
+    with pytest.raises(ValueError, match="bw_eff"):
+        RunConfig.from_dict({"calibration": {"decode_pricing": "latency",
+                                             "decode_bw_eff": 0.0}}).validate()
 
 
 def test_predict_dp_system_multiplies():

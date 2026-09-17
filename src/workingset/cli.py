@@ -59,6 +59,12 @@ def cmd_predict(args) -> int:
     print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}{layout}), "
           f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}"
           + (f", max_num_seqs {d.max_num_seqs}" if d.max_num_seqs is not None else ""))
+    lat = cfg.decode_latency()
+    if lat is not None:
+        print(f"decode pricing: latency (bytes at {lat.bw_eff:g} of bandwidth + "
+              f"{1 + lat.spec_tokens} tokens of compute per sequence at MFU "
+              f"{cfg.calibration.mfu:g} + {lat.fixed_s * 1e3:g} ms per step) — "
+              "opt-in, one deployment's constants")
     users = cfg.users_per_group()
     print(f"operating point: {users:g} users/group, think {w.think_time_s} s, "
           f"miss {w.miss_rate:.0%}, {'closed' if args.closed else 'open'} loop")

@@ -242,3 +242,36 @@ this note actually adds: **replay a burst.** Hold a warm population, invalidate
 `B` sessions at once, and record TTFT for the burst and ITL for the bystanders.
 `T_drain`, the convoy tax on hits, and the token debt are all directly
 observable in that trace, and none of the three needs new hardware.
+
+### 8.1 A burst, replayed (added 2026-09-18)
+
+Done, on the deployment of `research/prefill.md`'s third calibration point: a
+20-user standing load, then 4, 7 and 7 simultaneous forced misses chosen so the
+three bursts flushed ~140k, ~270k and ~400k prompt tokens (burst prompt
+lengths are random draws, so the COUNT alone says little: across seeds the
+model's own drain for N = 7 ranges 4.5–15 s).
+
+| tokens flushed | drain, measured | § 4's drain for those tokens | bystander freeze p95 |
+|---|---|---|---|
+| ~140k | 5.5 s | 3.1 s | 1.5 s |
+| ~270k | 9.5 s | 6.3 s | 1.0 s |
+| ~400k | 13.8 s | 9.5 s | 1.0 s |
+
+- **The fluid drain is the right shape.** Drain time is a straight line in
+  tokens flushed (the three slopes agree to 1%): 0.032 s per ktok, i.e. a
+  saturated ~32k tok/s, confirmed by the engine's own step counters.
+- **Its scale is the MFU's**: the slope is 1.3× § 4's at MFU 0.45, the same
+  factor the idle sweep found (`research/prefill.md` #1).
+- **It is missing a constant.** The line has an intercept of ~1 s that § 4 has
+  no term for: request upload and tokenisation of N large bodies at once, the
+  network floor, and whatever the standing load had in flight. Small against a
+  10 s budget, not against a 2 s one. NOT yet in `burst_drain_seconds`.
+- **B\* in tokens, not requests**: a 10 s budget drained ~280k tokens, ~4.7
+  mean-size misses, against the 6.8 predicted at MFU 0.45.
+- **Token debt is real and large** (§ 6): every bystander stream saw ~1 s gaps
+  for the length of the drain, one per 16k-token chunk, 1.4–2.2× the predicted
+  freeze — the MFU factor again, with the deepest chunks the slowest.
+
+`ws test` now reports a burst's drain against the tokens it actually flushed.
+Weakness #1 (Poisson arrivals) and #5 (no admission control) are untouched by
+this: the burst was fired into an otherwise quiet server.

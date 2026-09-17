@@ -1544,8 +1544,9 @@ def ladder_model_curve(cfg, running: float, n_iter: int = 96,
            "itl_ms": float("nan"), "rate_req_s": float("nan"),
            "ttft_miss_s": float("nan"), "ttft_hit_s": float("nan")}
     n = max(1, int(round(running)))
+    lat = cfg.decode_latency()     # the pricing `ws predict` showed, not another
     p5, p50, p95, _ = M.decode_curves(m, t, wl, [n], n_iter=n_iter, seed=seed,
-                                      mbu=cal.mbu)
+                                      mbu=cal.mbu, latency=lat)
     pu = float(p50[0])
     out["decode_tok_s"] = pu
     if pu > 0:
@@ -1553,7 +1554,8 @@ def ladder_model_curve(cfg, running: float, n_iter: int = 96,
 
     def running_at(rate: float) -> float:
         sp = M.steady_decode_point(m, t, wl, rate, out_tokens=w.max_output_tokens,
-                                   mbu=cal.mbu, n_iter=n_iter, seed=seed)
+                                   mbu=cal.mbu, latency=lat, n_iter=n_iter,
+                                   seed=seed)
         duty = M.prefill_duty(m, t, wl, rate, chunk, turn, cal.mfu,
                               per_pass_overhead=True)
         return sp["n"] + min(duty, 1.0)
