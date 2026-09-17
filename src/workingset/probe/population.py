@@ -33,8 +33,8 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 
-from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_window,
-                      send_request)
+from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_ready,
+                      sampler_window, send_request)
 from .session import Prefixes, make_session
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
 
@@ -345,6 +345,11 @@ async def run_population(client, ep: EndpointSpec, cfg, opts, pop: int,
     traces: list[RequestTrace] = []
     stop = asyncio.Event()
     rng = random.Random(opts.seed ^ pop)
+    # BEFORE the sessions start, so the ramp clock is not spent on it: the
+    # rung's window needs a snapshot that completed before `w_start`, and
+    # with a short (or zero) ramp the first rung can begin before the
+    # sampler's first scrape has landed. Instant once one has.
+    await sampler_ready(metrics)
 
     tasks = [asyncio.create_task(user_loop(
         client, ep, cfg, opts, uid=pop * 100_000 + i, is_sub=(i >= pop),
@@ -490,6 +495,7 @@ async def run_sample(client, ep: EndpointSpec, cfg, opts, prefixes: Prefixes,
     """
     wl = cfg.workload
     traces: list[RequestTrace] = []
+    await sampler_ready(metrics)       # a window needs a snapshot before w0
     w0 = sampler_now(metrics)          # the sampler's base, not monotonic
 
     async def one(i: int):

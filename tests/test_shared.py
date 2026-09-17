@@ -2219,3 +2219,52 @@ def test_a_second_run_at_the_same_seed_sends_bytes_the_first_never_did():
     warm_a = [p for p in a if p.startswith(pre.user)]
     warm_b = [p for p in b if p.startswith(pre.user)]
     assert len(warm_a) == len(warm_b) == 2
+
+
+def test_the_whole_run_window_waits_for_the_samplers_first_snapshot():
+    """`t_start` was read the moment the sampler started, before its first
+    scrape had completed, so the whole-run window had no low endpoint and the
+    SERVER CROSS-CHECK read `WindowNotCovered ... on the low side` on every
+    shared run. No `_until` here on purpose: the probe starts cold."""
+    from test_metrics import FakeServer
+
+    from workingset.metrics import MetricsSampler
+
+    cfg, opts = small_cfg(), small_opts()
+
+    async def go():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            async with client_for(fake_server()) as client:
+                return await run_shared(
+                    client, EndpointSpec(base_url="http://x/v1", model="m"),
+                    cfg, opts,
+                    build_prefixes(cfg.workload, opts.chars_per_token),
+                    budget(abort_if_waiting=None, abort_if_kv_above=None),
+                    shared_opts(rounds=2), s)
+
+    res = asyncio.run(go())
+    assert "error" not in res.cross, res.cross.get("error")
+    assert res.cross["window"]["counters"]["generation_tokens_total"] > 0
+    assert all("error" not in w for w in res.windows)
+
+
+def test_sampler_ready_is_bounded_and_duck_typed():
+    from workingset.probe import sampler_ready
+
+    class Never:
+        async def wait_first(self, timeout):
+            await asyncio.sleep(timeout)
+            return False
+
+    class Broken:
+        def wait_first(self, timeout):
+            raise RuntimeError("no")
+
+    async def go():
+        return (await sampler_ready(None), await sampler_ready(object()),
+                await sampler_ready(Never(), timeout=0.01),
+                await sampler_ready(Broken()))
+
+    assert asyncio.run(go()) == (True, True, False, False)

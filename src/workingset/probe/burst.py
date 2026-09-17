@@ -20,8 +20,8 @@ import time
 from dataclasses import asdict, dataclass, field
 
 from .population import spike_evidence, user_loop
-from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_window,
-                      send_request)
+from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_ready,
+                      sampler_window, send_request)
 from .session import Prefixes, draw_session_tokens, make_text, nonce_bits
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
 
@@ -178,6 +178,9 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
     stop = asyncio.Event()
     rng = random.Random(opts.seed ^ 0xB0057)
     bits = nonce_bits(opts.run_nonce)
+    # the burst's window opens at `w_start` below, and its low endpoint has
+    # to be a snapshot that completed before that (see `sampler_ready`)
+    await sampler_ready(metrics)
     tasks = [asyncio.create_task(user_loop(
         client, ep, cfg, opts, uid=900_000 + i, is_sub=(i >= pop),
         prefixes=prefixes, traces=traces, stop=stop,

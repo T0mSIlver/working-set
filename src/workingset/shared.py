@@ -75,7 +75,7 @@ import numpy as np
 
 from .probe.population import Sample, eval_sample
 from .probe.request import (RequestTrace, _covariates, sampler_now,
-                           send_request, window_dict)
+                           sampler_ready, send_request, window_dict)
 from .probe.session import make_text, nonce_bits
 from .probe.stats import pct
 
@@ -2153,6 +2153,13 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
                       for f in sopts.length_fractions()})
     stop = asyncio.Event()
     side: list[asyncio.Task] = []
+    # The whole-run window starts at `t_start`, and a window's low endpoint
+    # must be a scrape that COMPLETED before its start. Taken the moment the
+    # sampler was started, `t_start` preceded the first snapshot and the
+    # SERVER CROSS-CHECK came back `WindowNotCovered ... on the low side` on
+    # every run. Bounded: a sampler that never answers must not stall the
+    # probe, and its absence is then reported by the rails and the window.
+    await sampler_ready(metrics)
     t_start = sampler_now(metrics)
 
     if budget.canary:

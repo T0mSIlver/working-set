@@ -1023,3 +1023,40 @@ def test_tokenizer_flag_sets_chars_per_token_and_records_the_model(monkeypatch):
     # without the flag the explicit value stands and no model is recorded
     opts = test_cmd.build_options(Namespace(chars_per_token=4.4), RunConfig())
     assert opts.tokenizer is None and opts.chars_per_token == 4.4
+
+
+def test_a_rung_and_a_burst_started_cold_still_get_their_server_window():
+    """The same low-side gap as the shared run's: with no ramp to hide behind,
+    a probe that starts the instant the sampler does asks for a window that
+    begins before the series."""
+    from test_metrics import FakeServer
+
+    from workingset.metrics import MetricsSampler
+
+    cfg = small_cfg()
+
+    async def go():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            pre = build_prefixes(cfg.workload, 4.0)
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            async with client_for(fake_server()) as client:
+                r = await run_population(
+                    client, ep, cfg, small_opts(ramp_s=0.0, measure_s=0.2), 1,
+                    pre, s)
+            return r
+
+    async def go_burst():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            pre = build_prefixes(cfg.workload, 4.0)
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            async with client_for(fake_server()) as client:
+                return await run_burst(client, ep, cfg, small_opts(ramp_s=0.0),
+                                       n=2, standing_users=0, prefixes=pre,
+                                       metrics=s)
+
+    assert asyncio.run(go()).server is not None
+    assert asyncio.run(go_burst()).server is not None
