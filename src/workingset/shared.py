@@ -1986,7 +1986,10 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
                     # history would walk the warm turn up to the context cap
                     # and turn the cheapest probe in the run into its most
                     # expensive. The session restarts instead, which is also
-                    # what a real agentic session does at its cap.
+                    # what a real agentic session does at its cap — the same
+                    # reset a ladder session applies to its history
+                    # (`probe.session.HISTORY_RESET_FRAC`, there against the
+                    # session's own drawn length).
                     warm_history = ""
                 establishing = not warm_history
                 warm_history += "\n" + make_text(rng, wl.warm_turn_tokens, cpt)

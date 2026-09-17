@@ -264,6 +264,32 @@ def test_warm_turn_extends_the_cached_run():
     assert "REPLY" in p2 and len(p2) > len(p1)
 
 
+def test_a_sessions_history_is_capped_at_a_fifth_of_its_drawn_context():
+    """The log-normal is the prompt length PER REQUEST. A history that only
+    grew walked every prompt away from the session's draw, so a long ladder's
+    mean context drifted far above the configured distribution."""
+    from workingset.probe.session import HISTORY_RESET_FRAC
+
+    cfg, opts = small_cfg(), small_opts()
+    pre = build_prefixes(cfg.workload, opts.chars_per_token)
+    s = make_session(cfg.workload, opts, pre, uid=1, is_sub=False)
+    first, _ = s.next_turn()
+    drawn = s.ctx_tokens
+    assert drawn == pytest.approx(len(first) / s.cpt, abs=2)
+    longest = 0
+    for _ in range(40):
+        s.commit("r" * 40)
+        prompt, kind = s.next_turn(force_miss=False)
+        assert kind == "hit" and prompt.startswith(first)   # still a prefix hit
+        longest = max(longest, s.intended_prompt_tokens(prompt))
+    assert s.n_resets > 1
+    # never more than the cap plus the one turn that crossed it
+    turn = cfg.workload.warm_turn_tokens + 10 + 1
+    assert longest <= drawn * (1 + HISTORY_RESET_FRAC) + 2 * turn
+    # without the cap 40 turns would have stacked ~40 x 30 tokens on top
+    assert longest < drawn + 40 * 30 / 2
+
+
 def test_sampler_selfcheck_reproduces_median_and_sigma():
     rows, ok = sampler_selfcheck(RunConfig().workload, ProbeOptions())
     assert ok

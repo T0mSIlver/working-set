@@ -112,6 +112,20 @@ def sub_prefix_floor(wl) -> int:
         else wl.subagent_prefix_tokens
 
 
+# A session's history may grow to this FRACTION of its drawn context length
+# (tokens, via chars_per_token) and is then reset to empty. The workload's
+# log-normal describes the prompt length PER REQUEST, and a history that only
+# ever grows walks every session's prompts up and away from its draw: over a
+# long ladder the mean context the server actually saw drifted far above the
+# configured distribution, and the rungs were no longer measuring the workload
+# the predictions were priced on. The session restarts instead — which is what
+# a real agentic session does at its cap, and the same rule `run_shared`
+# applies to its warm history (there against the context cap, since a shared
+# run draws no per-session length). The turn after a reset is still a prefix
+# hit: prefix + context are byte-identical and cached.
+HISTORY_RESET_FRAC = 0.20
+
+
 @dataclass
 class Session:
     """One simulated user (assumption 1 of the planner): a context, a running
@@ -128,6 +142,8 @@ class Session:
     n_turn: int = 0
     history: str = ""
     nonce: int = 0          # `nonce_bits(opts.run_nonce)`, mixed into the salt
+    ctx_tokens: int = 0     # the drawn prompt length; 0 = read it off the text
+    n_resets: int = 0       # times the history hit HISTORY_RESET_FRAC
 
     def next_turn(self, force_miss: bool | None = None) -> tuple[str, str]:
         """Return (prompt, kind). kind is "first" (session establishment),
@@ -154,10 +170,17 @@ class Session:
 
     def commit(self, reply: str) -> None:
         """The response joins the context: the next warm turn extends the
-        cached sequence exactly the way a real agentic session does."""
+        cached sequence exactly the way a real agentic session does — until
+        the history outgrows HISTORY_RESET_FRAC of the drawn context, when
+        the session restarts from prefix + context."""
         self.history += getattr(self, "_pending_turn_text", "") + reply
         self._pending_turn_text = ""
         self.n_turn += 1
+        drawn = self.ctx_tokens or (
+            (len(self.prefix_text) + len(self.ctx)) / self.cpt)
+        if len(self.history) / self.cpt > HISTORY_RESET_FRAC * drawn:
+            self.history = ""
+            self.n_resets += 1
 
     def intended_prompt_tokens(self, prompt: str) -> int:
         return int(len(prompt) / self.cpt)
@@ -197,7 +220,7 @@ def make_session(wl, opts, prefixes: Prefixes, uid: int, is_sub: bool,
     return Session(uid=uid, is_sub=is_sub, prefix_text=prefix_txt,
                    prefix_tokens=prefix_tok, ctx=ctx, rng=rng, cpt=cpt,
                    warm_turn_tokens=wl.warm_turn_tokens,
-                   miss_rate=wl.miss_rate, nonce=bits)
+                   miss_rate=wl.miss_rate, nonce=bits, ctx_tokens=full)
 
 
 def sampler_selfcheck(wl, opts) -> tuple[list[dict], bool]:
