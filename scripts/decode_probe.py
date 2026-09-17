@@ -64,6 +64,7 @@ from pathlib import Path
 import httpx
 
 CHARS_PER_TOKEN = 3.6      # random lowercase text; refined from usage at runtime
+MAX_TOK_PER_EVENT = 4      # 1 + num_speculative_tokens, at the deepest setting seen
 
 
 def size_output(args):
@@ -126,14 +127,14 @@ def filler(tokens, rnd):
     return "".join(rnd.choice(string.ascii_lowercase + "  ") for _ in range(n))
 
 
-async def stream_one(client, args, prompt, stop, stats):
+async def stream_one(client, args, prompt, stop, stats, out_tokens):
     """One long decode. Retries once without min_tokens/ignore_eos: a proxy in
     front of vLLM often strips or rejects them, and a plateau that ends when
     the model decides to stop is not a plateau."""
     body = {"model": args.model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": args.out_tokens, "temperature": 0.0, "stream": True,
-            "min_tokens": args.out_tokens, "ignore_eos": True,
+            "max_tokens": out_tokens, "temperature": 0.0, "stream": True,
+            "min_tokens": out_tokens, "ignore_eos": True,
             "stream_options": {"include_usage": True}}
     for attempt in (0, 1):
         try:
@@ -162,6 +163,8 @@ async def stream_one(client, args, prompt, stop, stats):
                         m = re.search(r'"prompt_tokens"\s*:\s*(\d+)', line)
                         if m:
                             stats.setdefault("ptok", []).append(int(m.group(1)))
+                if stats.get("counting"):
+                    stats["drained"] = stats.get("drained", 0) + 1
                 return
         except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout):
             return
@@ -181,7 +184,9 @@ async def read_metrics(client, url, key):
     for line in r.text.splitlines():
         for name in ("vllm:num_requests_waiting", "vllm:num_requests_running",
                      "vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"):
-            if line.startswith(name):
+            # the bare series only: `num_requests_waiting_by_reason` starts
+            # with the same text and doubled the count
+            if line.startswith(name + "{") or line.startswith(name + " "):
                 try:
                     out[name] = out.get(name, 0.0) + float(line.rsplit(" ", 1)[1])
                 except (ValueError, IndexError):
@@ -222,7 +227,32 @@ async def watchdog(client, args, stop, events, armed_in=0.0):
         await asyncio.sleep(1.0)
 
 
-async def plateau(client, args, arm, k, ctx, shared, out, rnd):
+async def wait_idle(client, args):
+    """Block until the server runs nothing. A cancelled stream is NOT a
+    cancelled request: a proxy that does not pass the disconnect on leaves
+    vLLM generating every remaining token, and the next plateau then measures
+    its own batch plus the last one's leftovers (a k=64 rung ran at 96, the
+    max_num_seqs cap, and k=90 could only queue)."""
+    if not args.metrics:
+        return
+    t0, said = time.time(), False
+    while time.time() - t0 < args.idle_timeout:
+        m = await read_metrics(client, args.metrics, args.metrics_key)
+        busy = (m.get("vllm:num_requests_running", 0.0)
+                + m.get("vllm:num_requests_waiting", 0.0))
+        if m and busy == 0:
+            if said:
+                print(f"  idle after {time.time() - t0:.0f}s")
+            return
+        if not said:
+            print(f"  waiting for an idle server ({busy:.0f} requests still "
+                  "running or queued)...", flush=True)
+            said = True
+        await asyncio.sleep(2.0)
+    print("  idle wait timed out; running the plateau anyway")
+
+
+async def plateau(client, args, arm, k, ctx, shared, out, rnd, out_tokens):
     """One held batch. Shared rungs send byte-identical prompts (prefix cache
     dedups the storage, every sequence still reads it); unique rungs send k
     independent prompts so read bytes and stored bytes are one number."""
@@ -239,9 +269,11 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
     # warm prefix instead of k cold prefills racing each other
     lead = None
     if shared and k > 1:
-        lead = asyncio.create_task(stream_one(client, args, prompts[0], stop, stats))
+        lead = asyncio.create_task(stream_one(client, args, prompts[0], stop,
+                                              stats, out_tokens))
         await asyncio.sleep(args.lead)
-    streams = [asyncio.create_task(stream_one(client, args, p, stop, stats))
+    streams = [asyncio.create_task(stream_one(client, args, p, stop, stats,
+                                              out_tokens))
                for p in prompts[(1 if lead else 0):]]
     if lead:
         streams.insert(0, lead)
@@ -269,12 +301,18 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
            "start": start, "end": end, "held_s": end - start,
            "client_events_per_stream_s": (stats.get("events", 0) / k / (end - start)
                                           if end > start else None),
+           "out_tokens": out_tokens,
+           # streams that ran out of tokens INSIDE the hold: the batch shrank
+           "drained": stats.get("drained", 0),
            "aborted": aborted, "events": events,
            "errors": stats.get("errors", [])[:3],
            "n_errors": len(stats.get("errors", []))}
     out.append(rec)
     print(f"held {end-start:4.0f}s"
           + (f"  ptok~{sum(pt)/len(pt):,.0f}" if pt else "")
+          + (f"  {rec['client_events_per_stream_s']:.1f} events/stream/s"
+             if rec["client_events_per_stream_s"] else "")
+          + (f"  [{rec['drained']} DRAINED mid-hold]" if rec["drained"] else "")
           + ("  [ABORTED]" if aborted else "")
           + (f"  [{len(stats.get('errors', []))} errors]" if stats.get("errors") else ""))
 
@@ -317,13 +355,28 @@ async def run(args):
     async with httpx.AsyncClient(base_url=args.url.rstrip("/"), headers=hdr,
                                  limits=limits, verify=args.verify) as c:
         await calibrate(c, args, rnd)
+        # Size each rung's output so its streams END soon after the hold,
+        # because cancelling them may not stop the server (see wait_idle).
+        # Per-stream speed only falls as k grows within an arm, so the last
+        # rung's measured rate bounds this one's from above; an event carries
+        # at most MAX_TOK_PER_EVENT tokens under speculative decoding.
+        rate, last = args.slowest_tok_s, (None, 0)
         for arm, k, ctx, shared in rungs_for(args):
+            if arm != last[0] or k <= last[1]:
+                rate = args.slowest_tok_s
+            last = (arm, k)
+            span = args.hold + args.settle + (args.lead if shared and k > 1 else 0)
+            out_tokens = max(256, int(rate * span * 1.1))
+            await wait_idle(c, args)
             m = await read_metrics(c, args.metrics, args.metrics_key)
             w = m.get("vllm:num_requests_waiting")
             if w is not None and w > args.max_waiting:
                 print(f"  arm {arm}  k={k:<3} SKIPPED, instance busy (waiting={w:.0f})")
                 continue
-            await plateau(c, args, arm, k, ctx, shared, out, rnd)
+            await plateau(c, args, arm, k, ctx, shared, out, rnd, out_tokens)
+            ev = out[-1].get("client_events_per_stream_s")
+            if ev:
+                rate = min(rate, ev * MAX_TOK_PER_EVENT)
             await asyncio.sleep(args.settle)
     return out
 
@@ -389,6 +442,9 @@ def main():
                     help="pessimistic per-stream decode rate, for sizing the output")
     ap.add_argument("--max-model-len", type=int, default=0,
                     help="server max_model_len; the long rung is shortened to fit")
+    ap.add_argument("--idle-timeout", type=float, default=1800,
+                    help="longest wait for the server to run nothing before a "
+                         "plateau (needs --metrics)")
     ap.add_argument("--max-k", type=int, default=16, help="hard cap on streams")
     ap.add_argument("--ks", default="1,2,4,8,16,32",
                     type=lambda s: [int(x) for x in s.split(",") if x.strip()],
