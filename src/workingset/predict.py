@@ -59,6 +59,9 @@ class Predictions:
     itl_worst_freeze_ms: float | None = None   # last chunk of a cold re-prefill
     itl_freeze_lo_ms: float | None = None      # MFU 55% — the bracket's low edge
     itl_freeze_hi_ms: float | None = None      # MFU 35% — the bracket's high edge
+    # True when decode_ceiling_users is deployment.max_num_seqs rather than
+    # the bandwidth roofline: the scheduler's cap came first
+    decode_capped_by_max_num_seqs: bool = False
 
     def to_dict(self) -> dict:
         """JSON-safe: non-finite floats become None (strict JSON has no inf)."""
@@ -105,6 +108,20 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
         op["fits"] = users <= op["limit"]
 
+    # The scheduler's own cap on concurrent sequences. The decode ceiling is
+    # a count of sequences decoding AT ONCE (the stress convention), and
+    # max_num_seqs is the most the engine will ever run at once: past it a
+    # request queues instead of slowing the batch, so the floor is never
+    # reached by bandwidth — the cap is the ceiling.
+    capped = False
+    if dep.max_num_seqs is not None and dep.max_num_seqs < op["ceilings"]["decode"]:
+        op["ceilings"]["decode"] = float(dep.max_num_seqs)
+        op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
+        op["limit"] = op["ceilings"][op["binding"]]
+        op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
+        op["fits"] = users <= op["limit"]
+        capped = True
+
     # op["ceilings"]["cache"] is already the user-class warm p5 (the plan
     # column); the all-classes count is what the pool physically holds
     draw = int(4000 + M.kv_pool_tokens(m, t) / 8000)
@@ -138,7 +155,12 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     steady = _steady_block(m, t, wl, rate_total, w.max_output_tokens,
                            dep.max_model_len, chunk, cal.mfu, duty,
                            mbu=cal.mbu, n_iter=n_iter, seed=seed,
-                           resident=float(resident95))
+                           # ...nor the scheduler's cap: a steady batch above
+                           # max_num_seqs is a machine that does not exist, so
+                           # the point saturates there and the block goes empty
+                           resident=(min(float(resident95), dep.max_num_seqs)
+                                     if dep.max_num_seqs is not None
+                                     else float(resident95)))
 
     return Predictions(
         warm_capacity_p5=_int(op["ceilings"]["cache"]),
@@ -155,6 +177,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         ttft_hit_s=round(ttft_hit, 3) if math.isfinite(ttft_hit) else math.inf,
         bstar_misses=round(bstar, 2),
         replicas=t.replicas or 1,
+        decode_capped_by_max_num_seqs=capped,
         **steady,
     )
 
