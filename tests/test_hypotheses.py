@@ -247,6 +247,41 @@ def test_h_decode_is_not_separable_without_a_floor_failure():
     assert v.status == NOT_ESTABLISHED and "decode-floor" in v.text
 
 
+def test_h_decode_says_which_batch_the_ladder_reached_and_what_would_test_it():
+    """The decode ceiling counts sequences decoding AT ONCE; a closed loop
+    with think time holds a small batch, so "no decode-floor failure" on a
+    realistic ladder is not evidence. The row says what batch was reached."""
+    preds = replace(predict(RunConfig(), n_iter=40), decode_ceiling_users=31)
+    ladder = [rung(32, decode_seqs=5.5), rung(64, decode_seqs=12.25),
+              rung(16, decode_seqs=float("nan"))]
+    _, m, v = score(REGISTRY.get("H-decode"), ladder_ctx(preds, ladder))
+    assert m.text == "not separable" and v.status == NOT_ESTABLISHED
+    assert m.data["largest_decode_batch"] == 12.25
+    assert m.data["largest_decode_batch_pop"] == 64
+    assert m.data["decode_ceiling_seqs"] == 31
+    for text in (v.text, m.data["reason"]):
+        assert "12.2 sequences decoding at once (the 64-user rung)" in text
+        assert "predicted ceiling of ~31" in text
+        assert "scripts/decode_probe.py" in text
+
+    # no sampler, no batch reading: said, not guessed
+    _, m, v = score(REGISTRY.get("H-decode"),
+                    ladder_ctx(preds, [rung(32), rung(64)]))
+    assert m.data["largest_decode_batch"] is None
+    assert "not observed (no --metrics-url)" in v.text
+    assert "scripts/decode_probe.py" in v.text
+
+    # a ladder that DID hold the ceiling's batch is not told it could not have
+    _, _, v = score(REGISTRY.get("H-decode"),
+                    ladder_ctx(preds, [rung(400, decode_seqs=40.0)]))
+    assert "40.0 sequences" in v.text and "never holds" not in v.text
+
+    # and the dry run says it before anything is sent
+    st = REGISTRY.get("H-decode").statement(RunConfig(), preds)
+    assert "AT ONCE" in st and "scripts/decode_probe.py" in st
+    assert f"~{preds.steady_decode_seqs:g} at the" in st
+
+
 def test_h_decode_brackets_on_a_floor_failure():
     preds = predict(RunConfig(), n_iter=40)
     dc = preds.decode_ceiling_users
