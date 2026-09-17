@@ -118,6 +118,8 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         op["ceilings"]["decode"] = float(dep.max_num_seqs)
         op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
         op["limit"] = op["ceilings"][op["binding"]]
+        op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
+        op["fits"] = users <= op["limit"]
         capped = True
 
     # op["ceilings"]["cache"] is already the user-class warm p5 (the plan
@@ -153,7 +155,12 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     steady = _steady_block(m, t, wl, rate_total, w.max_output_tokens,
                            dep.max_model_len, chunk, cal.mfu, duty,
                            mbu=cal.mbu, n_iter=n_iter, seed=seed,
-                           resident=float(resident95))
+                           # ...nor the scheduler's cap: a steady batch above
+                           # max_num_seqs is a machine that does not exist, so
+                           # the point saturates there and the block goes empty
+                           resident=(min(float(resident95), dep.max_num_seqs)
+                                     if dep.max_num_seqs is not None
+                                     else float(resident95)))
 
     return Predictions(
         warm_capacity_p5=_int(op["ceilings"]["cache"]),

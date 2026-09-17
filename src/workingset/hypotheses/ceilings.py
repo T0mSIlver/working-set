@@ -94,6 +94,15 @@ class HDecode(Hypothesis):
     probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
+        if getattr(p, "decode_capped_by_max_num_seqs", False):
+            # a different claim, not a smaller number: the batch is pinned at
+            # the cap, so decode speed never falls to the floor by bandwidth
+            return (f"H-decode: the scheduler caps the batch at "
+                    f"{p.decode_ceiling_users:g} sequences (max_num_seqs), below "
+                    f"the bandwidth ceiling: per-user decode stays above "
+                    f"{cfg.slo.itl_floor_tok_s:g} tok/s and requests past the "
+                    "cap queue instead — watch TTFT. No decode-floor failure "
+                    "is expected, so this row cannot be bracketed.")
         return (f"H-decode: per-user p50 decode holds >= "
                 f"{cfg.slo.itl_floor_tok_s:g} tok/s up to "
                 f"~{p.decode_ceiling_users:g} concurrent users.")

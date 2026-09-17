@@ -443,6 +443,22 @@ def test_max_num_seqs_caps_the_decode_ceiling():
         assert getattr(tight, k) == getattr(free, k)
 
 
+def test_max_num_seqs_bounds_the_steady_batch_and_rewords_h_decode():
+    """A steady decode batch above the cap is a machine that does not exist:
+    the steady block must go empty rather than price it, and H-decode must
+    stop claiming a decode-floor crossing the cap makes unreachable."""
+    from workingset.hypotheses.ceilings import HDecode
+    dep = {"model": "27B", "gpu": "H200", "tensor_parallel": 4}
+    free = RunConfig.from_dict({"deployment": dep, "workload": {"users": 400}})
+    capped = RunConfig.from_dict({"deployment": {**dep, "max_num_seqs": 64},
+                                  "workload": {"users": 400}})
+    pf, pc = predict(free, n_iter=200), predict(capped, n_iter=200)
+    assert pf.steady_decode_seqs is not None and pf.steady_decode_seqs > 64
+    assert pc.steady_decode_seqs is None and pc.itl_normal_ms is None
+    assert "max_num_seqs" in HDecode().statement(capped, pc)
+    assert "max_num_seqs" not in HDecode().statement(free, pf)
+
+
 def test_max_num_seqs_round_trips_and_validates(tmp_path):
     cfg = RunConfig.from_dict({"deployment": {"model": "27B", "max_num_seqs": 96}})
     f = tmp_path / "workingset.toml"
