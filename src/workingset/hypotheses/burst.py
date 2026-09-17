@@ -51,6 +51,10 @@ class HBurst(Hypothesis):
             data={"n": b.n, "standing_users": b.standing_users,
                   "n_ok": b.n_ok, "n_err": b.n_err, "drain_s": b.drain_s,
                   "ttft_p50_s": b.ttft_p50_s,
+                  # 0 on a clean burst; anything else put an establishing
+                  # prefill in the queue ahead of it (see probe.burst)
+                  "n_establishing_at_fire": b.n_establishing_at_fire,
+                  "establish_wait_s": b.establish_wait_s,
                   "ttft_budget_s": ctx.cfg.slo.ttft_budget_s})
 
     def verdict(self, pred: Prediction, m: Measurement) -> Verdict:

@@ -322,6 +322,16 @@ def _burst_block(w, b: dict) -> None:
     w(f"  {b['n_ok']}/{b['n']} answered | TTFT p50 "
       f"{fmt(b.get('ttft_p50_s'), 's')} | last first-token "
       f"{fmt(b.get('last_ttft_s'), 's')} | drain {fmt(b.get('drain_s'), 's')}")
+    if b.get("n_establishing_at_fire"):
+        w(f"  WARNING: {b['n_establishing_at_fire']} standing session(s) were "
+          "still establishing at the fire (held "
+          f"{fmt(b.get('establish_wait_s'), 's', 1)} past the ramp, then "
+          "fired anyway): a cold establishing prefill sat in the queue ahead "
+          "of the burst, so the drain above is the burst PLUS that prefill. "
+          "Raise --ramp-s.")
+    elif b.get("establish_wait_s", 0) > 0.5:
+        w(f"  fire held {fmt(b.get('establish_wait_s'), 's', 1)} past the ramp "
+          "until every standing session had its first token")
     if b.get("standing_n"):
         w(f"  standing load hit by it: {b['standing_n']} responses in flight "
           f"| normal gap {fmt(b.get('standing_itl_p50_ms'), ' ms', 1)} | "

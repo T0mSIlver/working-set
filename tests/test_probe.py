@@ -693,6 +693,50 @@ def test_run_burst_times_the_drain():
     asyncio.run(go())
 
 
+def test_establishing_pending_counts_sessions_without_a_first_token():
+    from workingset.probe.burst import establishing_pending
+
+    tr = [trace(1, "first", 0.0, 0.4),            # established
+          trace(2, "first", 0.1, None),           # prefill still in flight
+          trace(3, "first", 0.2, None, err="HTTP 500"),   # over: nothing queued
+          trace(1, "hit", 1.0, 0.1)]
+    # four sessions: one established, one failed, one in flight, one not sent
+    assert establishing_pending(tr, 4) == 2
+    assert establishing_pending([], 0) == 0
+
+
+def _slow_establishing_burst(monkeypatch=None, wait_max=None):
+    import workingset.probe.burst as B
+    if wait_max is not None:
+        monkeypatch.setattr(B, "ESTABLISH_WAIT_MAX_S", wait_max)
+
+    async def go():
+        # an establishing turn takes 0.4 s to its first token and the ramp is
+        # 0.05 s: firing AT the ramp put every establishment ahead of the burst
+        cfg, opts = small_cfg(subagent_ratio=0.0), small_opts(ramp_s=0.05)
+        pre = build_prefixes(cfg.workload, opts.chars_per_token)
+        async with client_for(fake_server(n_tokens=3, ttft=0.4)) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            return await run_burst(c, ep, cfg, opts, n=2, standing_users=2,
+                                   prefixes=pre)
+    return asyncio.run(go())
+
+
+def test_the_burst_waits_for_the_standing_load_to_establish():
+    b = _slow_establishing_burst()
+    assert b.n_establishing_at_fire == 0 and b.n_ok == 2
+    assert b.establish_wait_s > 0.3            # held past the 0.05 s ramp
+    assert b.to_dict()["n_establishing_at_fire"] == 0
+
+
+def test_a_burst_fired_into_an_establishing_load_says_so(monkeypatch):
+    """The wait is bounded — an endpoint that never answers must not hang the
+    probe — and a fire that went ahead anyway is visible in the result."""
+    b = _slow_establishing_burst(monkeypatch, wait_max=0.05)
+    assert b.n_establishing_at_fire > 0
+    assert b.establish_wait_s == pytest.approx(0.05, abs=0.05)
+
+
 def test_eval_burst_reads_the_standing_load_in_flight():
     burst = [trace(990_000, "miss", 10.0, 1.0), trace(990_001, "miss", 10.0, 2.0)]
     standing = [

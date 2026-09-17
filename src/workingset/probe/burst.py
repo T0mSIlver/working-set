@@ -26,12 +26,45 @@ from .session import Prefixes, draw_session_tokens, make_text, nonce_bits
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
 
 
+# Standing sessions establish over the FIRST part of the ramp, not all of it.
+# Staggered over the whole ramp with the fire exactly at its end, a session
+# starting late has its cold establishing prefill — a full context, the most
+# expensive request it will ever send — in flight at the fire, sitting in the
+# server's queue ahead of the burst. The drain then times the burst PLUS
+# somebody's establishment, against a B* that priced a steady standing load.
+ESTABLISH_FRAC = 0.8
+# ...and the last fifth of the ramp is not a guarantee, so the fire also waits
+# until every standing session has its first token. BOUNDED: an endpoint that
+# never answers an establishing turn must not hang the probe, and a fire that
+# went ahead regardless says so in `n_establishing_at_fire`.
+ESTABLISH_WAIT_MAX_S = 30.0
+_ESTABLISH_POLL_S = 0.02
+
+
+def establishing_pending(traces: list, n_sessions: int) -> int:
+    """Standing sessions whose establishing ("first") turn has NOT yet got its
+    first token — in flight, or not even sent. Pure.
+
+    A first turn that errored is over and counts as settled: it holds no
+    place in the server's queue, and waiting on it would wait forever.
+    """
+    settled = sum(1 for t in traces if t.kind == "first"
+                  and (t.ttft is not None or t.error))
+    return max(0, n_sessions - settled)
+
+
 @dataclass
 class BurstResult:
     n: int = 0
     standing_users: int = 0
     n_ok: int = 0
     n_err: int = 0
+    # how long the fire was held past the ramp for standing sessions to finish
+    # establishing, and how many still had not when it went. Anything but 0 in
+    # the second is a CONTAMINATED burst: a cold establishing prefill was
+    # queued in front of it.
+    establish_wait_s: float = 0.0
+    n_establishing_at_fire: int = 0
     # drain: fire -> the LAST request's first token (all fired together, so
     # last first-token = the fluid model's T_drain, whatever the scheduler's
     # discipline — see model.burst_drain_seconds)
@@ -130,14 +163,25 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
     tasks = [asyncio.create_task(user_loop(
         client, ep, cfg, opts, uid=900_000 + i, is_sub=(i >= pop),
         prefixes=prefixes, traces=traces, stop=stop,
-        stagger_s=rng.uniform(0, max(opts.ramp_s, 1.0)), metrics=metrics))
+        stagger_s=rng.uniform(0, ESTABLISH_FRAC * max(opts.ramp_s, 1.0)),
+        metrics=metrics))
         for i in range(pop + n_sub)]
     # the SAMPLER's base, not monotonic: the traces below keep their own
     # monotonic timestamps for span arithmetic, and the two differ by the
     # unix epoch (see probe.request.sampler_now)
     w_start = sampler_now(metrics)
+    wait_s, n_pending = 0.0, 0
     try:
         await asyncio.sleep(opts.ramp_s)
+        # hold the fire until the standing load IS standing (see
+        # ESTABLISH_WAIT_MAX_S): no establishing prefill ahead of the burst
+        t_hold = time.monotonic()
+        while True:
+            n_pending = establishing_pending(traces, pop + n_sub)
+            wait_s = time.monotonic() - t_hold
+            if not n_pending or wait_s >= ESTABLISH_WAIT_MAX_S:
+                break
+            await asyncio.sleep(_ESTABLISH_POLL_S)
 
         async def one_miss(i: int) -> RequestTrace:
             r = random.Random((opts.seed << 8) ^ (0xF00D + i))
@@ -167,5 +211,7 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
         await asyncio.gather(*tasks, return_exceptions=True)
 
     server = await sampler_window(metrics, w_start, sampler_now(metrics))
-    return eval_burst(n, pop, burst_traces, traces, t_fire, server,
-                      cap_tokens=opts.context_cap_tokens)
+    res = eval_burst(n, pop, burst_traces, traces, t_fire, server,
+                     cap_tokens=opts.context_cap_tokens)
+    res.establish_wait_s, res.n_establishing_at_fire = wait_s, n_pending
+    return res

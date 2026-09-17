@@ -12,6 +12,7 @@ from dataclasses import replace
 from . import __version__
 from .hypotheses import (NOT_ESTABLISHED, REGISTRY, Measurement, RunContext,
                          Verdict, plan as make_plan)
+from .probe.burst import ESTABLISH_FRAC, ESTABLISH_WAIT_MAX_S
 from .probe.options import ProbeOptions
 from .probe.population import eval_rung
 from .probe.request import EndpointSpec, make_client
@@ -255,7 +256,10 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
         pop = RunContext(cfg, preds, opts, ep, burst=opts.burst,
                          burst_users=opts.burst_users)._burst_pop()
         w(f"\nBURST PROBE: {opts.burst} simultaneous forced misses at a "
-          f"{pop}-user standing load, after a {opts.ramp_s:g}s ramp")
+          f"{pop}-user standing load, after a {opts.ramp_s:g}s ramp "
+          f"(sessions establish over its first {ESTABLISH_FRAC:.0%}; the fire "
+          f"is held, up to {ESTABLISH_WAIT_MAX_S:g}s, until none is still "
+          "waiting for its first token)")
 
     # sampler self-check: the sampled raw median and log-sd must reproduce the
     # configured (median, sigma) — this is the distribution warm capacity and
