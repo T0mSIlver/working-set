@@ -862,3 +862,39 @@ def test_run_sample_and_the_shared_probe_agree_on_the_clock():
     smp = asyncio.run(go())
     assert smp.server is not None
     assert smp.server["counters"]["generation_tokens_total"] > 0
+
+
+def test_calibrate_chars_per_token_uses_the_probes_own_prose():
+    """The ratio is chars of the probe's synthetic text over what the real
+    tokenizer counts on it, so the prompts land on their intended lengths."""
+    from workingset.probe.session import calibrate_chars_per_token, make_text
+    import random
+    seen = {}
+
+    def fake_count(text):
+        seen["text"] = text
+        return len(text) // 5          # a tokenizer that sees 5 chars/token
+
+    cpt = calibrate_chars_per_token(fake_count, sample_tokens=1_000, seed=7)
+    assert cpt == pytest.approx(5.0, rel=0.01)
+    # it counted the same prose the prompts are built from, at the given seed
+    assert seen["text"] == make_text(random.Random(7), 1_000, 4.0)
+    with pytest.raises(ValueError):
+        calibrate_chars_per_token(lambda t: 0)
+
+
+def test_tokenizer_flag_sets_chars_per_token_and_records_the_model(monkeypatch):
+    import sys, types
+    from argparse import Namespace
+    from workingset import test_cmd
+    from workingset.config import RunConfig
+    fake = types.ModuleType("toklen")
+    fake.count = lambda model, text: len(text) // 6
+    monkeypatch.setitem(sys.modules, "toklen", fake)
+    args = Namespace(tokenizer="Org/Model", chars_per_token=4.0)
+    opts = test_cmd.build_options(args, RunConfig())
+    assert opts.tokenizer == "Org/Model"
+    assert opts.chars_per_token == pytest.approx(6.0, rel=0.01)
+    # without the flag the explicit value stands and no model is recorded
+    opts = test_cmd.build_options(Namespace(chars_per_token=4.4), RunConfig())
+    assert opts.tokenizer is None and opts.chars_per_token == 4.4

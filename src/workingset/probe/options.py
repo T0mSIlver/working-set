@@ -26,6 +26,7 @@ class ProbeOptions:
     sample_warm_turns: int = 3          # warm turns per sampled session
     # --- request shaping --------------------------------------------------
     chars_per_token: float = 4.0        # synthetic-text calibration
+    tokenizer: str | None = None        # HF slug / tokenizer.json that set it
     context_cap_tokens: int = 180_000   # truncation cap (the model's max_seq_len)
     request_timeout_s: float = 300.0    # keep well above the TTFT budget
     ignore_eos: bool = True             # vLLM extension: fixed-length decode

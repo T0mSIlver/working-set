@@ -247,6 +247,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="sessions the cheap probe opens (default 8)")
     p.add_argument("--chars-per-token", type=float,
                    help="synthetic-text calibration (default 4.0)")
+    p.add_argument("--tokenizer", metavar="MODEL",
+                   help="size the synthetic prompts with this model's real "
+                        "tokenizer (a Hugging Face slug such as "
+                        "Qwen/Qwen3.8-27B, or a local tokenizer.json) via the "
+                        "toklen package; overrides --chars-per-token")
     p.add_argument("--context-cap-tokens", type=int,
                    help="cap on sampled contexts (default: max_model_len)")
     p.add_argument("--request-timeout-s", type=float,
@@ -400,13 +405,30 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _tolerant_console() -> None:
+    """Never let the console's encoding kill a run. Behind a pipe on Windows
+    stdout is cp1252 (or cp850), which cannot encode the report's glyphs, and
+    `print` then raises UnicodeEncodeError. Substitute rather than raise; the
+    run record is the durable output, the console is a view of it."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv=None) -> int:
+    _tolerant_console()
     args = build_parser().parse_args(argv)
     try:
         return args.fn(args)
     except (ValueError, KeyError, FileNotFoundError) as e:
         # a config or model refusal is a user-facing message, not a traceback
-        print(f"ws: {e.args[0] if e.args else e}", file=sys.stderr)
+        # an OSError's args[0] is the errno ("ws: 2" for a missing config);
+        # str() carries the filename
+        msg = e if isinstance(e, OSError) else (e.args[0] if e.args else e)
+        print(f"ws: {msg}", file=sys.stderr)
         return 2
 
 

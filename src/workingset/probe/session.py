@@ -45,6 +45,23 @@ def make_text(rng: random.Random, tokens: float, cpt: float) -> str:
     return " ".join(out)[:budget]
 
 
+def calibrate_chars_per_token(count, sample_tokens: int = 40_000,
+                              seed: int = USER_PREFIX_SEED) -> float:
+    """chars per token of THIS probe's synthetic prose under a real tokenizer.
+
+    `count(text) -> int` is the tokenizer (toklen's `count` bound to a model).
+    The probe's text is random draws from one fixed vocabulary, so the ratio
+    is a property of (vocabulary, tokenizer) and one large sample pins it:
+    ~40k tokens' worth of the same prose every prefix and prompt is built
+    from. The achieved/intended ratio the report prints stays as the check.
+    """
+    text = make_text(random.Random(seed), sample_tokens, 4.0)
+    n = int(count(text))
+    if n <= 0:
+        raise ValueError("tokenizer counted 0 tokens on the calibration text")
+    return len(text) / n
+
+
 def draw_session_tokens(rng: random.Random, median: float, sigma: float,
                         prefix: float, cap: float) -> int:
     """One session's full prompt length: log-normal(median, sigma), clipped to

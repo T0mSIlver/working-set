@@ -190,6 +190,12 @@ def _shared_block(w, sh: dict) -> None:
             continue
         terms = " ".join(f"{c}={f['coefficients'][c]:+.4g}"
                          for c in f["columns"])
+        pinned = f.get("pinned") or {}
+        if pinned:
+            terms += "  " + " ".join(f"{c}=held@{v:g}"
+                                     for c, v in pinned.items())
+            terms += ("  (held: never varied over the probe, so it has no "
+                      "coefficient; read at that value)")
         w(f"  {name:<10} [{f['unit']}] {terms}"
           + (f"  (L centred on {f['centre_ktok']:.1f}k tok)"
              if f.get("centre_ktok") else ""))
