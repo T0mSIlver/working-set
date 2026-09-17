@@ -190,8 +190,9 @@ def _shared_block(w, sh: dict) -> None:
     bound = sh.get("probe_in_flight_bound")
     if bound:
         w(f"  `running` is the server's gauge plus whichever of OUR requests "
-          f"the scrape behind it provably missed; the residual ambiguity is "
-          f"at most {bound} request(s), the in-flight cap")
+          f"the scrape behind it provably missed, minus those it caught that "
+          f"had finished before the send; the residual ambiguity is at most "
+          f"{bound} request(s), the in-flight cap")
     for name, f in (sh.get("fits") or {}).items():
         if f.get("refused"):
             w(f"  {name:<10} no fit — {f['refused']}")

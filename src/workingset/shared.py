@@ -571,6 +571,31 @@ class ProbeGovernor:
             return 0
         return sum(1 for o in self._open.values() if o.t_sent > snapshot_t)
 
+    def own_finished_since(self, snapshot_t: float | None) -> int:
+        """How many of OUR requests were open when `snapshot_t` was read and
+        have FINISHED since, and so are in the gauge that snapshot carries
+        without being in the server any more.
+
+        The mirror of `own_after`, and the common case rather than a corner:
+        the probe sends back to back, and the reading stamped on a request is
+        up to one scrape old, so it still shows the probe's own PREVIOUS
+        request as running. Left in, every `running` covariate sat about one
+        request above what the server was carrying at the send — and by the
+        same amount on every row, which an OLS reads as a shifted intercept
+        and the extrapolation gate reads as load that was never there.
+
+        Only requests whose end was stamped (`in_flight(clock=...)`) can be
+        resolved. Whether the gauge had such a request under `running` or
+        under `waiting` at that instant is not knowable from here; it is
+        taken off `running`, where a request spends almost all of its life,
+        and the adjusted count is clamped at 0.
+        """
+        if snapshot_t is None or not _fin(snapshot_t):
+            return 0
+        return sum(1 for o in self._closed
+                   if o.t_done is not None
+                   and o.t_sent <= snapshot_t < o.t_done)
+
     # ---- token budget ---------------------------------------------------
     def spend(self, tokens: int) -> None:
         """Charge `tokens` INTENDED prompt tokens against the run's budget.
@@ -1885,6 +1910,8 @@ def covariate_rows(traces: list) -> list[dict]:
             "running": running, "running_decode": running_decode,
             "running_reported": cov.get("requests_running"),
             "probe_open_after_scrape": cov.get("probe_open_after_scrape"),
+            "probe_finished_since_scrape":
+                cov.get("probe_finished_since_scrape"),
             "waiting": cov.get("requests_waiting"),
             "kv_usage": cov.get("kv_cache_usage"),
             "ttft": t.ttft,
@@ -1993,13 +2020,17 @@ async def _one(client, ep, opts, gov: ProbeGovernor, metrics, traces: list,
         # BEFORE registering this request, so it does not count ITSELF.
         # `own` is how many OTHER requests of ours were open and sent after
         # the snapshot behind the gauge, so the gauge provably missed them.
-        own = gov.own_after(snap.get("t") if snap else None)
+        snap_t = snap.get("t") if snap else None
+        own = gov.own_after(snap_t)
+        # ...and the mirror: ours that the gauge still shows but that ended
+        # between the scrape and this send — the previous request, typically
+        gone = gov.own_finished_since(snap_t)
         canary = kind == "canary"
         async with gov.in_flight(t_wall, trace=tr, canary=canary,
                                  clock=lambda: sampler_now(metrics)) as rec:
             await send_request(client, ep, opts, prompt, tr, max_tokens,
                                metrics)
-            _stamp_own_load(tr, own)
+            _stamp_own_load(tr, own, gone)
         if canary:
             # HERE rather than in the canary loop: whether this canary waited
             # behind the probe's own prefill is known to the record that
@@ -2008,14 +2039,24 @@ async def _one(client, ep, opts, gov: ProbeGovernor, metrics, traces: list,
         return tr
 
 
-def _stamp_own_load(tr: RequestTrace, own: int) -> None:
+def _stamp_own_load(tr: RequestTrace, own: int, gone: int = 0) -> None:
     """Record the probe's own contribution to the load this request saw.
 
     `running` as the server reports it is background traffic plus however many
-    of ours the scrape behind it happened to catch. `own` is the part it
-    provably missed, and the adjusted totals below are consistently defined
-    regressors, which is what an OLS coefficient needs. The residual ambiguity
-    is bounded by the in-flight cap and is reported with the fit.
+    of ours the scrape behind it happened to catch. The snapshot is up to one
+    scrape old, and the probe's own traffic moved in both directions since:
+
+      `own`   ours sent AFTER the scrape and still open — the gauge provably
+              missed them (`ProbeGovernor.own_after`). ADDED.
+      `gone`  ours open AT the scrape that finished before this send — the
+              gauge still shows them and the server no longer has them
+              (`ProbeGovernor.own_finished_since`). SUBTRACTED; recorded as
+              `probe_finished_since_scrape`.
+
+    With both, the adjusted totals below consistently mean "what the server
+    was carrying when we sent", which is what an OLS coefficient needs; they
+    are clamped at 0. The residual ambiguity is bounded by the in-flight cap
+    and is reported with the fit.
 
     TWO adjusted counts, because the two fits ask different questions and the
     difference is exactly one request — this one:
@@ -2034,10 +2075,12 @@ def _stamp_own_load(tr: RequestTrace, own: int) -> None:
     if not cov:
         return
     cov["probe_open_after_scrape"] = own
+    cov["probe_finished_since_scrape"] = gone
     r = cov.get("requests_running")
     if r is not None and _fin(r):
-        cov["running_adjusted"] = float(r) + own
-        cov["running_adjusted_incl_self"] = float(r) + own + 1.0
+        before = max(0.0, float(r) + own - gone)
+        cov["running_adjusted"] = before
+        cov["running_adjusted_incl_self"] = before + 1.0
 
 
 async def _canary_loop(client, ep, opts, gov: ProbeGovernor, metrics,
@@ -2318,8 +2361,10 @@ def plan_lines(cfg, opts, sopts: SharedOptions, budget: ProbeBudget,
         f"own load       : the probe adds at most "
         f"{budget.max_extra_load or 'unbounded'} request(s) of its own; the "
         "part of that the server's gauge already counted is resolved against "
-        "the scrape's own timestamp, and the residual ambiguity is bounded by "
-        "that cap",
+        "the scrape's own timestamp — ours sent after the scrape are added, "
+        "ours it caught that finished before the send (the previous request, "
+        "back to back) are subtracted — and the residual ambiguity is bounded "
+        "by that cap",
     ]
     if not sopts.ladder and budget.max_probe_tokens and \
             tok > budget.max_probe_tokens:

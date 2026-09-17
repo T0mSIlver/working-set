@@ -1580,6 +1580,91 @@ def test_own_requests_sent_after_the_scrape_are_added_not_subtracted():
     asyncio.run(go())
 
 
+def test_own_requests_the_scrape_caught_that_have_since_finished_are_subtracted():
+    """The mirror of `own_after`. The probe sends back to back and the gauge
+    is up to a scrape old, so it still shows the probe's PREVIOUS request as
+    running: every `running` covariate sat one request too high."""
+    from workingset.shared import _stamp_own_load
+
+    gov = ProbeGovernor(budget())
+    clock = iter([160.0, 175.0])
+
+    async def go():
+        async with gov.in_flight(100.0, clock=lambda: next(clock)):
+            pass                                   # open 100 -> 160
+        async with gov.in_flight(170.0, clock=lambda: next(clock)):
+            pass                                   # open 170 -> 175
+        async with gov.in_flight(180.0):           # still open at the send
+            # a scrape at 150 caught the first one, which is over by now
+            assert gov.own_finished_since(150.0) == 1
+            # a scrape at 165 fell between the two: neither was open
+            assert gov.own_finished_since(165.0) == 0
+            # a scrape at 190 saw only the one that is STILL running, which
+            # is load the server really carries: not subtracted
+            assert gov.own_finished_since(190.0) == 0
+            assert gov.own_finished_since(None) == 0
+
+    asyncio.run(go())
+
+    t = RequestTrace(kind="miss", ttft=1.0)
+    t.covariates = {"requests_running": 3.0}
+    _stamp_own_load(t, own=1, gone=2)
+    assert t.covariates["probe_finished_since_scrape"] == 2
+    assert t.covariates["running_adjusted"] == 2.0
+    assert t.covariates["running_adjusted_incl_self"] == 3.0
+    assert covariate_rows([t])[0]["probe_finished_since_scrape"] == 2
+    # clamped: a gauge of 1 with two of ours gone is 0 others, not -1
+    t.covariates = {"requests_running": 1.0}
+    _stamp_own_load(t, own=0, gone=2)
+    assert t.covariates["running_adjusted"] == 0.0
+    assert t.covariates["running_adjusted_incl_self"] == 1.0
+
+
+def test_a_back_to_back_run_does_not_count_its_own_previous_request():
+    """End to end: the gauge is one request of OURS (nobody else is there) and
+    every snapshot is stamped a moment before the previous request ended."""
+    cfg, opts = small_cfg(), small_opts()
+
+    class OneBehind(ScriptedMetrics):
+        """A truthful gauge that is always one request stale: the newest
+        snapshot was taken while the PREVIOUS request was being served."""
+
+        def __init__(self):
+            super().__init__(window=FakeWindow())
+            self.clock, self.served = 1_000.0, []
+
+        def now(self):
+            self.clock += 1.0
+            return self.clock
+
+        def at(self, t):
+            if not self.served:
+                return {"requests_running": 0.0, "requests_waiting": 0.0,
+                        "kv_cache_usage": 0.2, "t": t - 0.5}
+            start, end = self.served[-1]
+            return {"requests_running": 1.0, "requests_waiting": 0.0,
+                    "kv_cache_usage": 0.2, "t": 0.5 * (start + end)}
+
+    metrics, inner = OneBehind(), fake_server()
+
+    def handler(request):
+        # the server's own view of when it held this request, on the
+        # sampler's clock: strictly inside the governor's [t_sent, t_done]
+        metrics.clock += 0.25
+        metrics.served.append((metrics.clock, metrics.clock + 0.25))
+        metrics.clock += 0.25
+        return inner(request)
+
+    res = _run_shared(handler, cfg, opts,
+                      shared_opts(rounds=2, lengths="0.5", warm_turns=1),
+                      budget(abort_if_waiting=None, abort_if_kv_above=None,
+                             max_metrics_gaps=0), metrics)
+    cov = [t.covariates for t in res.sample.traces]
+    assert [c["requests_running"] for c in cov] == [0.0, 1.0, 1.0, 1.0]
+    assert [c["probe_finished_since_scrape"] for c in cov] == [0, 1, 1, 1]
+    assert all(c["running_adjusted"] == 0.0 for c in cov)
+
+
 def test_the_fit_regressor_is_the_adjusted_running_count():
     t = RequestTrace(kind="miss", ttft=1.0, ptok_achieved=8_000)
     t.covariates = {"requests_running": 3, "requests_waiting": 0,
