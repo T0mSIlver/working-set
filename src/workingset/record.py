@@ -165,7 +165,7 @@ def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
         notes.extend(_shared_notes(shared))
 
     # --- measurements that were unavailable ------------------------------
-    if not _token_accounting(rungs, sample):
+    if not _token_accounting(rungs, sample, burst):
         notes.append(
             "No `usage` readback from this endpoint: prompt- and "
             "completion-token counts are the client's chars/{:g} estimate "
@@ -281,15 +281,27 @@ def _verdict(hypotheses, key: str) -> str | None:
     return None
 
 
-def _token_accounting(rungs, sample) -> bool:
+def _token_accounting(rungs, sample, burst=None) -> bool:
     """Did the endpoint return `usage` anywhere? request.py's fallback drops
     stream_options on a rejection, and without it there is no token count to
-    check the synthetic-text calibration against."""
+    check the synthetic-text calibration against.
+
+    ANYWHERE includes the burst. A run of `--burst N` alone has no rungs and
+    no sample, and this used to look at nothing else: it announced "No
+    `usage` readback from this endpoint" over a burst whose every request
+    had returned one."""
     for r in rungs:
         for t in r.get("traces") or []:
             if t.get("ptok_achieved"):
                 return True
-    for t in (sample or {}).get("traces") or []:
-        if t.get("ptok_achieved"):
-            return True
-    return False
+    for block in (sample, burst):
+        for t in (block or {}).get("traces") or []:
+            if t.get("ptok_achieved"):
+                return True
+    # a record saved without traces still carries the burst's own summary
+    # of the usage it got back (standing load included). nan in memory, null
+    # once saved: neither is a ratio.
+    b = burst or {}
+    ratio = b.get("ptok_ratio")
+    return bool(b.get("ptok_from_usage")) or (
+        isinstance(ratio, (int, float)) and ratio == ratio)

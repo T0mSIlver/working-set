@@ -79,6 +79,10 @@ class BurstResult:
     # counts the former.
     ptok_total: int = 0
     ptok_from_usage: int = 0
+    # achieved / intended prompt tokens, median over every request of this
+    # probe that returned `usage` — the burst's own misses AND the standing
+    # load's completed turns. nan = the endpoint returned no usage at all.
+    ptok_ratio: float = float("nan")
     # what the STANDING load felt while the burst was draining
     standing_n: int = 0
     standing_itl_p50_ms: float = float("nan")
@@ -135,6 +139,13 @@ def eval_burst(n: int, standing_users: int, burst_traces: list,
         r.ptok_total = sum(burst_prompt_tokens(ok))
         r.ptok_from_usage = sum(1 for t in ok if t.ptok_achieved)
     r.ttft_p50_s = pct([t.ttft for t in ok], 50)
+    # the standing load's traces are not kept on the result, so whatever
+    # `usage` they returned is summarised HERE or lost. (A standing stream
+    # cancelled when the probe ends never reaches its usage trailer; the
+    # turns that completed before that did.)
+    r.ptok_ratio = pct([t.ptok_achieved / t.ptok_intended
+                        for t in list(burst_traces) + list(standing_traces)
+                        if t.ptok_achieved and t.ptok_intended], 50)
     # the same spike statistic the ladder and the sample report, over both
     # legs: the burst's own misses are the cold prefills, the standing load
     # supplies the decoders

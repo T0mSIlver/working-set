@@ -876,6 +876,48 @@ def test_not_established_names_the_untested():
     assert "H-cache was not tested" in joined
 
 
+def test_a_burst_only_run_reads_usage_off_the_bursts_own_requests(capsys):
+    """`--burst N --exclusive` on H-burst alone has no rungs and no sample, and
+    the trailer looked nowhere else: it said "No `usage` readback from this
+    endpoint" over a burst whose every request had returned one."""
+    from workingset.probe import eval_burst
+
+    cfg, opts = RunConfig(), ProbeOptions()
+    pl = plan([REGISTRY.get("H-burst")], exclusive=True, burst=2)
+    tr = [trace(990_000 + i, "miss", 10.0, 1.0 + i, ptok=9_000,
+                intended=10_000) for i in range(2)]
+    # the standing load's usage counts too, and only survives as the ratio
+    standing = [trace(1, "hit", 5.0, 0.2, ptok=900, intended=1_000)]
+    b = eval_burst(2, 4, tr, standing, t_fire=10.0)
+    assert b.ptok_ratio == pytest.approx(0.9)
+
+    def notes(burst):
+        return "\n".join(not_established_notes(
+            cfg, opts, pl, burst=burst, exclusive=True, metrics=False))
+
+    assert "No `usage` readback" not in notes(b.to_dict())
+    # ...including from a record that was saved without its traces
+    assert "No `usage` readback" not in notes(
+        json.loads(json.dumps(b.to_dict(traces=False))))
+    # and an endpoint that really returned none still says so
+    blind = eval_burst(2, 4, [trace(990_000, "miss", 10.0, 1.0,
+                                    intended=10_000)], [], t_fire=10.0)
+    assert math.isnan(blind.ptok_ratio)
+    assert "No `usage` readback" in notes(blind.to_dict())
+    # (nan in memory, null once the record has been through JSON)
+    saved = json.loads(RunRecord(burst=blind.to_dict()).dumps())["burst"]
+    assert saved["ptok_ratio"] is None
+    assert "No `usage` readback" in notes(saved)
+
+    rec = RunRecord.new("0.0.0", mode="exclusive", config=cfg.to_dict(),
+                        predictions=predict(cfg, n_iter=40).to_dict(),
+                        options=opts.to_dict(), burst=b.to_dict())
+    print_report(rec)
+    out = capsys.readouterr().out
+    assert "achieved/intended prompt tokens (median): 0.90" in out
+    assert "flushed 18,000 prompt tokens (usage readback)" in out
+
+
 def test_trailer_is_built_from_results_not_from_the_plan():
     """A sample was PLANNED and every request failed. The old trailer said the
     run "establishes levels and gap distributions"; it establishes nothing."""

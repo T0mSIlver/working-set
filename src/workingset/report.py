@@ -337,6 +337,9 @@ def _burst_block(w, b: dict) -> None:
         w(f"  flushed {b['ptok_total']:,} prompt tokens ({src}) — the lengths "
           "are random draws, so read the drain against the H-burst row's "
           "prediction for THESE tokens, not against N alone")
+    ratio = b.get("ptok_ratio")
+    if ratio is not None and math.isfinite(ratio):
+        w(f"  achieved/intended prompt tokens (median): {ratio:.2f}")
     if b.get("n_establishing_at_fire"):
         w(f"  WARNING: {b['n_establishing_at_fire']} standing session(s) were "
           "still establishing at the fire (held "
