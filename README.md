@@ -67,6 +67,9 @@ decode point) and lists the rest as skipped — a hypothesis that has to
 generate its own population is never measured against someone else's load.
 With `--exclusive` it drives the geometric load ladder once, and every ceiling
 reads from it. `--burst N` adds the correlated-flush probe (B*).
+`--tokenizer Qwen/Qwen3.8-27B` sizes the synthetic prompts with the model's
+real tokenizer (via [toklen](https://pypi.org/project/toklen/); add
+`--with toklen` to the `uvx` line) instead of the chars-per-token guess.
 
 ## Contents
 

@@ -172,6 +172,11 @@ def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
             "only, so the achieved/intended ratio, freezes per 1k tokens and "
             "tokens per SSE event are all unavailable or unverified."
             .format(opts.chars_per_token))
+    elif opts.tokenizer:
+        notes.append(
+            "Token counts are chars/{:.3g}, calibrated on {} with its real "
+            "tokenizer (toklen); the achieved/intended ratio above is the "
+            "check.".format(opts.chars_per_token, opts.tokenizer))
     else:
         notes.append(
             "Token counts are chars/{:g} approximations; the achieved/intended "

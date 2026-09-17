@@ -43,7 +43,28 @@ def build_options(args, cfg) -> ProbeOptions:
         if v is not None:
             kw[field] = v
     kw["ignore_eos"] = not getattr(args, "no_ignore_eos", False)
+    tok = getattr(args, "tokenizer", None)
+    if tok:
+        # the real tokenizer sets chars_per_token; a --chars-per-token given
+        # alongside is overridden, and the dry run says which one is in force
+        kw["chars_per_token"] = _calibrated_cpt(tok)
+        kw["tokenizer"] = tok
     return ProbeOptions(**kw)
+
+
+def _calibrated_cpt(model: str) -> float:
+    """Size the synthetic text with the model's own tokenizer (toklen)."""
+    from .probe.session import calibrate_chars_per_token
+    try:
+        from toklen import count
+    except ImportError:
+        raise SystemExit("--tokenizer needs the toklen package: "
+                         "`uvx --with toklen --from workingset ws ...` "
+                         "or `pip install toklen`")
+    try:
+        return calibrate_chars_per_token(lambda t: count(model, t))
+    except Exception as e:                       # ToklenError, network, ...
+        raise SystemExit(f"--tokenizer {model}: {type(e).__name__}: {e}")
 
 
 def build_budget(args) -> ProbeBudget:
@@ -240,8 +261,11 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
           f"{r['sigma_cfg']:>9.2f} {r['sigma_smp']:>9.3f} {r['p5']:>8,.0f} "
           f"{r['p50']:>8,.0f} {r['p95']:>9,.0f} {r['mean']:>9,.0f}  "
           f"{'PASS' if r['ok'] else 'FAIL'}")
-    w(f"(chars per token: {opts.chars_per_token:g}; a p50 user prompt is "
-      f"~{rows[0]['p50'] * opts.chars_per_token / 1e3:,.0f}k chars on the wire)")
+    how = (f"calibrated on {opts.tokenizer} with toklen" if opts.tokenizer
+           else "an assumption; pass --tokenizer <hf model> to measure it")
+    w(f"(chars per token: {opts.chars_per_token:.3g}, {how}; a p50 user "
+      f"prompt is ~{rows[0]['p50'] * opts.chars_per_token / 1e3:,.0f}k chars "
+      "on the wire)")
 
     w("\nPREDICTIONS UNDER TEST")
     for k in ("warm_capacity_p5", "decode_ceiling_users",
