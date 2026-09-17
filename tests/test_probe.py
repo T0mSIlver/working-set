@@ -440,6 +440,35 @@ def test_chat_route_sends_messages_and_reads_delta_content():
     asyncio.run(go())
 
 
+def test_chat_route_counts_reasoning_deltas_as_tokens():
+    """vLLM's --reasoning-parser streams the thinking phase as
+    delta.reasoning_content with delta.content empty. Reading content alone
+    measured TTFT at the end of the thinking phase and dropped every gap
+    inside it."""
+    async def go():
+        events = [{"choices": [{"delta": {"reasoning_content": "think "},
+                                "index": 0}]}] * 3 \
+            + [{"choices": [{"delta": {"content": "tok "}, "index": 0}]}] * 2
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            async def gen():
+                for i, e in enumerate(events):
+                    if i:
+                        await asyncio.sleep(0.001)
+                    yield _sse(e)
+                yield b"data: [DONE]\n\n"
+            return httpx.Response(200, content=gen(),
+                                  headers={"content-type": "text/event-stream"})
+
+        async with client_for(handler) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m", api="chat")
+            tr = RequestTrace(uid=1, kind="hit")
+            txt = await send_request(c, ep, small_opts(), "hello", tr, 5)
+        assert txt == "think " * 3 + "tok " * 2
+        assert tr.n_chunks == 5 and tr.n_gaps == 4
+    asyncio.run(go())
+
+
 def test_multiline_sse_frames_and_keepalives_parse():
     """The SSE spec lets one event carry several `data:` lines, joined with a
     newline, and `:` comment lines keep a connection alive. Splitting on lines
