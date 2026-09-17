@@ -55,8 +55,9 @@ correction, for prefill only. No capacity or decode figure reads
 
 ### Model FLOP Utilisation (MFU)
 
-`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.35 / 0.45 / 0.55` — *tightened from
-0.30/0.60 on 2026-08-27, on the two calibration points below*. **Not
+`MFU_LOW / MFU_DEFAULT / MFU_HIGH = 0.30 / 0.45 / 0.55` — *tightened from
+0.30/0.60 to 0.35/0.55 on 2026-08-27 on the first two calibration points
+below; the low edge re-opened to 0.30 on 2026-09-18 on the third*. **Not
 measured** ~~at all~~ — *see below*.
 45% is a mid-range figure for FP8 prefill on Hopper-class parts with TP
 collectives in the loop. This is the softest input in the section — the
@@ -121,6 +122,43 @@ top. A controlled Hopper-FP8 measurement (the
 same `measure_mfu.py` protocol against an H200 backend) would settle it;
 until then the wider [0.30, 0.60] remains defensible for cross-model,
 cross-topology projections.
+
+**Third calibration point (2026-09-18, Hopper FP8, CONTROLLED) — and it
+disagrees.** The controlled Hopper-FP8 measurement the paragraph above asked
+for, on a 27B FP8 / 4×H200 TP4 deployment with the endpoint to itself,
+`max_num_batched_tokens = 16,384`, MTP depth 3. Three methods:
+
+| method | reading | effective MFU, model convention |
+|---|---|---|
+| 72 cold prompts, 16k–160k, sequential on an idle server; TTFT fitted in L and L² (residual sd 65 ms), less the measured network floor and a per-token transport slope read off the cache hits | 0.4 s at 16k … 6.7 s at 160k | **0.34 → 0.30** (falls with length) |
+| simultaneous-miss bursts, ENGINE-side counters: saturated prefill at ~32k tok/s, ~510 ms per full 16,384-token step | | **0.32–0.38** at the bursts' 30–60k mean prior |
+| the decode freeze behind one chunk, seen by bystander streams | p95 1.0–1.5 s against 0.69 s predicted | same factor |
+
+So **0.30–0.34 in the model convention, 0.24–0.27 of the raw advertised peak**:
+1.35–1.45× slower than the 0.45 central, and under the old bracket. The ratio
+to the model is flat across a 10× range of prompt length, so §3's split between
+the linear and the attention term stands; only the scale is in question. The
+engine-side step time rules out the proxy in front of the server.
+
+**The second point does not survive re-pricing unchanged.** It was priced as
+"one 7.2k-token pass over 50k cached". The traffic behind that mean was ~91%
+2k-token hits over a long cached context and ~9% cold 57k-token misses; priced
+as that mixture with §3's formula it reads **0.44** in the model convention
+(0.36 raw), not 0.49 (0.40). The "agree to under 1% on the advertised
+convention" sentence above therefore overstates the agreement: the points read
+0.396 (A100, controlled), ~0.36 (H200, implied, re-priced) and 0.24–0.27
+(H200, controlled).
+
+**Not reconciled.** Between the August and the September readings on the same
+class of deployment lies a factor of ~1.35 that the known differences do not
+explain: a 16k instead of a 32k chunk costs ~8 ms of fixed time per ~500 ms
+step (`research/decode_mbu.md` § 8), and one more MTP layer is one layer of 64.
+An aggregate mean over uncontrolled traffic against a controlled sweep is the
+most likely source, which would favour the lower figure — but that is a
+judgement, not a measurement. Hence: **the central stays 0.45, the low edge
+moves to 0.30** (the bracket now spans ~1.8×), and a deployment that has
+measured its own rate should set `[calibration] mfu`. Moving the central is
+deferred until a second controlled reading exists.
 
 What MFU does *not* affect: the cold/warm cost ratio (`thrash_ratio`), which
 cancels MFU and the GPU part entirely. That is why the ratio, not the

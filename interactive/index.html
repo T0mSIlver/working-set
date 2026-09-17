@@ -400,7 +400,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
           <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Prefill Model FLOP Utilisation — the fraction of the group's advertised FP8 peak a prefill pass achieves. 0.45 is the study's anchor, calibrated twice: 39.6% on 2xA100 BF16 (controlled, research/prefill.md #1) and 40.0% implied by a 7-day 4xH200 FP8 production trace, agreeing to under 1% on the advertised-peak convention. The bracket is [0.35, 0.55], PROVISIONAL — two deployments, and the implied point's own reading spread (40–59% model-convention) exceeds it. Moves TTFT, the cold-request ceiling, f* and B*; leaves cache and decode untouched, and cancels entirely from the cold/warm thrash ratio.">Prefill efficiency (MFU)</span> <span class="val"><span id="v-mfu">0.45</span></span></label>
+          <label class="flabel"><span class="tip" data-tip="Prefill Model FLOP Utilisation — the fraction of the group's advertised FP8 peak a prefill pass achieves. 0.45 is the study's anchor, calibrated twice: 39.6% on 2xA100 BF16 (controlled, research/prefill.md #1) and 40.0% implied by a 7-day 4xH200 FP8 production trace, agreeing to under 1% on the advertised-peak convention. The bracket is [0.30, 0.55], PROVISIONAL: a third, controlled Hopper-FP8 point (2026-09, 16k chunk) reads 30–34% in the model convention, below the other two, and the three are not yet reconciled. Moves TTFT, the cold-request ceiling, f* and B*; leaves cache and decode untouched, and cancels entirely from the cold/warm thrash ratio.">Prefill efficiency (MFU)</span> <span class="val"><span id="v-mfu">0.45</span></span></label>
           <input type="range" id="s-mfu" min="0.10" max="1.00" step="0.01" value="0.45">
         </div>
         <div class="field">
@@ -577,7 +577,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
     <div class="body">
     <dl>
       <dt>MFU <span class="gt">Model FLOP Utilisation</span></dt>
-      <dd>Achieved ÷ advertised FLOP throughput. <b>45%</b> [35–55%] — calibrated against two production measurements (2026-08-27; previously assumed [30–60%]). Still the softest input here: it scales every prefill figure, hence the bands.</dd>
+      <dd>Achieved ÷ advertised FLOP throughput. <b>45%</b> [30–55%] — three production calibration points (2026-08-27, 2026-09-18); the latest, the only controlled Hopper-FP8 one, sits at the low edge. Still the softest input here: it scales every prefill figure, hence the bands.</dd>
       <dt>TTFT <span class="gt">time to first token</span></dt>
       <dd>Queueing plus the request's own prefill. A miss re-prefills its whole context; a hit prefills only the new turn but queues behind misses.</dd>
       <dt>Prefill duty <span class="gt">fraction of the machine spent prefilling</span></dt>
@@ -604,10 +604,10 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
 
     <div class="panel card">
       <p class="ct">F · Cold-spike tolerance</p>
-      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses still answered in budget — vs the standing miss rate. Band = the MFU 35–55% bracket; each curve reaches zero at its own f*.</p>
+      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses still answered in budget — vs the standing miss rate. Band = the MFU 30–55% bracket; each curve reaches zero at its own f*.</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>this configuration</span>
-        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 35–55%</span>
+        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 30–55%</span>
         <span class="li"><span class="sw" style="background:var(--muted)"></span>other topologies</span>
         <span class="li"><span class="sw dash2" style="background:var(--crit)"></span>absorbs &lt; 1 miss</span>
       </div>

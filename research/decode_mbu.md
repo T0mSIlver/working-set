@@ -285,6 +285,148 @@ unpriced assumption.
   `t_pass` (a hardware property). Acceptance is read passively from real
   traffic, never from the probe.
 
+## 8. Held batches to n = 96: the latency reading holds (added 2026-09-18)
+
+*Same class of deployment as § 1 (27B FP8, 4×H200 TP4, vLLM 0.25.1), now at
+`num_speculative_tokens = 3`, with the endpoint to itself for the run. The
+anonymity rule at the top of this note applies.*
+
+§ 3 left the decode ceiling unidentified because the sweep stopped at n = 25,
+inside the regime where weights are most of the step. § 4.3 asked for a
+spec-off / k-sweep to choose between readings A and B. A second route needs no
+restart: hold batches large enough that KV dominates, at more than one context
+length, so per-sequence and per-token costs separate.
+
+### 8.1 Hypotheses, stated before the run
+
+At n = 90 sequences of ~100k context (≈ 295 GB of KV per step) the three
+pricings of § 3 predict, all anchored to the same n = 1 step:
+
+| pricing | step at n = 90, 100k | decode ceiling (§ 3) |
+|---|---|---|
+| single whole-ledger constant (shipped) | ~97 ms | 108 |
+| reading B, fixed latency + KV at its measured rate | ~71 ms | 154 |
+| reading A, weights ×(1+k), one higher efficiency | ~50 ms | 238 |
+
+### 8.2 Method
+
+`scripts/decode_probe.py --arm A --ks 1,8,32,64,90` at a 32k and a 100k
+shared prefix, then `--ks 72,80,96` at 64k: 13 plateaus of 40 s. Two
+independent clocks per plateau: step counts from `/metrics`
+(`iteration_tokens_total`), and SSE events per stream per second at the client
+(one event is one scheduler step for that stream). They agree to 0.1 ms on all
+13, and `tokens per step / (n × (1 + k))` reads 0.99: a step is a forward pass.
+
+One harness lesson, because it cost the first run: **a cancelled stream is not
+a cancelled request.** Behind a proxy that does not forward the disconnect, the
+engine generates every remaining token; the "k = 64" plateau of the first
+attempt ran at 96 sequences and k = 90 could only queue. The probe now waits
+for an idle server before each plateau and sizes outputs so streams end by
+themselves.
+
+### 8.3 Results
+
+| n | step, ~37k ctx | step, ~66k ctx | step, ~105k ctx |
+|---|---|---|---|
+| 1 | 8.6 ms | | 10.2 ms |
+| 8 | 11.1 | | 14.4 |
+| 32 | 19.7 | | 31.7 |
+| 64 | 31.3 | | 56.0 |
+| 72 | | 70.8 | |
+| 80 | | 73.0 | |
+| 90 | 48.3 | | 117 |
+| 96 | | 71.6 | |
+
+Up to n = 64 an ordinary least-squares plane fits the eight plateaus to
+**0.6 ms rms**:
+
+    t_step = 8.3 ms + 0.14 ms × n + 5.9 ms × ΣL [Mtok]
+
+i.e. KV read at **5.6 TB/s** (0.29 of the advertised aggregate; § 2's fixed-n
+slope read 4.7–4.9 at n = 4), a per-sequence cost the study has no term for,
+and a fixed cost. The single-constant fit of § 1, run on the same log, returns
+`t0 = −5 ms` again. That form is refuted, twice, by its own intercept.
+
+### 8.4 The three legs are physical, and two of them were already measured
+
+    t_step = bytes / (η × BW)  +  n × (1 + k) × t_token  +  t_fixed
+
+- **Per-sequence leg = the speculative verify, priced as compute.** Each
+  sequence has `1 + k` positions verified per step: `1 + k` tokens of GEMM
+  arithmetic the byte ledger never charged. Priced at the per-token time
+  PREFILL achieves on the same machine (`2 × params / (peak × MFU)`, ~24 µs at
+  the MFU measured the same night, `research/prefill.md` #1), four positions
+  cost ~0.10 ms; the recurrent-state read adds ~0.03–0.05 ms. Predicted
+  **0.13–0.15 ms, fitted 0.14**, from a measurement the fit never saw.
+- **One bandwidth efficiency for every byte.** With the compute leg present,
+  weights and KV stream at the same η = 0.29 (0.36 in the model convention):
+  30.9 GB of weights cost 5.5 ms of the fixed term. This is § 4.3's parsimony
+  argument for reading B, now with the second efficiency gone rather than
+  merely unneeded.
+- **Fixed leg = what bytes and compute leave over**, 2.7 ms: a TP4 group pays
+  two all-reduces per layer whatever the batch (128 × ~20 µs is ~2.6 ms), and
+  the draft head runs k extra passes. This split is a budget, not a
+  measurement; ±2 ms can move between "weights" and "collectives + draft".
+
+Evaluated from those physical terms — not from the fit — the form reproduces
+the eight n ≤ 64 plateaus within **5%** (the n = 1, 105k point is 11% low: a
+single long sequence reads its cache less efficiently than a batch does).
+
+### 8.5 What is NOT explained
+
+Between 64 and 72 sequences (256 → 288 tokens per pass at k = 3) the step
+jumps 1.2–1.6× above the line, by ~0.4 ms per ktok of per-stream context, and
+is then **flat in batch size to 96**. CUDA graphs cover these sizes. A
+bandwidth limit would bend smoothly and keep rising with n; a step at a
+power-of-two token count that then stops depending on n looks like a kernel or
+configuration boundary. Not identified from outside the pod, and **not
+modelled**: one deployment, mechanism unknown. A depth-2 run would show whether
+it moves to 85 sequences (256 / 3).
+
+### 8.6 Outcomes
+
+- § 4.3 is settled for **reading B** in kind: fixed latency, one efficiency.
+  Reading A and the fold both misfit.
+- The decode ceiling at the measured workload (61k mean context, 40 tok/s,
+  2.6–2.9 accepted tokens per step): **115–130 in the linear regime**; on this
+  deployment the unexplained step puts 72–96 sequences at 37–41 tok/s, so 64 is
+  safe and the engine's own `max_num_seqs = 96` is the hard cap
+  (`deployment.max_num_seqs`). The shipped 100 is about right here for the
+  wrong reason.
+- Acceptance during the sweep read 3.8–3.9 tokens per step: that is the
+  probe's repetitive filler, not a workload figure. § 2's 2.94 stands.
+- KV pool: 12.86 M tokens, **0.92×** `kv_pool_tokens()` (0.95× in § 2).
+
+### 8.7 What changed in the model, and what did not
+
+**Opt-in, not the default.** `model.DecodeLatency` and
+`[calibration] decode_pricing = "latency"` price decode with the three legs
+(`decode_bw_eff` 0.36 model-convention, `decode_fixed_ms` 2.7, `spec_tokens` 3,
+the compute leg at the configured `mfu`). `MBU_DEFAULT` and every published
+decode figure are untouched: the constants come from ONE model on ONE machine
+at ONE speculative depth, and the explorer does not carry the form yet.
+
+Three predictions that would falsify it, none needing new hardware:
+
+1. **Speculation off**: the per-sequence leg falls to a quarter, the fixed leg
+   loses the draft's share.
+2. **TP2 instead of TP4**: the collective share of the fixed leg halves while
+   the weight read doubles.
+3. **Any deployment's prefill rate predicts its decode per-sequence cost**
+   with no decode measurement.
+
+### 8.8 Limitations
+
+- One deployment, one model, one vLLM version, one evening.
+- The fixed leg's split is a budget (§ 8.4).
+- The probe's prompts are random text and its outputs forced (`ignore_eos`):
+  only step TIME is read from them, never acceptance.
+- The shared-prefix trick stores one prefix and reads it n times; § 2's arm C
+  showed no cascade attention at n = 8, and nothing re-checked it at n = 90.
+- Followers of a shared-prefix rung are not free on a hybrid: each recomputed
+  ~1–2k tokens on admission (cache alignment), so the ramp before a large
+  plateau is a real prefill load.
+
 ## Appendix: run log
 
 | Session | Arms | Outcome |

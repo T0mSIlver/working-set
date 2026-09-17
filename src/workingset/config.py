@@ -31,6 +31,7 @@ from . import model as M
 
 SCHEMA_VERSION = 1
 STATE_DTYPES = ("bf16", "fp32")
+DECODE_PRICINGS = ("roofline", "latency")
 KV_SHARDINGS = M.KV_SHARDS               # ("dcp", "replicate")
 
 # The model with no as-published weight overhead to add: its w_resident is the
@@ -153,6 +154,18 @@ class Calibration:
     # exposes it as a slider for exactly that reason. It travels with the MBU
     # it was fitted against — moving one without the other breaks the fit.
     mtp: float | None = None
+    # How decode is priced. "roofline" (default, and what every published
+    # figure uses): step bytes over one folded efficiency, `mbu`. "latency":
+    # the opt-in three-leg form of model.DecodeLatency — every byte at
+    # `decode_bw_eff`, the speculative verify as (1 + spec_tokens) tokens of
+    # compute per sequence at `mfu`, plus `decode_fixed_ms` per step. `mbu` is
+    # then unused. Its defaults were read on ONE deployment (TP4, MTP depth 3);
+    # set spec_tokens to the server's num_speculative_tokens (0 = off) and
+    # `mfu` to a measured value before trusting it elsewhere.
+    decode_pricing: str = "roofline"      # roofline | latency
+    decode_bw_eff: float = M.DECODE_BW_EFF
+    decode_fixed_ms: float = M.DECODE_FIXED_S * 1e3
+    spec_tokens: int = M.DECODE_SPEC_TOKENS
 
 
 @dataclass(frozen=True)
@@ -219,6 +232,16 @@ class RunConfig:
             raise ValueError("workload must set either users or headcount")
         return w.users
 
+    def decode_latency(self) -> "M.DecodeLatency | None":
+        """The opt-in decode pricing's constants, or None under the default
+        roofline pricing."""
+        c = self.calibration
+        if c.decode_pricing != "latency":
+            return None
+        return M.DecodeLatency(bw_eff=c.decode_bw_eff,
+                               fixed_s=c.decode_fixed_ms / 1e3,
+                               spec_tokens=c.spec_tokens, mfu=c.mfu)
+
     def validate(self) -> None:
         """Raise on anything the model refuses to price."""
         m, t, wl = self.to_model(), self.to_topology(), self.to_workload()
@@ -276,6 +299,11 @@ class RunConfig:
                 "figure came from")
         if self.calibration.mtp is not None and self.calibration.mtp <= 0:
             raise ValueError("calibration.mtp must be > 0")
+        if self.calibration.decode_pricing not in DECODE_PRICINGS:
+            raise ValueError(f"calibration.decode_pricing must be one of "
+                             f"{DECODE_PRICINGS}, got "
+                             f"{self.calibration.decode_pricing!r}")
+        self.decode_latency()       # raises on a constant out of range
 
     # ---- (de)serialisation --------------------------------------------
     def to_dict(self) -> dict[str, Any]:

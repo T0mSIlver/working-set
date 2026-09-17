@@ -58,7 +58,7 @@ class Predictions:
     itl_normal_ms: float | None = None         # gap with no prefill in the pass
     itl_worst_freeze_ms: float | None = None   # last chunk of a cold re-prefill
     itl_freeze_lo_ms: float | None = None      # MFU 55% — the bracket's low edge
-    itl_freeze_hi_ms: float | None = None      # MFU 35% — the bracket's high edge
+    itl_freeze_hi_ms: float | None = None      # MFU_LOW — the bracket's high edge
     # True when decode_ceiling_users is deployment.max_num_seqs rather than
     # the bandwidth roofline: the scheduler's cap came first
     decode_capped_by_max_num_seqs: bool = False
@@ -99,9 +99,11 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed)
     # operating_point prices decode at the study default MBU; re-price at the
     # configured one so the calibration block is honoured
-    if cal.mbu != M.MBU_DEFAULT:
+    lat = cfg.decode_latency()
+    if cal.mbu != M.MBU_DEFAULT or lat is not None:
         dec = M.max_users_decode(m, t, wl, floor=slo.itl_floor_tok_s,
-                                 n_iter=n_iter, seed=seed, mbu=cal.mbu)
+                                 n_iter=n_iter, seed=seed, mbu=cal.mbu,
+                                 latency=lat)
         op["ceilings"]["decode"] = dec
         op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
         op["limit"] = op["ceilings"][op["binding"]]
@@ -154,7 +156,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 
     steady = _steady_block(m, t, wl, rate_total, w.max_output_tokens,
                            dep.max_model_len, chunk, cal.mfu, duty,
-                           mbu=cal.mbu, n_iter=n_iter, seed=seed,
+                           mbu=cal.mbu, latency=lat, n_iter=n_iter, seed=seed,
                            # ...nor the scheduler's cap: a steady batch above
                            # max_num_seqs is a machine that does not exist, so
                            # the point saturates there and the block goes empty
@@ -201,7 +203,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 #                        so every decoder sees one gap of step-time plus
 #                        chunk-time. MARGINAL pricing: the host pass streams
 #                        the weights anyway.
-#   the [lo, hi] bracket the same at MFU_HIGH / MFU_LOW (the study's 35-55%
+#   the [lo, hi] bracket the same at MFU_HIGH / MFU_LOW (the study's 30-55%
 #                        band). Higher MFU = shorter freeze, so the HI anchor
 #                        is the bracket's LOW edge.
 #
@@ -224,7 +226,8 @@ def freeze_ms(model: M.Model, topo: M.Topology, cap: float, chunk: float,
 
 def _steady_block(m, t, wl, rate_total: float, out_tokens: float, cap: float,
                   chunk: float, mfu: float, duty: float, mbu: float,
-                  n_iter: int, seed: int, resident: float) -> dict:
+                  n_iter: int, seed: int, resident: float,
+                  latency=None) -> dict:
     empty = {"steady_decode_seqs": None, "steady_decode_tok_s": None,
              "itl_normal_ms": None, "itl_worst_freeze_ms": None,
              "itl_freeze_lo_ms": None, "itl_freeze_hi_ms": None}
@@ -233,7 +236,7 @@ def _steady_block(m, t, wl, rate_total: float, out_tokens: float, cap: float,
     # the calibration block's MBU, the same one max_users_decode is priced at
     sp = M.steady_decode_point(m, t, wl, rate_total, out_tokens=out_tokens,
                                mbu=mbu, n_iter=n_iter, seed=seed,
-                               resident=resident)
+                               resident=resident, latency=latency)
     pu = sp["per_user_tok_s"]
     if sp["saturated"] or not (pu > 0):
         return empty

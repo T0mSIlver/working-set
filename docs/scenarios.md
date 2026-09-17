@@ -712,7 +712,9 @@ within the explorer's miss-rate range; three more do so under stress
 It is **analytic and unvalidated**. The baseline collected prefill speeds but
 kept only the `ttft < 0.4 × cold` heuristic. *(Update 2026-08-27: MFU now
 carries two production calibration points and the bracket tightened to
-35–55%, moving absolute figures ~1.6× — research/prefill.md #1; the rest of
+35–55%, moving absolute figures ~1.6×; 2026-09-18: a third, controlled point
+reads 30–34% and re-opened the low edge to 30% (~1.8×), central unchanged —
+research/prefill.md #1; the rest of
 this section still predates any prefill measurement.)* MFU is the soft
 input — it moves every absolute millisecond figure, though not the ratios.
 The model omits queueing, preemption/recompute and PCIe restore contention,

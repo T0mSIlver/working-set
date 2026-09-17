@@ -150,11 +150,11 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
        ? `All four ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. cache = the warm p5 population that fits the pool; decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%.`
        : `All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's mean TTFT hits the budget; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
-     sub:`MFU 35–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
+     sub:`MFU 30–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
         + ` · latency ceiling f_sla ${op.fsla>=1?'never binds':fmt(op.fsla*100,0)+'%'}`,
      cls: op.bstar<1?'crit':(op.bstar<5?'warn':'good'),
-     tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside the TTFT budget — linear in that budget. The band is the MFU [35–55%] bracket; B* reaches zero exactly at f*, and f_sla (mean TTFT = budget) binds earlier still."},
+     tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside the TTFT budget — linear in that budget. The band is the MFU [30–55%] bracket; B* reaches zero exactly at f*, and f_sla (mean TTFT = budget) binds earlier still."},
     {k:`A burst of ${fmt(state.burst,0)} at once`,
      v: !isFinite(drain) ? 'never' : (drain>=90? fmt(drain/60,1) : fmt(drain,1)),
      u: !isFinite(drain) ? 'clears at this load' : (drain>=90?'min to clear':'s to clear'),

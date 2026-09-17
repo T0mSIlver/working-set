@@ -232,7 +232,7 @@ function harnessHypotheses(P, model, topo, wl, reps){
         + `not the population.`,
       `H-itl-spike: the worst freeze behind one chunk of a `
         + `${fmt(wl.cap / 1000, 0)}k cold re-prefill is ~${fmt(P.itl_worst_freeze_ms, 0)} ms `
-        + `[${fmt(brLo, 0)}-${fmt(brHi, 0)}, the MFU 35-55% bracket] at `
+        + `[${fmt(brLo, 0)}-${fmt(brHi, 0)}, the MFU 30-55% bracket] at `
         + `max_num_batched_tokens=${fmt(C, 0)} ${vsRef}`
         + `Read it on the INTER-TOKEN GAPS table, never on decode p50 (a mean `
         + `over the stream is nearly blind to a freeze); make sure `

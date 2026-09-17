@@ -9,7 +9,7 @@ import { interpAt } from './charts.js';
    PREFILL — the compute roofline (mirrors scenario_model.py's prefill section;
    research/prefill.md). Everything else on this page prices HBM bytes; a cache
    MISS prices FLOPs: it reads the weights once and does 2 x params x tokens on
-   them. ANALYTIC, MFU CALIBRATED 2026-08-27 — MFU is the soft input (the 35–55%
+   them. ANALYTIC, MFU CALIBRATED 2026-08-27 — MFU is the soft input (the 30–55%
    bracket moves every absolute figure by ~1.6x, though not the ratios).
    ========================================================================== */
 // 0.45 is now a CALIBRATION POINT, not a flat rate: it is the effective MFU

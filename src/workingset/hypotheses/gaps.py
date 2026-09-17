@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import math
 
+from .. import model as M
 from .base import (BURST_PROBE, LADDER, NOT_ESTABLISHED, REFUTED, SAMPLE,
                    SHARED, SUPPORTED, Hypothesis, Measurement, Prediction,
                    Verdict, ratio_verdict)
@@ -458,7 +459,7 @@ class HItlSpike(Hypothesis):
                 f"{cap / 1000:.0f}k cold re-prefill is "
                 f"~{p.itl_worst_freeze_ms:g} ms "
                 f"[{p.itl_freeze_lo_ms:g}-{p.itl_freeze_hi_ms:g}, the MFU "
-                f"35-55% bracket] at max_num_batched_tokens="
+                f"{M.MFU_LOW:.0%}-{M.MFU_HIGH:.0%} bracket] at max_num_batched_tokens="
                 f"{cfg.deployment.max_num_batched_tokens:,}. The spike "
                 "MAGNITUDE scales ~inversely with the unvalidated MFU, but "
                 "the RATIO between two chunk settings does not — quote the "

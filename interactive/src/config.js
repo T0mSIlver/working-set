@@ -458,11 +458,11 @@ export const ACT_RESERVE = actReserve();
    and decode code that uses them because the state object's DEFAULTS read
    them at load, and the module that holds them must not depend on anything
    that depends on state. ---- */
-export const PREFILL_MFU   = 0.45;    // mid of the plausible [0.35, 0.55] FP8 bracket
+export const PREFILL_MFU   = 0.45;    // the central of the plausible [0.30, 0.55] FP8 bracket
 
                                // (tightened from [0.30, 0.60] 2026-08-27 on two
                                // production calibration points — prefill.md #1)
-export const PREFILL_MFU_LO = 0.35, PREFILL_MFU_HI = 0.55;  // the bracket itself:
+export const PREFILL_MFU_LO = 0.30, PREFILL_MFU_HI = 0.55;  // the bracket itself:
 // an ERROR BAR on every prefill-derived figure, not a knob anyone chooses
 export const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor — now the
                                    // DEFAULT of state.decode_floor, kept as a
