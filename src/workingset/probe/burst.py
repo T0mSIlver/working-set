@@ -65,6 +65,10 @@ class BurstResult:
     # queued in front of it.
     establish_wait_s: float = 0.0
     n_establishing_at_fire: int = 0
+    # standing turns of ANY kind still waiting for a first token at the fire:
+    # a drawn miss in prefill sits ahead of the burst just as an establishing
+    # turn does. Not waited for (under load there is always one), only counted
+    n_standing_prefilling_at_fire: int = 0
     # drain: fire -> the LAST request's first token (all fired together, so
     # last first-token = the fluid model's T_drain, whatever the scheduler's
     # discipline — see model.burst_drain_seconds)
@@ -202,7 +206,7 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
     # monotonic timestamps for span arithmetic, and the two differ by the
     # unix epoch (see probe.request.sampler_now)
     w_start = sampler_now(metrics)
-    wait_s, n_pending = 0.0, 0
+    wait_s, n_pending, n_prefilling = 0.0, 0, 0
     try:
         await asyncio.sleep(opts.ramp_s)
         # hold the fire until the standing load IS standing (see
@@ -235,6 +239,7 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
             return t
 
         t_fire = time.monotonic()
+        n_prefilling = sum(1 for t in traces if t.ttft is None and not t.error)
         burst_traces = list(await asyncio.gather(*[one_miss(i) for i in range(n)]))
     finally:
         stop.set()
@@ -246,4 +251,5 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
     res = eval_burst(n, pop, burst_traces, traces, t_fire, server,
                      cap_tokens=opts.context_cap_tokens)
     res.establish_wait_s, res.n_establishing_at_fire = wait_s, n_pending
+    res.n_standing_prefilling_at_fire = n_prefilling
     return res

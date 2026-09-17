@@ -39,8 +39,12 @@ def nonce_bits(nonce: str | None) -> int:
     """A run nonce as the 64 bits that get mixed into salts and seeds.
 
     Hashed, so any string a user passes to `--run-nonce` spreads over all 64
-    bits; "" (and None) is 0, which mixes nothing in and leaves every prompt
-    the pure function of `seed` it was before the nonce existed.
+    bits; "" (and None) is 0, which mixes nothing in: every prompt is then a
+    pure function of `seed` again, so two runs collide in the server's prefix
+    cache exactly as they did before the nonce existed. NOT the same BYTES as
+    a pre-nonce version produced, though: contexts are drawn from their own
+    generator now, which also shifts the main stream, so a record saved by an
+    older version is not byte-reproducible at any nonce.
     """
     if not nonce:
         return 0

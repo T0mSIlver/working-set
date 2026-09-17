@@ -90,7 +90,9 @@ class HBurst(Hypothesis):
         return Measurement(
             value=b.last_ttft_s, unit="s", text=text,
             data={"n": b.n, "standing_users": b.standing_users,
-                  "prompt_tokens_total": sum(tokens),
+                  # a record replayed without traces has no lengths to sum,
+                  # but the result kept the total
+                  "prompt_tokens_total": b.ptok_total or sum(tokens),
                   "prompt_tokens_from_usage": b.ptok_from_usage,
                   "drain_predicted_for_these_tokens_s": drain_pred,
                   "drain_measured_over_predicted":

@@ -53,7 +53,8 @@ class ProbeOptions:
     # still fixes the prompt LENGTHS, the think times and the miss pattern,
     # so two runs at one seed offer the same load in different bytes; the
     # pair (seed, run_nonce) reproduces a run exactly, which is why the nonce
-    # is in the record. "" mixes nothing in.
+    # is in the record. "" mixes nothing in (runs at one seed then collide in
+    # the prefix cache; it does not reproduce a pre-nonce version's bytes).
     run_nonce: str = field(default_factory=process_nonce)
 
     def to_dict(self) -> dict:

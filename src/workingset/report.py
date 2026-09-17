@@ -350,6 +350,10 @@ def _burst_block(w, b: dict) -> None:
     elif b.get("establish_wait_s", 0) > 0.5:
         w(f"  fire held {fmt(b.get('establish_wait_s'), 's', 1)} past the ramp "
           "until every standing session had its first token")
+    extra = (b.get("n_standing_prefilling_at_fire") or 0) - (b.get("n_establishing_at_fire") or 0)
+    if extra > 0:
+        w(f"  note: {extra} standing turn(s) were still waiting for a first "
+          "token at the fire; their prefill is part of the drain above")
     if b.get("standing_n"):
         w(f"  standing load hit by it: {b['standing_n']} responses in flight "
           f"| normal gap {fmt(b.get('standing_itl_p50_ms'), ' ms', 1)} | "
