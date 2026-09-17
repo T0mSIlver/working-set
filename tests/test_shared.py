@@ -2006,3 +2006,29 @@ def test_verdict_sigmas_round_trips_into_the_report(capsys):
                         shared=json.loads(json.dumps(d)))
     print_report(rec)
     assert "+/-2.5 standard errors" in capsys.readouterr().out
+
+
+# --- robustness: what a second run at the same seed sends -------------------
+def test_a_second_run_at_the_same_seed_sends_bytes_the_first_never_did():
+    """Every shared prompt was a pure function of --seed, so a re-run re-sent
+    the last run's "misses" byte for byte and a server with prefix caching
+    answered them from cache. The run nonce makes them unmatchable across
+    runs; the shared prefix stays byte-stable, which is the point of it."""
+    cfg = small_cfg()
+    pre = build_prefixes(cfg.workload, 4.0)
+
+    def prompts(nonce):
+        seen: list = []
+        _run_shared(fake_server(seen=seen), cfg, small_opts(run_nonce=nonce),
+                    shared_opts(rounds=1, warm_turns=2),
+                    budget(abort_if_waiting=None))
+        return [b["prompt"] for b in seen]
+
+    a, b = prompts("run-a"), prompts("run-b")
+    assert a == prompts("run-a")              # (seed, nonce) reproduces a run
+    assert len(a) == len(b) and not set(a) & set(b)
+    # the same load: `make_text` lands within a character of its budget
+    assert all(abs(len(p) - len(q)) <= 2 for p, q in zip(a, b))
+    warm_a = [p for p in a if p.startswith(pre.user)]
+    warm_b = [p for p in b if p.startswith(pre.user)]
+    assert len(warm_a) == len(warm_b) == 2

@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field
 from .population import spike_evidence, user_loop
 from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_window,
                       send_request)
-from .session import Prefixes, draw_session_tokens, make_text
+from .session import Prefixes, draw_session_tokens, make_text, nonce_bits
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
 
 
@@ -126,6 +126,7 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
     traces: list[RequestTrace] = []
     stop = asyncio.Event()
     rng = random.Random(opts.seed ^ 0xB0057)
+    bits = nonce_bits(opts.run_nonce)
     tasks = [asyncio.create_task(user_loop(
         client, ep, cfg, opts, uid=900_000 + i, is_sub=(i >= pop),
         prefixes=prefixes, traces=traces, stop=stop,
@@ -144,7 +145,9 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
                                        wl.user_prompt_sigma,
                                        wl.system_prefix_tokens,
                                        opts.context_cap_tokens)
-            salt = f"[miss-salt {r.getrandbits(64):016x}] "
+            # the run nonce, as in `Session.next_turn`: `r` is a function of
+            # the seed, and a salt the server saw on the last run is a hit
+            salt = f"[miss-salt {r.getrandbits(64) ^ bits:016x}] "
             prompt = (salt + prefixes.user + "\n"
                       + make_text(r, max(full - wl.system_prefix_tokens, 0),
                                   opts.chars_per_token))

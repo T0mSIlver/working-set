@@ -75,7 +75,7 @@ import numpy as np
 from .probe.population import Sample, eval_sample
 from .probe.request import (RequestTrace, _covariates, sampler_now,
                            send_request, window_dict)
-from .probe.session import make_text
+from .probe.session import make_text, nonce_bits
 from .probe.stats import pct
 
 __all__ = [
@@ -1800,7 +1800,9 @@ def _miss_prompt(rng: random.Random, prefix: str, prefix_tokens: int,
                  tokens: int, cpt: float) -> str:
     """A forced miss at ~`tokens` prompt tokens: a random salt AHEAD of the
     byte-stable prefix makes the whole request unmatchable, exactly as
-    `Session.next_turn` does for a miss."""
+    `Session.next_turn` does for a miss. Unmatchable ACROSS RUNS too only
+    because `run_shared` seeds `rng` with the run nonce: a salt that is a
+    function of the seed alone was already sent by the last run."""
     body = make_text(rng, max(tokens - prefix_tokens, 1), cpt)
     return f"[miss-salt {rng.getrandbits(64):016x}] {prefix}\n{body}"
 
@@ -1932,7 +1934,12 @@ async def run_shared(client, ep, cfg, opts, prefixes, budget: ProbeBudget,
     gov = ProbeGovernor(budget, metrics_expected=metrics is not None)
     traces: list[RequestTrace] = []
     windows: list[dict] = []
-    rng = random.Random((sopts.seed << 21) ^ 0x5EED)
+    # the run nonce goes into the SEED here, not just the miss salts: this one
+    # generator also writes the warm history, and a history the server cached
+    # on the last run turns the "first" (establishing) warm turn into a hit.
+    # The lengths are designed, not drawn, so nothing about the load moves.
+    rng = random.Random((((sopts.seed << 21) ^ 0x5EED) << 64)
+                        | nonce_bits(getattr(opts, "run_nonce", "")))
     cap = opts.context_cap_tokens
     floor = wl.system_prefix_tokens
     lengths = sorted({max(floor + 1, int(f * cap))

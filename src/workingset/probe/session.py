@@ -19,6 +19,7 @@ Token counts are chars/`chars_per_token` approximations; the achieved
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 from dataclasses import dataclass
@@ -32,6 +33,18 @@ _VOCAB = ("the build failed on stage three because a header moved and the cache 
           "key did not include it so the runner reused a stale object then the "
           "linker saw two symbols with one name and gave up while the test "
           "suite kept polling a socket that nothing owned anymore").split()
+
+
+def nonce_bits(nonce: str | None) -> int:
+    """A run nonce as the 64 bits that get mixed into salts and seeds.
+
+    Hashed, so any string a user passes to `--run-nonce` spreads over all 64
+    bits; "" (and None) is 0, which mixes nothing in and leaves every prompt
+    the pure function of `seed` it was before the nonce existed.
+    """
+    if not nonce:
+        return 0
+    return int.from_bytes(hashlib.sha256(nonce.encode()).digest()[:8], "big")
 
 
 def make_text(rng: random.Random, tokens: float, cpt: float) -> str:
@@ -114,6 +127,7 @@ class Session:
     miss_rate: float
     n_turn: int = 0
     history: str = ""
+    nonce: int = 0          # `nonce_bits(opts.run_nonce)`, mixed into the salt
 
     def next_turn(self, force_miss: bool | None = None) -> tuple[str, str]:
         """Return (prompt, kind). kind is "first" (session establishment),
@@ -125,8 +139,13 @@ class Session:
         else:
             is_miss = bool(force_miss) and not first
         # a salt ahead of the prefix makes the WHOLE request unmatchable — the
-        # model's cache miss (full re-prefill), applied to this turn only
-        salt = f"[miss-salt {self.rng.getrandbits(64):016x}] " if is_miss else ""
+        # model's cache miss (full re-prefill), applied to this turn only. The
+        # run nonce is XORed in because `rng` is a function of the seed: the
+        # same seed draws the same salt, and a salt the server saw last run,
+        # sitting ahead of the same byte-stable prefix, is a cache HIT over
+        # the whole prefix. Same width either way, so the token count holds.
+        salt = (f"[miss-salt {self.rng.getrandbits(64) ^ self.nonce:016x}] "
+                if is_miss else "")
         turn_text = "" if first else "\n" + make_text(
             self.rng, self.warm_turn_tokens, self.cpt)
         prompt = salt + self.prefix_text + "\n" + self.ctx + self.history + turn_text
@@ -150,10 +169,20 @@ def make_session(wl, opts, prefixes: Prefixes, uid: int, is_sub: bool,
     class-specific log-normal draw, unique context on top of the shared block.
 
     The RNG is seeded `(seed << 20) ^ uid`, so a given (seed, uid) always
-    produces the same session — the determinism the tests pin.
+    draws the same context LENGTH, think times and miss pattern. The context
+    TEXT and the miss salts also take `opts.run_nonce`: a run is reproducible
+    from (seed, uid, run_nonce) — the determinism the tests pin — while two
+    runs at one seed offer the same load in bytes the server's prefix cache
+    has never seen. Without that, the second run's establishing turns and
+    forced misses are answered from the first run's cache.
     """
     seed = opts.seed if seed is None else seed
+    bits = nonce_bits(getattr(opts, "run_nonce", ""))
     rng = random.Random((seed << 20) ^ uid)
+    # the text stream is its own generator so the nonce moves the BYTES and
+    # nothing else: every draw on `rng` (length, think time, miss or hit) is
+    # the same at a given seed whatever the nonce
+    text_rng = random.Random((((seed << 20) ^ uid) << 64) | bits)
     cpt = opts.chars_per_token
     median = wl.subagent_median_tokens if is_sub else wl.user_prompt_median_tokens
     sigma = wl.subagent_sigma if is_sub else wl.user_prompt_sigma
@@ -164,11 +193,11 @@ def make_session(wl, opts, prefixes: Prefixes, uid: int, is_sub: bool,
     prefix_txt = prefixes.sub if own_sub else prefixes.user
     full = draw_session_tokens(rng, median, sigma, prefix_tok,
                                opts.context_cap_tokens)
-    ctx = make_text(rng, max(full - prefix_tok, 0), cpt)
+    ctx = make_text(text_rng, max(full - prefix_tok, 0), cpt)
     return Session(uid=uid, is_sub=is_sub, prefix_text=prefix_txt,
                    prefix_tokens=prefix_tok, ctx=ctx, rng=rng, cpt=cpt,
                    warm_turn_tokens=wl.warm_turn_tokens,
-                   miss_rate=wl.miss_rate)
+                   miss_rate=wl.miss_rate, nonce=bits)
 
 
 def sampler_selfcheck(wl, opts) -> tuple[list[dict], bool]:

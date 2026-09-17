@@ -163,6 +163,61 @@ def test_session_generation_is_deterministic():
     assert a.next_turn(force_miss=False)[0] == b.next_turn(force_miss=False)[0]
 
 
+def test_a_new_run_nonce_moves_the_bytes_and_nothing_else():
+    """Same seed, new nonce: the context and the miss salt are bytes the last
+    run never sent, while the LOAD — context length, hit/miss pattern — is
+    the one the seed fixes. A pinned nonce reproduces the run exactly."""
+    cfg = small_cfg()
+    pre = build_prefixes(cfg.workload, 4.0)
+
+    def turns(nonce):
+        s = make_session(cfg.workload, small_opts(run_nonce=nonce), pre,
+                         uid=5, is_sub=False)
+        first, _ = s.next_turn()
+        s.commit("reply")
+        return s, first, s.next_turn(force_miss=True)[0]
+
+    a, a_first, a_miss = turns("run-a")
+    b, b_first, b_miss = turns("run-b")
+    again, again_first, again_miss = turns("run-a")
+    assert (a_first, a_miss) == (again_first, again_miss)
+    assert a.ctx != b.ctx and len(a.ctx) == len(b.ctx)
+    assert a_first.startswith(pre.user) and b_first.startswith(pre.user)
+    salt = lambda p: p.split("]")[0]                       # noqa: E731
+    assert salt(a_miss) != salt(b_miss)
+    assert len(salt(a_miss)) == len(salt(b_miss))
+
+
+def test_the_run_nonce_is_per_process_unless_given():
+    assert ProbeOptions().run_nonce == ProbeOptions().run_nonce != ""
+    assert ProbeOptions(run_nonce="abc").to_dict()["run_nonce"] == "abc"
+    assert ProbeOptions(run_nonce="abc").ladder_key() \
+        != ProbeOptions(run_nonce="abd").ladder_key()
+
+
+def test_burst_misses_are_unmatchable_across_runs():
+    """The burst's misses are seeded from --seed alone, so a second burst at
+    the same seed re-sent the first one's bytes and drained from cache."""
+    def misses(nonce):
+        seen: list = []
+
+        async def go():
+            cfg, opts = small_cfg(), small_opts(ramp_s=0.02, run_nonce=nonce)
+            pre = build_prefixes(cfg.workload, opts.chars_per_token)
+            async with client_for(fake_server(seen=seen)) as c:
+                ep = EndpointSpec(base_url="http://x/v1", model="m")
+                await run_burst(c, ep, cfg, opts, n=3, standing_users=0,
+                                prefixes=pre)
+        asyncio.run(go())
+        return sorted(b["prompt"] for b in seen
+                      if b["prompt"].startswith("[miss-salt "))
+
+    a, b = misses("run-a"), misses("run-b")
+    assert len(a) == 3 and a == misses("run-a")
+    assert not set(a) & set(b)
+    assert sorted(map(len, a)) == sorted(map(len, b))      # same draws
+
+
 def test_prefixes_are_byte_stable_across_processes():
     cfg, opts = small_cfg(), small_opts()
     p1 = build_prefixes(cfg.workload, opts.chars_per_token)
