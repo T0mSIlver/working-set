@@ -190,6 +190,7 @@ def test_explorer_toml_names_every_field():
                        ("calibration", Calibration)):
         want = {f.name for f in dataclass_fields(typ)}
         want -= {"metrics_url"}          # optional: no /metrics on the page
+        want -= {"max_num_seqs"}         # optional: no such control; unset = no cap
         if block == "workload":
             want -= {"headcount", "peak_active_share", "sessions_per_active_user"}
         assert want == set(raw[block]), f"{block}: {want ^ set(raw[block])}"
@@ -417,6 +418,41 @@ def test_predict_reference_row():
     assert math.isfinite(p.ttft_miss_s) and p.ttft_miss_s > p.ttft_hit_s
     assert p.bstar_misses > 0
     assert p.replicas == 1
+
+
+def test_max_num_seqs_caps_the_decode_ceiling():
+    """The engine never runs more than max_num_seqs sequences at once, so a
+    decode ceiling above it is unreachable: the cap becomes the ceiling, the
+    binding constraint is recomputed, and an unset or looser cap changes
+    nothing."""
+    base = {"model": "27B", "gpu": "H200", "tensor_parallel": 4}
+    free = predict(RunConfig.from_dict({"deployment": base}), n_iter=200)
+    assert not free.decode_capped_by_max_num_seqs
+    tight = predict(RunConfig.from_dict(
+        {"deployment": {**base, "max_num_seqs": 32}}), n_iter=200)
+    assert tight.decode_capped_by_max_num_seqs
+    assert tight.decode_ceiling_users == 32 < free.decode_ceiling_users
+    assert tight.binding_constraint == "decode" and tight.predicted_limit_users == 32
+    loose = predict(RunConfig.from_dict(
+        {"deployment": {**base, "max_num_seqs": free.decode_ceiling_users + 50}}),
+        n_iter=200)
+    assert not loose.decode_capped_by_max_num_seqs
+    assert loose.decode_ceiling_users == free.decode_ceiling_users
+    # the other three ceilings never move
+    for k in ("warm_capacity_p5", "latency_ceiling_users", "saturation_ceiling_users"):
+        assert getattr(tight, k) == getattr(free, k)
+
+
+def test_max_num_seqs_round_trips_and_validates(tmp_path):
+    cfg = RunConfig.from_dict({"deployment": {"model": "27B", "max_num_seqs": 96}})
+    f = tmp_path / "workingset.toml"
+    f.write_text(cfg.dumps("toml"), encoding="utf-8")
+    assert load_config(f).deployment.max_num_seqs == 96
+    # unset stays unset on disk: TOML has no null, the key is omitted
+    assert "max_num_seqs" not in RunConfig.from_dict(
+        {"deployment": {"model": "27B"}}).dumps("toml")
+    with pytest.raises(ValueError, match="max_num_seqs"):
+        RunConfig.from_dict({"deployment": {"model": "27B", "max_num_seqs": 0}}).validate()
 
 
 def test_predict_dp_system_multiplies():

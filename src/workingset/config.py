@@ -70,6 +70,11 @@ class Deployment:
     kv_dtype: str = "fp8"                # fp8 | fp16
     max_num_batched_tokens: int = M.CHUNK_DEFAULT
     max_model_len: int = 180_000
+    # vLLM's --max-num-seqs: the scheduler never runs more sequences than this
+    # at once, so no decode batch — and therefore no decode ceiling — can
+    # exceed it, whatever the bandwidth says. None = not stated: the ceiling
+    # is then the roofline's alone, as in every published table.
+    max_num_seqs: int | None = None
     ram_gib: float = 0.0                 # CPU KV offload per replica group (explorer's RAM knob)
     # Recurrent (Gated DeltaNet / KDA) state precision. "fp32" doubles the
     # per-session state bytes, which is a per-session charge against the KV
@@ -244,6 +249,9 @@ class RunConfig:
                                  "workload.headcount; without it they price nothing")
         if self.deployment.ram_gib < 0:
             raise ValueError("deployment.ram_gib must be >= 0")
+        mns = self.deployment.max_num_seqs
+        if mns is not None and mns < 1:
+            raise ValueError("deployment.max_num_seqs must be >= 1")
         d = self.deployment
         if d.recurrent_state_dtype not in STATE_DTYPES:
             raise ValueError(f"deployment.recurrent_state_dtype must be one of "

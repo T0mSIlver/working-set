@@ -57,7 +57,8 @@ def cmd_predict(args) -> int:
     layout = (" [KV replicated]" if d.kv_sharding == "replicate" and d.tensor_parallel > 1
               else "")
     print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}{layout}), "
-          f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}")
+          f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}"
+          + (f", max_num_seqs {d.max_num_seqs}" if d.max_num_seqs is not None else ""))
     users = cfg.users_per_group()
     print(f"operating point: {users:g} users/group, think {w.think_time_s} s, "
           f"miss {w.miss_rate:.0%}, {'closed' if args.closed else 'open'} loop")
@@ -69,7 +70,8 @@ def cmd_predict(args) -> int:
               f"-> {_fmt_count(users)} /group on DP{d.replicas}")
     print()
     rows = [("cache (warm p5, users)", p.warm_capacity_p5),
-            ("decode (users at floor)", p.decode_ceiling_users),
+            ("decode (max_num_seqs cap)" if p.decode_capped_by_max_num_seqs
+             else "decode (users at floor)", p.decode_ceiling_users),
             ("latency (miss TTFT = budget)", p.latency_ceiling_users),
             ("saturation (prefill duty 100%)", p.saturation_ceiling_users)]
     for k, v in rows:
@@ -95,6 +97,7 @@ def _apply_overrides(cfg: RunConfig, args) -> RunConfig:
                              ("kv_dtype", args.kv_dtype),
                              ("max_num_batched_tokens", args.chunk),
                              ("max_model_len", args.max_model_len),
+                             ("max_num_seqs", args.max_num_seqs),
                              ("ram_gib", args.ram_gib)) if v is not None}
     wl = {k: v for k, v in (("users", args.users), ("miss_rate", args.miss_rate),
                             ("think_time_s", args.think)) if v is not None}
@@ -164,6 +167,8 @@ def _add_deploy_flags(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--kv-dtype", choices=M.KV_DTYPES)
     ap.add_argument("--chunk", type=int, help="max_num_batched_tokens")
     ap.add_argument("--max-model-len", type=int)
+    ap.add_argument("--max-num-seqs", type=int,
+                    help="vLLM --max-num-seqs; caps the decode ceiling")
     ap.add_argument("--ram-gib", type=float, help="CPU KV offload per group, GiB")
     ap.add_argument("--users", type=float,
                     help="operating point, users per group (fractional is "
