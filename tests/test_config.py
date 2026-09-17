@@ -502,3 +502,40 @@ def test_init_default_filename_follows_the_format(tmp_path, monkeypatch, capsys)
     capsys.readouterr()
     assert cli.main(["init", "--json", "-o", "-"]) == 0
     assert json.loads(capsys.readouterr().out)      # stdout, no file written
+
+
+def test_the_record_is_written_before_the_report_is_printed(tmp_path, monkeypatch):
+    """A console that cannot render the report must not cost the run its
+    record (Windows cp1252 behind a pipe raised out of print_report)."""
+    from workingset import test_cmd
+
+    class Rec:
+        def save(self, path):
+            open(path, "w").write("{}")
+
+    def boom(rec):
+        raise UnicodeEncodeError("charmap", "", 0, 1, "no")
+
+    monkeypatch.setattr(test_cmd, "print_report", boom)
+    out = tmp_path / "run.json"
+    import pytest
+    with pytest.raises(UnicodeEncodeError):
+        test_cmd._finish(Rec(), str(out))
+    assert out.exists()
+
+
+def test_main_tolerates_a_console_that_cannot_encode_the_report(capsys):
+    """`_tolerant_console` swaps strict encoding for substitution on both
+    streams, so a glyph the console lacks prints as '?' instead of raising."""
+    import io, sys
+    from workingset import cli
+    buf = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    old = sys.stdout
+    sys.stdout = buf
+    try:
+        cli._tolerant_console()
+        print("✓ supported ≥ bounded")
+        buf.flush()
+        assert b"? supported ? bounded" in buf.buffer.getvalue()
+    finally:
+        sys.stdout = old

@@ -400,7 +400,21 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _tolerant_console() -> None:
+    """Never let the console's encoding kill a run. Behind a pipe on Windows
+    stdout is cp1252 (or cp850), which cannot encode the report's glyphs, and
+    `print` then raises UnicodeEncodeError. Substitute rather than raise; the
+    run record is the durable output, the console is a view of it."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv=None) -> int:
+    _tolerant_console()
     args = build_parser().parse_args(argv)
     try:
         return args.fn(args)

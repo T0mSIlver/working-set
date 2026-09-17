@@ -138,6 +138,19 @@ async def _maybe(obj, *names):
         return
 
 
+def _finish(rec, out: str | None) -> None:
+    """Write the record, THEN print the report. A run that took minutes on
+    somebody else's endpoint must not lose its evidence to a console that
+    cannot render a glyph in the report (Windows cp1252 behind a pipe raised
+    UnicodeEncodeError out of print_report, and the record was never
+    written)."""
+    if out:
+        rec.save(out)
+    print_report(rec)
+    if out:
+        print(f"\nrun record written to {out}")
+
+
 # ============================================================================
 # dry run
 # ============================================================================
@@ -466,10 +479,7 @@ def cmd_test(args) -> int:
             shared=cached.get("shared")),
         measured_capacity_bracket=bracket)
 
-    print_report(rec)
-    if args.out:
-        rec.save(args.out)
-        print(f"\nrun record written to {args.out}")
+    _finish(rec, args.out)
     if aborted is not None:
         # the record is written FIRST: an abort that loses its own evidence
         # tells the operator nothing about why the endpoint was left alone
