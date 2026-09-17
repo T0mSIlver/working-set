@@ -269,8 +269,12 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd, out_tokens):
     # warm prefix instead of k cold prefills racing each other
     lead = None
     if shared and k > 1:
-        lead = asyncio.create_task(stream_one(client, args, prompts[0], stop,
-                                              stats, out_tokens))
+        # the lead decodes ALONE for `lead` seconds, at single-stream speed,
+        # before the batch forms; without those tokens on top it ran dry
+        # inside the hold (one stream, on two rungs of the first k>=72 run)
+        lead = asyncio.create_task(stream_one(
+            client, args, prompts[0], stop, stats,
+            out_tokens + int(args.lead * args.slowest_tok_s)))
         await asyncio.sleep(args.lead)
     streams = [asyncio.create_task(stream_one(client, args, p, stop, stats,
                                               out_tokens))
@@ -366,7 +370,9 @@ async def run(args):
                 rate = args.slowest_tok_s
             last = (arm, k)
             span = args.hold + args.settle + (args.lead if shared and k > 1 else 0)
-            out_tokens = max(256, int(rate * span * 1.1))
+            # 1.25: the bound is only as good as "the next rung is slower",
+            # and past a batch-size step the rate can stay flat
+            out_tokens = max(256, int(rate * span * 1.25))
             await wait_idle(c, args)
             m = await read_metrics(c, args.metrics, args.metrics_key)
             w = m.get("vllm:num_requests_waiting")
