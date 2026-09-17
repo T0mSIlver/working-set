@@ -71,6 +71,14 @@ class BurstResult:
     drain_s: float | None = None
     last_ttft_s: float | None = None
     ttft_p50_s: float = float("nan")
+    # what was actually flushed: the prompt tokens of the requests the drain
+    # is over. The burst's lengths are random draws from a heavy-tailed
+    # log-normal, so N alone says little about the work — the same N drains
+    # in very different times depending on the draws. `usage` readback where
+    # the endpoint gave one, the client's intent otherwise; `ptok_from_usage`
+    # counts the former.
+    ptok_total: int = 0
+    ptok_from_usage: int = 0
     # what the STANDING load felt while the burst was draining
     standing_n: int = 0
     standing_itl_p50_ms: float = float("nan")
@@ -99,6 +107,14 @@ class BurstResult:
         return b
 
 
+def burst_prompt_tokens(traces: list) -> list[int]:
+    """Prompt tokens of each burst request that ANSWERED — the same set
+    `drain_s` is over. The server's `usage` count where there is one, the
+    intended count where there is not."""
+    return [int(t.ptok_achieved or t.ptok_intended or 0) for t in traces
+            if t.ttft is not None and not t.error]
+
+
 def eval_burst(n: int, standing_users: int, burst_traces: list,
                standing_traces: list, t_fire: float,
                server: dict | None = None,
@@ -116,6 +132,8 @@ def eval_burst(n: int, standing_users: int, burst_traces: list,
     if ok:
         r.drain_s = max(t.t_send + t.ttft for t in ok) - t_fire
         r.last_ttft_s = max(t.ttft for t in ok)
+        r.ptok_total = sum(burst_prompt_tokens(ok))
+        r.ptok_from_usage = sum(1 for t in ok if t.ptok_achieved)
     r.ttft_p50_s = pct([t.ttft for t in ok], 50)
     # the same spike statistic the ladder and the sample report, over both
     # legs: the burst's own misses are the cold prefills, the standing load
