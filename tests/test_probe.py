@@ -163,6 +163,61 @@ def test_session_generation_is_deterministic():
     assert a.next_turn(force_miss=False)[0] == b.next_turn(force_miss=False)[0]
 
 
+def test_a_new_run_nonce_moves_the_bytes_and_nothing_else():
+    """Same seed, new nonce: the context and the miss salt are bytes the last
+    run never sent, while the LOAD — context length, hit/miss pattern — is
+    the one the seed fixes. A pinned nonce reproduces the run exactly."""
+    cfg = small_cfg()
+    pre = build_prefixes(cfg.workload, 4.0)
+
+    def turns(nonce):
+        s = make_session(cfg.workload, small_opts(run_nonce=nonce), pre,
+                         uid=5, is_sub=False)
+        first, _ = s.next_turn()
+        s.commit("reply")
+        return s, first, s.next_turn(force_miss=True)[0]
+
+    a, a_first, a_miss = turns("run-a")
+    b, b_first, b_miss = turns("run-b")
+    again, again_first, again_miss = turns("run-a")
+    assert (a_first, a_miss) == (again_first, again_miss)
+    assert a.ctx != b.ctx and len(a.ctx) == len(b.ctx)
+    assert a_first.startswith(pre.user) and b_first.startswith(pre.user)
+    salt = lambda p: p.split("]")[0]                       # noqa: E731
+    assert salt(a_miss) != salt(b_miss)
+    assert len(salt(a_miss)) == len(salt(b_miss))
+
+
+def test_the_run_nonce_is_per_process_unless_given():
+    assert ProbeOptions().run_nonce == ProbeOptions().run_nonce != ""
+    assert ProbeOptions(run_nonce="abc").to_dict()["run_nonce"] == "abc"
+    assert ProbeOptions(run_nonce="abc").ladder_key() \
+        != ProbeOptions(run_nonce="abd").ladder_key()
+
+
+def test_burst_misses_are_unmatchable_across_runs():
+    """The burst's misses are seeded from --seed alone, so a second burst at
+    the same seed re-sent the first one's bytes and drained from cache."""
+    def misses(nonce):
+        seen: list = []
+
+        async def go():
+            cfg, opts = small_cfg(), small_opts(ramp_s=0.02, run_nonce=nonce)
+            pre = build_prefixes(cfg.workload, opts.chars_per_token)
+            async with client_for(fake_server(seen=seen)) as c:
+                ep = EndpointSpec(base_url="http://x/v1", model="m")
+                await run_burst(c, ep, cfg, opts, n=3, standing_users=0,
+                                prefixes=pre)
+        asyncio.run(go())
+        return sorted(b["prompt"] for b in seen
+                      if b["prompt"].startswith("[miss-salt "))
+
+    a, b = misses("run-a"), misses("run-b")
+    assert len(a) == 3 and a == misses("run-a")
+    assert not set(a) & set(b)
+    assert sorted(map(len, a)) == sorted(map(len, b))      # same draws
+
+
 def test_prefixes_are_byte_stable_across_processes():
     cfg, opts = small_cfg(), small_opts()
     p1 = build_prefixes(cfg.workload, opts.chars_per_token)
@@ -207,6 +262,32 @@ def test_warm_turn_extends_the_cached_run():
     assert kind == "hit"
     assert p2.startswith(p1)          # byte-identical prefix run, then more
     assert "REPLY" in p2 and len(p2) > len(p1)
+
+
+def test_a_sessions_history_is_capped_at_a_fifth_of_its_drawn_context():
+    """The log-normal is the prompt length PER REQUEST. A history that only
+    grew walked every prompt away from the session's draw, so a long ladder's
+    mean context drifted far above the configured distribution."""
+    from workingset.probe.session import HISTORY_RESET_FRAC
+
+    cfg, opts = small_cfg(), small_opts()
+    pre = build_prefixes(cfg.workload, opts.chars_per_token)
+    s = make_session(cfg.workload, opts, pre, uid=1, is_sub=False)
+    first, _ = s.next_turn()
+    drawn = s.ctx_tokens
+    assert drawn == pytest.approx(len(first) / s.cpt, abs=2)
+    longest = 0
+    for _ in range(40):
+        s.commit("r" * 40)
+        prompt, kind = s.next_turn(force_miss=False)
+        assert kind == "hit" and prompt.startswith(first)   # still a prefix hit
+        longest = max(longest, s.intended_prompt_tokens(prompt))
+    assert s.n_resets > 1
+    # never more than the cap plus the one turn that crossed it
+    turn = cfg.workload.warm_turn_tokens + 10 + 1
+    assert longest <= drawn * (1 + HISTORY_RESET_FRAC) + 2 * turn
+    # without the cap 40 turns would have stacked ~40 x 30 tokens on top
+    assert longest < drawn + 40 * 30 / 2
 
 
 def test_sampler_selfcheck_reproduces_median_and_sigma():
@@ -638,6 +719,50 @@ def test_run_burst_times_the_drain():
     asyncio.run(go())
 
 
+def test_establishing_pending_counts_sessions_without_a_first_token():
+    from workingset.probe.burst import establishing_pending
+
+    tr = [trace(1, "first", 0.0, 0.4),            # established
+          trace(2, "first", 0.1, None),           # prefill still in flight
+          trace(3, "first", 0.2, None, err="HTTP 500"),   # over: nothing queued
+          trace(1, "hit", 1.0, 0.1)]
+    # four sessions: one established, one failed, one in flight, one not sent
+    assert establishing_pending(tr, 4) == 2
+    assert establishing_pending([], 0) == 0
+
+
+def _slow_establishing_burst(monkeypatch=None, wait_max=None):
+    import workingset.probe.burst as B
+    if wait_max is not None:
+        monkeypatch.setattr(B, "ESTABLISH_WAIT_MAX_S", wait_max)
+
+    async def go():
+        # an establishing turn takes 0.4 s to its first token and the ramp is
+        # 0.05 s: firing AT the ramp put every establishment ahead of the burst
+        cfg, opts = small_cfg(subagent_ratio=0.0), small_opts(ramp_s=0.05)
+        pre = build_prefixes(cfg.workload, opts.chars_per_token)
+        async with client_for(fake_server(n_tokens=3, ttft=0.4)) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            return await run_burst(c, ep, cfg, opts, n=2, standing_users=2,
+                                   prefixes=pre)
+    return asyncio.run(go())
+
+
+def test_the_burst_waits_for_the_standing_load_to_establish():
+    b = _slow_establishing_burst()
+    assert b.n_establishing_at_fire == 0 and b.n_ok == 2
+    assert b.establish_wait_s > 0.3            # held past the 0.05 s ramp
+    assert b.to_dict()["n_establishing_at_fire"] == 0
+
+
+def test_a_burst_fired_into_an_establishing_load_says_so(monkeypatch):
+    """The wait is bounded — an endpoint that never answers must not hang the
+    probe — and a fire that went ahead anyway is visible in the result."""
+    b = _slow_establishing_burst(monkeypatch, wait_max=0.05)
+    assert b.n_establishing_at_fire > 0
+    assert b.establish_wait_s == pytest.approx(0.05, abs=0.05)
+
+
 def test_eval_burst_reads_the_standing_load_in_flight():
     burst = [trace(990_000, "miss", 10.0, 1.0), trace(990_001, "miss", 10.0, 2.0)]
     standing = [
@@ -898,3 +1023,40 @@ def test_tokenizer_flag_sets_chars_per_token_and_records_the_model(monkeypatch):
     # without the flag the explicit value stands and no model is recorded
     opts = test_cmd.build_options(Namespace(chars_per_token=4.4), RunConfig())
     assert opts.tokenizer is None and opts.chars_per_token == 4.4
+
+
+def test_a_rung_and_a_burst_started_cold_still_get_their_server_window():
+    """The same low-side gap as the shared run's: with no ramp to hide behind,
+    a probe that starts the instant the sampler does asks for a window that
+    begins before the series."""
+    from test_metrics import FakeServer
+
+    from workingset.metrics import MetricsSampler
+
+    cfg = small_cfg()
+
+    async def go():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            pre = build_prefixes(cfg.workload, 4.0)
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            async with client_for(fake_server()) as client:
+                r = await run_population(
+                    client, ep, cfg, small_opts(ramp_s=0.0, measure_s=0.2), 1,
+                    pre, s)
+            return r
+
+    async def go_burst():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            pre = build_prefixes(cfg.workload, 4.0)
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            async with client_for(fake_server()) as client:
+                return await run_burst(client, ep, cfg, small_opts(ramp_s=0.0),
+                                       n=2, standing_users=0, prefixes=pre,
+                                       metrics=s)
+
+    assert asyncio.run(go()).server is not None
+    assert asyncio.run(go_burst()).server is not None

@@ -379,6 +379,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "while the operating point is per replica group, and "
                         "KV occupancy cannot be combined at all")
     p.add_argument("--seed", type=int, help="probe RNG seed")
+    p.add_argument("--run-nonce", metavar="HEX",
+                   help="mixed into every miss salt and session context so a "
+                        "re-run at the same --seed cannot be answered from the "
+                        "server's prefix cache. Random per process by default "
+                        "and written to the run record; pass a record's value "
+                        "to reproduce that run's bytes exactly")
     p.add_argument("--no-ignore-eos", action="store_true",
                    help="drop the vLLM ignore_eos extension (strict OpenAI "
                         "endpoints); decode tok/s then depends on natural EOS")

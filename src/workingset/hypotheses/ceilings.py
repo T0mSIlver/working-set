@@ -87,6 +87,50 @@ class HCache(Hypothesis):
         return Verdict(NOT_ESTABLISHED, m.data.get("reason", "no data"))
 
 
+# THE LADDER IS THE WRONG INSTRUMENT FOR THIS CEILING, and the row has to say
+# so rather than leave "no decode-floor failure observed" to be read as good
+# news. `max_users_decode` is a count of sequences decoding AT ONCE. The
+# ladder is a closed loop with think time: a user spends most of a cycle
+# thinking, so N users hold a decode batch far below N
+# (`Predictions.steady_decode_seqs` at the operating point), and any ladder
+# whose rungs stay near the other ceilings never brings the batch anywhere
+# near this one. The instrument that does is a sweep that HOLDS k sequences
+# decoding together.
+DECODE_INSTRUMENT = ("a held-batch decode sweep (scripts/decode_probe.py in "
+                     "the repository, which holds k sequences decoding at "
+                     "once) is the instrument for this ceiling")
+
+
+def _decode_not_reached(v, ceiling) -> dict:
+    """What the ladder's decode batch actually was, against the ceiling.
+
+    `Rung.decode_seqs` is the mean `requests_running` inside the measure
+    window, so it exists only with a metrics sampler attached.
+    """
+    seen = [(r.decode_seqs, r.pop) for r in v.full
+            if math.isfinite(r.decode_seqs)]
+    data = {"decode_ceiling_seqs": ceiling, "largest_decode_batch": None,
+            "largest_decode_batch_pop": None}
+    why = "no decode-floor failure observed"
+    if not seen:
+        why += ("; the decode batch the ladder held was not observed (no "
+                "--metrics-url), and a closed loop with think time holds far "
+                f"fewer sequences decoding at once than it has users — "
+                f"{DECODE_INSTRUMENT}")
+    else:
+        batch, pop = max(seen)
+        data.update(largest_decode_batch=batch, largest_decode_batch_pop=pop)
+        why += (f"; the largest decode batch this ladder produced was "
+                f"{batch:.1f} sequences decoding at once (the {pop}-user "
+                f"rung) against a predicted ceiling of ~{ceiling:g}")
+        if ceiling is None or batch < ceiling:
+            why += (" — a closed loop with think time never holds the batch "
+                    f"this ceiling is about, so it was not tested: "
+                    f"{DECODE_INSTRUMENT}")
+    data["reason"] = why
+    return data
+
+
 class HDecode(Hypothesis):
     key = "H-decode"
     title = "per-user p50 decode holds at the floor up to the decode ceiling"
@@ -103,9 +147,17 @@ class HDecode(Hypothesis):
                     f"{cfg.slo.itl_floor_tok_s:g} tok/s and requests past the "
                     "cap queue instead — watch TTFT. No decode-floor failure "
                     "is expected, so this row cannot be bracketed.")
+        seqs = getattr(p, "steady_decode_seqs", None)
+        held = (f"~{seqs:g} at the ~{p.operating_point_users:g}-user "
+                "operating point" if seqs is not None
+                else "far fewer than it has users")
         return (f"H-decode: per-user p50 decode holds >= "
                 f"{cfg.slo.itl_floor_tok_s:g} tok/s up to "
-                f"~{p.decode_ceiling_users:g} concurrent users.")
+                f"~{p.decode_ceiling_users:g} concurrent users. NOTE the "
+                "ceiling counts sequences decoding AT ONCE, and the ladder's "
+                f"closed loop with think time holds {held}: unless a rung "
+                "fails the decode floor this row reports the batch the "
+                f"ladder reached and nothing more — {DECODE_INSTRUMENT}.")
 
     def predict(self, cfg, p) -> Prediction:
         return Prediction(value=p.decode_ceiling_users, unit=" users")
@@ -114,8 +166,10 @@ class HDecode(Hypothesis):
         v = await ctx.ladder()
         fails = v.decode_fails
         if not fails:
-            return Measurement(text="not separable",
-                               data={"reason": "no decode-floor failure observed"})
+            return Measurement(
+                text="not separable",
+                data=_decode_not_reached(
+                    v, ctx.predictions.decode_ceiling_users))
         lo, hi = v.decode_lo, min(fails)
         return Measurement(value=hi, lo=lo, hi=hi, unit=" users",
                            text=_bracket_text(lo, hi),
@@ -124,7 +178,11 @@ class HDecode(Hypothesis):
 
     def verdict(self, pred: Prediction, m: Measurement) -> Verdict:
         if m.lo is None and m.hi is None:
-            return Verdict(NOT_ESTABLISHED, "no decode-floor failure observed")
+            # the measurement's own account of WHY: which batch the ladder
+            # reached, and that it is not the instrument for this ceiling
+            return Verdict(NOT_ESTABLISHED,
+                           m.data.get("reason",
+                                      "no decode-floor failure observed"))
         return bracket_verdict(pred.value, m.lo, m.hi)
 
 

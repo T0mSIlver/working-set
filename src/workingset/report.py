@@ -167,6 +167,14 @@ def _shared_block(w, sh: dict) -> None:
       f"{fmt(g.get('peak_requests_waiting'), '', 1)} | peak KV "
       f"{_pct(g.get('peak_kv_cache_usage'))} | canary n="
       f"{g.get('n_canary', 0)} p50 {fmt(g.get('canary_p50_s'), 's')}")
+    if g.get("peak_probe_in_prefill") or g.get("n_canary_contended"):
+        w(f"  the probe's own traffic, kept out of the rails: peak waiting "
+          f"net of our own requests still in prefill "
+          f"{fmt(g.get('peak_requests_waiting_net'), '', 1)} (what the "
+          f"waiting rail is keyed on) | {g.get('n_canary_contended', 0)} "
+          f"canary sample(s) taken behind our own prefill, p50 "
+          f"{fmt(g.get('canary_contended_p50_s'), 's')}, excluded from the "
+          "drift rule")
     if op.get("refused"):
         w(f"  operating point: NOT AVAILABLE — {op['refused']}")
     else:
@@ -182,8 +190,9 @@ def _shared_block(w, sh: dict) -> None:
     bound = sh.get("probe_in_flight_bound")
     if bound:
         w(f"  `running` is the server's gauge plus whichever of OUR requests "
-          f"the scrape behind it provably missed; the residual ambiguity is "
-          f"at most {bound} request(s), the in-flight cap")
+          f"the scrape behind it provably missed, minus those it caught that "
+          f"had finished before the send; the residual ambiguity is at most "
+          f"{bound} request(s), the in-flight cap")
     for name, f in (sh.get("fits") or {}).items():
         if f.get("refused"):
             w(f"  {name:<10} no fit — {f['refused']}")
@@ -322,6 +331,29 @@ def _burst_block(w, b: dict) -> None:
     w(f"  {b['n_ok']}/{b['n']} answered | TTFT p50 "
       f"{fmt(b.get('ttft_p50_s'), 's')} | last first-token "
       f"{fmt(b.get('last_ttft_s'), 's')} | drain {fmt(b.get('drain_s'), 's')}")
+    if b.get("ptok_total"):
+        src = ("usage readback" if b.get("ptok_from_usage") == b.get("n_ok")
+               else "client intent where usage was absent")
+        w(f"  flushed {b['ptok_total']:,} prompt tokens ({src}) — the lengths "
+          "are random draws, so read the drain against the H-burst row's "
+          "prediction for THESE tokens, not against N alone")
+    ratio = b.get("ptok_ratio")
+    if ratio is not None and math.isfinite(ratio):
+        w(f"  achieved/intended prompt tokens (median): {ratio:.2f}")
+    if b.get("n_establishing_at_fire"):
+        w(f"  WARNING: {b['n_establishing_at_fire']} standing session(s) were "
+          "still establishing at the fire (held "
+          f"{fmt(b.get('establish_wait_s'), 's', 1)} past the ramp, then "
+          "fired anyway): a cold establishing prefill sat in the queue ahead "
+          "of the burst, so the drain above is the burst PLUS that prefill. "
+          "Raise --ramp-s.")
+    elif b.get("establish_wait_s", 0) > 0.5:
+        w(f"  fire held {fmt(b.get('establish_wait_s'), 's', 1)} past the ramp "
+          "until every standing session had its first token")
+    extra = (b.get("n_standing_prefilling_at_fire") or 0) - (b.get("n_establishing_at_fire") or 0)
+    if extra > 0:
+        w(f"  note: {extra} standing turn(s) were still waiting for a first "
+          "token at the fire; their prefill is part of the drain above")
     if b.get("standing_n"):
         w(f"  standing load hit by it: {b['standing_n']} responses in flight "
           f"| normal gap {fmt(b.get('standing_itl_p50_ms'), ' ms', 1)} | "

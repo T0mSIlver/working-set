@@ -12,8 +12,41 @@ than reporting a number that cannot be compared with B*.
 """
 from __future__ import annotations
 
+from ..probe.burst import burst_prompt_tokens
 from .base import (BURST, BURST_PROBE, EXCLUSIVE, NOT_ESTABLISHED, REFUTED,
                    SUPPORTED, Hypothesis, Measurement, Prediction, Verdict)
+
+
+def predicted_drain_seconds(cfg, preds, prompt_tokens) -> float | None:
+    """The model's drain for THESE prompts rather than for N mean ones.
+
+    `model.burst_drain_seconds` is B x E[S | miss] / (1 - rho). The burst's
+    lengths are a handful of draws from a heavy-tailed log-normal, so their
+    service times sum to something that can sit far from B x the mean, and
+    "N against B*" alone is then close to a coin flip. This is the same fluid
+    drain with the backlog priced on the lengths actually sent:
+
+        T = sum_i S_miss(L_i) / (1 - rho)
+
+    `S_miss` is `model.miss_context_seconds` at the config's chunk and MFU —
+    the per-request form of the per-pass-overhead pricing `predict` uses for
+    B* — and rho is `Predictions.prefill_duty`, the rate x E[S] of the
+    operating point B* was priced at. Nothing is modelled here.
+
+    None when the model has no steady state there (rho >= 1) or no prompt
+    answered.
+    """
+    from .. import model as M
+
+    tokens = [L for L in prompt_tokens if L and L > 0]
+    rho = preds.prefill_duty
+    if not tokens or rho is None or not rho < 1.0:
+        return None
+    m, t = cfg.to_model(), cfg.to_topology()
+    chunk, mfu = cfg.deployment.max_num_batched_tokens, cfg.calibration.mfu
+    backlog = sum(M.miss_context_seconds(m, t, L, chunk, mfu_anchor=mfu)
+                  for L in tokens)
+    return backlog / (1.0 - rho)
 
 
 class HBurst(Hypothesis):
@@ -45,12 +78,32 @@ class HBurst(Hypothesis):
             return Measurement(text="not measured",
                                data={"reason": "no burst request answered",
                                      "n": b.n, "n_err": b.n_err})
+        # ADDED next to the count-based test, which is unchanged: what the
+        # model says the drain of the prompts actually sent should have been.
+        # A replayed record without traces has no lengths and prints neither.
+        tokens = burst_prompt_tokens(b.traces)
+        drain_pred = predicted_drain_seconds(ctx.cfg, ctx.predictions, tokens)
+        text = f"N={b.n}: last {b.last_ttft_s:.2f}s"
+        if drain_pred is not None and b.drain_s is not None:
+            text += (f"; drain {b.drain_s:.2f}s measured / {drain_pred:.2f}s "
+                     f"predicted for these {sum(tokens) / 1e3:.0f}k tokens")
         return Measurement(
-            value=b.last_ttft_s, unit="s",
-            text=f"N={b.n}: last {b.last_ttft_s:.2f}s",
+            value=b.last_ttft_s, unit="s", text=text,
             data={"n": b.n, "standing_users": b.standing_users,
+                  # a record replayed without traces has no lengths to sum,
+                  # but the result kept the total
+                  "prompt_tokens_total": b.ptok_total or sum(tokens),
+                  "prompt_tokens_from_usage": b.ptok_from_usage,
+                  "drain_predicted_for_these_tokens_s": drain_pred,
+                  "drain_measured_over_predicted":
+                      (b.drain_s / drain_pred
+                       if drain_pred and b.drain_s is not None else None),
                   "n_ok": b.n_ok, "n_err": b.n_err, "drain_s": b.drain_s,
                   "ttft_p50_s": b.ttft_p50_s,
+                  # 0 on a clean burst; anything else put an establishing
+                  # prefill in the queue ahead of it (see probe.burst)
+                  "n_establishing_at_fire": b.n_establishing_at_fire,
+                  "establish_wait_s": b.establish_wait_s,
                   "ttft_budget_s": ctx.cfg.slo.ttft_budget_s})
 
     def verdict(self, pred: Prediction, m: Measurement) -> Verdict:

@@ -203,6 +203,38 @@ def sampler_now(metrics) -> float:
     return float(t) if isinstance(t, (int, float)) else time.time()
 
 
+# how long a probe waits for a sampler's first snapshot before starting anyway
+SAMPLER_FIRST_WAIT_S = 10.0
+
+
+async def sampler_ready(metrics, timeout: float = SAMPLER_FIRST_WAIT_S) -> bool:
+    """Wait (bounded) until the sampler holds one COMPLETED snapshot.
+
+    A window's low endpoint must be a scrape that completed BEFORE the
+    window's start (`metrics/sampler.py`: endpoints ENCLOSE the interval). A
+    probe that takes its start instant the moment the sampler is started asks
+    for a window beginning before the series does, and `window()` answers
+    `WindowNotCovered ... not covered on the low side` — for the whole-run
+    window of a shared run, on every run, since that one starts first. So
+    every probe awaits this before it reads `sampler_now` for a window start.
+
+    Duck-typed like the rest of the seam: `wait_first(timeout)` is what a real
+    `MetricsSampler` offers; a double without it is ready by definition.
+    Returns False when the wait timed out or failed — the probe then runs
+    anyway, and an uncovered window is reported as one rather than hidden.
+    """
+    fn = getattr(metrics, "wait_first", None) if metrics is not None else None
+    if fn is None:
+        return True
+    try:
+        r = fn(timeout)
+        if asyncio.iscoroutine(r):
+            r = await r
+        return bool(r)
+    except Exception:                       # noqa: BLE001 -- never the probe
+        return False
+
+
 # `t` rides along with the three gauges: it is the instant the SNAPSHOT was
 # taken, not the instant of the send, and a consumer needs it to know how
 # stale the reading is and which of its own requests the gauge can possibly

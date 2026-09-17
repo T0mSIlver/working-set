@@ -263,6 +263,108 @@ def test_note_canary_raises_when_the_rule_fires():
     assert "canary TTFT drifted" in e.value.reason
 
 
+def test_the_waiting_rail_is_net_of_the_probes_own_queued_requests():
+    """A scheduler that gives a running prefill the whole token budget parks
+    the probe's own canary in `waiting` behind the probe's own long miss. At
+    the default limit of 0 that aborted the run on nobody else's traffic."""
+    gov = ProbeGovernor(budget(abort_if_waiting=0))
+    miss = RequestTrace(kind="miss")              # sent, no first token yet
+    canary = RequestTrace(kind="canary")
+
+    async def go():
+        async with gov.in_flight(100.0, trace=miss):
+            async with gov.in_flight(101.0, trace=canary, canary=True,
+                                     clock=lambda: 103.0):
+                assert gov.own_in_prefill(102.0) == 2
+                # the gauge shows ONE waiting: ours. Not an abort.
+                gov.observe(_gauges(requests_waiting=1.0, t=102.0))
+                # a scrape from BEFORE the canary was sent cannot contain it
+                assert gov.own_in_prefill(100.5) == 1
+                canary.ttft = 1.5                 # first token at 102.5
+            # the canary is over, but the scrape at 102.0 caught it waiting:
+            # a stale gauge must still be netted against it
+            assert gov.own_in_prefill(102.0) == 2
+            assert gov.own_in_prefill(102.8) == 1
+            gov.observe(_gauges(requests_waiting=2.0, t=102.0))
+            # somebody ELSE's request on top of ours still trips the rail
+            with pytest.raises(BudgetAbort) as e:
+                gov.observe(_gauges(requests_waiting=3.0, t=102.0))
+            assert "1 of them not ours" in e.value.reason
+            assert e.value.detail["own_in_prefill"] == 2
+
+    asyncio.run(go())
+    d = gov.to_dict()
+    assert d["peak_requests_waiting"] == 3.0          # the raw gauge is kept
+    assert d["peak_requests_waiting_net"] == 1.0
+    assert d["peak_probe_in_prefill"] == 2
+
+
+def test_a_decoding_request_of_ours_is_not_netted_out_of_the_queue():
+    """Only a request still waiting for its first token can be in the queue.
+    Once ours is decoding, a waiting request is somebody else's."""
+    gov = ProbeGovernor(budget(abort_if_waiting=0))
+    miss = RequestTrace(kind="miss", ttft=0.5)        # first token at 100.5
+
+    async def go():
+        async with gov.in_flight(100.0, trace=miss):
+            assert gov.own_in_prefill(101.0) == 0
+            with pytest.raises(BudgetAbort):
+                gov.observe(_gauges(requests_waiting=1.0, t=101.0))
+
+    asyncio.run(go())
+
+
+def test_a_canary_taken_behind_our_own_prefill_is_flagged_not_scored():
+    """The drift rule reads a slow canary as the endpoint getting busier. One
+    that queued behind the probe's own long miss is the probe timing itself."""
+    gov = ProbeGovernor(budget(canary=True, canary_baseline_s=10,
+                               canary_window_s=10, canary_min_n=2,
+                               canary_drift=2.0))
+    gov.t0 = 0.0
+    for i in range(3):
+        gov.note_canary(i * 2.0, 0.10)
+    flags = []
+
+    async def go():
+        prefilling = RequestTrace(kind="miss")
+        async with gov.in_flight(20.0, trace=prefilling):
+            # sent while our miss has no first token: contended from the start
+            async with gov.in_flight(21.0, trace=RequestTrace(kind="canary"),
+                                     canary=True) as behind:
+                pass
+            prefilling.ttft = 2.0                 # ...now it is decoding
+            async with gov.in_flight(23.0, trace=RequestTrace(kind="canary"),
+                                     canary=True) as clear:
+                pass
+        # and the other order: the canary is waiting when our miss arrives
+        async with gov.in_flight(24.0, trace=RequestTrace(kind="canary"),
+                                 canary=True) as overtaken:
+            async with gov.in_flight(24.1, trace=RequestTrace(kind="miss")):
+                pass
+        flags.extend([behind.contended, clear.contended, overtaken.contended])
+
+    asyncio.run(go())
+    assert flags == [True, False, True]
+    # five slow canaries behind our own prefill: recorded, never scored...
+    for t in (21.0, 22.0, 23.0, 24.0, 25.0):
+        gov.note_canary(t, 5.0, contended=True)
+    assert gov.canary_drift() is None and gov.aborted is None
+    d = gov.to_dict()
+    assert d["n_canary"] == 3 and d["n_canary_contended"] == 5
+    assert d["canary_p50_s"] == pytest.approx(0.10)
+    assert [s["contended"] for s in d["canary_samples"]] == [False] * 3 + [True] * 5
+    # ...while the same canaries with nothing of ours in prefill still abort
+    gov.note_canary(26.0, 5.0)
+    with pytest.raises(BudgetAbort):
+        gov.note_canary(27.0, 5.0)
+
+
+def test_dry_run_budget_says_how_the_probes_own_traffic_is_handled():
+    text = " ".join(budget(canary=True).describe(metrics=True))
+    assert "NET of the probe's own requests" in text
+    assert "NOT counted" in text and "at most 2" in text
+
+
 # ============================================================================
 # the rails, driven end to end against the fake endpoint
 # ============================================================================
@@ -1478,6 +1580,91 @@ def test_own_requests_sent_after_the_scrape_are_added_not_subtracted():
     asyncio.run(go())
 
 
+def test_own_requests_the_scrape_caught_that_have_since_finished_are_subtracted():
+    """The mirror of `own_after`. The probe sends back to back and the gauge
+    is up to a scrape old, so it still shows the probe's PREVIOUS request as
+    running: every `running` covariate sat one request too high."""
+    from workingset.shared import _stamp_own_load
+
+    gov = ProbeGovernor(budget())
+    clock = iter([160.0, 175.0])
+
+    async def go():
+        async with gov.in_flight(100.0, clock=lambda: next(clock)):
+            pass                                   # open 100 -> 160
+        async with gov.in_flight(170.0, clock=lambda: next(clock)):
+            pass                                   # open 170 -> 175
+        async with gov.in_flight(180.0):           # still open at the send
+            # a scrape at 150 caught the first one, which is over by now
+            assert gov.own_finished_since(150.0) == 1
+            # a scrape at 165 fell between the two: neither was open
+            assert gov.own_finished_since(165.0) == 0
+            # a scrape at 190 saw only the one that is STILL running, which
+            # is load the server really carries: not subtracted
+            assert gov.own_finished_since(190.0) == 0
+            assert gov.own_finished_since(None) == 0
+
+    asyncio.run(go())
+
+    t = RequestTrace(kind="miss", ttft=1.0)
+    t.covariates = {"requests_running": 3.0}
+    _stamp_own_load(t, own=1, gone=2)
+    assert t.covariates["probe_finished_since_scrape"] == 2
+    assert t.covariates["running_adjusted"] == 2.0
+    assert t.covariates["running_adjusted_incl_self"] == 3.0
+    assert covariate_rows([t])[0]["probe_finished_since_scrape"] == 2
+    # clamped: a gauge of 1 with two of ours gone is 0 others, not -1
+    t.covariates = {"requests_running": 1.0}
+    _stamp_own_load(t, own=0, gone=2)
+    assert t.covariates["running_adjusted"] == 0.0
+    assert t.covariates["running_adjusted_incl_self"] == 1.0
+
+
+def test_a_back_to_back_run_does_not_count_its_own_previous_request():
+    """End to end: the gauge is one request of OURS (nobody else is there) and
+    every snapshot is stamped a moment before the previous request ended."""
+    cfg, opts = small_cfg(), small_opts()
+
+    class OneBehind(ScriptedMetrics):
+        """A truthful gauge that is always one request stale: the newest
+        snapshot was taken while the PREVIOUS request was being served."""
+
+        def __init__(self):
+            super().__init__(window=FakeWindow())
+            self.clock, self.served = 1_000.0, []
+
+        def now(self):
+            self.clock += 1.0
+            return self.clock
+
+        def at(self, t):
+            if not self.served:
+                return {"requests_running": 0.0, "requests_waiting": 0.0,
+                        "kv_cache_usage": 0.2, "t": t - 0.5}
+            start, end = self.served[-1]
+            return {"requests_running": 1.0, "requests_waiting": 0.0,
+                    "kv_cache_usage": 0.2, "t": 0.5 * (start + end)}
+
+    metrics, inner = OneBehind(), fake_server()
+
+    def handler(request):
+        # the server's own view of when it held this request, on the
+        # sampler's clock: strictly inside the governor's [t_sent, t_done]
+        metrics.clock += 0.25
+        metrics.served.append((metrics.clock, metrics.clock + 0.25))
+        metrics.clock += 0.25
+        return inner(request)
+
+    res = _run_shared(handler, cfg, opts,
+                      shared_opts(rounds=2, lengths="0.5", warm_turns=1),
+                      budget(abort_if_waiting=None, abort_if_kv_above=None,
+                             max_metrics_gaps=0), metrics)
+    cov = [t.covariates for t in res.sample.traces]
+    assert [c["requests_running"] for c in cov] == [0.0, 1.0, 1.0, 1.0]
+    assert [c["probe_finished_since_scrape"] for c in cov] == [0, 1, 1, 1]
+    assert all(c["running_adjusted"] == 0.0 for c in cov)
+
+
 def test_the_fit_regressor_is_the_adjusted_running_count():
     t = RequestTrace(kind="miss", ttft=1.0, ptok_achieved=8_000)
     t.covariates = {"requests_running": 3, "requests_waiting": 0,
@@ -2006,3 +2193,78 @@ def test_verdict_sigmas_round_trips_into_the_report(capsys):
                         shared=json.loads(json.dumps(d)))
     print_report(rec)
     assert "+/-2.5 standard errors" in capsys.readouterr().out
+
+
+# --- robustness: what a second run at the same seed sends -------------------
+def test_a_second_run_at_the_same_seed_sends_bytes_the_first_never_did():
+    """Every shared prompt was a pure function of --seed, so a re-run re-sent
+    the last run's "misses" byte for byte and a server with prefix caching
+    answered them from cache. The run nonce makes them unmatchable across
+    runs; the shared prefix stays byte-stable, which is the point of it."""
+    cfg = small_cfg()
+    pre = build_prefixes(cfg.workload, 4.0)
+
+    def prompts(nonce):
+        seen: list = []
+        _run_shared(fake_server(seen=seen), cfg, small_opts(run_nonce=nonce),
+                    shared_opts(rounds=1, warm_turns=2),
+                    budget(abort_if_waiting=None))
+        return [b["prompt"] for b in seen]
+
+    a, b = prompts("run-a"), prompts("run-b")
+    assert a == prompts("run-a")              # (seed, nonce) reproduces a run
+    assert len(a) == len(b) and not set(a) & set(b)
+    # the same load: `make_text` lands within a character of its budget
+    assert all(abs(len(p) - len(q)) <= 2 for p, q in zip(a, b))
+    warm_a = [p for p in a if p.startswith(pre.user)]
+    warm_b = [p for p in b if p.startswith(pre.user)]
+    assert len(warm_a) == len(warm_b) == 2
+
+
+def test_the_whole_run_window_waits_for_the_samplers_first_snapshot():
+    """`t_start` was read the moment the sampler started, before its first
+    scrape had completed, so the whole-run window had no low endpoint and the
+    SERVER CROSS-CHECK read `WindowNotCovered ... on the low side` on every
+    shared run. No `_until` here on purpose: the probe starts cold."""
+    from test_metrics import FakeServer
+
+    from workingset.metrics import MetricsSampler
+
+    cfg, opts = small_cfg(), small_opts()
+
+    async def go():
+        srv = FakeServer()
+        async with MetricsSampler("http://fake/metrics", interval=0.02,
+                                  client=srv.client()) as s:
+            async with client_for(fake_server()) as client:
+                return await run_shared(
+                    client, EndpointSpec(base_url="http://x/v1", model="m"),
+                    cfg, opts,
+                    build_prefixes(cfg.workload, opts.chars_per_token),
+                    budget(abort_if_waiting=None, abort_if_kv_above=None),
+                    shared_opts(rounds=2), s)
+
+    res = asyncio.run(go())
+    assert "error" not in res.cross, res.cross.get("error")
+    assert res.cross["window"]["counters"]["generation_tokens_total"] > 0
+    assert all("error" not in w for w in res.windows)
+
+
+def test_sampler_ready_is_bounded_and_duck_typed():
+    from workingset.probe import sampler_ready
+
+    class Never:
+        async def wait_first(self, timeout):
+            await asyncio.sleep(timeout)
+            return False
+
+    class Broken:
+        def wait_first(self, timeout):
+            raise RuntimeError("no")
+
+    async def go():
+        return (await sampler_ready(None), await sampler_ready(object()),
+                await sampler_ready(Never(), timeout=0.01),
+                await sampler_ready(Broken()))
+
+    assert asyncio.run(go()) == (True, True, False, False)

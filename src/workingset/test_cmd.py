@@ -12,6 +12,7 @@ from dataclasses import replace
 from . import __version__
 from .hypotheses import (NOT_ESTABLISHED, REGISTRY, Measurement, RunContext,
                          Verdict, plan as make_plan)
+from .probe.burst import ESTABLISH_FRAC, ESTABLISH_WAIT_MAX_S
 from .probe.options import ProbeOptions
 from .probe.population import eval_rung
 from .probe.request import EndpointSpec, make_client
@@ -38,7 +39,10 @@ def build_options(args, cfg) -> ProbeOptions:
                         ("request_timeout_s", "request_timeout_s"),
                         ("api", "api"),
                         ("freeze_threshold_ms", "freeze_threshold_ms"),
-                        ("seed", "seed")):
+                        ("seed", "seed"),
+                        # absent = the per-process random one ProbeOptions
+                        # draws for itself; given = that run's bytes again
+                        ("run_nonce", "run_nonce")):
         v = getattr(args, flag, None)
         if v is not None:
             kw[field] = v
@@ -196,6 +200,12 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
     w(f"SLOs     : p{slo.percentile} TTFT <= {slo.ttft_budget_s:g}s, "
       f"per-user p50 decode >= {slo.itl_floor_tok_s:g} tok/s")
     w(f"probes   : {', '.join(sorted(pl.probes)) or 'none'}")
+    w(f"run nonce: {opts.run_nonce or '<none>'} "
+      + ("(--run-nonce)" if getattr(args, "run_nonce", None) is not None
+         else "(random per process; the run record keeps it)")
+      + " — mixed into every miss salt and session context so a re-run at "
+        "--seed " + f"{opts.seed} is never answered from the last run's "
+        "prefix cache; the shared prefix stays byte-stable on purpose")
 
     # the sampler is CONSTRUCTED, never started: --dry-run still sends
     # nothing, and its scrape interval is what makes the rails' detection lag
@@ -246,7 +256,10 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
         pop = RunContext(cfg, preds, opts, ep, burst=opts.burst,
                          burst_users=opts.burst_users)._burst_pop()
         w(f"\nBURST PROBE: {opts.burst} simultaneous forced misses at a "
-          f"{pop}-user standing load, after a {opts.ramp_s:g}s ramp")
+          f"{pop}-user standing load, after a {opts.ramp_s:g}s ramp "
+          f"(sessions establish over its first {ESTABLISH_FRAC:.0%}; the fire "
+          f"is held, up to {ESTABLISH_WAIT_MAX_S:g}s, until none is still "
+          "waiting for its first token)")
 
     # sampler self-check: the sampled raw median and log-sd must reproduce the
     # configured (median, sigma) — this is the distribution warm capacity and

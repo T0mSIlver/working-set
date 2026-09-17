@@ -247,6 +247,41 @@ def test_h_decode_is_not_separable_without_a_floor_failure():
     assert v.status == NOT_ESTABLISHED and "decode-floor" in v.text
 
 
+def test_h_decode_says_which_batch_the_ladder_reached_and_what_would_test_it():
+    """The decode ceiling counts sequences decoding AT ONCE; a closed loop
+    with think time holds a small batch, so "no decode-floor failure" on a
+    realistic ladder is not evidence. The row says what batch was reached."""
+    preds = replace(predict(RunConfig(), n_iter=40), decode_ceiling_users=31)
+    ladder = [rung(32, decode_seqs=5.5), rung(64, decode_seqs=12.25),
+              rung(16, decode_seqs=float("nan"))]
+    _, m, v = score(REGISTRY.get("H-decode"), ladder_ctx(preds, ladder))
+    assert m.text == "not separable" and v.status == NOT_ESTABLISHED
+    assert m.data["largest_decode_batch"] == 12.25
+    assert m.data["largest_decode_batch_pop"] == 64
+    assert m.data["decode_ceiling_seqs"] == 31
+    for text in (v.text, m.data["reason"]):
+        assert "12.2 sequences decoding at once (the 64-user rung)" in text
+        assert "predicted ceiling of ~31" in text
+        assert "scripts/decode_probe.py" in text
+
+    # no sampler, no batch reading: said, not guessed
+    _, m, v = score(REGISTRY.get("H-decode"),
+                    ladder_ctx(preds, [rung(32), rung(64)]))
+    assert m.data["largest_decode_batch"] is None
+    assert "not observed (no --metrics-url)" in v.text
+    assert "scripts/decode_probe.py" in v.text
+
+    # a ladder that DID hold the ceiling's batch is not told it could not have
+    _, _, v = score(REGISTRY.get("H-decode"),
+                    ladder_ctx(preds, [rung(400, decode_seqs=40.0)]))
+    assert "40.0 sequences" in v.text and "never holds" not in v.text
+
+    # and the dry run says it before anything is sent
+    st = REGISTRY.get("H-decode").statement(RunConfig(), preds)
+    assert "AT ONCE" in st and "scripts/decode_probe.py" in st
+    assert f"~{preds.steady_decode_seqs:g} at the" in st
+
+
 def test_h_decode_brackets_on_a_floor_failure():
     preds = predict(RunConfig(), n_iter=40)
     dc = preds.decode_ceiling_users
@@ -606,6 +641,64 @@ def test_h_burst_refuses_to_score_a_partial_flush():
     assert "19 of 20 burst requests failed" in v.text
 
 
+def test_h_burst_prices_the_drain_on_the_tokens_actually_flushed():
+    """N is a count and the burst's lengths are random draws: two bursts of
+    the same N are very different amounts of work. The row carries the
+    model's drain for THESE prompts, by the same fluid formula as
+    `model.burst_drain_seconds`, beside the unchanged count-based verdict."""
+    from workingset import model as M
+    from workingset.hypotheses.burst import predicted_drain_seconds
+    from workingset.probe import eval_burst
+
+    cfg = RunConfig()
+    preds = replace(predict(cfg, n_iter=40), bstar_misses=10.0)
+
+    def burst_of(lengths, usage=True):
+        tr = [trace(990_000 + i, "miss", 10.0, 1.0 + i,
+                    ptok=L if usage else None, intended=L + 7)
+              for i, L in enumerate(lengths)]
+        return eval_burst(len(tr), 8, tr, [], t_fire=10.0)
+
+    short, long_ = burst_of([20_000, 25_000]), burst_of([150_000, 170_000])
+    assert short.ptok_total == 45_000 and short.ptok_from_usage == 2
+    _, m_short, v = score(REGISTRY.get("H-burst"), _burst_ctx(preds, short))
+    _, m_long, _ = score(REGISTRY.get("H-burst"), _burst_ctx(preds, long_))
+    assert v.status == SUPPORTED                 # the count verdict still runs
+    d_short = m_short.data["drain_predicted_for_these_tokens_s"]
+    d_long = m_long.data["drain_predicted_for_these_tokens_s"]
+    assert d_long > 5 * d_short                  # same N, not the same work
+    assert "predicted for these 45k tokens" in m_short.text
+    assert m_short.data["drain_measured_over_predicted"] == pytest.approx(
+        short.drain_s / d_short)
+
+    # it IS the model's own pieces: sum of per-request miss service times at
+    # the config's chunk and MFU, over (1 - rho), as burst_drain_seconds does
+    m_, t_ = cfg.to_model(), cfg.to_topology()
+    want = sum(M.miss_context_seconds(
+        m_, t_, L, cfg.deployment.max_num_batched_tokens,
+        mfu_anchor=cfg.calibration.mfu) for L in (20_000, 25_000)) \
+        / (1 - preds.prefill_duty)
+    assert d_short == pytest.approx(want)
+    # ...and the rho it divides by is the one B* was priced at: the model's
+    # own drain at the operating point's rate is B x E[S | miss] / (1 - duty)
+    wl, chunk = cfg.to_workload(), cfg.deployment.max_num_batched_tokens
+    turn, mfu = cfg.workload.warm_turn_tokens, cfg.calibration.mfu
+    rate_total = preds.req_rate_main * (1.0 + wl.sub_ratio)
+    e_cold = M.prefill_service_moments(m_, t_, wl, chunk, turn, mfu, True)[2]
+    assert M.burst_drain_seconds(m_, t_, wl, 3, rate_total, chunk, turn, mfu,
+                                 True) == pytest.approx(
+        3 * e_cold / (1 - preds.prefill_duty), rel=2e-3)
+
+    # no usage readback: the intended count stands in, and says so
+    blind = burst_of([20_000, 25_000], usage=False)
+    assert blind.ptok_total == 45_014 and blind.ptok_from_usage == 0
+    # no steady state, no prediction — and the row prints as it always did
+    sat = replace(preds, prefill_duty=1.2)
+    assert predicted_drain_seconds(cfg, sat, [20_000]) is None
+    _, m_sat, _ = score(REGISTRY.get("H-burst"), _burst_ctx(sat, short))
+    assert m_sat.text == f"N=2: last {short.last_ttft_s:.2f}s"
+
+
 def test_h_burst_not_measured_when_the_run_ended_first():
     preds = predict(RunConfig(), n_iter=40)
     ctx = RunContext(RunConfig(), preds, ProbeOptions(), EndpointSpec(),
@@ -816,6 +909,48 @@ def test_not_established_names_the_untested():
     assert "Shared mode" in joined
     assert "B*" in joined
     assert "H-cache was not tested" in joined
+
+
+def test_a_burst_only_run_reads_usage_off_the_bursts_own_requests(capsys):
+    """`--burst N --exclusive` on H-burst alone has no rungs and no sample, and
+    the trailer looked nowhere else: it said "No `usage` readback from this
+    endpoint" over a burst whose every request had returned one."""
+    from workingset.probe import eval_burst
+
+    cfg, opts = RunConfig(), ProbeOptions()
+    pl = plan([REGISTRY.get("H-burst")], exclusive=True, burst=2)
+    tr = [trace(990_000 + i, "miss", 10.0, 1.0 + i, ptok=9_000,
+                intended=10_000) for i in range(2)]
+    # the standing load's usage counts too, and only survives as the ratio
+    standing = [trace(1, "hit", 5.0, 0.2, ptok=900, intended=1_000)]
+    b = eval_burst(2, 4, tr, standing, t_fire=10.0)
+    assert b.ptok_ratio == pytest.approx(0.9)
+
+    def notes(burst):
+        return "\n".join(not_established_notes(
+            cfg, opts, pl, burst=burst, exclusive=True, metrics=False))
+
+    assert "No `usage` readback" not in notes(b.to_dict())
+    # ...including from a record that was saved without its traces
+    assert "No `usage` readback" not in notes(
+        json.loads(json.dumps(b.to_dict(traces=False))))
+    # and an endpoint that really returned none still says so
+    blind = eval_burst(2, 4, [trace(990_000, "miss", 10.0, 1.0,
+                                    intended=10_000)], [], t_fire=10.0)
+    assert math.isnan(blind.ptok_ratio)
+    assert "No `usage` readback" in notes(blind.to_dict())
+    # (nan in memory, null once the record has been through JSON)
+    saved = json.loads(RunRecord(burst=blind.to_dict()).dumps())["burst"]
+    assert saved["ptok_ratio"] is None
+    assert "No `usage` readback" in notes(saved)
+
+    rec = RunRecord.new("0.0.0", mode="exclusive", config=cfg.to_dict(),
+                        predictions=predict(cfg, n_iter=40).to_dict(),
+                        options=opts.to_dict(), burst=b.to_dict())
+    print_report(rec)
+    out = capsys.readouterr().out
+    assert "achieved/intended prompt tokens (median): 0.90" in out
+    assert "flushed 18,000 prompt tokens (usage readback)" in out
 
 
 def test_trailer_is_built_from_results_not_from_the_plan():
