@@ -101,7 +101,7 @@ def rungs_for(args):
     # separately identified from one run.
     LONG = args.long_tokens
     plan = {
-        "A": [("A", k, P, True) for k in (1, 2, 4, 8, 16, 32)],
+        "A": [("A", k, P, True) for k in args.ks],
         "B": [("B", 4, c, False) for c in (8_000, 32_000, 128_000)],
         "C": [("C", 8, P, True), ("C", 8, P, False)],
         "D": [("D", k, c, True) for c in (8_000, LONG) for k in (1, 2, 4, 8)],
@@ -153,6 +153,11 @@ async def stream_one(client, args, prompt, stop, stats):
                 async for line in r.aiter_lines():
                     if stop.is_set():
                         return
+                    # one SSE event per scheduler step per stream, so events
+                    # per second inside the hold is 1/t_pass as the CLIENT
+                    # saw it: the fallback when the /metrics scrape is lost
+                    if line.startswith("data:") and stats.get("counting"):
+                        stats["events"] = stats.get("events", 0) + 1
                     if '"prompt_tokens"' in line:
                         m = re.search(r'"prompt_tokens"\s*:\s*(\d+)', line)
                         if m:
@@ -243,8 +248,10 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
 
     await asyncio.sleep(args.settle)
     start = time.time()
+    stats["counting"] = True
     while time.time() - start < args.hold and not stop.is_set():
         await asyncio.sleep(0.5)
+    stats["counting"] = False
     end = time.time()
     aborted = stop.is_set()
     stop.set()
@@ -260,6 +267,8 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
            "shared_prefix_tokens": (sum(pt) / len(pt) if pt else ctx) if shared else 0,
            "measured_prompt_tokens": (sum(pt) / len(pt)) if pt else None,
            "start": start, "end": end, "held_s": end - start,
+           "client_events_per_stream_s": (stats.get("events", 0) / k / (end - start)
+                                          if end > start else None),
            "aborted": aborted, "events": events,
            "errors": stats.get("errors", [])[:3],
            "n_errors": len(stats.get("errors", []))}
@@ -381,6 +390,11 @@ def main():
     ap.add_argument("--max-model-len", type=int, default=0,
                     help="server max_model_len; the long rung is shortened to fit")
     ap.add_argument("--max-k", type=int, default=16, help="hard cap on streams")
+    ap.add_argument("--ks", default="1,2,4,8,16,32",
+                    type=lambda s: [int(x) for x in s.split(",") if x.strip()],
+                    help="arm A batch sizes; on an endpoint you own, run up to "
+                         "max_num_seqs to reach the KV-dominated steps the "
+                         "decode ceiling lives at")
     ap.add_argument("--max-waiting", type=float, default=0.0,
                     help="abort if this many requests queue")
     ap.add_argument("--max-kv", type=float, default=0.80,
