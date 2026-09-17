@@ -458,17 +458,69 @@ def test_fit_refuses_a_small_sample_and_says_what_would_fix_it():
                      "waiting": 1})
 
 
-def test_fit_refuses_a_rank_deficient_design_and_names_the_flat_column():
-    """The canonical shape of a shared run with no metrics: `running` and
-    `waiting` never vary, so their coefficients do not exist."""
+def test_a_flat_load_column_is_pinned_not_refused():
+    """The canonical shape of a QUIET shared run: `waiting` is 0 in every
+    scrape. Its coefficient does not exist, and refusing the whole fit for it
+    meant a quiet server could never produce a verdict. It is pinned at its
+    one value instead; the fit is read there, and the requests gate decides
+    whether the operating point is close enough to it."""
+    rows = synth_rows(60, TRUE, seed=4)
+    for r in rows:                      # the surface at waiting = 0, exactly
+        r["y"] -= TRUE[4] * r["waiting"]
+        r["waiting"] = 0.0
+    fit = fit_covariates(rows, TTFT_COLUMNS)
+    assert fit.usable, fit.refused
+    assert fit.pinned == {"waiting": 0.0}
+    assert "waiting" not in fit.columns and "running" in fit.columns
+    assert fit.ranges["waiting"] == {"min": 0.0, "max": 0.0, "mean": 0.0,
+                                     "sd": 0.0}
+    # the remaining coefficients are still recovered
+    raw = fit.coefficients_raw_L
+    assert raw["L_ktok"] == pytest.approx(TRUE[1], abs=1e-6)
+    assert raw["running"] == pytest.approx(TRUE[3], abs=1e-6)
+    # the pinned column has no sd distance, only an absolute one
+    point = {"L_ktok": fit.centre, "L_ktok2": fit.centre ** 2 + 100.0,
+             "running": 10.0, "waiting": 0.05}
+    off = fit.offsets(point)["waiting"]
+    assert off["sd"] == 0.0 and off["absolute"] == pytest.approx(0.05)
+    assert off["pinned_at"] == 0.0
+    assert not fit.over_absolute(point, 2.0)
+    assert fit.over_absolute({**point, "waiting": 5.0}, 2.0)
+    assert "waiting=held@0" in fit.summary()
+    assert fit.to_dict()["pinned"] == {"waiting": 0.0}
+
+
+def test_a_pinned_reading_is_gated_in_requests_not_sd():
+    """A pinned column cannot refuse a reading through the sd gate (there is
+    no sd), but the absolute gate still does when the operating point sits
+    far from the held value."""
+    cfg = RunConfig()
+    rows = synth_rows(120, TRUE, noise=0.01, seed=5)
+    for r in rows:
+        r["y"] -= TRUE[4] * r["waiting"]
+        r["waiting"] = 0.0
+    fits = {"ttft_miss": fit_covariates(rows, TTFT_COLUMNS, unit="s")}
+    fit = fits["ttft_miss"]
+    near = _result(fits, _op_at(fit, cfg, 10.0, waiting=0.05)).reading("ttft_miss")
+    assert near["available"], near["reason"]
+    assert near["extrapolation_by"]["waiting"] == 0.0
+    far = _result(fits, _op_at(fit, cfg, 10.0, waiting=5.0)).reading("ttft_miss")
+    assert not far["available"]
+    assert "--max-extrapolation-requests" in far["reason"]
+    assert "`waiting`" in far["reason"]
+
+
+def test_every_load_column_flat_still_fits_on_length_alone():
+    """No metrics variation at all: the length terms are still identified,
+    and both load columns are held."""
     rows = synth_rows(60, TRUE, seed=4)
     for r in rows:
         r["running"] = 4.0
         r["waiting"] = 0.0
     fit = fit_covariates(rows, TTFT_COLUMNS)
-    assert not fit.usable
-    assert "rank-deficient" in fit.refused
-    assert "running" in fit.refused and "waiting" in fit.refused
+    assert fit.usable, fit.refused
+    assert fit.pinned == {"running": 4.0, "waiting": 0.0}
+    assert fit.columns == ("const", "L_ktok", "L_ktok2")
 
 
 def test_fit_refuses_when_the_regressors_moved_together():

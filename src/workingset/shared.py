@@ -704,12 +704,23 @@ class CovariateFit:
     ranges         column -> {min, max, mean, sd} over the observations AS
                    FITTED (so centred, for the length columns), which is what
                    an extrapolation distance is measured against
+    pinned         column -> the ONE value it took in every observation. A
+                   regressor that never varied has no coefficient (the design
+                   would be rank-deficient with it), so it is dropped from
+                   the OLS and the fit is read AT that value. On a quiet
+                   server `waiting` is 0 in every scrape, which is the normal
+                   shape of a shared run, not a broken one. Evaluating away
+                   from the pinned value is an extrapolation the fit cannot
+                   measure in sd (there is no spread), so `offsets` reports
+                   it in the column's own units only and the absolute
+                   (requests) gate is what decides.
     refused        why this fit may not be used, or None
     """
     target: str
     unit: str
     columns: tuple = ()
     coefficients: dict = field(default_factory=dict)
+    pinned: dict = field(default_factory=dict)
     n: int = 0
     dof: int = 0
     residual_std: float = float("nan")
@@ -809,9 +820,10 @@ class CovariateFit:
 
         A column's distance is how far `point` lies OUTSIDE the observed
         [min, max] of that column, divided by the column's observed standard
-        deviation; zero inside the range. `const` is skipped. A column that
-        never varied (sd = 0) gives inf outside its single observed value —
-        a regressor with no spread supports no extrapolation at all.
+        deviation; zero inside the range. `const` is skipped. A PINNED column
+        (never varied, see `pinned`) has no sd to measure against: its sd
+        distance reads 0 and its absolute distance, in the column's own
+        units, is what the requests gate judges.
         """
         per = {c: d["sd"] for c, d in self.offsets(point).items()}
         worst = max(per.values()) if per else 0.0
@@ -850,6 +862,11 @@ class CovariateFit:
                 sd_d = float("inf")
             out[c] = {"sd": sd_d, "absolute": dist, "above": over > 0,
                       "value": v}
+        for c, held in self.pinned.items():
+            v = float(point[c])
+            dist = abs(v - held)
+            out[c] = {"sd": 0.0, "absolute": dist, "above": v > held,
+                      "value": v, "pinned_at": held}
         return out
 
     # ---- is there evidence NEAR the point? -------------------------------
@@ -947,6 +964,7 @@ class CovariateFit:
         return {"target": self.target, "unit": self.unit,
                 "columns": list(self.columns),
                 "coefficients": dict(self.coefficients),
+                "pinned": dict(self.pinned),
                 "coefficients_raw_L": self.coefficients_raw_L,
                 "centre_ktok": self.centre,
                 "coefficient_units": {c: f"{self.unit} {_COLUMN_UNITS[c]}".strip()
@@ -964,6 +982,9 @@ class CovariateFit:
             return f"{self.target}: no fit — {self.refused}"
         terms = " ".join(f"{c}={self.coefficients[c]:+.4g}"
                          for c in self.columns)
+        if self.pinned:
+            terms += " " + " ".join(f"{c}=held@{v:g}"
+                                    for c, v in self.pinned.items())
         return (f"{self.target} [{self.unit}]: {terms} | n={self.n} "
                 f"resid sd {self.residual_std:.3g} R2 {self.r_squared:.2f} "
                 f"scaled cond {self.scaled_condition_number:.3g}")
@@ -1045,17 +1066,22 @@ def fit_covariates(rows: list[dict], columns=TTFT_COLUMNS, target: str = "y",
     snapshot existed carries no load reading, and imputing one would invent
     the covariate the whole design rests on.
 
+    A load column that never varied is PINNED at its one value rather than
+    fitted (see `CovariateFit.pinned`): it would make the design
+    rank-deficient, and on a quiet server `waiting` is 0 in every scrape.
+    The observation floor is counted over the coefficients actually fitted.
+
     Refuses, with the reason in `refused` and what would fix it:
       * n below `min_obs_per_coef` x (number of coefficients), floor
         `MIN_OBS_FLOOR`
-      * a rank-deficient design matrix (naming the columns that did not vary)
+      * a rank-deficient design matrix that pinning did not cure (the
+        remaining columns are exactly collinear)
       * a variance inflation factor above `max_vif`, NAMING the inflated
         coefficient — a whole-design number cannot say which one is unstable
       * a standardised condition number above `max_condition`
       * a degenerate residual (n == k: no degrees of freedom left)
     """
-    k = len(columns)
-    need = max(min_obs_per_coef * k, MIN_OBS_FLOOR)
+    columns = tuple(columns)
     names = [c for c in columns if c not in ("const", "L_ktok2")]
     kept = []
     for r in rows:
@@ -1066,7 +1092,23 @@ def fit_covariates(rows: list[dict], columns=TTFT_COLUMNS, target: str = "y",
             continue
         kept.append((r, float(y)))
     n = len(kept)
-    base = dict(target=target, unit=unit, columns=tuple(columns), n=n)
+    # a load column with ONE observed value carries no information about
+    # its coefficient: pin it and fit the rest. The length columns are
+    # never pinned -- the probe designs them to vary, and a ladder that
+    # collapsed to one length is a plan error the dry run already warns about
+    pinned = {}
+    if kept:
+        for c in columns:
+            if c not in REQUEST_COLUMNS:
+                continue
+            vals = {float(r[c]) for r, _ in kept}
+            if len(vals) == 1:
+                pinned[c] = vals.pop()
+    columns = tuple(c for c in columns if c not in pinned)
+    k = len(columns)
+    need = max(min_obs_per_coef * k, MIN_OBS_FLOOR)
+    base = dict(target=target, unit=unit, columns=columns, n=n,
+                pinned=pinned)
     if n < need:
         return CovariateFit(
             **base, refused=f"n={n} covariate-stamped observations, {need} "
@@ -1083,6 +1125,8 @@ def fit_covariates(rows: list[dict], columns=TTFT_COLUMNS, target: str = "y",
         c: {"min": float(X[:, i].min()), "max": float(X[:, i].max()),
             "mean": float(X[:, i].mean()), "sd": float(X[:, i].std(ddof=1))}
         for i, c in enumerate(columns) if c != "const"}
+    base["ranges"].update({c: {"min": v, "max": v, "mean": v, "sd": 0.0}
+                           for c, v in pinned.items()})
 
     flat = [c for i, c in enumerate(columns)
             if c != "const" and X[:, i].std() == 0.0]
