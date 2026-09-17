@@ -3549,8 +3549,10 @@ def _selfcheck():
     # queueing rises with load and diverges at the duty ceiling
     assert (queue_wait_seconds(m27, tp2, wl, RATE, CH, TURN)
             > queue_wait_seconds(m27, tp2, wl, RATE / 2, CH, TURN) > 0)
-    assert queue_wait_seconds(m27, tp2, replace(wl, invalidation=fstar), RATE,
-                              CH, TURN) == float("inf"), "no steady state at f*"
+    # a hair past f*: AT f* the duty is 1.0 only to rounding, and which side
+    # of it the float lands on is an accident of the constants
+    assert queue_wait_seconds(m27, tp2, replace(wl, invalidation=fstar * (1 + 1e-9)),
+                              RATE, CH, TURN) == float("inf"), "no steady state past f*"
     # The convoy effect: under FCFS a HIT waits behind misses, under PS it
     # does not. This is the section's sharpest claim (the miss tax is paid by
     # users who HIT the cache), so it is asserted, not merely printed.
