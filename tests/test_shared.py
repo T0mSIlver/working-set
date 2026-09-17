@@ -263,6 +263,108 @@ def test_note_canary_raises_when_the_rule_fires():
     assert "canary TTFT drifted" in e.value.reason
 
 
+def test_the_waiting_rail_is_net_of_the_probes_own_queued_requests():
+    """A scheduler that gives a running prefill the whole token budget parks
+    the probe's own canary in `waiting` behind the probe's own long miss. At
+    the default limit of 0 that aborted the run on nobody else's traffic."""
+    gov = ProbeGovernor(budget(abort_if_waiting=0))
+    miss = RequestTrace(kind="miss")              # sent, no first token yet
+    canary = RequestTrace(kind="canary")
+
+    async def go():
+        async with gov.in_flight(100.0, trace=miss):
+            async with gov.in_flight(101.0, trace=canary, canary=True,
+                                     clock=lambda: 103.0):
+                assert gov.own_in_prefill(102.0) == 2
+                # the gauge shows ONE waiting: ours. Not an abort.
+                gov.observe(_gauges(requests_waiting=1.0, t=102.0))
+                # a scrape from BEFORE the canary was sent cannot contain it
+                assert gov.own_in_prefill(100.5) == 1
+                canary.ttft = 1.5                 # first token at 102.5
+            # the canary is over, but the scrape at 102.0 caught it waiting:
+            # a stale gauge must still be netted against it
+            assert gov.own_in_prefill(102.0) == 2
+            assert gov.own_in_prefill(102.8) == 1
+            gov.observe(_gauges(requests_waiting=2.0, t=102.0))
+            # somebody ELSE's request on top of ours still trips the rail
+            with pytest.raises(BudgetAbort) as e:
+                gov.observe(_gauges(requests_waiting=3.0, t=102.0))
+            assert "1 of them not ours" in e.value.reason
+            assert e.value.detail["own_in_prefill"] == 2
+
+    asyncio.run(go())
+    d = gov.to_dict()
+    assert d["peak_requests_waiting"] == 3.0          # the raw gauge is kept
+    assert d["peak_requests_waiting_net"] == 1.0
+    assert d["peak_probe_in_prefill"] == 2
+
+
+def test_a_decoding_request_of_ours_is_not_netted_out_of_the_queue():
+    """Only a request still waiting for its first token can be in the queue.
+    Once ours is decoding, a waiting request is somebody else's."""
+    gov = ProbeGovernor(budget(abort_if_waiting=0))
+    miss = RequestTrace(kind="miss", ttft=0.5)        # first token at 100.5
+
+    async def go():
+        async with gov.in_flight(100.0, trace=miss):
+            assert gov.own_in_prefill(101.0) == 0
+            with pytest.raises(BudgetAbort):
+                gov.observe(_gauges(requests_waiting=1.0, t=101.0))
+
+    asyncio.run(go())
+
+
+def test_a_canary_taken_behind_our_own_prefill_is_flagged_not_scored():
+    """The drift rule reads a slow canary as the endpoint getting busier. One
+    that queued behind the probe's own long miss is the probe timing itself."""
+    gov = ProbeGovernor(budget(canary=True, canary_baseline_s=10,
+                               canary_window_s=10, canary_min_n=2,
+                               canary_drift=2.0))
+    gov.t0 = 0.0
+    for i in range(3):
+        gov.note_canary(i * 2.0, 0.10)
+    flags = []
+
+    async def go():
+        prefilling = RequestTrace(kind="miss")
+        async with gov.in_flight(20.0, trace=prefilling):
+            # sent while our miss has no first token: contended from the start
+            async with gov.in_flight(21.0, trace=RequestTrace(kind="canary"),
+                                     canary=True) as behind:
+                pass
+            prefilling.ttft = 2.0                 # ...now it is decoding
+            async with gov.in_flight(23.0, trace=RequestTrace(kind="canary"),
+                                     canary=True) as clear:
+                pass
+        # and the other order: the canary is waiting when our miss arrives
+        async with gov.in_flight(24.0, trace=RequestTrace(kind="canary"),
+                                 canary=True) as overtaken:
+            async with gov.in_flight(24.1, trace=RequestTrace(kind="miss")):
+                pass
+        flags.extend([behind.contended, clear.contended, overtaken.contended])
+
+    asyncio.run(go())
+    assert flags == [True, False, True]
+    # five slow canaries behind our own prefill: recorded, never scored...
+    for t in (21.0, 22.0, 23.0, 24.0, 25.0):
+        gov.note_canary(t, 5.0, contended=True)
+    assert gov.canary_drift() is None and gov.aborted is None
+    d = gov.to_dict()
+    assert d["n_canary"] == 3 and d["n_canary_contended"] == 5
+    assert d["canary_p50_s"] == pytest.approx(0.10)
+    assert [s["contended"] for s in d["canary_samples"]] == [False] * 3 + [True] * 5
+    # ...while the same canaries with nothing of ours in prefill still abort
+    gov.note_canary(26.0, 5.0)
+    with pytest.raises(BudgetAbort):
+        gov.note_canary(27.0, 5.0)
+
+
+def test_dry_run_budget_says_how_the_probes_own_traffic_is_handled():
+    text = " ".join(budget(canary=True).describe(metrics=True))
+    assert "NET of the probe's own requests" in text
+    assert "NOT counted" in text and "at most 2" in text
+
+
 # ============================================================================
 # the rails, driven end to end against the fake endpoint
 # ============================================================================

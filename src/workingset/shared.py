@@ -67,6 +67,7 @@ import asyncio
 import math
 import random
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 
@@ -226,7 +227,9 @@ class ProbeBudget:
                        operator's explicit cap is never raised, so at 1 the
                        canary simply takes its turn in the single slot
                        (`asyncio.Semaphore` is FIFO, so it cannot starve).
-    abort_if_waiting   abort the moment the server's `requests_waiting` gauge
+    abort_if_waiting   abort the moment the server's `requests_waiting` gauge,
+                       NET of the probe's own requests still waiting for a
+                       first token (`ProbeGovernor.own_in_prefill`),
                        EXCEEDS this many requests (None = rail off). Needs
                        `--metrics-url`; without one the gauge is unreadable
                        and the rail cannot fire, which `--dry-run` says.
@@ -248,7 +251,8 @@ class ProbeBudget:
                        `canary_window_s`. Once both hold at least
                        `canary_min_n` samples AND the recent window no longer
                        overlaps the baseline window, abort when
-                       `recent > canary_drift * base`.
+                       `recent > canary_drift * base`. Canaries that waited
+                       behind the probe's OWN prefill are in neither window.
     """
     max_extra_load: int = 2
     abort_if_waiting: float | None = 0.0
@@ -315,6 +319,12 @@ class ProbeBudget:
             f"in flight      : at most {cap} of our requests, canary included",
             f"abort waiting  : requests_waiting > "
             f"{'off' if self.abort_if_waiting is None else f'{self.abort_if_waiting:g}'}"
+            ", counted NET of the probe's own requests that were sent and "
+            "still without a first token when the gauge was read (its own "
+            "canary queues behind its own long miss; the rail is blind to a "
+            "queue no deeper than that, "
+            + (f"at most {cap}" if self.max_extra_load
+               else "unbounded without --max-extra-load") + ")"
             f"{gauge}",
             f"abort KV       : kv_cache_usage > "
             f"{'off' if self.abort_if_kv_above is None else f'{self.abort_if_kv_above:.0%}'}"
@@ -331,7 +341,10 @@ class ProbeBudget:
                f"its p50 over the last {self.canary_window_s:g}s exceeds "
                f"{self.canary_drift:g}x the p50 over the first "
                f"{self.canary_baseline_s:g}s (both need "
-               f"{self.canary_min_n} samples)" if self.canary else "off"),
+               f"{self.canary_min_n} samples). A canary that waited while a "
+               "non-canary request of ours was still in prefill is recorded "
+               "but NOT counted: that delay is the probe's own"
+               if self.canary else "off"),
         ]
 
     def to_dict(self) -> dict:
@@ -370,6 +383,45 @@ class BudgetAbort(RuntimeError):
 
     def to_dict(self) -> dict:
         return {"reason": self.reason, "detail": dict(self.detail)}
+
+
+@dataclass
+class _OwnRequest:
+    """One of the probe's own requests, as the governor tracks it.
+
+    `t_sent` is in the SAMPLER's base, because it is compared with a
+    snapshot's timestamp. `trace` is the live `RequestTrace`: its `ttft` is
+    filled in the moment the first token arrives, which is how the governor
+    knows whether this request is still in prefill — queued or being
+    prefilled, the two states in which it can hold up somebody's first token,
+    our own canary's included.
+    """
+    t_sent: float
+    trace: RequestTrace | None = None
+    canary: bool = False
+    contended: bool = False           # canaries only, see `in_flight`
+    t_done: float | None = None       # sampler base; None while open
+
+    def awaiting_first_token(self) -> bool:
+        tr = self.trace
+        return tr is not None and tr.ttft is None and not tr.error
+
+    def t_first(self) -> float | None:
+        """First-token instant, sampler base; None while there is none."""
+        tr = self.trace
+        if tr is None or tr.ttft is None:
+            return None
+        return self.t_sent + tr.ttft
+
+    def in_prefill_at(self, t: float) -> bool:
+        """Sent by `t` and still without a first token at `t`. A request that
+        ended with none (an error) was in prefill until it ended."""
+        if self.t_sent > t or self.trace is None:
+            return False
+        end = self.t_first()
+        if end is None:
+            end = self.t_done
+        return end is None or end > t
 
 
 class ProbeGovernor:
@@ -412,9 +464,20 @@ class ProbeGovernor:
         # sent at. What the server's gauge says about them depends on whether
         # the scrape behind it predates them, which is what `own_after` uses
         # this to resolve.
-        self._open: dict[int, float] = {}
+        self._open: dict[int, _OwnRequest] = {}
+        # ...and the ones that recently finished: a gauge is up to a scrape
+        # old, so a request of ours it counted may be over by the time the
+        # reading is used. Bounded — only the last scrape interval matters.
+        self._closed: deque[_OwnRequest] = deque(maxlen=64)
         self._next_id = 0
         self.peak_in_flight = 0
+        # the waiting gauge NET of our own requests, which is what the rail
+        # is keyed on (see `observe`); `peak_waiting` stays the raw gauge
+        self.peak_waiting_net: float | None = None
+        self.peak_own_in_prefill = 0
+        # canaries that waited behind the probe's OWN prefill: recorded,
+        # flagged, and kept out of the drift statistic (see `note_canary`)
+        self.canary_contended: list[tuple[float, float]] = []
 
     # ---- in-flight cap --------------------------------------------------
     @asynccontextmanager
@@ -437,15 +500,59 @@ class ProbeGovernor:
 
     # ---- our own contribution to the server's gauge ----------------------
     @asynccontextmanager
-    async def in_flight(self, t_sent: float):
-        """Mark one of our requests open, from `t_sent` (SAMPLER base)."""
+    async def in_flight(self, t_sent: float, trace: RequestTrace | None = None,
+                        canary: bool = False, clock=None):
+        """Mark one of our requests open, from `t_sent` (SAMPLER base).
+
+        `trace` lets the governor see when this request gets its first token;
+        `clock` (the sampler's) stamps when it ended. Yields the record, whose
+        `contended` flag answers, for a CANARY, "did this wait behind the
+        probe's own prefill?" — true when a non-canary request of ours was
+        still without a first token at any point while the canary was
+        waiting for its own. A scheduler that hands a running prefill the
+        whole token budget holds a 1-token canary back for as long as our own
+        long miss prefills, and that delay says nothing about anybody else.
+        A request of ours that is already DECODING does not count: it takes
+        one token of the budget per step and delays nothing.
+        """
         rid, self._next_id = self._next_id, self._next_id + 1
-        self._open[rid] = t_sent
+        rec = _OwnRequest(t_sent=t_sent, trace=trace, canary=canary)
+        if canary:
+            rec.contended = any(o.awaiting_first_token()
+                                for o in self._open.values() if not o.canary)
+        else:
+            for o in self._open.values():
+                if o.canary and o.awaiting_first_token():
+                    o.contended = True
+        self._open[rid] = rec
         self.peak_in_flight = max(self.peak_in_flight, len(self._open))
         try:
-            yield
+            yield rec
         finally:
             self._open.pop(rid, None)
+            if clock is not None:
+                try:
+                    rec.t_done = float(clock())
+                except Exception:               # noqa: BLE001 -- a clock
+                    rec.t_done = None
+            self._closed.append(rec)
+
+    def own_in_prefill(self, snapshot_t: float | None) -> int:
+        """How many of OUR requests were sent and still without a first token
+        when the gauge was read — the most the server's `requests_waiting`
+        can owe to the probe itself.
+
+        With the snapshot's own timestamp this is resolved AT that instant,
+        over requests still open and ones that have ended since: a canary the
+        scrape caught waiting is usually over by the time the reading is
+        used. Without a timestamp it is the requests awaiting a first token
+        right now.
+        """
+        if snapshot_t is None or not _fin(snapshot_t):
+            return sum(1 for o in self._open.values()
+                       if o.awaiting_first_token())
+        return sum(1 for o in (*self._open.values(), *self._closed)
+                   if o.in_prefill_at(snapshot_t))
 
     def own_after(self, snapshot_t: float | None) -> int:
         """How many of OUR open requests were sent after `snapshot_t`, and so
@@ -462,7 +569,7 @@ class ProbeGovernor:
         """
         if snapshot_t is None or not _fin(snapshot_t):
             return 0
-        return sum(1 for t in self._open.values() if t > snapshot_t)
+        return sum(1 for o in self._open.values() if o.t_sent > snapshot_t)
 
     # ---- token budget ---------------------------------------------------
     def spend(self, tokens: int) -> None:
@@ -534,13 +641,33 @@ class ProbeGovernor:
         if w is not None and math.isfinite(w):
             self.peak_waiting = w if self.peak_waiting is None \
                 else max(self.peak_waiting, w)
+            # NET OF OUR OWN. The rail is about somebody ELSE queueing, and
+            # the gauge cannot tell whose request it is counting. A scheduler
+            # that gives a running prefill the whole token budget parks the
+            # probe's own 1-token canary in `waiting` behind the probe's own
+            # long miss, and at the default limit of 0 that aborted the run
+            # on traffic nobody else sent. Subtracted: our requests that were
+            # sent and still without a first token when the gauge was read —
+            # an upper bound on our share, since one of them may be the
+            # prefill that is RUNNING rather than waiting. The rail is
+            # therefore blind to a queue no deeper than that count, which the
+            # in-flight cap bounds and `--dry-run` states; the raw gauge is
+            # kept in `peak_waiting` beside the net one.
+            own = self.own_in_prefill(covariates.get("t"))
+            net = max(0.0, w - own)
+            self.peak_own_in_prefill = max(self.peak_own_in_prefill, own)
+            self.peak_waiting_net = net if self.peak_waiting_net is None \
+                else max(self.peak_waiting_net, net)
             lim = self.budget.abort_if_waiting
-            if lim is not None and w > lim:
+            if lim is not None and net > lim:
+                ours = (f", {net:g} of them not ours ({own} of the probe's own "
+                        "were still waiting for a first token)" if own else "")
                 self._abort(
-                    f"the server's queue reached {w:g} waiting requests "
+                    f"the server's queue reached {w:g} waiting requests{ours} "
                     f"(--abort-if-waiting {lim:g}): somebody else is already "
                     "queueing behind this endpoint",
-                    requests_waiting=w, limit=lim)
+                    requests_waiting=w, own_in_prefill=own,
+                    requests_waiting_net=net, limit=lim)
         # PER ENGINE, worst first. An unselected multi-engine dump cannot
         # combine occupancy into one number at all (`combine_gauge` returns
         # None for a fraction across engines, deliberately — summing them
@@ -591,10 +718,22 @@ class ProbeGovernor:
                 detail_why=why, kind="metrics_lost")
 
     # ---- the canary ------------------------------------------------------
-    def note_canary(self, t_send: float, ttft: float | None) -> None:
+    def note_canary(self, t_send: float, ttft: float | None,
+                    contended: bool = False) -> None:
         """Record one canary TTFT (seconds) sent at monotonic `t_send`, then
-        apply the drift rule."""
+        apply the drift rule.
+
+        A `contended` canary — one that waited while a non-canary request of
+        OURS was still in prefill (see `in_flight`) — is recorded and flagged
+        but kept OUT of the drift statistic. The rule reads a slow canary as
+        "the endpoint got busier while we were probing it", and a canary
+        parked behind the probe's own long miss is the probe measuring
+        itself: the same self-inflicted delay the waiting rail nets out.
+        """
         if ttft is None or not math.isfinite(ttft):
+            return
+        if contended:
+            self.canary_contended.append((t_send - self.t0, ttft))
             return
         self.canary_ttft.append((t_send - self.t0, ttft))
         drift = self.canary_drift()
@@ -660,11 +799,28 @@ class ProbeGovernor:
                 "last_metrics_gap": self.last_metrics_gap,
                 "n_engines": self.n_engines,
                 "peak_requests_waiting": self.peak_waiting,
+                # what the waiting rail was actually keyed on: the gauge net
+                # of the probe's own requests still in prefill
+                "peak_requests_waiting_net": self.peak_waiting_net,
+                "peak_probe_in_prefill": self.peak_own_in_prefill,
                 "peak_kv_cache_usage": self.peak_kv,
                 "peak_probe_in_flight": self.peak_in_flight,
+                # `n_canary` / `canary_p50_s` are the samples the drift rule
+                # SAW; the ones taken behind the probe's own prefill are kept
+                # beside them, flagged by the list they are in
                 "n_canary": len(self.canary_ttft),
                 "canary_p50_s": pct([v for _, v in self.canary_ttft], 50)
                 if self.canary_ttft else None,
+                "n_canary_contended": len(self.canary_contended),
+                "canary_contended_p50_s":
+                    pct([v for _, v in self.canary_contended], 50)
+                    if self.canary_contended else None,
+                "canary_samples": sorted(
+                    [{"t_s": t, "ttft_s": v, "contended": False}
+                     for t, v in self.canary_ttft]
+                    + [{"t_s": t, "ttft_s": v, "contended": True}
+                       for t, v in self.canary_contended],
+                    key=lambda s: s["t_s"]),
                 "aborted": None if self.aborted is None
                 else self.aborted.to_dict()}
 
@@ -1838,10 +1994,17 @@ async def _one(client, ep, opts, gov: ProbeGovernor, metrics, traces: list,
         # `own` is how many OTHER requests of ours were open and sent after
         # the snapshot behind the gauge, so the gauge provably missed them.
         own = gov.own_after(snap.get("t") if snap else None)
-        async with gov.in_flight(t_wall):
+        canary = kind == "canary"
+        async with gov.in_flight(t_wall, trace=tr, canary=canary,
+                                 clock=lambda: sampler_now(metrics)) as rec:
             await send_request(client, ep, opts, prompt, tr, max_tokens,
                                metrics)
             _stamp_own_load(tr, own)
+        if canary:
+            # HERE rather than in the canary loop: whether this canary waited
+            # behind the probe's own prefill is known to the record that
+            # tracked it, and a contended one must not reach the drift rule
+            gov.note_canary(tr.t_send, tr.ttft, contended=rec.contended)
         return tr
 
 
@@ -1883,9 +2046,10 @@ async def _canary_loop(client, ep, opts, gov: ProbeGovernor, metrics,
     baseline: a tiny, byte-stable prompt has no prefill of its own worth
     speaking of, so what moves it is the queue in front of it."""
     while not stop.is_set():
-        tr = await _one(client, ep, opts, gov, metrics, traces, CANARY_PROMPT,
-                        "canary", 1, opts.chars_per_token)
-        gov.note_canary(tr.t_send, tr.ttft)
+        # `_one` hands the TTFT to `gov.note_canary` itself, with the flag
+        # that says whether it was taken behind the probe's own prefill
+        await _one(client, ep, opts, gov, metrics, traces, CANARY_PROMPT,
+                   "canary", 1, opts.chars_per_token)
         try:
             await asyncio.wait_for(stop.wait(), gov.budget.canary_every_s)
         except asyncio.TimeoutError:

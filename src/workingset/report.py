@@ -167,6 +167,14 @@ def _shared_block(w, sh: dict) -> None:
       f"{fmt(g.get('peak_requests_waiting'), '', 1)} | peak KV "
       f"{_pct(g.get('peak_kv_cache_usage'))} | canary n="
       f"{g.get('n_canary', 0)} p50 {fmt(g.get('canary_p50_s'), 's')}")
+    if g.get("peak_probe_in_prefill") or g.get("n_canary_contended"):
+        w(f"  the probe's own traffic, kept out of the rails: peak waiting "
+          f"net of our own requests still in prefill "
+          f"{fmt(g.get('peak_requests_waiting_net'), '', 1)} (what the "
+          f"waiting rail is keyed on) | {g.get('n_canary_contended', 0)} "
+          f"canary sample(s) taken behind our own prefill, p50 "
+          f"{fmt(g.get('canary_contended_p50_s'), 's')}, excluded from the "
+          "drift rule")
     if op.get("refused"):
         w(f"  operating point: NOT AVAILABLE — {op['refused']}")
     else:
