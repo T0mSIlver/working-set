@@ -89,6 +89,13 @@ def size_output(args):
     return out
 
 
+def parse_ks(s):
+    ks = [int(x) for x in s.split(",") if x.strip()]
+    if not ks or min(ks) < 1:
+        raise argparse.ArgumentTypeError("--ks needs batch sizes >= 1")
+    return ks
+
+
 def rungs_for(args):
     """(arm, k, prompt_tokens, shared) plateaus, in run order."""
     P = args.prefix_tokens
@@ -101,12 +108,15 @@ def rungs_for(args):
     # separately identified from one run.
     LONG = args.long_tokens
     plan = {
-        "A": [("A", k, P, True) for k in (1, 2, 4, 8, 16, 32)],
+        "A": [("A", k, P, True) for k in args.ks],
         "B": [("B", 4, c, False) for c in (8_000, 32_000, 128_000)],
         "C": [("C", 8, P, True), ("C", 8, P, False)],
         "D": [("D", k, c, True) for c in (8_000, LONG) for k in (1, 2, 4, 8)],
     }
     out = [r for a in args.arm for r in plan[a] if r[1] <= args.max_k]
+    over = sorted({r[1] for a in args.arm for r in plan[a] if r[1] > args.max_k})
+    if over:
+        print(f"  k = {over} dropped: above --max-k {args.max_k}")
     # Clamp every rung to the server's context window, not just arm D's long
     # one: a prompt over max_model_len is an HTTP 400 and a lost plateau, and
     # arm B's 128k rung is over the limit on any 64k-context deployment.
@@ -126,14 +136,14 @@ def filler(tokens, rnd):
     return "".join(rnd.choice(string.ascii_lowercase + "  ") for _ in range(n))
 
 
-async def stream_one(client, args, prompt, stop, stats):
+async def stream_one(client, args, prompt, stop, stats, out_tokens):
     """One long decode. Retries once without min_tokens/ignore_eos: a proxy in
     front of vLLM often strips or rejects them, and a plateau that ends when
     the model decides to stop is not a plateau."""
     body = {"model": args.model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": args.out_tokens, "temperature": 0.0, "stream": True,
-            "min_tokens": args.out_tokens, "ignore_eos": True,
+            "max_tokens": out_tokens, "temperature": 0.0, "stream": True,
+            "min_tokens": out_tokens, "ignore_eos": True,
             "stream_options": {"include_usage": True}}
     for attempt in (0, 1):
         try:
@@ -153,10 +163,17 @@ async def stream_one(client, args, prompt, stop, stats):
                 async for line in r.aiter_lines():
                     if stop.is_set():
                         return
+                    # one SSE event per scheduler step per stream, so events
+                    # per second inside the hold is 1/t_pass as the CLIENT
+                    # saw it: the fallback when the /metrics scrape is lost
+                    if line.startswith("data:") and stats.get("counting"):
+                        stats["events"] = stats.get("events", 0) + 1
                     if '"prompt_tokens"' in line:
                         m = re.search(r'"prompt_tokens"\s*:\s*(\d+)', line)
                         if m:
                             stats.setdefault("ptok", []).append(int(m.group(1)))
+                if stats.get("counting"):
+                    stats["drained"] = stats.get("drained", 0) + 1
                 return
         except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout):
             return
@@ -176,7 +193,9 @@ async def read_metrics(client, url, key):
     for line in r.text.splitlines():
         for name in ("vllm:num_requests_waiting", "vllm:num_requests_running",
                      "vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"):
-            if line.startswith(name):
+            # the bare series only: `num_requests_waiting_by_reason` starts
+            # with the same text and doubled the count
+            if line.startswith(name + "{") or line.startswith(name + " "):
                 try:
                     out[name] = out.get(name, 0.0) + float(line.rsplit(" ", 1)[1])
                 except (ValueError, IndexError):
@@ -217,11 +236,66 @@ async def watchdog(client, args, stop, events, armed_in=0.0):
         await asyncio.sleep(1.0)
 
 
-async def plateau(client, args, arm, k, ctx, shared, out, rnd):
+async def wait_idle(client, args):
+    """Block until the server runs nothing. A cancelled stream is NOT a
+    cancelled request: a proxy that does not pass the disconnect on leaves
+    vLLM generating every remaining token, and the next plateau then measures
+    its own batch plus the last one's leftovers (a k=64 rung ran at 96, the
+    max_num_seqs cap, and k=90 could only queue).
+
+    Returns (idle, waited_s): idle is True when the server was SEEN to run
+    nothing, False when the wait timed out on a busy server, and None when
+    the gauges could not be read at all -- unknown is not busy, and sleeping
+    out the timeout on a mistyped --metrics URL would cost half an hour per
+    rung."""
+    if not args.metrics:
+        return None, 0.0
+    t0, said, blind = time.time(), False, 0
+    while time.time() - t0 < args.idle_timeout:
+        m = await read_metrics(client, args.metrics, args.metrics_key)
+        if not m:
+            blind += 1
+            if blind >= 3:
+                print("  /metrics unreadable: cannot tell whether the server "
+                      "is idle; running the plateau anyway")
+                return None, time.time() - t0
+            await asyncio.sleep(2.0)
+            continue
+        blind = 0
+        busy = (m.get("vllm:num_requests_running", 0.0)
+                + m.get("vllm:num_requests_waiting", 0.0))
+        if busy == 0:
+            if said:
+                print(f"  idle after {time.time() - t0:.0f}s")
+            return True, time.time() - t0
+        if not said:
+            print(f"  waiting for an idle server ({busy:.0f} requests still "
+                  "running or queued)...", flush=True)
+            said = True
+        await asyncio.sleep(2.0)
+    print("  idle wait timed out; running the plateau anyway")
+    return False, time.time() - t0
+
+
+def fit_context(args, ctx, out_tokens, lead_extra):
+    """The rung's prompt, shortened so prompt + the output actually requested
+    fits max_model_len. rungs_for clamps against the flat --out-tokens figure;
+    the per-rung output (and the lead stream's extra) can exceed it, and a
+    request over the window is an HTTP 400 on every stream: a 40 s hold
+    against an empty batch."""
+    if not args.max_model_len:
+        return ctx
+    return max(1_000, min(ctx, args.max_model_len - out_tokens - lead_extra - 2_000))
+
+
+async def plateau(client, args, arm, k, ctx, shared, out, rnd, out_tokens,
+                  idle=(None, 0.0)):
     """One held batch. Shared rungs send byte-identical prompts (prefix cache
     dedups the storage, every sequence still reads it); unique rungs send k
     independent prompts so read bytes and stored bytes are one number."""
     tag = "shared" if shared else "unique"
+    lead_extra = int(args.lead * args.slowest_tok_s) if shared and k > 1 else 0
+    ctx = fit_context(args, ctx, out_tokens, lead_extra)
     print(f"  arm {arm}  k={k:<3} ctx~{ctx:>7,} {tag:<6} ", end="", flush=True)
     base = filler(ctx, rnd)
     prompts = [("Continue this text.\n\n" + base) if shared
@@ -234,17 +308,24 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
     # warm prefix instead of k cold prefills racing each other
     lead = None
     if shared and k > 1:
-        lead = asyncio.create_task(stream_one(client, args, prompts[0], stop, stats))
+        # the lead decodes ALONE for `lead` seconds, at single-stream speed,
+        # before the batch forms; without those tokens on top it ran dry
+        # inside the hold (one stream, on two rungs of the first k>=72 run)
+        lead = asyncio.create_task(stream_one(
+            client, args, prompts[0], stop, stats, out_tokens + lead_extra))
         await asyncio.sleep(args.lead)
-    streams = [asyncio.create_task(stream_one(client, args, p, stop, stats))
+    streams = [asyncio.create_task(stream_one(client, args, p, stop, stats,
+                                              out_tokens))
                for p in prompts[(1 if lead else 0):]]
     if lead:
         streams.insert(0, lead)
 
     await asyncio.sleep(args.settle)
     start = time.time()
+    stats["counting"] = True
     while time.time() - start < args.hold and not stop.is_set():
         await asyncio.sleep(0.5)
+    stats["counting"] = False
     end = time.time()
     aborted = stop.is_set()
     stop.set()
@@ -260,12 +341,24 @@ async def plateau(client, args, arm, k, ctx, shared, out, rnd):
            "shared_prefix_tokens": (sum(pt) / len(pt) if pt else ctx) if shared else 0,
            "measured_prompt_tokens": (sum(pt) / len(pt)) if pt else None,
            "start": start, "end": end, "held_s": end - start,
+           "client_events_per_stream_s": (stats.get("events", 0) / k / (end - start)
+                                          if end > start else None),
+           "out_tokens": out_tokens,
+           # was the server SEEN idle before this plateau? False = the wait
+           # timed out on a busy server, None = the gauges were unreadable.
+           # Anything but True means the batch may not have been k
+           "server_idle": idle[0], "idle_wait_s": round(idle[1], 1),
+           # streams that ran out of tokens INSIDE the hold: the batch shrank
+           "drained": stats.get("drained", 0),
            "aborted": aborted, "events": events,
            "errors": stats.get("errors", [])[:3],
            "n_errors": len(stats.get("errors", []))}
     out.append(rec)
     print(f"held {end-start:4.0f}s"
           + (f"  ptok~{sum(pt)/len(pt):,.0f}" if pt else "")
+          + (f"  {rec['client_events_per_stream_s']:.1f} events/stream/s"
+             if rec["client_events_per_stream_s"] else "")
+          + (f"  [{rec['drained']} DRAINED mid-hold]" if rec["drained"] else "")
           + ("  [ABORTED]" if aborted else "")
           + (f"  [{len(stats.get('errors', []))} errors]" if stats.get("errors") else ""))
 
@@ -308,13 +401,35 @@ async def run(args):
     async with httpx.AsyncClient(base_url=args.url.rstrip("/"), headers=hdr,
                                  limits=limits, verify=args.verify) as c:
         await calibrate(c, args, rnd)
+        # Size each rung's output so its streams END soon after the hold,
+        # because cancelling them may not stop the server (see wait_idle).
+        # Per-stream speed only falls as k grows within an arm, so the last
+        # rung's measured rate bounds this one's from above; an event carries
+        # at most --max-tok-per-event tokens under speculative decoding.
+        rate, last = args.slowest_tok_s, (None, 0)
         for arm, k, ctx, shared in rungs_for(args):
+            if arm != last[0] or k <= last[1]:
+                rate = args.slowest_tok_s
+            last = (arm, k)
+            span = args.hold + args.settle + (args.lead if shared and k > 1 else 0)
+            # 1.25: the bound is only as good as "the next rung is slower",
+            # and past a batch-size step the rate can stay flat
+            out_tokens = max(256, int(rate * span * 1.25))
+            idle = await wait_idle(c, args)
             m = await read_metrics(c, args.metrics, args.metrics_key)
             w = m.get("vllm:num_requests_waiting")
             if w is not None and w > args.max_waiting:
                 print(f"  arm {arm}  k={k:<3} SKIPPED, instance busy (waiting={w:.0f})")
                 continue
-            await plateau(c, args, arm, k, ctx, shared, out, rnd)
+            await plateau(c, args, arm, k, ctx, shared, out, rnd, out_tokens, idle)
+            # Only a CLEAN rung may tighten the bound. Errors, a drain or an
+            # abort all read as a slow batch (events from fewer than k streams,
+            # divided by k); sizing the next rung from that starves it, it
+            # drains in turn, and nothing later in the arm recovers.
+            rec = out[-1]
+            ev = rec.get("client_events_per_stream_s")
+            if ev and not (rec["n_errors"] or rec["drained"] or rec["aborted"]):
+                rate = min(args.slowest_tok_s, ev * args.max_tok_per_event)
             await asyncio.sleep(args.settle)
     return out
 
@@ -348,9 +463,10 @@ def plan_table(args):
           f"~{gen:.0f}k more tokens over a {args.hold:.0f}s plateau.")
     print(f"leverage across the plan: {hi/lo:.2f}x  "
           f"({'OK, >=2x identifies both terms' if hi/lo >= 2 else 'TOO LOW -- raise --max-k or --prefix-tokens'})")
-    print(f"output per stream: {args.out_tokens:,} tokens -- outlasts a "
-          f"{args.hold:.0f}s hold down to {args.out_tokens/args.hold:.0f} tok/s")
-    print(f"wall clock: ~{len(rows)*(args.hold+2*args.settle)/60:.1f} min")
+    print("output per stream: sized per rung from the previous rung's measured "
+          f"rate (first rung of an arm: {args.slowest_tok_s:.0f} tok/s assumed)")
+    print(f"wall clock: ~{len(rows)*(args.hold+2*args.settle)/60:.1f} min, plus "
+          "the wait for an idle server before each plateau")
 
 
 def main():
@@ -380,7 +496,20 @@ def main():
                     help="pessimistic per-stream decode rate, for sizing the output")
     ap.add_argument("--max-model-len", type=int, default=0,
                     help="server max_model_len; the long rung is shortened to fit")
+    ap.add_argument("--idle-timeout", type=float, default=1800,
+                    help="longest wait for the server to run nothing before a "
+                         "plateau (needs --metrics)")
     ap.add_argument("--max-k", type=int, default=16, help="hard cap on streams")
+    ap.add_argument("--max-tok-per-event", type=float, default=4,
+                    help="most tokens one SSE event can carry: 1 + the "
+                         "server's num_speculative_tokens (1 with speculation "
+                         "off). Sizes each rung's output from the last one's "
+                         "event rate; too low drains a plateau, too high "
+                         "leaves streams running long after it")
+    ap.add_argument("--ks", default="1,2,4,8,16,32", type=parse_ks,
+                    help="arm A batch sizes; on an endpoint you own, run up to "
+                         "max_num_seqs to reach the KV-dominated steps the "
+                         "decode ceiling lives at")
     ap.add_argument("--max-waiting", type=float, default=0.0,
                     help="abort if this many requests queue")
     ap.add_argument("--max-kv", type=float, default=0.80,
