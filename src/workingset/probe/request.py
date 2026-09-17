@@ -381,7 +381,14 @@ def _delta_text(obj: dict) -> str:
     if c.get("text"):
         return c["text"]
     d = c.get("delta") or {}
-    return d.get("content") or ""
+    # a server running a reasoning parser (vLLM --reasoning-parser qwen3,
+    # deepseek_r1, ...) streams the thinking phase as `reasoning_content`
+    # (`reasoning` on some builds) with `content` empty until the answer
+    # starts. Those are decode tokens like any other: TTFT is the first of
+    # them, and the gaps between them are the inter-token gaps. Reading
+    # `content` alone put TTFT at the END of the thinking phase.
+    return (d.get("content") or d.get("reasoning_content")
+            or d.get("reasoning") or "")
 
 
 async def send_request(client, ep: EndpointSpec, opts, prompt: str,

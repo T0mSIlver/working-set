@@ -1,6 +1,6 @@
 [project]
 name = "workingset"
-version = "0.1.0"
+version = "0.1.1"
 description = "How many agentic-coding users a local LLM deployment serves: capacity model, CLI and live-endpoint hypothesis tests"
 readme = "README.md"
 requires-python = ">=3.11"
