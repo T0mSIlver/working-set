@@ -32,6 +32,7 @@ from . import model as M
 SCHEMA_VERSION = 1
 STATE_DTYPES = ("bf16", "fp32")
 DECODE_PRICINGS = ("roofline", "latency")
+_LATENCY_KEYS = ("decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens")
 KV_SHARDINGS = M.KV_SHARDS               # ("dcp", "replicate")
 
 # The model with no as-published weight overhead to add: its w_resident is the
@@ -336,6 +337,14 @@ class RunConfig:
 
     def dumps(self, fmt: str = "toml") -> str:
         d = self.to_dict()
+        # Under the default roofline pricing the latency constants price
+        # nothing, and writing them would change every schema-1 file this
+        # version emits: an older reader rejects keys it does not know. They
+        # are written only when selected (to_dict(), and so the run record,
+        # always carries them).
+        if d["calibration"].get("decode_pricing") == "roofline":
+            for k in _LATENCY_KEYS:
+                d["calibration"].pop(k, None)
         if fmt == "json":
             return json.dumps(d, indent=2) + "\n"
         if fmt == "toml":

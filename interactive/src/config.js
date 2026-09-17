@@ -57,7 +57,7 @@ export const CONFIG = {
   // of TDP); p_decode_w the measured bandwidth-bound token-phase draw (0.55 x
   // TDP central, band 0.45-0.75); p_prefill_w the power-cap-limited prefill
   // draw (0.90 x TDP — the cap binds before the FLOP peak, so it is FLAT
-  // across the MFU 35-55% band); host_w the DGX chassis adder per GPU (spec
+  // across the MFU 30-55% band); host_w the DGX chassis adder per GPU (spec
   // ceiling, conservative). B300 rows are ENTIRELY extrapolated — no
   // published Blackwell Ultra power-state measurements exist.
   // eur_gpu_h: what one GPU-hour RENTS for, on demand, no commitment — the

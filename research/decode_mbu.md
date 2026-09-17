@@ -369,8 +369,10 @@ and a fixed cost. The single-constant fit of § 1, run on the same log, returns
   measurement; ±2 ms can move between "weights" and "collectives + draft".
 
 Evaluated from those physical terms — not from the fit — the form reproduces
-the eight n ≤ 64 plateaus within **5%** (the n = 1, 105k point is 11% low: a
-single long sequence reads its cache less efficiently than a batch does).
+**seven of the eight** n ≤ 64 plateaus within **5%**. The eighth, n = 1 at
+~110k context, comes out ~12% low (9.0 ms against 10.2): a single long sequence
+reads its cache less efficiently than a batch does, and the form has no term
+for that.
 
 ### 8.5 What is NOT explained
 

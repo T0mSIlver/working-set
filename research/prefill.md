@@ -126,16 +126,19 @@ cross-topology projections.
 **Third calibration point (2026-09-18, Hopper FP8, CONTROLLED) — and it
 disagrees.** The controlled Hopper-FP8 measurement the paragraph above asked
 for, on a 27B FP8 / 4×H200 TP4 deployment with the endpoint to itself,
-`max_num_batched_tokens = 16,384`, MTP depth 3. Three methods:
+`max_num_batched_tokens = 16,384`, MTP depth 3. One controlled measurement
+sets the figure; two noisier ones corroborate its direction:
 
 | method | reading | effective MFU, model convention |
 |---|---|---|
 | 72 cold prompts, 16k–160k, sequential on an idle server; TTFT fitted in L and L² (residual sd 65 ms), less the measured network floor and a per-token transport slope read off the cache hits | 0.4 s at 16k … 6.7 s at 160k | **0.34 → 0.30** (falls with length) |
 | simultaneous-miss bursts, ENGINE-side counters: saturated prefill at ~32k tok/s, ~510 ms per full 16,384-token step | | **0.32–0.38** at the bursts' 30–60k mean prior |
-| the decode freeze behind one chunk, seen by bystander streams | p95 1.0–1.5 s against 0.69 s predicted | same factor |
+| the decode freeze behind one chunk, seen by bystander streams | p95 1.0–1.5 s against 0.69 s predicted | **0.21–0.31** implied (the deepest chunks are the slowest) |
 
-So **0.30–0.34 in the model convention, 0.24–0.27 of the raw advertised peak**:
-1.35–1.45× slower than the 0.45 central, and under the old bracket. The ratio
+The idle sweep is the bracket-setting reading: **0.30–0.34 in the model
+convention, 0.24–0.27 of the raw advertised peak**, 1.35–1.45× slower than the
+0.45 central and under the old bracket. The other two are wider (0.21–0.38
+between them) and straddle it; none of the three reaches 0.45. The ratio
 to the model is flat across a 10× range of prompt length, so §3's split between
 the linear and the attention term stands; only the scale is in question. The
 engine-side step time rules out the proxy in front of the server.

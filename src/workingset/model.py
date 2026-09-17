@@ -95,7 +95,7 @@ class GPU:
     #   tolerant of a 700->350 W cap; mixed vLLM serving measured 229-477 W
     #   on H200-class parts. B300 transfers the FRACTION, not the watts.
     # p_prefill_w: compute-bound prefill is POWER-CAP-limited, 0.90 x TDP
-    #   central (band 0.80-1.00) — FLAT across the study's MFU 35-55% bracket,
+    #   central (band 0.80-1.00) — FLAT across the study's MFU 30-55% bracket,
     #   because the cap binds before the FLOP peak does. MEASURED anchor:
     #   saturated vLLM inference at ~0.85-0.89 of summed GPU TDP (NLR).
     # host_w: flat per-GPU chassis adder (CPUs/NVSwitch/NICs/fans/PSU loss),

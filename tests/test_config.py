@@ -495,6 +495,20 @@ def test_latency_decode_pricing_is_opt_in_and_reproduces_its_calibration():
                   + n * (1 + lat.spec_tokens) * M.decode_token_seconds(m, t, lat.mfu)
                   + lat.fixed_s)
         assert abs(1e3 * t_step / ms - 1) < 0.06, (n, ctx, 1e3 * t_step, ms)
+    # the documented exception: one long sequence alone reads its cache less
+    # efficiently than a batch does, and the form has no term for it
+    lone = (m.w_decode(1, "linear") + 114e3 * m.kv_bpt + m.state_traffic) \
+        / (M.effective_bw(t) * lat.bw_eff) \
+        + (1 + lat.spec_tokens) * M.decode_token_seconds(m, t, lat.mfu) + lat.fixed_s
+    assert 0.85 < 1e3 * lone / 10.2 < 0.92
+    # `ws test` reads its ladder curve through the same pricing `ws predict` shows
+    from workingset.shared import ladder_model_curve
+    assert (ladder_model_curve(cfg, 32, n_iter=48)["decode_tok_s"]
+            > ladder_model_curve(base, 32, n_iter=48)["decode_tok_s"])
+    # a default config still writes the file it always wrote
+    assert "decode_pricing" not in base.dumps("toml")
+    assert "spec_tokens" not in base.dumps("json")
+    assert 'decode_pricing = "latency"' in cfg.dumps("toml")
     # it moves the decode ceiling and the steady point, and nothing else
     p0, p1 = predict(base, n_iter=200), predict(cfg, n_iter=200)
     assert p1.decode_ceiling_users > p0.decode_ceiling_users
