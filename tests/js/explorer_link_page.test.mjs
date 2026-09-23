@@ -70,11 +70,26 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}/`;
 
   profile = mkdtempSync(join(tmpdir(), 'wslink-chrome-'));
-  chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu',
-    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
+  chrome = spawn(CHROME, ['--headless', '--no-sandbox', '--disable-gpu',
+    '--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage',
+    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
+    { stdio: ['ignore', 'ignore', 'pipe'] });
+  let chromeErr = '';
+  chrome.stderr.on('data', d => { chromeErr += d; });
+  // Chrome writes the port it picked here once DevTools listens; a cold start
+  // on a CI runner has taken over 10 s
   const portFile = join(profile, 'DevToolsActivePort');
-  for (let i = 0; i < 100 && !existsSync(portFile); i++) await sleep(100);
-  const [port, path] = readFileSync(portFile, 'utf8').trim().split('\n');
+  let port, path;
+  for (const t0 = Date.now(); Date.now() - t0 < 30000; await sleep(100)){
+    if (chrome.exitCode !== null || chrome.signalCode !== null)
+      throw new Error(`Chrome exited (${chrome.exitCode ?? chrome.signalCode}) before `
+                      + `DevTools came up:\n${chromeErr}`);
+    if (!existsSync(portFile)) continue;
+    [port, path] = readFileSync(portFile, 'utf8').trim().split('\n');
+    if (port && path) break;       // the file can be seen half-written
+  }
+  if (!(port && path))
+    throw new Error(`Chrome's DevTools did not come up within 30 s:\n${chromeErr}`);
   sock = new WebSocket(`ws://127.0.0.1:${port}${path}`);
   await new Promise((res, rej) => { sock.onopen = res; sock.onerror = rej; });
   sock.onmessage = e => {
