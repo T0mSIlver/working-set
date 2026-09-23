@@ -1,7 +1,7 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeTopo,
          minTpFor, servableKv, unionKink, withKvDtype } from './config.js';
 import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
-         decodeFloor, capDecodeUsers, maxUsersDecode, missContextSeconds, operatingPoint, prefillChunk,
+         decodeFloor, capDecodeUsers, decodePowerUsers, maxUsersDecode, missContextSeconds, operatingPoint, prefillChunk,
          prefillContextSeconds, prefillSeconds, prefillServiceMoments, serverRate,
          setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint, steadyResident,
          ttftMoments } from './prefill.js';
@@ -194,7 +194,9 @@ export function computeAndRender(draft, deferFrontierDecode){
     renderNoFit('chartC'); renderNoFit('chartD');
     clearChartGeomCD();
   } else {
-    renderChartC(dc, {p5:lastWarmCur.g5, p95:lastWarmCur.g95}, lastStress, lastSteady);
+    // the decode-concurrency zone stops at max_num_seqs for the same reason
+    renderChartC(dc, {p5:steadyResident(lastWarmCur.g5), p95:steadyResident(lastWarmCur.g95)},
+                 lastStress, lastSteady);
     renderChartD(dc, lastStress, unionKink(model), lastSteady);
   }
   updateCsD(model);
@@ -258,20 +260,24 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   // would change them, so any staleness check re-runs the Monte-Carlo on
   // every input event — ~0.5 s per frame — and the 120 ms settle corrects
   // the numbers anyway.
-  let warmFn, decodeUsers, decodeCensored = false, decodeCapped = false, decodeRaw;
+  let warmFn, decodeUsers, decodeCensored = false, decodeCapped = false, decodeRaw, decodePower;
   if (!draft || !lastPlanner){
     seedFor('decodeCeil');
     decodeUsers = capDecodeUsers(maxUsersDecode(model, topo, wl, decodeFloor(), q.DECODE_ITER || 220));
     decodeCensored = decodeUsers.censored; decodeCapped = decodeUsers.capped;
+    if (decodeCapped){
+      seedFor('decodeCapPower');
+      decodePower = decodePowerUsers(model, topo, wl, decodeUsers, decodeFloor(), q.DECODE_ITER || 220);
+    } else decodePower = decodeUsers.n;
     decodeRaw = decodeUsers.raw; decodeUsers = decodeUsers.n;
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
                             q.WARM_BUDGET_SCAN, wl, f, warmUsers);
-    lastPlanner = { warmFn, decodeUsers, decodeCensored, decodeCapped, decodeRaw, fMax: fAxisMax() };
+    lastPlanner = { warmFn, decodeUsers, decodeCensored, decodeCapped, decodeRaw, decodePower, fMax: fAxisMax() };
   } else {
     warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
     decodeCensored = lastPlanner.decodeCensored; decodeCapped = lastPlanner.decodeCapped;
-    decodeRaw = lastPlanner.decodeRaw;
+    decodeRaw = lastPlanner.decodeRaw; decodePower = lastPlanner.decodePower;
   }
   // a draft render reuses the cached curve, but warmUsersCurve's anchors only
   // span the axis it was built for and it CLAMPS beyond its last anchor. So a
@@ -313,9 +319,9 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   renderCeilingBars(op);
   renderDeployCard(op, model, topo, wl, mo, decodeUsers);
   renderTestCard(op, model, topo, wl);
-  // power prices decode time against the BANDWIDTH ceiling x floor (the
-  // aggregate decode throughput), which a max_num_seqs cap does not change
-  renderCostCard(op, model, topo, wl, mo, decodeCapped ? decodeRaw : decodeUsers);
+  // power prices decode time against the aggregate decode throughput: the
+  // ceiling x floor, or under a max_num_seqs cap the aggregate at the cap
+  renderCostCard(op, model, topo, wl, mo, decodePower);
   renderBindingChart(d, op);
 
   // context lines on the spike chart: the same model at other widths that fit
@@ -515,8 +521,13 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
       else {
         seedFor(`frontierDec|${p.key}`, ssig);
         const du2 = capDecodeUsers(maxUsersDecode(m2, t2, wl, floor0, 140), mns0);
+        let pow = du2.n;
+        if (du2.capped){
+          seedFor(`frontierDecPow|${p.key}`, ssig);
+          pow = decodePowerUsers(m2, t2, wl, du2, floor0, 140);
+        }
         dec[p.key] = { decodeUsers: du2.n*reps, censored: du2.censored, capped: du2.capped,
-                       decodeRaw: du2.raw*reps };
+                       decodePower: pow*reps };
       }
       mo[p.key] = moOld[p.key] || prefillServiceMoments(m2, t2, wl, cs);
     }
@@ -544,7 +555,7 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
 function seatPrice(op, topo, mo, f, wl, r){
   if (!isFinite(op.limit) || op.limit < 1) return Infinity;
   const rateMax = serverRate(op.limit, state.think, wl.sub_ratio) / r.reps;
-  return energyCost(topo, mo, f, rateMax, (r.decodeRaw ?? r.decodeUsers) / r.reps).totalMonth / op.limit;
+  return energyCost(topo, mo, f, rateMax, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth / op.limit;
 }
 function assembleFrontier(wl, cs){
   const f = wl.invalidation;
@@ -562,7 +573,7 @@ function assembleFrontier(wl, cs){
              // the whole bill at YOUR load — hardware plus energy
              // (research/power.md) — comparable across rows because every
              // row is priced at the same demand and the same €/GPU-hour
-             eur: energyCost(t2, mo2, f, r2, (r.decodeRaw ?? r.decodeUsers) / r.reps).totalMonth,
+             eur: energyCost(t2, mo2, f, r2, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth,
              // and the bill at the row's OWN ceiling, per seat: what one
              // user costs when the configuration is full. At your load the
              // bill is the GPU count and every row on a topology prices the
@@ -618,10 +629,12 @@ function itlSpikeRatio(model, topo, wl, cs){
   return { decodeS, mixedS, ratio: mixedS/decodeS };
 }
 
+// every GPU-resident p5-warm session decoding at once — but never more than
+// max_num_seqs: the scheduler queues the rest, so a bigger batch cannot run
 function stressPoint(dc, topo, warm){
-  const n=Math.max(1,Math.round(warm.g5));
+  const n=Math.max(1,Math.round(steadyResident(warm.g5)));
   const pu=interpAt(dc,'p50',n,true);
-  return { n, pu, agg:n*pu*topo.replicas };
+  return { n, pu, agg:n*pu*topo.replicas, capped: n < Math.max(1,Math.round(warm.g5)) };
 }
 
 export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
@@ -765,7 +778,7 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
          + (dp?` · ×${topo.replicas} replicas`:""), cls:prefillClass,
      tip:"The prefill (compute) ceiling the capacity model cannot see: cold requests/s at which re-prefilling misses alone consumes 100% of one replica group — set by FLOPs, so no KV pool, offload or warm headroom raises it. Priced on the heavy tail (E[L²]) at the priced chunk (32,768 unless a share link pins another) and the calibrated 45% MFU; f* is the miss rate that saturates the group at the current load; colour: green f < f*/2, amber from f*/2, red at f* and beyond. Analytic and UNVALIDATED — details on the method page."},
     {act:1, k:"Per-user, all GPU-resident p5 warm active", v:noFit?"—":fmt(puOp,1), u:noFit?"":"tok/s",
-     sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent`, cls:floorClass,
+     sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`at n = ${nOp} GPU-resident concurrent${st.capped?' (max_num_seqs cap)':''}`, cls:floorClass,
      tip:`Stress test: every HBM-resident p5-warm session decoding at once — each user's median speed. Green ≥${fmt(decodeComfort(),0)} tok/s, amber ≥${fmt(decodeFloor(),0)} (the hard floor), red below; if green, the cache — not bandwidth — binds. Both thresholds follow the decode-floor slider. CPU-offloaded sessions are excluded, so the offload slider does not move this.`},
     {act:1, k:"Aggregate, all GPU-resident p5 warm active", v:noFit?"—":fmt(aggOp,1), u:noFit?"":"ktok/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`:`n = ${nOp} × ${topo.replicas} replica${topo.replicas>1?'s':''}`,

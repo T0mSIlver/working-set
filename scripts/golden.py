@@ -314,7 +314,16 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     pue = float(st["pue"])
     # decode_floor: the SAME floor `dec` was sized at, which is what the
     # explorer's decodeFloor() feeds powerDraw
-    e = M.energy_cost(m, topo, wl, rate, dec, st["users"], chunk,
+    # under a max_num_seqs cap the decode capacity power prices is the
+    # aggregate AT the cap, cap x p50(cap) tok/s, handed over in the
+    # users-at-floor units power_draw reads (prefill.js decodePowerUsers)
+    dec_power = dec
+    if capped:
+        p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
+                                        seed=seed, mbu=st["mbu"],
+                                        latency=lat)[1][0])
+        dec_power = mns * p50_cap / st["decode_floor"]
+    e = M.energy_cost(m, topo, wl, rate, dec_power, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,
                       out_tokens=st["out"], per_pass_overhead=True,
                       eur_gpu_h=st["gpuh"], decode_floor=st["decode_floor"])
@@ -358,8 +367,10 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         # the flag can flip on noise alone: that band is what the allowlist
         # names. Away from it the two agree on the flag.
         "steady_cap": float(warm_gpu95),
-        "steady_cap_ratio": _steady_cap_ratio(m, topo, wl, st, rate,
-                                              warm_gpu95, seed),
+        # at the resident count the steady search actually stops at
+        "steady_cap_ratio": _steady_cap_ratio(
+            m, topo, wl, st, rate,
+            warm_gpu95 if mns is None else min(warm_gpu95, mns), seed),
     }
     return o, cond
 
@@ -1119,7 +1130,9 @@ MAPPING = [
      "prefill.js steadyDecodePoint", "mc",
      "Python bisects integer n re-sampling each probe; the explorer inverts the "
      "linearly-interpolated aggregate of one pre-sampled sweep"),
-    ("power_*", "model.power_draw", "cost.js powerDraw (inside energyCost)", "mc", ""),
+    ("power_*", "model.power_draw", "cost.js powerDraw (inside energyCost)", "mc",
+     "under a max_num_seqs cap the decode capacity is cap x p50(cap) on both sides "
+     "(prefill.js decodePowerUsers)"),
     ("energy_*", "model.energy_cost", "cost.js energyCost", "mc", ""),
     ("(state -> model)", "golden.py state_model / state_topo / state_wl",
      "render.js modelFor + state.js currentTopo/currentWL", "n/a",

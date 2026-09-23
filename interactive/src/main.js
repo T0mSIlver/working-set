@@ -296,10 +296,15 @@ document.getElementById('i-headcount').addEventListener('input', e=>{
   if (raw !== '' && !Number.isFinite(state.headcount)) state.headcount = null;
   onInput();
 });
-// max_num_seqs: empty = unset (no cap), else a whole number >= 1
+// max_num_seqs: empty = unset (no cap), else a whole number in [1, 4096],
+// which workingset also requires. Anything else keeps the last valid value
+// and flags the field until it is corrected.
 document.getElementById('i-mns').addEventListener('input', e=>{
-  const raw = e.target.value.trim(), n = Math.round(Number(raw));
-  state.mns = raw === '' || !Number.isFinite(n) || n < 1 ? null : Math.min(n, 4096);
+  const raw = e.target.value.trim(), n = Number(raw);
+  const ok = raw === '' || (Number.isInteger(n) && n >= 1 && n <= 4096);
+  e.target.setAttribute('aria-invalid', ok ? 'false' : 'true');
+  if (!ok) return;
+  state.mns = raw === '' ? null : n;
   onInput();
 });
 // the latency pricing's constants; an out-of-range entry is ignored (the
@@ -440,7 +445,9 @@ function syncLabels(){
   document.getElementById('v-mns').textContent = state.mns === null ? 'unset' : 'cap ' + fmt(state.mns, 0);
   const mnsEl = document.getElementById('i-mns');
   const mnsText = state.mns === null ? '' : String(state.mns);
-  if (document.activeElement !== mnsEl && mnsEl.value !== mnsText) mnsEl.value = mnsText;
+  if (document.activeElement !== mnsEl && mnsEl.value !== mnsText){
+    mnsEl.value = mnsText; mnsEl.setAttribute('aria-invalid', 'false');
+  }
   document.getElementById('v-mfu').textContent=state.mfu.toFixed(2);
   // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
   // per-draft acceptance — the base quantity the speedup is computed from

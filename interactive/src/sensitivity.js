@@ -165,9 +165,13 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   }
   // 5 · prefill MFU — the study's softest input; not a slider, a structural
   //     unknown, so the sweep runs over the whole stated [30%, 55%] bracket
-  axes.push({ label: 'Prefill MFU', cur: PREFILL_MFU, lo: PREFILL_MFU_LO, hi: PREFILL_MFU_HI,
+  //     Under the latency pricing decode is calibrated at the MFU slider, so
+  //     the marker sits there and the sweep widens to contain it
+  const mfuCur = model.decode_lat ? state.mfu : PREFILL_MFU;
+  const mfuLo = Math.min(PREFILL_MFU_LO, mfuCur), mfuHi = Math.max(PREFILL_MFU_HI, mfuCur);
+  axes.push({ label: 'Prefill MFU', cur: mfuCur, lo: mfuLo, hi: mfuHi,
     fmt: v => fmt(v * 100, 0) + '%', approx: false,
-    pts: sweep(16, PREFILL_MFU_LO, PREFILL_MFU_HI, v => {
+    pts: sweep(16, mfuLo, mfuHi, v => {
       const mo2 = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), v);
       // under the latency pricing the verify compute runs at this MFU too
       const decU = model.decode_lat && calD > 0
@@ -175,7 +179,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
                             topo, cs.samples) * calD * reps
         : decodeNow;
       return evalAt(mo2, f0, state.sla, state.think, cacheNow, decU);
-    }, PREFILL_MFU) });
+    }, mfuCur) });
   // 6 · speculative-decode speedup — decode speed is exactly linear in it,
   //     so the mean-context stand-in only has to move the crossing point
   if (calD > 0)

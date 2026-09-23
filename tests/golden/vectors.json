@@ -1264,7 +1264,7 @@
    "python": "model.power_draw",
    "js": "cost.js powerDraw (inside energyCost)",
    "class": "mc",
-   "note": ""
+   "note": "under a max_num_seqs cap the decode capacity is cap x p50(cap) on both sides (prefill.js decodePowerUsers)"
   },
   {
    "quantity": "energy_*",
@@ -30584,7 +30584,7 @@
     "sla_f_unreachable": 0.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 33.05,
-    "steady_cap_ratio": 6.08520086612
+    "steady_cap_ratio": 11.7673223023
    }
   },
   {
@@ -31136,14 +31136,14 @@
     "steady_per_user_tok_s": 151.085610716,
     "steady_saturated": true,
     "power_d_p": 0.124702868936,
-    "power_d_d": 0.436507936508,
-    "power_per_gpu_w": 281.72149855,
-    "power_kw": 2.57016449565,
-    "energy_eur_month": 351.598503005,
+    "power_d_d": 0.875297131064,
+    "power_per_gpu_w": 415.552202889,
+    "power_kw": 2.97165660867,
+    "energy_eur_month": 406.522624066,
     "energy_hw_month": 5472.0,
-    "energy_total_month": 5823.598503,
-    "energy_eur_user": 29.117992515,
-    "energy_eur_mtok": 0.765940459676
+    "energy_total_month": 5878.52262407,
+    "energy_eur_user": 29.3926131203,
+    "energy_eur_mtok": 0.773164276103
    },
    "cond": {
     "duty": 0.124702868936,
@@ -31154,7 +31154,7 @@
     "sla_f_unreachable": 0.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 732.0,
-    "steady_cap_ratio": 0.326617794968
+    "steady_cap_ratio": 1.21807849809
    }
   },
   {
@@ -40844,7 +40844,7 @@
     "sla_f_unreachable": 1.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 732.0,
-    "steady_cap_ratio": 0.151192503469
+    "steady_cap_ratio": 0.176333886231
    }
   },
   {
@@ -41072,7 +41072,7 @@
     "sla_f_unreachable": 0.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 115.05,
-    "steady_cap_ratio": 0.524006330651
+    "steady_cap_ratio": 0.736539322582
    }
   },
   {
@@ -41168,14 +41168,14 @@
     "steady_per_user_tok_s": 993.239795143,
     "steady_saturated": false,
     "power_d_p": 0.0399049180595,
-    "power_d_d": 0.239455782313,
-    "power_per_gpu_w": 174.981718538,
-    "power_kw": 2.24994515561,
-    "energy_eur_month": 307.792497288,
+    "power_d_d": 0.445450746022,
+    "power_per_gpu_w": 237.810182469,
+    "power_kw": 2.43843054741,
+    "energy_eur_month": 333.577298885,
     "energy_hw_month": 5472.0,
-    "energy_total_month": 5779.79249729,
-    "energy_eur_user": 90.3092577701,
-    "energy_eur_mtok": 2.37555917956
+    "energy_total_month": 5805.57729889,
+    "energy_eur_user": 90.7121452951,
+    "energy_eur_mtok": 2.3861570206
    },
    "cond": {
     "duty": 0.0399049180595,
@@ -41186,7 +41186,7 @@
     "sla_f_unreachable": 1.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 732.0,
-    "steady_cap_ratio": 0.151192503469
+    "steady_cap_ratio": 0.448582541921
    }
   },
   {
@@ -41300,7 +41300,7 @@
     "sla_f_unreachable": 0.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 33.05,
-    "steady_cap_ratio": 1.32837824817
+    "steady_cap_ratio": 1.37342253461
    }
   },
   {
@@ -41414,7 +41414,7 @@
     "sla_f_unreachable": 0.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 115.05,
-    "steady_cap_ratio": 0.524006330651
+    "steady_cap_ratio": 2.7602441733
    }
   },
   {
@@ -41510,14 +41510,14 @@
     "steady_per_user_tok_s": 993.239795143,
     "steady_saturated": false,
     "power_d_p": 0.0399049180595,
-    "power_d_d": 0.239455782313,
-    "power_per_gpu_w": 174.981718538,
-    "power_kw": 2.24994515561,
-    "energy_eur_month": 307.792497288,
+    "power_d_d": 0.563141983603,
+    "power_per_gpu_w": 273.706009932,
+    "power_kw": 2.54611802979,
+    "energy_eur_month": 348.308946476,
     "energy_hw_month": 5472.0,
-    "energy_total_month": 5779.79249729,
-    "energy_eur_user": 90.3092577701,
-    "energy_eur_mtok": 2.37555917956
+    "energy_total_month": 5820.30894648,
+    "energy_eur_user": 90.9423272887,
+    "energy_eur_mtok": 2.39221189206
    },
    "cond": {
     "duty": 0.0399049180595,
@@ -41528,7 +41528,7 @@
     "sla_f_unreachable": 1.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 732.0,
-    "steady_cap_ratio": 0.151192503469
+    "steady_cap_ratio": 0.565397132923
    }
   },
   {
@@ -41642,7 +41642,7 @@
     "sla_f_unreachable": 0.0,
     "ctx_cv2": 0.735428018913,
     "steady_cap": 33.05,
-    "steady_cap_ratio": 1.32837824817
+    "steady_cap_ratio": 4.70086907669
    }
   },
   {

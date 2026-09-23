@@ -140,6 +140,7 @@ input[type=number].population{
   padding:6px 8px; outline:none;
 }
 input[type=number].population:focus{border-color:var(--s1)}
+input[type=number].population[aria-invalid=true]{border-color:var(--crit)}
 .latrow{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:6px}
 .latrow[hidden]{display:none}
 .latrow label{display:flex; flex-direction:column; gap:2px; font-size:11.5px; color:var(--text-2)}

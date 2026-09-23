@@ -20,7 +20,7 @@ import { decodeCurves, decodePlan, warmCapacity }
 import { bStar, warmUsersCurve, warmUsersNow } from '../../interactive/src/planner.js';
 import { energyCost } from '../../interactive/src/cost.js';
 import {
-  breakevenMissRate, capDecodeUsers, coldRequestSeconds, contextStats, maxUsersDecode, meanPasses,
+  breakevenMissRate, capDecodeUsers, coldRequestSeconds, decodePowerUsers, contextStats, maxUsersDecode, meanPasses,
   maxUsersLatency, maxUsersSaturation, mfuCeil, mfuEff, missContextSeconds,
   peakFlops, prefillContextSeconds, prefillFlops, prefillOverheadSeconds,
   prefillSeconds, prefillServiceMoments, serverRate, setLiveThink, setLiveTurn,
@@ -150,7 +150,13 @@ export function driveState(v){
   o.steady_saturated = sd.saturated;
 
   // ---- power and the bill --------------------------------------------
-  const e = energyCost(topo, mo, f, rate, dec.n);
+  // under a cap, the aggregate at the cap (render.js prices the cost card so)
+  let decPower = decC.n;
+  if (decC.capped){
+    seedFor('decodeCapPower');
+    decPower = decodePowerUsers(m, topo, wl, decC, state.decode_floor, DECODE_ITER);
+  }
+  const e = energyCost(topo, mo, f, rate, decPower);
   o.power_d_p = e.dP;
   o.power_d_d = e.dD;
   o.power_per_gpu_w = e.perGpu;
