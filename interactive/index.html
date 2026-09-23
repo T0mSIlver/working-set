@@ -553,8 +553,17 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
       <div class="ctl-group">
         <div class="ctl-sec">Latency budget &amp; cold traffic</div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Time-to-first-token budget a cache MISS must meet. Sets the latency ceiling and B*, which is exactly linear in it; solved against the MEAN TTFT, so a p95 budget binds sooner than anything shown here.">TTFT budget</span> <span class="val"><span id="v-sla">10</span> s</span></label>
+          <label class="flabel"><span class="tip" data-tip="Time-to-first-token budget a cache MISS must meet, at the statistic picked below. Sets the latency ceiling and B*, which is exactly linear in it. B*, the burst drain and f_sla are still checked against the MEAN.">TTFT budget</span> <span class="val"><span id="v-sla-stat">p95</span> ≤ <span id="v-sla">10</span> s</span></label>
           <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
+      </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Which TTFT statistic the latency ceiling holds to the budget. A percentile replaces a miss's mean prefill with that percentile of it (a miss costs more the longer its context, so this is the prefill of a miss at that context-length percentile); the queue wait stays at its mean, so the ceiling is still optimistic. 95 matches the harness's [slo] percentile; mean is the older reading, and the loosest.">TTFT statistic</span></label>
+          <div class="seg" id="seg-ttft_pct" data-key="ttft_pct">
+            <button data-v="mean" aria-pressed="false">mean</button>
+            <button data-v="90" aria-pressed="false">p90</button>
+            <button data-v="95" aria-pressed="true">p95</button>
+            <button data-v="99" aria-pressed="false">p99</button>
+          </div>
       </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Per-user decode speed a session must still get once every warm session decodes at once — the threshold the DECODE ceiling is solved against. 40 tok/s is the study's hard floor and every published figure uses it; 50 is its comfortable mark, and the comfortable line tracks this slider at 1.25×. The right value is a property of the WORKLOAD, not the hardware: an agent consuming tokens programmatically wants 40+, while a human reading chat output consumes maybe 5–8 tok/s, so a chat deployment judged at 40 can look decode-bound when it is not. Moves the decode ceiling steeply — it is the reciprocal of per-user speed, so halving the floor roughly doubles the ceiling. The energy model prices the same floor, so the cost card stays consistent.">Per-user decode floor</span> <span class="val"><span id="v-decode_floor">40</span> tok/s</span></label>

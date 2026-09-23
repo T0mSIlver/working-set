@@ -141,6 +141,8 @@ class WorkloadCfg:
 class SLO:
     ttft_budget_s: float = 10.0
     itl_floor_tok_s: float = M.DECODE_FLOOR_TOKS
+    # the TTFT percentile the budget is read at: the probe's measured verdict
+    # and, since the model honours it, the predicted latency ceiling
     percentile: int = 95
 
 
@@ -252,6 +254,9 @@ class RunConfig:
             raise ValueError(f"weight_dtype must be one of {M.WEIGHT_DTYPES}")
         if self.deployment.kv_dtype not in M.KV_DTYPES:
             raise ValueError(f"kv_dtype must be one of {M.KV_DTYPES}")
+        if not 0 < self.slo.percentile < 100:
+            raise ValueError("slo.percentile must be in (0, 100), got "
+                             f"{self.slo.percentile!r}")
         w = self.workload
         if w.headcount is not None and w.users is not None:
             raise ValueError("workload.headcount and workload.users cannot both be set; "

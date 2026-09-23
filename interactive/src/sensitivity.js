@@ -87,7 +87,8 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const cacheNow = op.ceilings.cache, decodeNow = op.ceilings.decode;
   const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU) => {
     const c = { cache: cacheU, decode: decodeU,
-      latency: reps * maxUsersLatency(mo_, f_, sla_, think_, undefined, subR),
+      latency: reps * maxUsersLatency(mo_, f_, sla_, think_, undefined, subR,
+                                      state.ttft_pct),
       saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };
     let bind = 'cache';
     for (const k in c) if (c[k] < c[bind]) bind = k;

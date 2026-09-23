@@ -28,7 +28,7 @@
    that state.js depends on must never depend on state.js.
    ========================================================================== */
 import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, unionKink } from './config.js';
-import { decodeComfort, decodeFloor, requestRate } from './prefill.js';
+import { TTFT_PCTS, decodeComfort, decodeFloor, requestRate } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
 import { STATE_DEFAULTS, capSliderMax, currentTopo, currentWL, hasHeadcount,
@@ -393,6 +393,7 @@ function syncLabels(){
   }
   document.getElementById('v-think').textContent=fmt(state.think,0);
   document.getElementById('v-sla').textContent=fmt(state.sla,0);
+  document.getElementById('v-sla-stat').textContent=ttftStatLabel();
   document.getElementById('v-decode_floor').textContent=fmt(state.decode_floor,0);
   // chart C's dashed guide lines move with the slider, so its caption has to
   // name the thresholds actually drawn rather than the study's 40/50
@@ -457,6 +458,9 @@ function syncLabels(){
   document.getElementById('v-gpuh').textContent=state.gpuh.toFixed(2);
 }
 
+// the statistic the TTFT budget is checked at, as the budget label prints it
+function ttftStatLabel(){ return state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`; }
+
 /* ---- share link: the whole configuration in the URL fragment ------------
    Encodes only the DIFFS from STATE_DEFAULTS, so a default page shares as a
    bare URL. The fragment (not the query string) keeps every permutation on
@@ -474,6 +478,7 @@ const URL_ENUMS = {
   pue: () => ["1.2","1.5","2.0"],
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
   bench: () => Object.keys(CONFIG.BENCHES),
+  ttft_pct: () => TTFT_PCTS,
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
@@ -545,7 +550,8 @@ function applyURLState(){
 // reflect enum state into the two segmented controls enforceConstraints does
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
-  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench']])
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'],
+                                  ['seg-ttft_pct','ttft_pct']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;

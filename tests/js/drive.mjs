@@ -104,7 +104,7 @@ export function driveState(v){
   o.spike_tolerance = bStar(mo, f, state.sla, rate);
   o.spike_tolerance_sla10 = sp.bstar;
   o.max_users_latency = maxUsersLatency(mo, f, state.sla, state.think,
-                                        'fcfs', wl.sub_ratio);
+                                        'fcfs', wl.sub_ratio, state.ttft_pct);
   o.max_users_saturation = maxUsersSaturation(mo, f, state.think, wl.sub_ratio);
 
   // ---- warm fill -----------------------------------------------------

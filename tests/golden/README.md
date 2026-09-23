@@ -170,7 +170,7 @@ can be gated on the **cause** rather than on a model name.
 | `where` key | what it says |
 |---|---|
 | `_duty` | prefill duty; `1/(1-rho)` amplifies every queue figure as it approaches 1 |
-| `_sla_headroom` | `1 - E[S\|miss]/SLA`; the latency ceiling's `k = 2(SLA - c)` vanishes at 0 and goes negative past it |
+| `_sla_headroom` | `1 - c/SLA`, c = a miss's own prefill at the state's TTFT statistic (`E[S\|miss]` for the mean, its percentile otherwise); the latency ceiling's `k = 2(SLA - c)` vanishes at 0 and goes negative past it |
 | `_sla10_headroom` | the same against the 10 s budget `spikeMetrics` hard-wires — use this one for the `*_sla10` quantities |
 | `_sla_f_unreachable` | 1 where `sla_miss_rate` returned its `hi` clamp: the SLA survives an all-cold stream, so the latency constraint is not reached at any miss rate. Both sides clamp there now, so no entry currently uses it |
 | `_warm_p5` | the warm count in sessions — one session either way is 33% of three |

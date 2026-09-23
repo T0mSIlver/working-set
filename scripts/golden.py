@@ -107,7 +107,8 @@ DEFAULT_STATE = {
     "mbu": M.MBU_DEFAULT, "mfu": M.MFU_DEFAULT, "chunk": "32768",
     "user_median": 31, "user_sigma": 0.81, "sub_median": 8, "sub_sigma": 0.90,
     "sub_ratio": 0.10, "sub_shares_prefix": False, "sys": 15, "inval": 1.0,
-    "users": 64, "think": 30, "sla": 10, "turn": 2000, "burst": 32,
+    "users": 64, "think": 30, "sla": 10, "ttft_pct": "95", "turn": 2000,
+    "burst": 32,
     "out": M.AVG_OUT_TOK, "decode_floor": M.DECODE_FLOOR_TOKS,
     "ekwh": 0.19, "pue": "1.5", "gpuh": M.GPUS["H200"].eur_gpu_h,
 }
@@ -257,7 +258,8 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         m, topo, wl, 10.0, rate, chunk, turn, mfu, per_pass_overhead=True)
     o["max_users_latency"] = M.max_users_latency(
         m, topo, wl, chunk, st["sla"], turn, st["think"], mfu, "fcfs",
-        per_pass_overhead=True)
+        per_pass_overhead=True,
+        percentile=None if st["ttft_pct"] == "mean" else float(st["ttft_pct"]))
     o["max_users_saturation"] = M.max_users_saturation(
         m, topo, wl, chunk, turn, st["think"], mfu, per_pass_overhead=True)
     # at 10 s, not state.sla: spikeMetrics computes fsla against the same
@@ -318,9 +320,16 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     cond = {
         # 1/(1 - rho) amplifies every queue figure as this approaches 1
         "duty": o["prefill_duty"],
-        # k = 2(SLA - E[S|miss]) in max_users_latency vanishes as this hits 0,
-        # and goes NEGATIVE where the miss alone already breaches the budget
-        "sla_headroom": 1.0 - o["moments_miss"] / st["sla"],
+        # k = 2(SLA - c) in max_users_latency vanishes as this hits 0, and
+        # goes NEGATIVE where the miss alone already breaches the budget. c is
+        # the miss's own prefill at the state's TTFT statistic: E[S|miss] for
+        # the mean, its percentile otherwise
+        "sla_headroom": 1.0 - (
+            o["moments_miss"] if st["ttft_pct"] == "mean"
+            else M.miss_service_quantile(m, topo, wl, chunk,
+                                         float(st["ttft_pct"]), turn, mfu,
+                                         per_pass_overhead=True)
+        ) / st["sla"],
         # ...and the same against the 10 s budget spikeMetrics hard-wires, for
         # the quantities compared at that budget rather than at state.sla
         "sla10_headroom": 1.0 - o["moments_miss"] / 10.0,
@@ -488,6 +497,7 @@ KNOB_SWEEP = [
     ("think", [10, 60, 120]),
     ("inval", [0.0, 5.0, 25.0, 60.0]),
     ("sla", [2, 30, 60]),
+    ("ttft_pct", ["mean", "90", "99"]),
     ("decode_floor", [5, 20, 80]),
     ("turn", [500, 8000, 16000]),
     ("out", [100, 1200, 4000]),

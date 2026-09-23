@@ -52,6 +52,9 @@ export const state = {
   // product is snapped to that slider's legal values by main.js.
   headcount: null, active: 1.0, spu: 1.0,
   think: 30, sla: 10, turn: 2000, out: AVG_OUT_TOK, burst: 32,
+  // the TTFT statistic `sla` is checked at: 'mean' | '90' | '95' | '99'.
+  // 95 matches the harness's [slo] percentile, the figure an SLO states.
+  ttft_pct: '95',
   // per-user decode speed the DECODE ceiling is solved against. A workload
   // property, not a hardware one: the study's 40 is an agentic-coding comfort
   // standard, and a chat deployment judged at it can read as decode-bound

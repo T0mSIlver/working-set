@@ -115,7 +115,8 @@ export function workingsetConfig(state, model, topo, wl){
     ['slo', [
       ['ttft_budget_s', flt(state.sla)],
       ['itl_floor_tok_s', flt(decodeFloor())],
-      ['percentile', 95],
+      // the percentile the page checked; a mean page still measures p95
+      ['percentile', state.ttft_pct === 'mean' ? 95 : parseInt(state.ttft_pct, 10)],
     ]],
     ['endpoint', [
       ['base_url', 'http://localhost:8000/v1'],
@@ -189,7 +190,8 @@ function harnessHypotheses(P, model, topo, wl, reps){
       + `A run bounds this below unless load reaches eviction.`,
     `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
       + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
-    `H-latency: a cache miss's mean TTFT reaches the ${fmt(state.sla, 0)} s budget `
+    `H-latency: a cache miss's ${state.ttft_pct === 'mean' ? 'mean' : 'p' + state.ttft_pct} `
+      + `TTFT reaches the ${fmt(state.sla, 0)} s budget `
       + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
     `H-saturation: prefill duty reaches 100% near ~${fmt(P.saturation_ceiling_users, 0)} `
       + `users${grp}; above it the queue has no steady state.`,
