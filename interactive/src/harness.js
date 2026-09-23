@@ -115,8 +115,10 @@ export function workingsetConfig(state, model, topo, wl){
     ['slo', [
       ['ttft_budget_s', flt(state.sla)],
       ['itl_floor_tok_s', flt(decodeFloor())],
-      // the percentile the page checked; a mean page still measures p95
+      // the percentile the probe measures; a mean page still measures p95,
+      // and ttft_statistic makes `ws predict` check what the page checked
       ['percentile', state.ttft_pct === 'mean' ? 95 : parseInt(state.ttft_pct, 10)],
+      ['ttft_statistic', state.ttft_pct === 'mean' ? 'miss_mean' : 'percentile'],
     ]],
     ['endpoint', [
       ['base_url', 'http://localhost:8000/v1'],
@@ -192,7 +194,7 @@ function harnessHypotheses(P, model, topo, wl, reps){
       + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
     `H-latency: ${state.ttft_pct === 'mean' ? "a cache miss's mean TTFT"
         : `the p${state.ttft_pct} TTFT over all requests (model proxy: mean wait `
-          + `+ that percentile's own prefill)`} reaches the ${fmt(state.sla, 0)} s budget `
+          + `+ the p${state.ttft_pct} of the hit/miss service mixture)`} reaches the ${fmt(state.sla, 0)} s budget `
       + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
     `H-saturation: prefill duty reaches 100% near ~${fmt(P.saturation_ceiling_users, 0)} `
       + `users${grp}; above it the queue has no steady state.`,

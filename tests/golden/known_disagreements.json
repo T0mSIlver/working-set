@@ -117,20 +117,34 @@
   {
    "quantity": "max_users_latency",
    "where": {
-    "_sla_headroom": {
-     "gte": -0.05,
-     "lt": 0.1
-    }
+    "model": [
+     "MM35"
+    ],
+    "gpu": [
+     "B300"
+    ],
+    "ngpu": [
+     3
+    ],
+    "inval": [
+     10.0
+    ],
+    "sla": [
+     5
+    ],
+    "ttft_pct": [
+     "95"
+    ]
    },
-   "observed_rel": 1.0,
-   "max_rel": 1.0,
-   "hypothesis": "ILL-CONDITIONED at the cliff, not a formula difference: lam = k/(a + k b) with k = 2(SLA - c), c = E[S|miss] (mean) or the percentile's own prefill c_p (a sampled QUANTILE, noisier than a mean, hence the window's 0.1 upper edge: at the default p95 a 10%-miss state takes the miss median, and one Mistral-Medium-3.5 B300 state at headroom 0.066 reads 49%). These are configurations whose miss alone eats 95-100% of its own TTFT budget (almost all Mistral-Medium-3.5, whose 88 full-attention layers make a miss cost ~10 s against a 10 s SLA). k is then the difference of two nearly equal sampled numbers and passes through zero, where Python returns a hard 0 and the mirror returns 1.5 users. The window is bounded on BOTH sides so a state arbitrarily past its SLA is not admitted."
+   "observed_rel": 0.494,
+   "max_rel": 0.6,
+   "hypothesis": "ILL-CONDITIONED near the cliff, one named state: Mistral-Medium-3.5 on 3xB300 at 10% misses and a 5 s budget, whose p95 own-prefill term (4.67 s, the p95 of the hit/miss service mixture) leaves 6.6% headroom. lam = k/(a + k b) with k = 2(SLA - c_p) then multiplies the two samplers' ~3.5% quantile difference by 1/headroom; no JS formula difference was found. Named rather than a wider _sla_headroom window, so the licence does not spread to other states."
   },
   {
    "quantity": "max_users_latency",
    "where": {
     "_sla_headroom": {
-     "gte": 0.1,
+     "gte": 0.05,
      "lt": 0.75
     }
    },

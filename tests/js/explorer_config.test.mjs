@@ -25,7 +25,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 import { CONFIG } from '../../interactive/src/config.js';
-import { STATE_DEFAULTS, currentTopo, currentWL, state } from '../../interactive/src/state.js';
+import { STATE_DEFAULTS, currentTopo, currentWL, state, stampTtftPct,
+         ttftPctFromFragment } from '../../interactive/src/state.js';
+import { TTFT_PCTS } from '../../interactive/src/prefill.js';
 import { setLiveThink, setLiveTurn } from '../../interactive/src/prefill.js';
 import { activeModel } from '../../interactive/src/render.js';
 import { workingsetConfig } from '../../interactive/src/harness.js';
@@ -52,8 +54,24 @@ function decodeStateURL(url){
   const p = new URLSearchParams(q);
   if (!p.has('mtp')) st.mtp = CONFIG.MODELS[st.model].mtp;
   if (!p.has('gpuh')) st.gpuh = CONFIG.GPUS[st.gpu].eur_gpu_h;
+  st.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);
   return st;
 }
+
+test('share links: legacy fragments decode as mean, bare URLs as p95, new links name it', () => {
+  const dec = q => ttftPctFromFragment(new URLSearchParams(q), TTFT_PCTS);
+  assert.equal(dec(''), '95');                       // bare URL: today's default
+  assert.equal(dec('users=128'), 'mean');            // pre-control link
+  assert.equal(dec('users=128&ttft_pct=99'), '99');
+  assert.equal(dec('ttft_pct=mean'), 'mean');
+  assert.equal(dec('users=128&ttft_pct=bogus'), '95');
+  const enc = (q, pct) => stampTtftPct(new URLSearchParams(q), pct).toString();
+  assert.equal(enc('', '95'), '');                   // default page stays bare
+  assert.equal(enc('users=128', '95'), 'users=128&ttft_pct=95');
+  assert.equal(enc('ttft_pct=mean', 'mean'), 'ttft_pct=mean');
+  // round trip: a new non-bare link decodes to the statistic it was made at
+  for (const pct of TTFT_PCTS) assert.equal(dec(enc('users=128', pct)), pct);
+});
 
 const body = text => text.replace(/^(#[^\n]*\n)+/, '');
 

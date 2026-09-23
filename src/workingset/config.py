@@ -137,6 +137,9 @@ class WorkloadCfg:
     users: float | None = M.REF_USERS
 
 
+TTFT_STATISTICS = ("percentile", "miss_mean")
+
+
 @dataclass(frozen=True)
 class SLO:
     ttft_budget_s: float = 10.0
@@ -144,6 +147,12 @@ class SLO:
     # the TTFT percentile the budget is read at: the probe's measured verdict
     # and, since the model honours it, the predicted latency ceiling
     percentile: int = 95
+    # what the PREDICTED latency ceiling checks against the budget:
+    # "percentile" = the p{percentile} TTFT over all requests (model proxy),
+    # "miss_mean"  = a cache miss's mean TTFT, the reading before the
+    # percentile existed (an explorer page in `mean` mode exports this).
+    # The probe's measurement always reads the percentile.
+    ttft_statistic: str = "percentile"
 
 
 @dataclass(frozen=True)
@@ -254,6 +263,9 @@ class RunConfig:
             raise ValueError(f"weight_dtype must be one of {M.WEIGHT_DTYPES}")
         if self.deployment.kv_dtype not in M.KV_DTYPES:
             raise ValueError(f"kv_dtype must be one of {M.KV_DTYPES}")
+        if self.slo.ttft_statistic not in TTFT_STATISTICS:
+            raise ValueError(f"slo.ttft_statistic must be one of {TTFT_STATISTICS}, "
+                             f"got {self.slo.ttft_statistic!r}")
         if not 0 < self.slo.percentile < 100:
             raise ValueError("slo.percentile must be in (0, 100), got "
                              f"{self.slo.percentile!r}")

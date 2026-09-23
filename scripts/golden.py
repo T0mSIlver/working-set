@@ -266,7 +266,7 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     o["miss_service_q95"] = M.miss_service_quantile(
         m, topo, wl, chunk, 95.0, turn, mfu, per_pass_overhead=True)
     o["ttft_service_q95"] = M.ttft_service_quantile(
-        m, topo, wl, chunk, 95.0, turn, mfu, per_pass_overhead=True)[0]
+        m, topo, wl, chunk, 95.0, turn, mfu, per_pass_overhead=True)
     o["max_users_saturation"] = M.max_users_saturation(
         m, topo, wl, chunk, turn, st["think"], mfu, per_pass_overhead=True)
     # at 10 s, not state.sla: spikeMetrics computes fsla against the same
@@ -335,7 +335,7 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
             o["moments_miss"] if st["ttft_pct"] == "mean"
             else M.ttft_service_quantile(m, topo, wl, chunk,
                                          float(st["ttft_pct"]), turn, mfu,
-                                         per_pass_overhead=True)[0]
+                                         per_pass_overhead=True)
         ) / st["sla"],
         # ...and the same against the 10 s budget spikeMetrics hard-wires, for
         # the quantities compared at that budget rather than at state.sla
@@ -971,9 +971,9 @@ BAND_FLOOR = 0.02     # below this is noise on any sampled statistic
 BAND_CAP = 0.25       # above this, name the states instead of widening for all
 
 # Quantities that ARE the same statistic take the widest of the group's bands.
-# ttft_service_q95 IS a miss-service quantile wherever the miss share passes
-# the 5% tail, but the probe's default 1% miss share puts it on the hit path,
-# whose affine cost is far less noisy; its band must not come from there.
+# ttft_service_q95 is a quantile of the hit/miss mixture: dominated by the
+# miss tail at high miss shares, by the hits' affine (far less noisy) cost at
+# the probe's default 1%, so its band must not come from the latter alone.
 # power_draw's d_p is prefill_duty clamped at 1; below the clamp they are the
 # same number, but the clamp shrinks d_p's measured spread on the probe, so an
 # independent derivation hands the identical figure a tighter band and it trips
@@ -1086,10 +1086,10 @@ MAPPING = [
      "prefill.js missServiceQuantile(mo, 95)", "mc",
      "a miss's own prefill at its p95; cost is monotone in L, so both sides "
      "take numpy's linear percentile over the sorted length draw"),
-    ("ttft_service_q95", "model.ttft_service_quantile(percentile=95)[0]",
-     "prefill.js ttftServiceQuantile(mo, f, 95).c", "mc",
-     "the own-prefill term of the all-request p95: a hit or a miss at its "
-     "conditional quantile, by the state's miss share"),
+    ("ttft_service_q95", "model.ttft_service_quantile(percentile=95)",
+     "prefill.js ttftServiceQuantile(mo, f, 95)", "mc",
+     "the own-prefill term of the all-request p95: the p95 of the hit/miss "
+     "service mixture at the state's miss share"),
     ("max_users_saturation", "model.max_users_saturation",
      "prefill.js maxUsersSaturation", "mc", "per replica GROUP on both sides"),
     ("max_users_cache", "model.max_users_cache (warm_capacity which='user')",

@@ -107,7 +107,7 @@ export function driveState(v){
                                         'fcfs', wl.sub_ratio, state.ttft_pct);
   o.max_users_saturation = maxUsersSaturation(mo, f, state.think, wl.sub_ratio);
   o.miss_service_q95 = missServiceQuantile(mo, 95);
-  o.ttft_service_q95 = ttftServiceQuantile(mo, f, 95).c;
+  o.ttft_service_q95 = ttftServiceQuantile(mo, f, 95);
 
   // ---- warm fill -----------------------------------------------------
   seedFor('warm');

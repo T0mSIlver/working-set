@@ -279,20 +279,37 @@ export function missServiceQuantile(mo, p){
   return costQuantile(mo.sorted, mo.coldAt, p/100);
 }
 // Twin of model.ttft_service_quantile: the own-prefill term of the p-th TTFT
-// over ALL requests (the probe's population). With miss share f, misses
-// ranked above hits: past f > 1 - P the P-th request is a miss at
-// q = 1 - (1-P)/f, otherwise a hit at q = P/(1-f).
+// over ALL requests (the probe's population) — the p-th quantile of the
+// hit/miss service MIXTURE, misses weighing f and hits 1 - f. Not a hit/miss
+// split: the classes overlap (a long turn over a long cached context
+// outlasts a short miss). Both cost lines are monotone in L, so each class
+// is already sorted by the sorted draw; a merge walk (a hit first on ties,
+// as Python's stable sort) accumulates the weights in Python's order and
+// stops at the first sample whose cumulative weight reaches p.
+function sortedCosts(mo){
+  if (!mo.coldSorted){
+    const a = mo.sorted, n = a.length;
+    mo.coldSorted = new Float64Array(n); mo.hitSorted = new Float64Array(n);
+    for (let i = 0; i < n; i++){ mo.coldSorted[i] = mo.coldAt(a[i]); mo.hitSorted[i] = mo.hitAt(a[i]); }
+  }
+  return [mo.coldSorted, mo.hitSorted];
+}
 export function ttftServiceQuantile(mo, f, p){
-  const P = p/100;
-  return f > 1 - P
-    ? { c: costQuantile(mo.sorted, mo.coldAt, 1 - (1 - P)/f), path: 'miss' }
-    : { c: costQuantile(mo.sorted, mo.hitAt, P/(1 - f)), path: 'hit' };
+  const [cold, hit] = sortedCosts(mo), n = cold.length;
+  const wc = f/n, wh = (1 - f)/n, thr = (p/100)*(1 - 1e-12);
+  let i = 0, j = 0, cum = 0, v = 0;
+  while (i < n || j < n){
+    if (j < n && (i >= n || hit[j] <= cold[i])){ v = hit[j++]; cum += wh; }
+    else { v = cold[i++]; cum += wc; }
+    if (cum >= thr) return v;
+  }
+  return v;
 }
 // The own-prefill term the budget is checked with: a miss's mean for 'mean',
 // the all-request percentile proxy's otherwise.
 export function ttftOwn(mo, f, pct){
   return (!pct || pct === 'mean') ? mo.miss
-       : ttftServiceQuantile(mo, f, parseFloat(pct)).c;
+       : ttftServiceQuantile(mo, f, parseFloat(pct));
 }
 // How the budget label and tooltips name the statistic.
 export function ttftStatName(pct){
@@ -527,7 +544,8 @@ export function maxUsersSaturation(mo, f, think, subR){
 //   PS    c/(1-lam b) = SLA            ->  lam = (1 - c/SLA)/b
 // `pct` picks the statistic (model.max_users_latency): 'mean' uses
 // c = E[S|miss]; '95' uses the proxy E[W] + c_p for the p95 over all
-// requests, c_p from ttftServiceQuantile. A proxy, not Q_p(W + S).
+// requests, c_p the p95 of the hit/miss service mixture
+// (ttftServiceQuantile). A proxy, not Q_p(W + S).
 // ALWAYS strictly inside saturation, since k/(a+kb) < 1/b for any a > 0 — the
 // algebraic form of "the queue diverges before the server does".
 export function maxUsersLatency(mo, f, sla, think, discipline, subR, pct){

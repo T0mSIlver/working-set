@@ -31,7 +31,7 @@ import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, union
 import { TTFT_PCTS, decodeComfort, decodeFloor, requestRate } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
-import { STATE_DEFAULTS, capSliderMax, currentTopo, currentWL, hasHeadcount,
+import { STATE_DEFAULTS, stampTtftPct, ttftPctFromFragment, capSliderMax, currentTopo, currentWL, hasHeadcount,
          sessionsFromHeadcount, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartCGeom, chartDGeom, clearChartGeomCD, drawCross, interpAt, lastChartE,
@@ -506,7 +506,7 @@ export function encodeStateURL(){
   // links from before the TTFT statistic existed decode as a miss's mean
   // (applyURLState), so every non-bare link names its statistic explicitly;
   // the default page still shares as a bare URL
-  if ([...p.keys()].length && !p.has('ttft_pct')) p.set('ttft_pct', String(state.ttft_pct));
+  stampTtftPct(p, state.ttft_pct);
   const q = p.toString();
   return location.origin === "null"   // file:// — origin is unusable
     ? location.href.split('#')[0] + (q ? '#' + q : '')
@@ -522,7 +522,7 @@ function applyURLState(){
   }
   // a link without ttft_pct predates the control: those pages checked a
   // miss's mean TTFT, so that is what it reproduces
-  if (p.get('ttft_pct') === null) state.ttft_pct = 'mean';
+  state.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);
   // a shared model carries its own MTP default unless the link pins one —
   // the same reset the model buttons apply on click
   if (p.get('model') !== null && p.get('mtp') === null)

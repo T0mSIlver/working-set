@@ -1789,33 +1789,42 @@ def miss_service_quantile(model: Model, topo: Topology, wl, chunk: float,
 def ttft_service_quantile(model: Model, topo: Topology, wl, chunk: float,
                           percentile: float, turn_tokens: float = 0.0,
                           mfu: float = MFU_DEFAULT,
-                          per_pass_overhead: bool = False) -> tuple:
-    """(seconds, path): the own-prefill term of the `percentile`-th TTFT over
-    ALL requests, the population the probe scores (probe/population.py,
-    ttft_all_pX) and the one an SLO is written against.
+                          per_pass_overhead: bool = False) -> float:
+    """The own-prefill term of the `percentile`-th TTFT over ALL requests,
+    the population the probe scores (probe/population.py, ttft_all_pX) and
+    the one an SLO is written against, in seconds.
 
-    With miss share m = wl.invalidation and target P = percentile / 100, and
-    misses ranked above hits (a miss re-prefills its whole context, a hit only
-    its new turn):
+    It is the `percentile`-th quantile of the MIXTURE of the two service
+    distributions, misses at weight m = wl.invalidation and hits at 1 - m:
+    the smallest sampled service time s with
+        m F_miss(s) + (1 - m) F_hit(s) >= P.
+    A mixture rather than a hit/miss split because the two overlap: a hit's
+    long new turn over a long cached context can outlast a short miss, so no
+    rank of one class above the other holds.
 
-      m > 1 - P   the P-th request is a miss, at the miss-conditional quantile
-                  q = 1 - (1 - P) / m          -> ("miss", Q_q(S | miss))
-      otherwise   the P-th request is a hit, at the hit-conditional quantile
-                  q = P / (1 - m)              -> ("hit",  Q_q(S | hit))
-
-    Both costs are monotone in the context length, so each quantile is the
-    service of a request at that context-length quantile. The ranking is the
-    approximation: a long-context hit can outlast a short miss, which this
-    ignores.
+    Both per-draw costs are monotone in the context length, so each class's
+    samples sort by sorting the lengths once; the explorer's
+    ttftServiceQuantile walks the same two sorted sequences as a merge.
     """
     if not 0 < percentile < 100:
         raise ValueError(f"percentile must be in (0, 100), got {percentile!r}")
     cold, warm = _prefill_service_arrays(model, topo, wl, chunk, turn_tokens,
                                          mfu, per_pass_overhead)
-    p, m = percentile / 100.0, wl.invalidation
-    if m > 1.0 - p:
-        return float(np.percentile(cold, 100.0 * (1.0 - (1.0 - p) / m))), "miss"
-    return float(np.percentile(warm, 100.0 * min(1.0, p / (1.0 - m)))), "hit"
+    return _mixture_quantile(cold, warm, wl.invalidation, percentile / 100.0)
+
+
+def _mixture_quantile(cold, warm, m: float, p: float) -> float:
+    """Smallest value v of cold U warm with weighted CDF >= p, cold draws
+    weighing m / n each and warm draws (1 - m) / n. Ties rank a warm draw
+    first; the accumulation runs in sorted order, as the mirror's merge does.
+    """
+    n = len(cold)
+    vals = np.concatenate([np.sort(warm), np.sort(cold)])
+    w = np.concatenate([np.full(n, (1.0 - m) / n), np.full(n, m / n)])
+    order = np.argsort(vals, kind="stable")
+    cum = np.cumsum(w[order])
+    i = int(np.searchsorted(cum, p * (1.0 - 1e-12), side="left"))
+    return float(vals[order][min(i, 2 * n - 1)])
 
 
 def _ttft_own(model, topo, wl, chunk, turn_tokens, mfu, per_pass_overhead,
@@ -1826,7 +1835,7 @@ def _ttft_own(model, topo, wl, chunk, turn_tokens, mfu, per_pass_overhead,
     if percentile is None:
         return e_cold
     return ttft_service_quantile(model, topo, wl, chunk, percentile,
-                                 turn_tokens, mfu, per_pass_overhead)[0]
+                                 turn_tokens, mfu, per_pass_overhead)
 
 
 def queue_wait_seconds(model: Model, topo: Topology, wl, req_rate: float,
@@ -2726,10 +2735,9 @@ def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
     THE PERCENTILE PROXY. The probe scores p-th TTFT over every request, so
     that is the population here. The proxy is
         TTFT_p ~= E[W] + c_p
-    with c_p the own-prefill term of ttft_service_quantile: a miss at its
-    conditional quantile when misses outnumber the tail (m > 1 - P), a hit
-    at its conditional quantile otherwise. It is c -> c_p in both closed
-    forms below. It is NOT Q_p(W + S): the wait enters at its P-K mean
+    with c_p = ttft_service_quantile, the P-th quantile of the hit/miss
+    service mixture at the workload's miss share. It is c -> c_p in both
+    closed forms below. It is NOT Q_p(W + S): the wait enters at its P-K mean
     because the model has no distribution for it, and a percentile of a sum
     is not the sum of a mean and a percentile. How far the proxy sits from
     the true percentile, and in which direction, is unmeasured.

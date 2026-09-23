@@ -86,6 +86,21 @@ export const state = {
 // default page shares as a bare URL and every link stays readable.
 export const STATE_DEFAULTS = { ...state };
 
+// The TTFT statistic of a share-link fragment. A non-empty fragment without
+// ttft_pct was shared before the control existed, when the page checked a
+// miss's mean TTFT, so it decodes as 'mean'; a bare URL is today's default.
+export function ttftPctFromFragment(params, options){
+  const v = params.get('ttft_pct');
+  if (v !== null) return options.includes(v) ? v : STATE_DEFAULTS.ttft_pct;
+  return [...params.keys()].length ? 'mean' : STATE_DEFAULTS.ttft_pct;
+}
+// ...and the encoder's side: every non-bare link names its statistic, so no
+// new link can be read as a legacy one. Mutates and returns `params`.
+export function stampTtftPct(params, pct){
+  if ([...params.keys()].length && !params.has('ttft_pct')) params.set('ttft_pct', String(pct));
+  return params;
+}
+
 export function sessionsFromHeadcount(headcount, active=1.0, spu=1.0){
   return headcount * active * spu;
 }

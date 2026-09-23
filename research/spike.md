@@ -216,12 +216,12 @@ TP2 costs ~1,140 tokens across 8.8 seconds.
    this study is therefore an **upper** bound on the SLA-limited miss rate.
    *Update 2026-09-23: the latency ceiling can now check a percentile.* An
    SLO's p95 is over ALL requests, which is also what the probe scores
-   (`ttft_all_pX`), so the model uses that population. With miss share m
-   and target P, and misses ranked above hits: if m > 1 − P the P-th
-   request is a miss at the miss-conditional quantile q = 1 − (1 − P)/m;
-   otherwise it is a hit at q = P/(1 − m). Each cost is monotone in context
-   length, so the quantile is the prefill of a request at that context
-   quantile (`model.ttft_service_quantile`). `max_users_latency` and
+   (`ttft_all_pX`), so the model uses that population: c_p is the P-th
+   quantile of the MIXTURE of hit and miss service times, weighted 1 − m
+   and m by the miss share (`model.ttft_service_quantile`). A split that
+   ranks every miss above every hit is wrong here, because the two overlap:
+   at a 16,000-token turn a hit over a long cached context outlasts a short
+   miss. `max_users_latency` and
    `sla_miss_rate` then check the **proxy** `E[W] + c_p` in place of
    `E[W] + E[S | miss]`. It is not `Q_p(W + S)`: the wait enters at its P-K
    mean because the model has no distribution for it, and how far the proxy

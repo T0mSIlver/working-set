@@ -193,10 +193,13 @@ class HLatency(Hypothesis):
     probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
-        return (f"H-latency: the p{cfg.slo.percentile} TTFT over all "
-                f"requests (model proxy: mean wait + that percentile's own "
-                f"prefill) reaches the {cfg.slo.ttft_budget_s:g} s budget "
-                f"near ~{p.latency_ceiling_users:g} users.")
+        stat = ("a cache miss's mean TTFT"
+                if cfg.slo.ttft_statistic == "miss_mean"
+                else f"the p{cfg.slo.percentile} TTFT over all requests "
+                     f"(model proxy: mean wait + the p{cfg.slo.percentile} "
+                     f"of the hit/miss service mixture)")
+        return (f"H-latency: {stat} reaches the {cfg.slo.ttft_budget_s:g} s "
+                f"budget near ~{p.latency_ceiling_users:g} users.")
 
     def predict(self, cfg, p) -> Prediction:
         return Prediction(value=p.latency_ceiling_users, unit=" users")

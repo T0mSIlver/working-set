@@ -35,43 +35,66 @@ def _ref_latency_args(**wl_kw):
 KW = dict(turn_tokens=2000, per_pass_overhead=True)
 
 
-def test_ttft_quantile_picks_the_all_request_path():
-    """p-th TTFT over ALL requests: with m misses, the p-th request is a hit
-    while m <= 1 - p, and a miss at the conditional quantile
-    q = 1 - (1 - p)/m past it."""
+def test_ttft_quantile_is_the_weighted_mixture_quantile():
+    """c_p is the P-th quantile of the hit/miss service mixture, weights
+    1 - m and m: at m = 0 it is the hits' own quantile, at m = 1 the misses'
+    own, and in between the weighted CDF at c_p reaches P."""
     m, topo, _ = _ref_latency_args()
-    for inval, pct, path in ((0.01, 95, "hit"), (0.05, 95, "hit"),
-                             (0.10, 95, "miss"), (0.01, 99.5, "miss"),
-                             (1.0, 50, "miss"), (0.0, 99, "hit")):
+    for inval in (0.0, 0.01, 0.05, 0.3, 1.0):
         wl = M.Workload(invalidation=inval)
-        c, got = M.ttft_service_quantile(m, topo, wl, 4096, pct, **KW)
-        assert got == path, (inval, pct)
-        assert c >= 0
-    # the miss path's quantile is the miss-conditional one
-    wl = M.Workload(invalidation=0.10)
-    c, _ = M.ttft_service_quantile(m, topo, wl, 4096, 95, **KW)
-    q = 100 * (1 - 0.05 / 0.10)
-    assert c == pytest.approx(M.miss_service_quantile(m, topo, wl, 4096, q, **KW))
+        cold, warm = M._prefill_service_arrays(m, topo, wl, 4096, 2000,
+                                               per_pass_overhead=True)
+        c = M.ttft_service_quantile(m, topo, wl, 4096, 95, **KW)
+        cdf = inval * (cold <= c).mean() + (1 - inval) * (warm <= c).mean()
+        below = inval * (cold < c).mean() + (1 - inval) * (warm < c).mean()
+        assert below < 0.95 <= cdf + 1e-12, (inval, below, cdf)
+    wl = M.Workload(invalidation=1.0)
+    assert M.ttft_service_quantile(m, topo, wl, 4096, 95, **KW) == pytest.approx(
+        M.miss_service_quantile(m, topo, wl, 4096, 95, **KW), rel=1e-4)
 
 
-def test_latency_ceiling_percentile_is_monotone_within_a_path():
-    """Inside one path a higher percentile is a stricter budget: the ceiling
-    never rises with it."""
+def test_latency_ceiling_is_monotone_in_the_miss_share():
+    """More misses never raise the ceiling, including across m = 1 - P where
+    a hit/miss split used to jump. Checked where the two classes overlap
+    (a 16,000-token turn) and at the reference turn."""
+    m, _, _ = _ref_latency_args()
+    for tp, turn, sla in ((1, 16_000, 1.0), (2, 16_000, 1.0),
+                          (1, 16_000, 10.0), (2, 2_000, 10.0)):
+        topo = M.topology("tp", tp, "H200")
+        ceil = [M.max_users_latency(m, topo, M.Workload(invalidation=x), 4096,
+                                    sla, turn, percentile=95,
+                                    per_pass_overhead=True)
+                for x in (0.0, 0.03, 0.045, 0.05, 0.055, 0.07, 0.1, 0.3, 1.0)]
+        assert all(a >= b for a, b in zip(ceil, ceil[1:])), (tp, turn, sla, ceil)
+
+
+def test_16k_turn_one_second_budget_is_unmeetable_past_the_split():
+    """27B on one H200 with a 16,000-token turn: the mixture's p95 service is
+    ~1.9 s, over a 1 s budget at zero load, at 5% and at 5.5% misses alike.
+    A split that ranked every miss above every hit read 0.88 s at 5.5%."""
+    m = M.MODELS["27B"]
+    topo = M.topology("tp", 1, "H200")
+    for inval in (0.05, 0.055):
+        wl = M.Workload(invalidation=inval)
+        c = M.ttft_service_quantile(m, topo, wl, 4096, 95, 16_000,
+                                    per_pass_overhead=True)
+        assert 1.8 < c < 2.1, (inval, c)
+        assert M.max_users_latency(m, topo, wl, 4096, 1.0, 16_000,
+                                   percentile=95, per_pass_overhead=True) == 0.0
+
+
+def test_latency_ceiling_percentile_is_monotone():
+    """A higher percentile is a stricter budget at any fixed miss share."""
     m, topo, _ = _ref_latency_args()
-    for inval, pcts in ((1.0, (50, 90, 95, 99)), (0.01, (50, 90, 95, 98))):
+    for inval in (0.01, 0.1, 1.0):
         wl = M.Workload(invalidation=inval)
         ceil = [M.max_users_latency(m, topo, wl, 4096, 10.0, percentile=p, **KW)
-                for p in pcts]
+                for p in (50, 90, 95, 99)]
         assert all(a >= b for a, b in zip(ceil, ceil[1:])), (inval, ceil)
-    # all misses: p95 is strictly tighter than p50
-    wl = M.Workload(invalidation=1.0)
-    assert (M.max_users_latency(m, topo, wl, 4096, 30.0, percentile=95, **KW)
-            < M.max_users_latency(m, topo, wl, 4096, 30.0, percentile=50, **KW))
-    # and the miss rate the budget allows falls with the percentile too
     wl = M.Workload(invalidation=0.10)
     rate = M.request_rate(64, M.THINK_TIME_S)
     f = [M.sla_miss_rate(m, topo, wl, rate, 4096, 10.0, 2000,
-                         per_pass_overhead=True, percentile=p) for p in (99, 99.9)]
+                         per_pass_overhead=True, percentile=p) for p in (95, 99)]
     assert f[1] <= f[0]
 
 
@@ -98,8 +121,8 @@ def test_capped_workload_quantile_sits_at_the_cap():
     m, topo, _ = _ref_latency_args()
     wl = M.Workload(invalidation=1.0, cap=16_000)
     at_cap = M.miss_context_seconds(m, topo, 16_000, 4096)
-    q95, _ = M.ttft_service_quantile(m, topo, wl, 4096, 95, **KW)
-    q99, _ = M.ttft_service_quantile(m, topo, wl, 4096, 99, **KW)
+    q95 = M.ttft_service_quantile(m, topo, wl, 4096, 95, **KW)
+    q99 = M.ttft_service_quantile(m, topo, wl, 4096, 99, **KW)
     assert q95 == pytest.approx(q99, rel=1e-9)
     assert q95 == pytest.approx(at_cap, rel=0.05)
     assert (M.max_users_latency(m, topo, wl, 4096, 10.0, percentile=95, **KW)
