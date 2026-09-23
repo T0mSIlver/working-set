@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU scaling explorer</title>
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<style>
+/* ============================================================================
+   DESIGN SYSTEM — theme-aware tokens (light default, dark via media + attr)
+   ========================================================================== */
+:root{
+  --surface:#fcfcfb; --page:#f9f9f7;
+  --text:#0b0b0b; --text-2:#52514e; --muted:#6f6d66;
+  --grid:#e1e0d9; --axis:#c3c2b7;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#12805a; --s4:#7b4fc0;
+  /* light theme only: these carry status text and axis labels, so they are
+     tuned for contrast on white (>=4.5:1) rather than for vividness. The dark
+     theme keeps the brighter originals, where they already pass. */
+  --good:#0a7d0a; --warn:#a5680a; --crit:#c22c2c;
+  --border:#e1e0d9; --tile:#ffffff; --control:#f2f1ec; --control-active:#ffffff;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 1px 3px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --surface:#1a1a19; --page:#0d0d0d;
+    --text:#ffffff; --text-2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#a486e8; --s4:#a486e8;
+    --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+    --border:#2c2c2a; --tile:#222220; --control:#242422; --control-active:#333330;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --surface:#1a1a19; --page:#0d0d0d;
+  --text:#ffffff; --text-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+  --border:#2c2c2a; --tile:#222220; --control:#242422; --control-active:#333330;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;overflow-x:hidden}
+body{
+  background:var(--page); color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:20px 20px 60px;}
+.tnum{font-variant-numeric:tabular-nums}
+a{color:var(--s1); text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* header */
+header.app{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:6px;}
+header.app h1{font-size:22px; font-weight:650; letter-spacing:-.01em; margin:0;}
+header.app .sub{color:var(--text-2); font-size:13.5px; margin:4px 0 0;}
+.themebtn{
+  border:1px solid var(--border); background:var(--surface); color:var(--text-2);
+  border-radius:8px; padding:7px 12px; font:inherit; font-size:12.5px; cursor:pointer;
+  display:inline-flex; align-items:center; gap:7px; white-space:nowrap;
+}
+.themebtn:hover{border-color:var(--axis)}
+
+/* assumptions */
+details.assump{margin:14px 0 4px; border:1px solid var(--border); border-radius:10px; background:var(--surface);}
+details.assump>summary{cursor:pointer; padding:11px 15px; font-weight:560; font-size:13px; color:var(--text-2); list-style:none;}
+details.assump>summary::-webkit-details-marker{display:none}
+details.assump>summary::before{content:"▸ "; color:var(--muted)}
+details.assump[open]>summary::before{content:"▾ "}
+details.assump .body{padding:2px 18px 15px; color:var(--text-2); font-size:12.8px; line-height:1.6;}
+details.assump .body ul{margin:6px 0 0; padding-left:18px}
+details.assump .body li{margin:5px 0}
+details.assump .body b{color:var(--text); font-weight:600}
+.prov{color:var(--warn); font-weight:600}
+.assump-line{color:var(--text-2); font-size:12.8px; margin:14px 0 4px;}
+
+/* panels */
+.panel{background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow);}
+.section-h{font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:650; margin:0 0 2px;}
+
+/* control panel — ONE flowing grid, not three fixed columns: the groups used to
+   be independent vertical stacks of 8/4/4 fields, so two thirds of the panel
+   was dead space next to the tallest column. `display:contents` drops the group
+   boxes out of layout and lets every field flow into the same auto-fit grid;
+   the group names survive as full-width hairline-ruled subheads. */
+.controls{padding:13px 15px 14px; margin:12px 0;}
+.ctl-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(238px,1fr));
+  gap:10px 22px; margin-top:8px; align-items:start;}
+.ctl-group{display:contents}
+.ctl-sec{grid-column:1/-1; font-size:10.5px; text-transform:uppercase; letter-spacing:.055em;
+  color:var(--muted); font-weight:650; margin:7px 0 -1px; padding-top:8px;
+  border-top:1px solid var(--border);}
+/* every .ctl-sec is the first child of its own (display:contents) group, so
+   `:first-child` would match all three and no rule would ever draw — scope it
+   to the FIRST GROUP instead, leaving the other two headings ruled */
+.ctl-group:first-child > .ctl-sec{border-top:0; padding-top:0; margin-top:0}
+.field label.flabel{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px; color:var(--text-2); margin-bottom:3px; gap:8px}
+.field label.flabel .val{color:var(--text); font-weight:620; font-size:12.5px}
+
+/* segmented control */
+.seg{display:inline-flex; background:var(--control); border-radius:8px; padding:2.5px; gap:2px; flex-wrap:wrap;}
+/* the 4-model selector wraps to 2x2 — an equal-width grid instead of the
+   ragged inline wrap, so the buttons fill the field cleanly */
+#seg-model{display:grid; grid-template-columns:1fr 1fr; width:100%;}
+#seg-model button{text-align:center}
+.seg button{
+  border:0; background:transparent; color:var(--text-2); font:inherit; font-size:12px;
+  padding:5px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; font-weight:520;
+}
+.seg button[aria-pressed="true"]{background:var(--control-active); color:var(--text); box-shadow:var(--shadow); font-weight:600}
+.seg button:disabled{opacity:.35; cursor:not-allowed}
+/* a split whose TP group cannot hold the weights: still selectable, so the
+   tiles can explain the threshold, but visibly marked as non-viable */
+.seg button.nofit{opacity:.45; text-decoration:line-through solid 1px}
+.seg button.nofit[aria-pressed="true"]{opacity:.8; text-decoration:none}
+
+/* sliders */
+input[type=range]{
+  -webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:3px;
+  background:var(--grid); outline:none; margin:4px 0 2px;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none; appearance:none; width:15px; height:15px; border-radius:50%;
+  background:var(--s1); cursor:pointer; border:2px solid var(--surface); box-shadow:var(--shadow);
+}
+input[type=range]::-moz-range-thumb{
+  width:15px; height:15px; border-radius:50%; background:var(--s1); cursor:pointer;
+  border:2px solid var(--surface); box-shadow:var(--shadow);
+}
+input[type=number].population{
+  width:100%; box-sizing:border-box; border:1px solid var(--border); border-radius:7px;
+  background:var(--control); color:var(--text); font:inherit; font-size:12.5px;
+  padding:6px 8px; outline:none;
+}
+input[type=number].population:focus{border-color:var(--s1)}
+input[type=range]:disabled{opacity:.38}
+
+/* toggle */
+.toggle{display:inline-flex; align-items:center; gap:9px; cursor:pointer; font-size:12.5px; color:var(--text-2)}
+.toggle .track{width:38px; height:21px; border-radius:12px; background:var(--grid); position:relative; transition:background .12s; flex:none}
+.toggle .track::after{content:""; position:absolute; top:2.5px; left:2.5px; width:16px; height:16px; border-radius:50%; background:var(--surface); box-shadow:var(--shadow); transition:transform .12s}
+.toggle input{position:absolute; opacity:0; width:0; height:0}
+.toggle input:checked + .track{background:var(--s3)}
+.toggle input:checked + .track::after{transform:translateX(17px)}
+
+/* stat tiles */
+/* 7 tiles = 8 column units (only the hero spans 2): two full rows of 4,
+   so no tile ever wraps onto a line of its own */
+.tiles{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:16px 0;}
+@media (max-width:900px){ .tiles{grid-template-columns:repeat(2,1fr)} }
+@media (max-width:620px){ .tiles{grid-template-columns:1fr} .tile.hero{grid-column:span 1} }
+.tile.wide{grid-column:span 2}
+@media (max-width:760px){ .tiles{grid-template-columns:repeat(2,1fr)} }
+.tile{background:var(--tile); border:1px solid var(--border); border-radius:11px; padding:13px 15px; box-shadow:var(--shadow);}
+.tile .k{font-size:11.5px; color:var(--muted); font-weight:560; letter-spacing:.01em}
+.tile .badge{margin-left:6px; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; border:1px solid; border-radius:5px; padding:0 4px; vertical-align:1px}
+.tile .v{font-size:25px; font-weight:680; letter-spacing:-.02em; margin-top:4px; line-height:1.05}
+.tile .v .u{font-size:12.5px; font-weight:520; color:var(--text-2); margin-left:4px}
+.tile .sub2{font-size:11px; color:var(--text-2); margin-top:3px}
+/* hero tile: the planning number (warm p5) */
+.tile.hero{grid-column:span 2; border-color:var(--s1); border-width:1.5px}
+.tile.hero .k{color:var(--s1); font-weight:650}
+.tile.hero .v{font-size:38px}
+@media (max-width:480px){ .tiles{grid-template-columns:1fr} .tile.hero,.tile.wide{grid-column:auto} }
+
+/* hover tooltips (metric / control explanations) */
+.tip{cursor:help; border-bottom:1px dotted var(--muted); position:relative}
+.tip:focus-visible{outline:1.5px solid var(--s1); outline-offset:2px; border-radius:3px}
+.tip:hover::after, .tip:focus-visible::after{
+  content:attr(data-tip); position:absolute; left:0; top:100%; margin-top:7px;
+  background:var(--surface); color:var(--text); border:1px solid var(--border);
+  border-radius:8px; padding:9px 11px; width:270px; white-space:normal;
+  font-size:11.5px; font-weight:400; line-height:1.5; letter-spacing:0;
+  text-transform:none; z-index:20; box-shadow:var(--shadow);
+}
+
+/* charts grid */
+.charts{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+/* Vertical rhythm: every stacked block (chart grid, card, tiles) is 14 px
+   from the next. Cards carry it inline as margin-bottom; a chart grid gets it
+   here. A new block placed next to an existing one MUST have it — two cards
+   with rounded corners touching is the tell. */
+.charts + .charts, .charts + .panel{margin-top:14px}
+@media (max-width:820px){ .charts{grid-template-columns:1fr} }
+.card{padding:14px 16px 12px; overflow:hidden;}
+.card .ct{font-size:13.5px; font-weight:620; margin:0 0 1px}
+.card .cs{font-size:11.5px; color:var(--muted); margin:0 0 6px}
+.chartbox{width:100%; position:relative; overflow-x:auto}
+svg.chart{width:100%; height:auto; display:block; overflow:visible}
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; color:var(--text-2); margin:2px 0 4px}
+.legend .li{display:inline-flex; align-items:center; gap:6px}
+.legend .sw{width:14px; height:3px; border-radius:2px; display:inline-block}
+.legend .sw.dot{width:9px; height:9px; border-radius:50%}
+/* legend swatches mirror the series' dash patterns, so the key works for
+   readers who cannot separate the hues */
+.legend .sw.dash7{background-image:repeating-linear-gradient(90deg,transparent 0 3px,var(--surface) 3px 5px)}
+.legend .sw.dash2{background-image:repeating-linear-gradient(90deg,transparent 0 2px,var(--surface) 2px 4px)}
+.legend .sw.dash11{background-image:repeating-linear-gradient(90deg,transparent 0 6px,var(--surface) 6px 8px)}
+
+/* tooltip */
+/* left/top are set in JS in chartbox-relative pixels and clamped inside the
+   box — no transform offset, or the tooltip lands above the card and the
+   card's overflow:hidden clips it (only its bottom edge stays visible). */
+.tt{position:absolute; pointer-events:none; background:var(--surface); border:1px solid var(--border); border-radius:8px; box-shadow:var(--shadow); padding:7px 9px; font-size:11.5px; color:var(--text); opacity:0; transition:opacity .08s; z-index:5; white-space:nowrap; left:0; top:0}
+.tt .tth{color:var(--muted); font-size:10.5px; margin-bottom:3px}
+.tt .row{display:flex; align-items:center; gap:6px; margin:1px 0}
+.tt .row .sw{width:8px;height:8px;border-radius:2px;display:inline-block}
+.tt b{font-weight:640}
+
+svg text{fill:var(--text-2)}
+.axlbl{fill:var(--muted); font-size:10.5px}
+.axtick{fill:var(--muted); font-size:10px}
+.dlabel{fill:var(--text); font-size:10.5px; font-weight:600}
+.foot{color:var(--muted); font-size:11.5px; margin-top:22px; text-align:center}
+.foot code{background:var(--control); padding:1px 5px; border-radius:4px}
+.ftable-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch}
+.ftable{width:100%; min-width:640px; border-collapse:collapse; font-size:12px; margin-top:4px}
+.ftable th{text-align:left}
+.ftable th.num{text-align:right}
+.ftable th{ font-weight:600; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; padding:4px 8px 6px; border-bottom:1px solid var(--border)}
+.ftable td{padding:5px 8px; border-bottom:1px solid var(--border)}
+.ftable tr.you td{background:color-mix(in srgb, var(--s1) 11%, transparent); font-weight:600}
+.ftable tr.you td:first-child{box-shadow:inset 3px 0 0 var(--s1)}
+.ftable td.num{text-align:right; font-variant-numeric:tabular-nums}
+.ftable .bind{font-weight:650; font-size:11px; text-transform:uppercase; letter-spacing:.03em}
+.ftable td.v{font-weight:650; white-space:nowrap}
+
+/* deploy card */
+.deploy{display:grid; grid-template-columns:1.05fr .95fr; gap:8px 28px}
+/* min-width:0 lets the unbroken <pre> shrink instead of widening the grid
+   into the card's overflow:hidden clip */
+.deploy>div{min-width:0}
+@media (max-width:760px){ .deploy{grid-template-columns:1fr} }
+.deploy h4{font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:650; margin:4px 0 6px}
+.spec{display:grid; grid-template-columns:auto 1fr; gap:3px 16px; font-size:12.5px; margin:0}
+.spec dt{color:var(--muted)}
+.spec dd{margin:0; color:var(--text); font-weight:600; text-align:right}
+.verdictline{grid-column:1/-1; font-size:12.5px; font-weight:600; margin:6px 0 0}
+.cmdwrap{position:relative; grid-column:1/-1; margin-top:6px; min-width:0}
+.cmd{background:var(--control); border:1px solid var(--border); border-radius:8px; padding:10px 70px 10px 12px; margin:0; font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-x:auto; white-space:pre; color:var(--text)}
+.cmd .cmt{color:var(--muted)}
+.copybtn{position:absolute; top:7px; right:7px; border:1px solid var(--border); background:var(--surface); color:var(--text-2); border-radius:6px; padding:3px 9px; font:inherit; font-size:11px; cursor:pointer}
+.copybtn:hover{border-color:var(--axis)}
+.planner-h{margin:22px 0 -4px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.planner-h .lede{font-size:12px; color:var(--text-2); font-weight:400; text-transform:none; letter-spacing:0}
+.preset{display:inline-flex; gap:6px; margin-top:7px; align-items:center; flex-wrap:wrap}
+.preset .plab{font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-right:1px}
+.preset button{font:inherit; font-size:11px; padding:3px 9px; border-radius:7px; border:1px solid var(--border); background:var(--tile); color:var(--text-2); cursor:pointer}
+.preset button:hover{border-color:var(--s1); color:var(--s1)}
+/* page table of contents — the page now runs three acts and eight act-3
+   panels, so it gets the same in-page nav the method page has */
+nav.toc{border:1px solid var(--border); border-radius:10px; background:var(--surface);
+  padding:10px 15px; margin:12px 0 2px; font-size:12.5px; color:var(--text-2);
+  display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline;}
+nav.toc a{color:var(--text-2)}
+nav.toc a:hover{color:var(--s1); text-decoration:none}
+nav.toc .tn{color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; font-weight:650; margin-right:2px}
+nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
+/* act-3 subsection headers: one narrative beat per group of panels */
+.sub-h{margin:30px 0 12px; padding-top:16px; border-top:1px solid var(--border);
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.sub-h h3{margin:0; font-size:15.5px; font-weight:660; letter-spacing:-.012em}
+.sub-h .n{color:var(--s1); font-weight:700; font-size:13px}
+.sub-h .lede{font-size:12.5px; color:var(--text-2)}
+.act-h{margin:34px 0 12px; padding-top:22px; border-top:2px solid var(--border)}
+.act-h .act-t{display:flex; gap:12px; align-items:center}
+.act-n{flex:0 0 auto; width:30px; height:30px; border-radius:50%; background:var(--s1); color:#fff; font-weight:700; font-size:15px; display:grid; place-items:center}
+.act-h h2{margin:0; font-size:20px; letter-spacing:-.02em; font-weight:680}
+/* the lede spans the container rather than sitting in a narrow column beside
+   the number badge, which wrapped it at ~55 characters */
+.act-h p{margin:8px 0 0; font-size:13.5px; color:var(--text-2); line-height:1.6}
+.ctl-lede{margin:-2px 0 10px; font-size:12px; color:var(--text-2); max-width:80ch}
+.glossary{margin:14px 0}
+.glossary .body{padding-top:2px}
+.glossary dl{margin:8px 0 0; display:grid; grid-template-columns:190px 1fr; gap:11px 20px; align-items:baseline}
+.glossary dt{font-weight:660; font-size:13px}
+.glossary dt .gt{display:block; font-weight:420; color:var(--muted); font-size:11.5px; margin-top:1px}
+.glossary dd{margin:0; font-size:12.5px; color:var(--text-2); line-height:1.55}
+@media (max-width:820px){ .glossary dl{grid-template-columns:1fr; gap:3px 0} .glossary dd{margin:0 0 8px} }
+/* a section whose single chart or single tile should not leave a dead column */
+.charts.solo{grid-template-columns:1fr}
+.tiles.solo{grid-template-columns:1fr}
+.tiles.solo .tile.hero{grid-column:span 1}
+/* ============================================================================
+   OPTION B — website design language: graph-paper ground, square hairline
+   boxes, teal accent, mono apparatus labels. Overrides the tokens above; every
+   token name the charts read stays defined in all three theme blocks.
+   ========================================================================== */
+:root{
+  --bg:#ffffff; --paper:#f0f1f3; --fg:#1a1a1a; --fg-muted:#6b6b6b; --accent:#0d9488;
+  --code-bg:#f3f4f6; --card-hover:#f6f7f8;
+  --surface:#ffffff; --page:#ffffff; --tile:#ffffff;
+  --text:#1a1a1a; --text-2:#4a4a4a; --muted:#6b6b6b;
+  --grid:#eceef0; --axis:#c9ccd1; --border:#e4e5e8;
+  --s1:#0d9488; --s2:#e0612b; --s3:#2a6fd6; --s4:#7b4fc0;
+  --good:#0a7d0a; --warn:#a5680a; --crit:#c22c2c;
+  --control:#f3f4f6; --control-active:#ffffff; --shadow:none;
+  --mono:ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0c0c0d; --paper:#17181a; --fg:#e8e8e6; --fg-muted:#8a8a8a; --accent:#2dd4bf;
+    --code-bg:#1a1b1e; --card-hover:#151619;
+    --surface:#0c0c0d; --page:#0c0c0d; --tile:#0c0c0d;
+    --text:#e8e8e6; --text-2:#b9b9b6; --muted:#8a8a8a;
+    --grid:#1f2023; --axis:#34353a; --border:#26272a;
+    --s1:#2dd4bf; --s2:#f07a45; --s3:#5b9cf0; --s4:#a486e8;
+    --good:#0ca30c; --warn:#fab219; --crit:#e04848;
+    --control:#1a1b1e; --control-active:#26272a; --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0c0c0d; --paper:#17181a; --fg:#e8e8e6; --fg-muted:#8a8a8a; --accent:#2dd4bf;
+  --code-bg:#1a1b1e; --card-hover:#151619;
+  --surface:#0c0c0d; --page:#0c0c0d; --tile:#0c0c0d;
+  --text:#e8e8e6; --text-2:#b9b9b6; --muted:#8a8a8a;
+  --grid:#1f2023; --axis:#34353a; --border:#26272a;
+  --s1:#2dd4bf; --s2:#f07a45; --s3:#5b9cf0; --s4:#a486e8;
+  --good:#0ca30c; --warn:#fab219; --crit:#e04848;
+  --control:#1a1b1e; --control-active:#26272a; --shadow:none;
+}
+:root[data-theme="light"]{
+  --bg:#ffffff; --paper:#f0f1f3; --fg:#1a1a1a; --fg-muted:#6b6b6b; --accent:#0d9488;
+  --surface:#ffffff; --page:#ffffff; --tile:#ffffff;
+  --text:#1a1a1a; --text-2:#4a4a4a; --muted:#6b6b6b;
+  --grid:#eceef0; --axis:#c9ccd1; --border:#e4e5e8;
+  --s1:#0d9488; --s2:#e0612b; --s3:#2a6fd6; --s4:#7b4fc0;
+  --control:#f3f4f6; --control-active:#ffffff;
+}
+
+body{
+  background-color:var(--bg);
+  background-image:linear-gradient(var(--paper) 1px,transparent 1px),linear-gradient(90deg,var(--paper) 1px,transparent 1px);
+  background-size:48px 48px; background-position:center top;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  font-size:14.5px; line-height:1.6; color:var(--fg);
+}
+a{color:var(--accent); text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent); text-underline-offset:2px}
+a:hover{text-decoration-color:var(--accent)}
+
+/* top band */
+.topband{background:var(--bg); border-bottom:1px solid var(--border)}
+.topin{max-width:1120px; margin:0 auto; padding:18px 20px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap}
+.topin .site{color:var(--fg); font-weight:650; text-decoration:none; font-size:15px}
+nav.steps{display:flex; gap:4px 20px; flex-wrap:wrap; font-size:14px}
+nav.steps a{color:var(--fg-muted); text-decoration:none}
+nav.steps a:hover{color:var(--fg)}
+
+.wrap{max-width:1120px; padding:48px 20px 60px}
+.box{background:var(--bg); border:1px solid var(--border); padding:32px 36px; margin:0 0 1.5rem}
+header.app{margin-bottom:1.5rem; align-items:flex-start}
+header.app > div:first-child{max-width:62ch}
+header.app h1{font-size:1.625rem; font-weight:650; letter-spacing:-.01em; line-height:1.25}
+header.app .sub{font-size:1.02rem; color:var(--fg-muted); margin:10px 0 0; line-height:1.6}
+
+/* step heads */
+.step-h{display:flex; flex-direction:column; gap:4px; margin:0 0 18px}
+.step-h .lbl, .sub-lbl, details.fold > summary .lbl{
+  font-family:var(--mono); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.09em; color:var(--fg-muted)}
+.step-h .lbl{color:var(--accent)}
+.step-h h2{margin:0; font-size:1.25rem; font-weight:600; letter-spacing:-.01em}
+.step-lede{color:var(--fg-muted); margin:-8px 0 18px; max-width:75ch}
+.sub-lbl{margin:22px 0 8px}
+.appendix{margin-top:2.5rem}
+.appendix > .step-h, .appendix > .step-lede{background:var(--bg); border:1px solid var(--border); padding:20px 24px; margin:0}
+.appendix > .step-h{border-bottom:0; padding-bottom:0}
+.appendix > .step-lede{border-top:0; padding-top:4px; margin-bottom:.75rem; font-size:13px; max-width:none}
+
+/* square everything that was rounded */
+.panel,.tile,.themebtn,.seg,.seg button,.cmd,.copybtn,.tt,details.assump,nav.toc,
+.preset button,input[type=number].population,.tile .badge,.foot code,.tip:hover::after{border-radius:0}
+.panel{box-shadow:none}
+/* cards nested inside a step box: hairline inner rows, no double padding */
+.step .panel.card{padding:16px 18px 14px}
+.card .ct{font-size:14px; font-weight:600}
+.card .cs{font-size:12px; color:var(--fg-muted)}
+.themebtn{background:var(--bg); color:var(--fg-muted); font-size:13px}
+.themebtn:hover{border-color:var(--accent); color:var(--accent)}
+
+/* controls */
+.ctl-grid{gap:14px 26px}
+.ctl-grid.hyp{grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); margin-top:0}
+.ctl-sec{font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.09em; color:var(--fg-muted)}
+.ctl-group:first-child > .ctl-sec{border-top:0; padding-top:0; margin-top:0}
+.field label.flabel{font-size:13px; color:var(--fg-muted)}
+.field label.flabel .val{color:var(--fg); font-family:var(--mono); font-size:12.5px; font-weight:600}
+.seg{background:transparent; border:1px solid var(--border); padding:2px}
+.seg button{color:var(--fg-muted)}
+.seg button:hover{background:var(--card-hover)}
+.seg button[aria-pressed="true"]{background:var(--accent); color:var(--bg); box-shadow:none}
+input[type=range]{background:var(--border); border-radius:0; height:2px}
+input[type=range]::-webkit-slider-thumb{background:var(--accent); border:2px solid var(--bg); box-shadow:0 0 0 1px var(--accent)}
+input[type=range]::-moz-range-thumb{background:var(--accent); border:2px solid var(--bg)}
+.toggle input:checked + .track{background:var(--accent)}
+.toggle .track{border-radius:11px}
+
+/* tiles */
+.tiles{gap:.5rem; margin:0 0 14px}
+.tile{padding:14px 16px}
+.tile .k{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--fg-muted); font-weight:700}
+.tile.hero{border-color:var(--accent); border-width:1px; box-shadow:inset 3px 0 0 var(--accent)}
+.tile.hero .k{color:var(--accent)}
+#decisionTiles{margin:0 0 14px}
+
+/* folds */
+details.fold{background:var(--bg); border:1px solid var(--border); margin:0 0 .5rem}
+details.fold > summary{cursor:pointer; list-style:none; padding:14px 18px; display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 14px}
+details.fold > summary::-webkit-details-marker{display:none}
+details.fold > summary .lbl::before{content:"+ "; color:var(--accent)}
+details.fold[open] > summary .lbl::before{content:"− "}
+details.fold > summary .sum{color:var(--fg-muted); font-size:13px}
+details.fold > summary:hover{background:var(--card-hover)}
+details.fold > summary:hover .lbl{color:var(--accent)}
+.fold-body{padding:4px 18px 18px}
+.fold-body > .panel.card:last-child, .fold-body > .charts:last-child{margin-bottom:0}
+details.fold.inner{margin:22px 0 0}
+details.fold.inner .fold-body .ctl-grid{margin-top:0}
+.fold-body .tiles:last-child{margin-bottom:0}
+details.readmore{margin:2px 0 8px; font-size:12px}
+details.readmore > summary{cursor:pointer; color:var(--accent); font-size:12.5px; width:max-content}
+details.readmore[open] > summary{margin-bottom:6px}
+.lead-h{font-size:13px !important; color:var(--text-2) !important; max-width:90ch}
+
+/* chart H hero */
+.hero-h .panel.card{border-color:var(--border)}
+.hero-h .card .ct{font-size:15px}
+#frontierCard{margin-top:14px}
+.ftable tr.you td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.ftable tr.you td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.ftable th{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em}
+.cmd{background:var(--code-bg)}
+.glossary{margin:0}
+.foot{color:var(--fg-muted); background:var(--bg); border:1px solid var(--border); padding:14px; margin-top:1.5rem}
+
+@media (max-width:640px){
+  .wrap{padding:24px 12px 40px}
+  .box{padding:20px 16px}
+  .fold-body{padding:4px 10px 12px}
+  details.fold > summary{padding:12px 14px}
+  .step .panel.card{padding:12px 12px 10px}
+  header.app h1{font-size:1.35rem}
+  .topin{padding:14px 12px}
+  nav.steps{gap:4px 14px; font-size:13px}
+}
+@media (max-width:640px){
+  .hero-h .chartbox #chartH{min-width:620px}
+  .ftable{min-width:700px}
+}
+
+</style>
+<link rel="modulepreload" href="src/main.js">
+</head>
+<body>
+<div class="topband"><div class="topin">
+  <a class="site" href="method.html">working-set</a>
+  <nav class="steps" aria-label="Page steps">
+    <a href="#step1">1 · Hypothesis</a><a href="#step2">2 · Result</a><a href="#step3">3 · Test</a><a href="#appendix">Under the hood</a><a href="method.html">Method</a>
+  </nav>
+</div></div>
+<div class="wrap">
+  <header class="app box">
+    <div>
+      <h1>How many coding agents can your GPUs serve?</h1>
+      <p class="sub">Describe the deployment you have in mind; the explorer says which limit it hits first, ranks every alternative on the same GPUs, and writes the load test that would prove it.</p>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap">
+      <button class="themebtn" id="shareBtn" type="button"
+        title="Copy a link that reproduces this configuration exactly as it is set now">
+        <span aria-hidden="true">⧉</span><span id="shareTxt">Share this configuration</span></button>
+      <button class="themebtn" id="themeBtn" type="button"><span id="themeIco">◐</span><span id="themeTxt">Theme</span></button>
+    </div>
+  </header>
+
+  <section class="box step" id="step1">
+    <div class="step-h"><span class="lbl">Step 1</span><h2>Your hypothesis</h2></div>
+    <div class="ctl-grid hyp">
+      <div class="ctl-group">
+        <div class="field">
+          <label class="flabel"><span class="tip" id="model-tip" data-tip="">Model</span></label>
+          <div class="seg" id="seg-model" data-key="model">
+            <button data-v="27B" aria-pressed="true">Qwen3.8-27B</button>
+            <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
+            <button data-v="MM35" aria-pressed="false">Mistral-Med-3.5</button>
+            <button data-v="GLM52" aria-pressed="false">GLM-5.3</button>
+            <button data-v="DSV4F" aria-pressed="false">DSv4-Flash</button>
+            <button data-v="DSV41F" aria-pressed="false">DSv4.1-Flash</button>
+            <button data-v="Q38FN" aria-pressed="false">Q3.8-Flash</button>
+            <button data-v="GLM53F" aria-pressed="false">G5.3-Flash</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="H200 (141 GB, 4.8 TB/s): the calibrated baseline. B300 (288.4 GB measured, 8 TB/s, native FP4): the only part that can run NVFP4 weights — reserve transferred from the H200 calibration plus a measured correction.">GPU</span></label>
+          <div class="seg" id="seg-gpu" data-key="gpu">
+            <button data-v="H200" aria-pressed="true">H200</button>
+            <button data-v="B300" aria-pressed="false">B300</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Total GPUs — one 8-GPU NVLink node at most; the Split control decides how they divide into replica groups. The big models need several GPUs before any pool exists at all — dimmed splits and the tiles show each threshold.">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
+          <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="split-tip" data-tip="How the N GPUs divide into DP replica groups × TP width. TP shards one weight copy across a group, so freed VRAM becomes one shared cache; DP replicates whole groups — throughput ×replicas, but the cache splits and a returning user is warm only on their home group (sticky routing). Dimmed splits cannot hold the weights.">Split (DP × TP)</span></label>
+          <div class="seg" id="seg-split"></div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Concurrent sessions are the load the model prices. Set headcount below to derive them as people × peak active share × sessions per active person. Each session is conservatively treated as a full request stream with its own think-time loop.">Concurrent users</span> <span class="val"><span id="v-users">64</span> · <span id="v-rate">2.13</span> req/s</span></label>
+          <input type="range" id="s-users" min="4" max="1024" step="4" value="64">
+        </div>
+        <div class="field">
+          <label class="flabel" for="i-headcount"><span class="tip" data-tip="People with access. Leave this empty to set concurrent sessions directly above. With a value here, the users slider is derived and disabled.">Headcount</span> <span class="val" id="v-pop-sessions">optional</span></label>
+          <input class="population" type="number" id="i-headcount" min="0" step="1" inputmode="numeric" placeholder="people with access">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Median of the user-prompt log-normal; 31k is the reference workload's fitted value. Chat workloads sit an order of magnitude lower, so the range runs down to 1k in 0.1k steps. The upper range scales with the model's context window, and lengths above the max_seq_len cap truncate to it.">User prompt median</span> <span class="val"><span id="v-user_median">31</span>k</span></label>
+          <input type="range" id="s-user_median" min="1" max="120" step="0.1" value="31">
+        </div>
+      </div>
+    </div>
+    <details class="fold inner" id="moreAssumptions">
+      <summary><span class="lbl">More assumptions</span><span class="sum">dtypes, efficiencies, MTP, offload, context cap, prompt shape, arrival rate, latency budget, cold traffic</span></summary>
+      <div class="fold-body">
+      <div class="ctl-grid">
+        <div class="ctl-group">
+          <div class="ctl-sec">Serving</div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Weight quantization of the served checkpoint. FP8 = the study baseline; NVFP4 uses real checkpoint byte counts (what stays high-precision is recipe-specific) and is B300-only — the KV cache stays FP8/FP16 by policy. Details on the method page.">Weights</span></label>
+          <div class="seg" id="seg-wdt" data-key="wdt">
+            <button data-v="fp8" aria-pressed="true">FP8</button>
+            <button data-v="nvfp4" aria-pressed="false">NVFP4</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="wover-tip" data-tip="">Deployed-weight overhead</span></label>
+          <div class="seg" id="seg-wover" data-key="wover">
+            <button data-v="pub" aria-pressed="true">As published</button>
+            <button data-v="p15" aria-pressed="false">+15%</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="kv-tip" data-tip="">KV cache dtype</span></label>
+          <div class="seg" id="seg-kv" data-key="kv">
+            <button data-v="fp8" aria-pressed="true">FP8</button>
+            <button data-v="fp16" aria-pressed="false">FP16</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="state-tip" data-tip="">Recurrent state dtype</span></label>
+          <div class="seg" id="seg-state" data-key="state_dt">
+            <button data-v="bf16" aria-pressed="true">bf16</button>
+            <button data-v="fp32" aria-pressed="false">fp32</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="kvshard-tip" data-tip="">KV cache across TP ranks</span></label>
+          <div class="seg" id="seg-kvshard" data-key="kvshard">
+            <button data-v="dcp" aria-pressed="true">Sharded (DCP)</button>
+            <button data-v="replicate" aria-pressed="false">Replicated</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
+          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.01" value="2.94">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" id="mbu-tip" data-tip="">Decode efficiency (MBU)</span> <span class="val"><span id="v-mbu">0.22</span></span></label>
+          <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Prefill Model FLOP Utilisation — the fraction of the group's advertised FP8 peak a prefill pass achieves. 0.45 is the study's anchor, calibrated twice: 39.6% on 2xA100 BF16 (controlled, research/prefill.md #1) and 40.0% implied by a 7-day 4xH200 FP8 production trace, agreeing to under 1% on the advertised-peak convention. The bracket is [0.30, 0.55], PROVISIONAL: a third, controlled Hopper-FP8 point (2026-09, 16k chunk) reads 30–34% in the model convention, below the other two, and the three are not yet reconciled. Moves TTFT, the cold-request ceiling, f* and B*; leaves cache and decode untouched, and cancels entirely from the cold/warm thrash ratio.">Prefill efficiency (MFU)</span> <span class="val"><span id="v-mfu">0.45</span></span></label>
+          <input type="range" id="s-mfu" min="0.10" max="1.00" step="0.01" value="0.45">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Host-RAM buffer for evicted sessions' KV + state: raises warm capacity as STORAGE, never decode speed — an offloaded session must be restored over PCIe first (unpriced). Split across replicas under DP.">CPU offload</span> <span class="val"><span id="v-ram">0</span> GiB</span></label>
+          <input type="range" id="s-ram" min="0" max="1024" step="32" value="0">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="vLLM max_seq_len; longer prompts are truncated. A lower cap trims the log-normal tail — smaller worst-case cold prefill, more sessions warm. The range is per model; the top stop is the model's exact max.">max_seq_len cap</span> <span class="val"><span id="v-cap">180</span>k</span></label>
+          <input type="range" id="s-cap" min="30" max="262" step="2" value="180">
+        </div>
+        </div>
+        <div class="ctl-group">
+          <div class="ctl-sec">Workload</div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Log-normal shape (std-dev of ln length), fitted at 0.81 on 1,850 real request lengths. The mean — not the median — drives warm capacity, so higher σ = fatter tail of pool-hogging sessions = fewer warm.">User prompt sigma</span> <span class="val" id="v-user_sigma">0.81</span></label>
+          <input type="range" id="s-user_sigma" min="0.30" max="1.40" step="0.01" value="0.81">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Median of the subagent-prompt log-normal — assumed 8k; subagents run much leaner contexts.">Subagent prompt median</span> <span class="val"><span id="v-sub_median">8</span>k</span></label>
+          <input type="range" id="s-sub_median" min="1" max="60" step="1" value="8">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Same log-normal shape parameter for the subagent class — assumed 0.90, not fitted (no subagent trace has been collected yet).">Subagent prompt sigma</span> <span class="val" id="v-sub_sigma">0.90</span></label>
+          <input type="range" id="s-sub_sigma" min="0.30" max="1.40" step="0.01" value="0.90">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Subagent requests per USER request — r = 0.10 makes subagents ≈ 9% of sampled sessions. They pack more, smaller sessions warm; the user-count readout excludes them.">Subagent ratio</span> <span class="val" id="v-sub_ratio">0.10 · 1 per 10</span></label>
+          <input type="range" id="s-sub_ratio" min="0" max="1.0" step="0.05" value="0.10">
+        </div>
+        <div class="field" style="margin-top:2px">
+          <label class="toggle">
+            <input type="checkbox" id="t-sub_shares_prefix">
+            <span class="track"></span>
+            <span class="tip" data-tip="Off = subagents get their own separate lean 3k prefix block (reserved once in the pool). On = they reuse the user prefix instead — no extra reserved block, but each subagent carries the bigger user prefix as its cached base.">Subagents share the user prefix</span>
+          </label>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Stable prefix every user request shares (system prompt, skills, tools) — reserved once per cache and deduplicated, so raising it RAISES warm capacity. Only pays off while byte-stable: a per-tenant salt or edited tool list turns it into per-session bytes (see the invalidation control).">System / shared prefix</span> <span class="val"><span id="v-sys">15</span>k</span></label>
+          <input type="range" id="s-sys" min="1" max="40" step="1" value="15">
+        </div>
+        </div>
+        <div class="ctl-group">
+          <div class="ctl-sec">Load, latency &amp; cold traffic</div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Fraction of the headcount with at least one live session in the busiest interval you size for. This is unmeasured; estimate distinct users per 15-minute window from gateway logs.">Peak active share</span> <span class="val"><span id="v-active">100</span>%</span></label>
+          <input type="range" id="s-active" min="0.01" max="1" step="0.01" value="1">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Parallel agent sessions per active person. The conservative reading gives each session its own request loop. Count simultaneous active sessions per user id in gateway logs.">Sessions per active person</span> <span class="val"><span id="v-spu">1.0</span></span></label>
+          <input type="range" id="s-spu" min="1" max="8" step="0.1" value="1">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Average seconds between one user's MAIN requests (reference: 30 s) — the full turn-to-turn interval, including the previous response's prefill + decode, not idle time on top: arrivals are open-loop, so response time never feeds back into the cadence. Measured once (role-tagged pi-agent trace, 2026-08-04): 43 s = 32.5 s waiting (tool + human) + 10.8 s being served, so 30 s is the conservative side — but per-session cycles spanned 4–126 s. Scales the request rate inversely — moves the latency and saturation ceilings linearly while leaving cache and decode untouched. The Python model also offers a closed-loop conversion (operating_point(closed=True)) where waiting alone is the knob and the deployment supplies its own response time.">Think time</span> <span class="val"><span id="v-think">30</span> s/turn</span></label>
+          <input type="range" id="s-think" min="5" max="180" step="5" value="30">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Tokens a warm HIT still prefills — the new turn on top of cached context. A bigger lever than it looks: at low miss rates the hit leg dominates the duty cycle, so this sets the headroom a burst drains into (500 → 8,000 tokens moves B* ~3.5× on the 27B/TP2).">Warm turn size</span> <span class="val"><span id="v-turn">2,000</span> tok</span></label>
+          <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Output tokens one response decodes — the assumption the steady-state readouts rest on. Measured (2026-08-27): ~400 mean over a 7-day production agentic trace, replacing the earlier 1,000 assumption; at the traced 50–90 tok/s that decodes in ~5–8 s of the 10.8 s served per request. It sets how long a request occupies the decode batch, so decoders in flight and the €/1M-token figure both scale with it.">Output per response</span> <span class="val"><span id="v-out">400</span> tok</span></label>
+          <input type="range" id="s-out" min="100" max="8000" step="100" value="400">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Time-to-first-token budget a cache MISS must meet. Sets the latency ceiling and B*, which is exactly linear in it; solved against the MEAN TTFT, so a p95 budget binds sooner than anything shown here.">TTFT budget</span> <span class="val"><span id="v-sla">10</span> s</span></label>
+          <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
+      </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Per-user decode speed a session must still get once every warm session decodes at once — the threshold the DECODE ceiling is solved against. 40 tok/s is the study's hard floor and every published figure uses it; 50 is its comfortable mark, and the comfortable line tracks this slider at 1.25×. The right value is a property of the WORKLOAD, not the hardware: an agent consuming tokens programmatically wants 40+, while a human reading chat output consumes maybe 5–8 tok/s, so a chat deployment judged at 40 can look decode-bound when it is not. Moves the decode ceiling steeply — it is the reciprocal of per-user speed, so halving the floor roughly doubles the ceiling. The energy model prices the same floor, so the cost card stays consistent.">Per-user decode floor</span> <span class="val"><span id="v-decode_floor">40</span> tok/s</span></label>
+          <input type="range" id="s-decode_floor" min="5" max="100" step="1" value="40">
+      </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Fraction of requests that can't match any cached KV (edited prefix, changed tools, a per-tenant salt) — an i.i.d. per-request draw; 10% is the docs' adverse planning case. 100% is the no-reuse floor: nothing matches, not even the shared system prefix, so the prefix control stops buying anything. Above 50% charts F and G widen their axis to the full range. A correlated flush is worse than anything this slider can show, and is priced by the Cold-spike tolerance tile.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
+          <input type="range" id="s-inval" min="0" max="100" step="0.5" value="1">
+      </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Cache misses arriving AT ONCE — the correlated event the i.i.d. miss-rate slider cannot express. The 'flush' preset sets it to one replica group's p5 warm population (capped at the slider's 512): a prompt-template deploy colding every session at once.">Cold burst size</span> <span class="val"><span id="v-burst">32</span> at once</span></label>
+          <input type="range" id="s-burst" min="1" max="512" step="1" value="32">
+          <span class="preset"><span class="plab">presets</span><button type="button" data-burst="1">one miss</button><button type="button" data-burst="32">a burst of 32</button><button type="button" data-burst="flush">full flush</button></span>
+      </div>
+        </div>
+      </div>
+      </div>
+    </details>
+  </section>
+
+  <section class="box step" id="step2">
+    <div class="step-h"><span class="lbl">Step 2</span><h2>The result</h2></div>
+  <div class="tiles solo" id="decisionTiles"></div>
+<details class="fold">
+  <summary><span class="lbl">Capacity and load readouts</span><span class="sum">warm sessions, decode speed, TTFT, prefill duty, cold-spike tolerance</span></summary>
+  <div class="fold-body">
+  <div class="tiles" id="tiles"></div>
+  <div class="tiles" id="tilesLoad"></div>
+  </div>
+</details>
+    <div class="sub-lbl" id="frontier">Every alternative, ranked</div>
+  <div class="charts solo hero-h">
+    <div class="panel card">
+      <p class="ct">H · The frontier: what a seat costs against what the model can do</p>
+      <p class="cs lead-h">Each dot is one model × split that can carry your load: Terminal-Bench score across, what one seat costs a month when the configuration is full up. The staircase is the set nothing beats on both counts.</p>
+      <details class="readmore"><summary>How to read this chart</summary>
+      <p class="cs">Every configuration that can carry your load as one dot: its Terminal-Bench score (one lab, one harness per version — Artificial Analysis; DeepSeek-V4.1-Flash's is its vendor card's until AA runs it) against what one seat costs a month with the configuration <b>full</b> — the bill at its max users, divided by them (hardware + electricity, at your prices). Priced full rather than at your load because at your load the hardware line of the bill is just the GPU count; at capacity a row that carries twice the users halves the seat. Dots stacked at one score are the same model on different splits — the column is what the topology choice costs. The <b>staircase</b> joins the configurations nothing beats on both counts: for any capability floor, the cheapest seat. Dots off it are dimmed because some other row scores at least as high for no more money — bills within 1% count as the same money, so a dearer dot can win on score alone.</p>
+      <p class="cs">The two Terminal-Bench versions disagree about this field. On <b>2.1</b> (89 tasks, Terminus 2 — Artificial Analysis's legacy eval) the eight models sit inside 46 points and the top four inside 7; on <b>4.0</b> (66 tasks, mini-SWE-agent v2.4.6 — the version carrying AA's Intelligence Index v4.3) the same eight spread over 42 points, GLM-5.3 leads Qwen3.8-Flash-Next by 17 rather than trailing it by 2, and two models score a measured <b>0.0%</b>. Each version is its own staircase, so neither can stand in for the other; the table below prints both columns whichever is on the axis.</p>
+      </details>
+      <div class="field" style="margin:6px 0 8px">
+        <label class="flabel"><span class="tip" id="bench-axis-label" data-tip="Which Terminal-Bench version is this chart's x-axis. Both are Artificial Analysis pass@1, one harness per version: 2.1 = 89 tasks × 3 repeats in Terminus 2, AA's legacy agentic-coding eval and the version every model here has a run on; 4.0 = 66 tasks × 3 repeats in mini-SWE-agent v2.4.6, the version in AA's Intelligence Index v4.3. DeepSeek-V4.1-Flash has no AA run of either and carries its vendor card's 90.6 / 31.2 on both. Display only — no other chart or number on the page moves.">chart axis</span></label>
+        <div class="seg" id="seg-bench" role="group" aria-labelledby="bench-axis-label">
+          <button data-v="tb21" aria-pressed="true">TB 2.1</button>
+          <button data-v="tb40" aria-pressed="false">TB 4.0</button>
+        </div>
+      </div>
+      <div class="legend">
+        <span class="li"><span class="sw dot" style="background:var(--s1)"></span>binds on cache</span>
+        <span class="li"><span class="sw dot" style="background:var(--s4)"></span>decode</span>
+        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>latency</span>
+        <span class="li"><span class="sw dot" style="background:var(--muted)"></span>saturation</span>
+        <span class="li"><span class="sw" style="background:var(--muted)"></span>efficient set</span>
+        <span class="li"><span class="sw dot" style="background:var(--muted); opacity:.35"></span>dominated</span>
+        <span class="li"><span class="sw dot" style="background:var(--surface); box-shadow:inset 0 0 0 2px var(--s4)"></span>hollow: max users is a lower bound (decode search censored)</span>
+      </div>
+      <div class="chartbox"><div id="chartH"></div><div class="tt" id="ttH"></div></div>
+    </div>
+  </div>
+  <div class="panel card" id="frontierCard">
+    <p class="ct">Every configuration that fits your load, ranked by max users</p>
+    <details class="readmore"><summary>What the columns mean</summary>
+    <p class="cs">Which configurations can serve <b>your current load</b>, sorted by max users; yours is highlighted. Each row is priced at its model's <b>own</b> speculative-decode capability (the MTP slider only affects the selected configuration) and at the <b>MBU slider's</b> decode efficiency, one value for every row — measured on one deployment; nothing here measures a dense one. Figures are system-wide users, per-group in parentheses for DP. <b>TB 2.1</b> and <b>TB 4.0</b> are the model's Terminal-Bench pass@1 on the two versions as Artificial Analysis measures them (one harness per version for every model — Terminus 2 on 2.1, mini-SWE-agent v2.4.6 on 4.0; vendor cards are not comparable, and DeepSeek-V4.1-Flash's 90.6 / 31.2 are the one pair of vendor figures, carried until AA publishes) — a model property, so every split of a model shares it. Chart H's toggle picks which of the two is its axis; the emphasised column is the one in play. The €/mo column is the whole bill at your load — GPU-hours at your GPU price plus the electricity at your €/kWh — so two rows with the same headroom rarely bill the same; €/seat is that bill with the row full, per user it then carries (chart H's y-axis).</p>
+    </details>
+    <label class="toggle" style="margin:2px 0 4px"><input type="checkbox" id="t-ceilcols"><span class="track"></span><span>show all four ceiling columns</span></label>
+    <div id="frontierTable"></div>
+  </div>
+  </section>
+
+  <section class="box step" id="step3">
+    <div class="step-h"><span class="lbl">Step 3</span><h2>What to test</h2></div>
+    <p class="step-lede">Every number above is a projection. Run the load test on your endpoint, then deploy with the recipe below.</p>
+    <div class="sub-lbl" id="validate">Prove it on your endpoint</div>
+  <div class="panel card" id="testCard" style="margin-bottom:14px">
+    <p class="cs">Every number on this page is a projection — the planning stance defines "comfortable capacity" as <b>measured</b> SLO capacity, which no model produces. This button hands out the configuration on screen as a <code>workingset.toml</code>, and the <code>workingset</code> package turns it into the load test: closed-loop users with the shared prefix and log-normal contexts configured above, a ladder bracketing the predicted limit, and a predicted-vs-measured verdict table. The predictions are <b>not</b> in the file — <code>ws predict</code> recomputes them from it, so a config can never carry a number the code did not produce. Start with <code>--dry-run</code>; probe B* with <code>--burst N</code>.</p>
+    <div id="testBody"></div>
+  </div>
+    <div class="sub-lbl" id="recipe">The recipe</div>
+  <div class="panel card" id="deployCard" style="margin-bottom:14px">
+    <p class="ct">The deploy card — this configuration as a recipe</p>
+    <p class="cs">What to run and what to expect, from the current controls. Projections, not measurements — <a href="method.html">method &amp; caveats</a>.</p>
+    <div id="deployBody"></div>
+  </div>
+  </section>
+
+  <section class="step appendix" id="appendix">
+    <div class="step-h"><span class="lbl">Appendix</span><h2>Under the hood</h2></div>
+    <p class="step-lede">Memory model calibrated to an FP8 anchor <em>projected</em> from the baseline's measured FP16 H200 pool, validated once against a real TP2 bring-up (within 0.3%); everything prefill-side is <span class="prov">analytic and unvalidated</span>. <a href="method.html">All assumptions, the full model &amp; glossary →</a></p>
+<details class="fold" id="verdict">
+  <summary><span class="lbl">Four ceilings</span><span class="sum">cache, decode, latency and saturation limits side by side, and against the miss rate (chart G)</span></summary>
+  <div class="fold-body">
+  <div class="panel card" id="ceilingCard" style="margin-bottom:14px">
+    <p class="ct">All four ceilings, side by side</p>
+    <p class="cs">How many concurrent users each constraint allows. The shortest bar is the answer; the marker is your load.</p>
+    <div id="ceilingBars"></div>
+  </div>
+  <div class="charts solo">
+    <div class="panel card">
+      <p class="ct">G · The binding constraint vs cache-miss rate</p>
+      <p class="cs">All four ceilings vs the miss rate. The <b>grey halo</b> traces the lowest — what you actually get; the dot is your load (red if over), and the vertical marker is where the binding constraint first changes hands.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
+        <span class="li"><span class="sw dash7" style="background:var(--s4)"></span>decode</span>
+        <span class="li"><span class="sw dash2" style="background:var(--s2)"></span>latency</span>
+        <span class="li"><span class="sw dash11" style="background:var(--muted)"></span>saturation</span>
+        <span class="li"><span class="sw dot" style="background:var(--text)"></span>your load (red if over)</span>
+      </div>
+      <div class="chartbox"><div id="chartG"></div><div class="tt" id="ttG"></div></div>
+    </div>
+  </div>
+  </div>
+</details>
+<details class="fold" id="fragility">
+  <summary><span class="lbl">Sensitivity</span><span class="sum">sweep one assumption at a time and see where the verdict flips</span></summary>
+  <div class="fold-body">
+  <div class="panel card" id="flipCard">
+    <p class="cs">Each bar sweeps <b>one</b> assumption across its plausible range with every other control held at your settings. Colour = which constraint binds there; the <b>red underline</b> marks where your load no longer fits. The <b>▼</b> is your current value, and the <b>dashed tick</b> is the nearest flip: the value where the bar changes colour (a different constraint takes over) or where the red underline starts or stops (the verdict itself changes) — the label on the right names which, in the flip’s own colour. Rows are sorted by how close that tick sits to your value.</p>
+    <div class="legend" id="flipLegend"></div>
+    <div id="flipRows"></div>
+  </div>
+  </div>
+</details>
+<details class="fold">
+  <summary><span class="lbl">The bill</span><span class="sum">hardware and electricity at your prices; sets chart H's EUR/seat axis</span></summary>
+  <div class="fold-body">
+  <div class="panel card" id="costCard" style="margin-bottom:14px">
+    <p class="ct">The bill: hardware and electricity</p>
+    <p class="cs">Two lines. <b>Hardware</b> is GPU-hours at the on-demand rental rate (the default is the cross-provider median for the selected part; owned hardware is whatever your depreciation says). <b>Electricity</b> is wall power priced from the duty cycle the model already computes — prefill bursts near the power cap, bandwidth-bound decode well under it, idle in between — plus the chassis and the facility overhead (PUE). GPU term ±20–25%; B300 figures are extrapolated from Hopper measurements — <a href="method.html#power">method &amp; sources</a>.</p>
+    <div class="ctl-grid" style="margin-bottom:4px">
+      <div class="ctl-group">
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="What one kWh costs you. Default €0.19 = the Eurostat EU-27 non-household average (H1-2025); the spread runs €0.077 (FI) to €0.258 (CY). The electricity line is exactly linear in it; the hardware line does not move.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
+          <input type="range" id="s-ekwh" min="0.05" max="0.60" step="0.01" value="0.19">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="One GPU-hour of the selected part, on demand. Default = the cross-provider on-demand median (getdeploying.com, Sept 2026: H200 $4.40, B300 $7.89, at EUR/USD 1.16); hyperscalers charge 2–3× that, an owned rack amortises to well under €1. Clicking a GPU re-seeds it to that part's median. Every row of the frontier (all on the selected part) moves with this knob. A rental price is the provider's all-in rate, power included, so for a RENTED GPU the electricity line below double-counts (~7% of the total at the defaults) — the honest total is the hardware line alone. For OWNED hardware enter your amortised €/GPU-hour and both lines apply. Neither is a cost of ownership: no staff, networking or storage.">GPU price</span> <span class="val">€<span id="v-gpuh">3.80</span> / GPU·h</span></label>
+          <input type="range" id="s-gpuh" min="0.5" max="20" step="0.1" value="3.8">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Power Usage Effectiveness — facility watts per IT watt (cooling, distribution). 1.2 ≈ hyperscale, 1.5 ≈ the Uptime-survey colo average, 2.0 ≈ a small in-house server room. Multiplies the electricity line only.">Facility PUE</span></label>
+          <div class="seg" id="seg-pue" data-key="pue">
+            <button data-v="1.2" aria-pressed="false">1.2 hyperscale</button>
+            <button data-v="1.5" aria-pressed="true">1.5 colo</button>
+            <button data-v="2.0" aria-pressed="false">2.0 server room</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="costBody"></div>
+  </div>
+  </div>
+</details>
+<details class="fold" id="act1">
+  <summary><span class="lbl">Memory and decode</span><span class="sum">charts A–D: prompt lengths, warm sessions vs GPUs, per-user and aggregate decode speed</span></summary>
+  <div class="fold-body">
+  <div class="charts">
+    <div class="panel card">
+      <p class="ct">A · Prompt-length distribution</p>
+      <p class="cs">Log-normal density, user vs subagent. Dashed line = the max_seq_len truncation cap.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>User</span>
+        <span class="li"><span class="sw" style="background:var(--s2)"></span>Subagent</span>
+      </div>
+      <div class="chartbox"><div id="chartA"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">B · Warm sessions (p5) vs hardware</p>
+      <p class="cs">The planning view: p5 warm sessions vs GPU count. Ring = your current configuration.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>TP — one shared cache (band to p95)</span>
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>DP — system total (needs sticky routing)</span>
+      </div>
+      <div class="chartbox"><div id="chartB"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">C · Per-user decode speed vs max_num_seqs</p>
+      <p class="cs" id="cs-C">p50 line, p5–p95 band, <b>log</b> axis. Shaded = the GPU-resident warm-capacity zone; dashed = the 40 tok/s floor and 50 tok/s comfortable mark.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>p50 per-user</span>
+        <span class="li"><span class="sw" style="background:var(--s1);opacity:.28"></span>p5–p95</span>
+        <span class="li"><span class="sw" style="background:var(--s3);opacity:.4"></span>capacity zone</span>
+        <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
+        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>your load (steady state)</span>
+      </div>
+      <div class="chartbox"><div id="chartC"></div><div class="tt" id="ttC"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">D · Aggregate throughput vs max_num_seqs</p>
+      <p class="cs" id="cs-D">System p50 tok/s (×replicas for DP).</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>aggregate p50</span>
+        <span class="li"><span class="sw dot" style="background:var(--s3)"></span>all warm decoding</span>
+        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>your load (steady state)</span>
+      </div>
+      <div class="chartbox"><div id="chartD"></div><div class="tt" id="ttD"></div></div>
+    </div>
+  </div>
+  </div>
+</details>
+<details class="fold" id="act2">
+  <summary><span class="lbl">Prefill and cold spikes</span><span class="sum">charts E and F: the chunk-size trade and burst tolerance</span></summary>
+  <div class="fold-body">
+  <div class="charts">
+    <div class="panel card">
+      <p class="ct">E · The max_num_batched_tokens trade</p>
+      <p class="cs">A (re)prefilling request's chunks ride the decode batch's fused passes, and the pass duration is everyone's inter-token gap. <b>Bottom:</b> that gap ÷ the normal all-decoding gap. <b>Middle:</b> cold requests one replica group can prefill per second (1 / mean miss machine time). <b>Top:</b> the compute share of a miss pass. Small chunks shrink each freeze but pay the weight stream every pass — sinking MFU and the cold ceiling. Dashed = the study's 32,768 default; the dot marks the chunk every tile, the deploy recipe and the validation script are priced at (the same, unless a share link pins another). E2–E4 below take the three strips apart.</p>
+      <div class="chartbox"><div id="chartE"></div><div class="tt" id="ttE"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">F · Cold-spike tolerance</p>
+      <p class="cs">B* — the largest burst of <b>simultaneous</b> misses still answered in budget — vs the standing miss rate. Band = the MFU 30–55% bracket; each curve reaches zero at its own f*.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>this configuration</span>
+        <span class="li"><span class="sw" style="background:var(--s1);opacity:.25"></span>MFU 30–55%</span>
+        <span class="li"><span class="sw" style="background:var(--muted)"></span>other topologies</span>
+        <span class="li"><span class="sw dash2" style="background:var(--crit)"></span>absorbs &lt; 1 miss</span>
+      </div>
+      <div class="chartbox"><div id="chartF"></div><div class="tt" id="ttF"></div></div>
+    </div>
+  </div>
+  </div>
+</details>
+<details class="fold">
+  <summary><span class="lbl">Chunk size, taken apart</span><span class="sum">charts E2–E4: one pass, which models pay, what a decoder feels</span></summary>
+  <div class="fold-body">
+  <div class="charts">
+    <div class="panel card">
+      <p class="ct">E2 · Anatomy of one pass — the toll and the math</p>
+      <p class="cs">One miss-side pass = a fixed weight-stream toll (gray) + compute that grows with the chunk (blue: GEMM plus the chunk's own attention). The gray never changes — the chunk decides how much math amortises it, which is all chart E's top strip measures. <b>Hover chart E or E3</b> for a live third bar; switch models to watch the gray flip from sliver (dense) to dominant (MoE at 2k).</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--muted)"></span>weight-stream toll (fixed)</span>
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>compute (grows with chunk)</span>
+      </div>
+      <div class="chartbox"><div id="chartE2"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">E3 · Which models pay for small chunks</p>
+      <p class="cs">Chart E's middle strip for every model at once: each cold-request ceiling vs chunk, normalised to its own 32k value, at the selected GPUs and dtypes. Dense models barely care; a MoE streams its whole expert bank every pass, so the toll dwarfs the math at small chunks. Selected model = thick.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s1)"></span>dense</span>
+        <span class="li"><span class="sw" style="background:var(--s2)"></span>MoE</span>
+      </div>
+      <div class="chartbox"><div id="chartE3"></div><div class="tt" id="ttE3"></div></div>
+    </div>
+  </div>
+  <div class="charts solo">
+    <div class="panel card">
+      <p class="ct">E4 · What a decoder feels — the token stream itself</p>
+      <p class="cs">Chart E's bottom strip as lived: one mean-length miss in a live token stream (ticks = tokens) at three chunk sizes, <b>every waiting gap labelled in ms</b>. The green total is identical in every row — the chunk sets the texture of the stall, not its sum. ▲ = the miss's own first token, which small chunks postpone: the decoders' comfort is paid by the cold request. "Worst" here is the miss's last full chunk (the most cache to attend over); chart E's spike prices its midpoint chunk, so the two differ a little at long contexts.</p>
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>stream frozen behind a chunk</span>
+        <span class="li"><span class="sw" style="background:var(--axis); width:2px; height:10px"></span>a token arrives</span>
+        <span class="li"><span class="sw" style="background:var(--s2); width:9px; height:9px; clip-path:polygon(50% 0,0 100%,100% 100%)"></span>the miss's first token</span>
+      </div>
+      <div class="chartbox"><div id="chartE4"></div></div>
+    </div>
+  </div>
+  </div>
+</details>
+<details class="fold">
+  <summary><span class="lbl">Glossary</span><span class="sum">MFU, TTFT, prefill duty, f*, B*, n@load</span></summary>
+  <div class="fold-body">
+  <div class="glossary">
+    
+    <div class="body">
+    <dl>
+      <dt>MFU <span class="gt">Model FLOP Utilisation</span></dt>
+      <dd>Achieved ÷ advertised FLOP throughput. <b>45%</b> [30–55%] — three production calibration points (2026-08-27, 2026-09-18); the latest, the only controlled Hopper-FP8 one, sits at the low edge. Still the softest input here: it scales every prefill figure, hence the bands.</dd>
+      <dt>TTFT <span class="gt">time to first token</span></dt>
+      <dd>Queueing plus the request's own prefill. A miss re-prefills its whole context; a hit prefills only the new turn but queues behind misses.</dd>
+      <dt>Prefill duty <span class="gt">fraction of the machine spent prefilling</span></dt>
+      <dd>Arrival rate × mean prefill time; at 100% the queue grows without bound. An average — it sees neither variance nor bursts.</dd>
+      <dt>f* <span class="gt">the saturation miss rate</span></dt>
+      <dd>The miss rate at which prefill duty reaches 100%. Not a target: burst tolerance hits zero there.</dd>
+      <dt>B* <span class="gt">cold-spike tolerance</span></dt>
+      <dd>How many misses can arrive <em>at the same instant</em> with the last still answered in budget — the correlated event the miss-rate slider cannot express.</dd>
+      <dt>n@load <span class="gt">the steady-state decode batch</span></dt>
+      <dd>Sequences decoding at any instant at <em>this</em> load — Little's law, not the warm population. An expected occupancy, not a <code>max_num_seqs</code> setting.</dd>
+    </dl>
+    <p style="margin:8px 0 0"><a href="method.html#glossary">Full definitions →</a></p>
+    </div>
+  </div>
+  </div>
+</details>
+  </section>
+
+  <p class="foot"><a href="method.html">Model, assumptions &amp; glossary</a> · Monte-Carlo model mirrored from <code>scripts/scenario_model.py</code>.</p>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
