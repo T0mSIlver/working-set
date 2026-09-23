@@ -206,6 +206,25 @@ class HLatency(Hypothesis):
 
     async def measure(self, ctx) -> Measurement:
         v = await ctx.ladder()
+        slo = ctx.cfg.slo
+        if slo.ttft_statistic == "miss_mean":
+            # judge what was predicted: each rung's mean TTFT over its forced
+            # misses, not the rung's all-request p{percentile} verdict
+            budget = slo.ttft_budget_s
+            seen = [r for r in v.full if math.isfinite(r.ttft_miss_mean)]
+            over = [r.pop for r in seen if r.ttft_miss_mean > budget]
+            data = {"ttft_miss_mean_by_pop": {r.pop: r.ttft_miss_mean
+                                              for r in seen}}
+            if not over:
+                return Measurement(text="not separable", data={
+                    **data, "reason": "no rung's miss-mean TTFT exceeded the "
+                                      "budget" if seen else
+                                      "no rung measured a miss"})
+            hi = min(over)
+            lo = max((r.pop for r in seen if r.pop < hi
+                      and r.ttft_miss_mean <= budget), default=None)
+            return Measurement(value=hi, lo=lo, hi=hi, unit=" users",
+                               text=_bracket_text(lo, hi), data=data)
         fails = v.ttft_fails
         if not fails:
             return Measurement(text="not separable",
@@ -218,7 +237,8 @@ class HLatency(Hypothesis):
 
     def verdict(self, pred: Prediction, m: Measurement) -> Verdict:
         if m.lo is None and m.hi is None:
-            return Verdict(NOT_ESTABLISHED, "no TTFT-mode failure observed")
+            return Verdict(NOT_ESTABLISHED,
+                           m.data.get("reason", "no TTFT-mode failure observed"))
         return bracket_verdict(pred.value, m.lo, m.hi)
 
 

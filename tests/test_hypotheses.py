@@ -300,6 +300,35 @@ def test_h_latency_brackets_on_a_ttft_failure():
     assert (m.lo, m.hi) == (lc - 2, lc + 2) and v.status == SUPPORTED
 
 
+def test_h_latency_judges_the_miss_mean_in_miss_mean_mode():
+    """ttft_statistic = "miss_mean" predicts where a miss's mean TTFT meets
+    the budget, so the measurement brackets on each rung's miss-mean TTFT,
+    not on the all-request percentile verdict."""
+    from dataclasses import replace
+    cfg = RunConfig.from_dict({"slo": {"ttft_statistic": "miss_mean"}})
+    preds = predict(cfg, n_iter=40)
+    lc = preds.latency_ceiling_users
+    # the percentile verdict fails at lc - 2 (a hit tail), but the miss mean
+    # holds there and breaks only at lc + 2
+    ladder = [rung(lc - 2, passed=False, reasons=["p95 TTFT 12.00s > 10s"],
+                   ttft_miss_mean=6.0),
+              rung(lc + 2, ttft_miss_mean=11.0)]
+    ctx = ladder_ctx(preds, ladder, cfg=cfg)
+    h = REGISTRY.get("H-latency")
+    _, m, v = score(h, ctx)
+    assert (m.lo, m.hi) == (lc - 2, lc + 2) and v.status == SUPPORTED
+    assert "mean TTFT" in h.statement(cfg, preds)
+    # no rung with a measured miss: stated, not guessed
+    ctx = ladder_ctx(preds, [rung(lc + 2)], cfg=cfg)
+    _, m, v = score(h, ctx)
+    assert m.text == "not separable" and v.status == NOT_ESTABLISHED
+    assert "no rung measured a miss" in v.text
+    # and percentile mode still reads the percentile verdict, not the miss mean
+    ctx = ladder_ctx(preds, ladder)
+    _, m, _ = score(h, ctx)
+    assert m.hi == lc - 2
+
+
 def test_h_cache_is_bounded_below_when_nothing_evicts():
     preds = predict(RunConfig(), n_iter=40)
     wc = preds.warm_capacity_p5

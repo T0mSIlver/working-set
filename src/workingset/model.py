@@ -1802,6 +1802,12 @@ def ttft_service_quantile(model: Model, topo: Topology, wl, chunk: float,
     long new turn over a long cached context can outlast a short miss, so no
     rank of one class above the other holds.
 
+    Monotone in m only when the miss service distribution dominates the
+    hit's (F_miss <= F_hit everywhere, e.g. every miss costs at least what a
+    hit does). That fails with short prompts and long warm turns: at a
+    1,000-token prompt median and an 8,000-token turn a hit re-prefills more
+    than a miss does, and more misses LOWER c_p and raise the ceiling.
+
     Both per-draw costs are monotone in the context length, so each class's
     samples sort by sorting the lengths once; the explorer's
     ttftServiceQuantile walks the same two sorted sequences as a merge.

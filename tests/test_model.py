@@ -3,6 +3,7 @@ anchors (measured pools, MFU band, decode measurement) and take ~1 min."""
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from workingset import model as M
@@ -53,19 +54,51 @@ def test_ttft_quantile_is_the_weighted_mixture_quantile():
         M.miss_service_quantile(m, topo, wl, 4096, 95, **KW), rel=1e-4)
 
 
-def test_latency_ceiling_is_monotone_in_the_miss_share():
-    """More misses never raise the ceiling, including across m = 1 - P where
-    a hit/miss split used to jump. Checked where the two classes overlap
-    (a 16,000-token turn) and at the reference turn."""
+def _miss_dominates(m, topo, wl, turn):
+    """First-order dominance of the miss service sample over the hit's:
+    equal-size samples, so it is the elementwise order of the sorted pair."""
+    cold, warm = M._prefill_service_arrays(m, topo, wl, 4096, turn,
+                                           per_pass_overhead=True)
+    return bool((np.sort(cold) >= np.sort(warm)).all())
+
+
+def test_latency_ceiling_is_monotone_in_the_miss_share_when_misses_dominate():
+    """Where the miss service distribution dominates the hit's, more misses
+    never raise the ceiling, including across m = 1 - P where a hit/miss
+    split used to jump. Without dominance there is no such claim (see the
+    short-prompt test below)."""
     m, _, _ = _ref_latency_args()
+    checked = 0
     for tp, turn, sla in ((1, 16_000, 1.0), (2, 16_000, 1.0),
-                          (1, 16_000, 10.0), (2, 2_000, 10.0)):
+                          (1, 16_000, 10.0), (2, 2_000, 10.0), (1, 500, 10.0)):
         topo = M.topology("tp", tp, "H200")
+        if not _miss_dominates(m, topo, M.Workload(), turn):
+            continue
+        checked += 1
         ceil = [M.max_users_latency(m, topo, M.Workload(invalidation=x), 4096,
                                     sla, turn, percentile=95,
                                     per_pass_overhead=True)
                 for x in (0.0, 0.03, 0.045, 0.05, 0.055, 0.07, 0.1, 0.3, 1.0)]
         assert all(a >= b for a, b in zip(ceil, ceil[1:])), (tp, turn, sla, ceil)
+    assert checked >= 1
+
+
+def test_latency_ceiling_rises_with_misses_when_a_miss_costs_less():
+    """Short prompts and a long warm turn: a hit re-prefills 8,000 tokens
+    over its cache while a miss re-prefills a ~2,000-token context, so the
+    hits dominate and more misses LOWER the p95 own-prefill term. The
+    ceiling then rises with the miss share. Expected, and pinned."""
+    m = M.MODELS["27B"]
+    topo = M.topology("tp", 1, "H200")
+    wl = lambda x: M.Workload(user_median=1000, sys_user=1000, sub_ratio=0.0,
+                              invalidation=x)
+    assert not _miss_dominates(m, topo, wl(0.1), 8000)
+    ceil = [M.max_users_latency(m, topo, wl(x), 4096, 10.0, 8000,
+                                percentile=95, per_pass_overhead=True)
+            for x in (0.0, 0.05, 0.10)]
+    assert ceil[0] == pytest.approx(63.7, abs=0.1)
+    assert ceil[2] == pytest.approx(69.2, abs=0.1)
+    assert ceil[0] < ceil[1] < ceil[2]
 
 
 def test_16k_turn_one_second_budget_is_unmeetable_past_the_split():

@@ -221,7 +221,11 @@ TP2 costs ~1,140 tokens across 8.8 seconds.
    and m by the miss share (`model.ttft_service_quantile`). A split that
    ranks every miss above every hit is wrong here, because the two overlap:
    at a 16,000-token turn a hit over a long cached context outlasts a short
-   miss. `max_users_latency` and
+   miss. The ceiling falls as misses rise only while the miss distribution
+   dominates the hit's; with short prompts and long warm turns a hit costs
+   more than a miss and the ceiling RISES with the miss share (27B, 1×H200,
+   1,000-token prompts, 8,000-token turn: 63.7 users at 0% misses, 69.2 at
+   10%). `max_users_latency` and
    `sla_miss_rate` then check the **proxy** `E[W] + c_p` in place of
    `E[W] + E[S | miss]`. It is not `Q_p(W + S)`: the wait enters at its P-K
    mean because the model has no distribution for it, and how far the proxy

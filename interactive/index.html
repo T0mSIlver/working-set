@@ -557,7 +557,7 @@ nav.toc .sep{flex:0 0 1px; align-self:stretch; background:var(--border)}
           <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
       </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Which TTFT statistic the latency ceiling holds to the budget. p90/p95/p99 are over ALL requests, as an SLO and the harness count them. While misses are rarer than the tail (1% misses against a 5% p95 tail) the p95 request is a HIT, and the budget binds on the warm-turn path; past that it is a miss at the matching miss percentile. The model checks a proxy: mean queue wait plus that request's own prefill, not the true percentile of their sum. mean is the older reading: a cache miss's mean TTFT. 95 matches the harness's [slo] percentile.">TTFT statistic</span></label>
+          <label class="flabel"><span class="tip" data-tip="Which TTFT statistic the latency ceiling holds to the budget. p90/p95/p99 are over ALL requests, as an SLO and the harness count them. The percentile is taken over the weighted mixture of hit and miss service times (hits at 1 − miss rate, misses at the miss rate), so at a 1% miss rate the p95 is mostly set by warm turns, and misses weigh in as the rate grows. The model checks a proxy: mean queue wait plus that request's own prefill, not the true percentile of their sum. mean is the older reading: a cache miss's mean TTFT. 95 matches the harness's [slo] percentile.">TTFT statistic</span></label>
           <div class="seg" id="seg-ttft_pct" data-key="ttft_pct">
             <button data-v="mean" aria-pressed="false">mean</button>
             <button data-v="90" aria-pressed="false">p90</button>

@@ -282,7 +282,9 @@ export function missServiceQuantile(mo, p){
 // over ALL requests (the probe's population) — the p-th quantile of the
 // hit/miss service MIXTURE, misses weighing f and hits 1 - f. Not a hit/miss
 // split: the classes overlap (a long turn over a long cached context
-// outlasts a short miss). Both cost lines are monotone in L, so each class
+// outlasts a short miss). Monotone in f only while misses dominate hits;
+// with short prompts and long turns a hit costs more and more misses lower
+// it (model.ttft_service_quantile). Both cost lines are monotone in L, so each class
 // is already sorted by the sorted draw; a merge walk (a hit first on ties,
 // as Python's stable sort) accumulates the weights in Python's order and
 // stops at the first sample whose cumulative weight reaches p.
