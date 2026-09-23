@@ -12,6 +12,9 @@
 #                 header and fails if the committed file has drifted
 #   link          tests/js/explorer_link.test.mjs opens `ws link` of every
 #                 fixture in the page's state and re-emits the same file
+#   link page     tests/js/explorer_link_page.test.mjs opens `ws link` URLs in
+#                 headless Chrome, so the page's own decoder and constraint
+#                 pass run, and checks what the page holds
 #   quality       tests/js/frontier_bench.test.mjs holds CONFIG.QUALITY to the
 #                 Terminal-Bench ledger: one entry per model per benchmark
 #                 version, every AA figure an exact k/267 or k/198, and a
@@ -78,6 +81,10 @@ jobs:
       # `ws link` config -> URL -> page state -> config, on the same fixtures
       - name: ws link reproduces each fixture in the explorer
         run: node --import ./tests/js/register.mjs --test tests/js/explorer_link.test.mjs
+      # the same links through the real main.js; the runner image ships
+      # google-chrome, which the test finds on PATH
+      - name: ws link through the real page
+        run: node --test tests/js/explorer_link_page.test.mjs
       # the frontier's quality axis: every model scored on every benchmark,
       # every AA figure an exact run count, and a MEASURED zero still a score
       - name: frontier benchmark scores are well formed

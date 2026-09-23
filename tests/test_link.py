@@ -137,3 +137,49 @@ def test_cli_prints_the_url_and_warns_on_stderr(tmp_path, capsys):
     out, err = capsys.readouterr()
     assert out.strip() == "http://127.0.0.1:8123/"
     assert "slo.percentile" in err
+
+
+def test_top_stop_collision_warns_with_the_priced_tokens():
+    c = RunConfig()
+    c = replace(c, deployment=replace(c.deployment, model="MM35", gpu="B300",
+                                      max_model_len=262_000))
+    url, warnings = explorer_link(c)
+    assert _frag(url)["cap"] == "262"
+    assert any("max_model_len = 262000" in w and "262,144 tokens" in w for w in warnings)
+    # the exact maximum is the top stop by design: no warning
+    c = replace(c, deployment=replace(c.deployment, max_model_len=262_144))
+    assert explorer_link(c)[1] == []
+
+
+def test_nondefault_endpoint_fields_warn():
+    c = RunConfig()
+    c = replace(c, endpoint=replace(c.endpoint, base_url="http://10.0.0.5:8000/v1",
+                                    model="my-model",
+                                    metrics_url="http://10.0.0.5:8000/metrics"))
+    w = _warned(c)
+    for field in ("endpoint.base_url", "endpoint.model", "endpoint.metrics_url"):
+        assert field in w
+    assert "endpoint.api_key_env" not in w
+
+
+def test_headcount_tie_rounds_half_up_like_js():
+    c = RunConfig()
+    c = replace(c, workload=replace(c.workload, users=None, headcount=10))
+    w = _warned(c)
+    assert "10 sessions" in w and "prices 12" in w     # Math.round(2.5) = 3
+
+
+def test_replicate_below_the_kv_heads_warns():
+    c = RunConfig()
+    c = replace(c, deployment=replace(c.deployment, kv_sharding="replicate"))
+    assert "kv_sharding = 'replicate' at TP1" in _warned(c)
+
+
+def test_precision_beyond_six_decimals_is_kept():
+    c = RunConfig()
+    c = replace(c, calibration=replace(c.calibration, mfu=0.45000049))
+    url, warnings = explorer_link(c)
+    assert _frag(url)["mfu"] == "0.45000049" and warnings == []
+    # conversion dust is still trimmed: 0.07 * 100 is 7, not 7.000000000000001
+    c = replace(c, workload=replace(c.workload, miss_rate=0.07))
+    assert _frag(explorer_link(c)[0])["inval"] == "7"

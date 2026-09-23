@@ -64,10 +64,10 @@ CONFIG block is extracted).
 `ws link` goes the other way: it prints the explorer share URL that opens the
 page on a config (`--base http://127.0.0.1:PORT/` for a local copy of
 `interactive/`). The page has no control for `subagent_prefix_tokens`,
-`percentile`, `max_num_seqs` or the latency decode pricing, and it clamps each
-slider to its range, so when a config sets one of those, or a value the page
-would clamp, `ws link` names the field on stderr with what the page shows
-instead.
+`percentile`, `max_num_seqs`, the latency decode pricing or `[endpoint]`, and
+it clamps each slider to its range and resets combinations it does not price,
+so when a config sets one of those, or a value the page would move, `ws link`
+names the field on stderr with what the page shows instead.
 
 `ws test` puts the predictions to a live endpoint, one falsifiable hypothesis
 at a time. Without `--exclusive` it runs only the hypotheses that need a

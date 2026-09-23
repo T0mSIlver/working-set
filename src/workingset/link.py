@@ -14,12 +14,13 @@ ranges to interactive/src/main.js and index.html.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, fields
 from typing import Any, Callable
 from urllib.parse import urlencode
 
 from . import model as M
-from .config import RunConfig
+from .config import Endpoint, RunConfig
 
 DEFAULT_BASE = "https://workingset.tomvaucourt.com/"
 
@@ -134,13 +135,22 @@ KNOBS: tuple[Knob, ...] = (
 
 def _js(v: Any) -> str:
     """The string encodeStateURL writes for the same value: 1 not 1.0, a
-    boolean as 1/0, float dust trimmed as harness.js flt() trims it."""
+    boolean as 1/0. Binary-float dust from a unit conversion (0.07 * 100 =
+    7.000000000000001) is trimmed; any real precision is kept."""
     if isinstance(v, bool):
         return "1" if v else "0"
     if isinstance(v, (int, float)):
-        v = round(float(v), 6)
+        v = float(v)
+        r = round(v, 9)
+        if abs(r - v) <= 1e-12 * max(1.0, abs(v)):
+            v = r
         return str(int(v)) if v.is_integer() else repr(v)
     return str(v)
+
+
+def _js_round(x: float) -> int:
+    """JS Math.round: halves go up (Python's round() goes to even)."""
+    return math.floor(x + 0.5)
 
 
 def _bound(b, cfg):
@@ -173,6 +183,24 @@ def _unmapped(cfg: RunConfig) -> list[str]:
         out.append(f"deployment.max_num_batched_tokens = {d.max_num_batched_tokens}: the "
                    f"explorer takes only {', '.join(map(str, CHUNKS))}; it will show "
                    "32768")
+    m = M.MODELS[d.model]
+    if d.kv_sharding == "replicate" and d.tensor_parallel <= (m.kv_heads or 1):
+        # main.js enforceConstraints: the arm only prices something past the
+        # model's KV heads, and the page resets it below that
+        out.append(f"deployment.kv_sharding = 'replicate' at TP{d.tensor_parallel}: "
+                   f"{d.model} has {m.kv_heads or 1} KV head(s), so the explorer "
+                   "resets it to 'dcp' (both layouts store one copy here)")
+    # the page's config download writes these defaults back, whatever the
+    # config said (harness.js workingsetConfig)
+    for f in fields(Endpoint):
+        v, dflt = getattr(cfg.endpoint, f.name), getattr(Endpoint(), f.name)
+        # the page's own download names the model with a "<your served
+        # model id ...>" placeholder; that is its value, not the user's
+        if v != dflt and not (f.name == "model" and str(v).startswith("<")):
+            shown = "no value" if dflt is None else (
+                "a placeholder" if dflt == "" else repr(dflt))
+            out.append(f"endpoint.{f.name} = {v!r}: the explorer does not carry it; "
+                       f"a config downloaded from the page will have {shown}")
     return out
 
 
@@ -200,11 +228,18 @@ def explorer_link(cfg: RunConfig, base: str = DEFAULT_BASE) -> tuple[str, list[s
                 warnings.append(f"{k.field} -> {k.key} = {_js(v)}{k.unit}: {why} "
                                 f"[{_js(lo)}, {_js(hi)}]; the explorer "
                                 f"will show {_js(shown)}{k.unit}")
+            if k.key == "cap" and shown >= hi and \
+                    cfg.deployment.max_model_len != M.MODELS[cfg.deployment.model].max_ctx:
+                # currentWL(): the top stop is the model's exact maximum
+                warnings.append(
+                    f"deployment.max_model_len = {cfg.deployment.max_model_len}: "
+                    f"{_js(shown)}k is the explorer's top stop, which prices the "
+                    f"model's maximum, {M.MODELS[cfg.deployment.model].max_ctx:,.0f} tokens")
         params[k.key] = _js(shown)
     if (w := cfg.workload).headcount is not None:
         raw = M.sessions_from_headcount(w.headcount, w.peak_active_share,
                                         w.sessions_per_active_user)
-        page = min(max(round(raw / 4) * 4, 4), 1024)    # main.js syncLabels
+        page = min(max(_js_round(raw / 4) * 4, 4), 1024)    # main.js syncLabels
         if abs(raw - page) > 1e-6:
             warnings.append(f"workload.headcount -> {raw:g} sessions: the explorer prices "
                             f"{page} (its users slider takes multiples of 4 in "
