@@ -10,6 +10,8 @@
 #   fixtures      tests/js/explorer_config.test.mjs re-emits every
 #                 tests/fixtures/explorer_*.toml from the share URL in its own
 #                 header and fails if the committed file has drifted
+#   link          tests/js/explorer_link.test.mjs opens `ws link` of every
+#                 fixture in the page's state and re-emits the same file
 #   quality       tests/js/frontier_bench.test.mjs holds CONFIG.QUALITY to the
 #                 Terminal-Bench ledger: one entry per model per benchmark
 #                 version, every AA figure an exact k/267 or k/198, and a
@@ -73,6 +75,9 @@ jobs:
       # in its own header
       - name: explorer config fixtures are current
         run: node --import ./tests/js/register.mjs --test tests/js/explorer_config.test.mjs
+      # `ws link` config -> URL -> page state -> config, on the same fixtures
+      - name: ws link reproduces each fixture in the explorer
+        run: node --import ./tests/js/register.mjs --test tests/js/explorer_link.test.mjs
       # the frontier's quality axis: every model scored on every benchmark,
       # every AA figure an exact run count, and a MEASURED zero still a score
       - name: frontier benchmark scores are well formed
