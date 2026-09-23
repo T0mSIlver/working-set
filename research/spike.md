@@ -214,19 +214,26 @@ TP2 costs ~1,140 tokens across 8.8 seconds.
    A p95 budget binds at a lower miss rate still, and the heavy tail (cv² of
    5.5–8.3) means the gap between mean and p95 is large here. Every f_sla in
    this study is therefore an **upper** bound on the SLA-limited miss rate.
-   *Update 2026-09-23: the latency ceiling now takes a percentile.* A miss's
-   TTFT is its queue wait plus its own prefill, and the own prefill carries
-   the spread; because its cost is monotone in context length, its p-th
-   percentile is the prefill of a miss at the p-th percentile of the context
-   distribution (`model.miss_service_quantile`). `max_users_latency` and
-   `sla_miss_rate` accept `percentile` and use `E[W] + Q_p(S | miss)` in place
-   of `E[W] + E[S | miss]`. The wait stays at its P-K mean, because the model
-   has no distribution for it, so the percentile ceiling is still
-   optimistic. `ws predict` passes `[slo] percentile` (default 95), and the
-   explorer defaults to p95. The library default is still the mean, so the
-   published tables regenerate unchanged until the docs are re-issued. B*
-   and the burst drain still price the mean: a drain is a sum of B service
-   times, whose percentile is not a per-miss percentile.
+   *Update 2026-09-23: the latency ceiling can now check a percentile.* An
+   SLO's p95 is over ALL requests, which is also what the probe scores
+   (`ttft_all_pX`), so the model uses that population. With miss share m
+   and target P, and misses ranked above hits: if m > 1 − P the P-th
+   request is a miss at the miss-conditional quantile q = 1 − (1 − P)/m;
+   otherwise it is a hit at q = P/(1 − m). Each cost is monotone in context
+   length, so the quantile is the prefill of a request at that context
+   quantile (`model.ttft_service_quantile`). `max_users_latency` and
+   `sla_miss_rate` then check the **proxy** `E[W] + c_p` in place of
+   `E[W] + E[S | miss]`. It is not `Q_p(W + S)`: the wait enters at its P-K
+   mean because the model has no distribution for it, and how far the proxy
+   sits from the true percentile, and in which direction, is unmeasured. At
+   the reference 1% miss rate the p95 request is a hit, so the all-request
+   p95 ceiling sits slightly ABOVE the old mean-of-a-miss one (27B TP4: 500
+   against 499); misses reach the p95 only past 5%. `ws predict` passes
+   `[slo] percentile` (default 95), and the explorer defaults to p95. The
+   library default is still the mean, so the published tables regenerate
+   unchanged until the docs are re-issued. B* and the burst drain still
+   price the mean: a drain is a sum of B service times, whose percentile is
+   not a per-miss percentile.
 5. **No admission control, priority, or preemption.** Real servers shed load,
    prioritise short requests, and preempt — all of which change the outcome of
    exactly the events this note models. § 5's "must shed load" verdict is a

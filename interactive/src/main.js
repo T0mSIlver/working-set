@@ -459,7 +459,7 @@ function syncLabels(){
 }
 
 // the statistic the TTFT budget is checked at, as the budget label prints it
-function ttftStatLabel(){ return state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`; }
+function ttftStatLabel(){ return state.ttft_pct === 'mean' ? 'miss mean' : `p${state.ttft_pct} all req.`; }
 
 /* ---- share link: the whole configuration in the URL fragment ------------
    Encodes only the DIFFS from STATE_DEFAULTS, so a default page shares as a
@@ -503,6 +503,10 @@ export function encodeStateURL(){
   // booleans encode as 1/0, so the diff test must compare the BOOLEANS —
   // comparing "0" to "false" would stamp the key into every default link
   for (const k of URL_BOOLS) if (state[k] !== STATE_DEFAULTS[k]) p.set(k, state[k] ? '1' : '0');
+  // links from before the TTFT statistic existed decode as a miss's mean
+  // (applyURLState), so every non-bare link names its statistic explicitly;
+  // the default page still shares as a bare URL
+  if ([...p.keys()].length && !p.has('ttft_pct')) p.set('ttft_pct', String(state.ttft_pct));
   const q = p.toString();
   return location.origin === "null"   // file:// — origin is unusable
     ? location.href.split('#')[0] + (q ? '#' + q : '')
@@ -516,6 +520,9 @@ function applyURLState(){
     const v = p.get(k);
     if (v !== null && opts().includes(v)) state[k] = v;
   }
+  // a link without ttft_pct predates the control: those pages checked a
+  // miss's mean TTFT, so that is what it reproduces
+  if (p.get('ttft_pct') === null) state.ttft_pct = 'mean';
   // a shared model carries its own MTP default unless the link pins one —
   // the same reset the model buttons apply on click
   if (p.get('model') !== null && p.get('mtp') === null)

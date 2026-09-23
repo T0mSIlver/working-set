@@ -1,6 +1,6 @@
 import { PREFILL_MFU_HI, PREFILL_MFU_LO } from './config.js';
 import { decodeFloor, maxUsersLatency, maxUsersSaturation, prefillChunk,
-         missOwn, prefillServiceMoments, serverRate } from './prefill.js';
+         prefillServiceMoments, serverRate, ttftOwn, ttftStatName } from './prefill.js';
 import { clip } from './mathlib.js';
 import { p_sub } from './workload.js';
 import { warmCapacity } from './capacity.js';
@@ -142,14 +142,14 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
             + ` — ${fmt(op.headroom*100,0)}% of the limit`
           : `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`)
           + ` · next: ${others}`
-        : `the ${fmt(state.sla,0)} s budget is below one miss's own prefill `
-          + `(${fmt(missOwn(sp.mo, state.ttft_pct),1)} s at the `
-          + `${state.ttft_pct === 'mean' ? 'mean' : 'p' + state.ttft_pct}) — unachievable at any load`
+        : `the ${fmt(state.sla,0)} s budget is below the own prefill behind `
+          + `${ttftStatName(state.ttft_pct)} `
+          + `(${fmt(ttftOwn(sp.mo, wl.invalidation, state.ttft_pct),1)} s) — unachievable at any load`
           + ` · next: ${others}`,
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
      tip:hasHeadcount()
-       ? `All four ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. cache = the warm p5 population that fits the pool; decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's ${state.ttft_pct === 'mean' ? 'mean' : 'p' + state.ttft_pct} TTFT hits the budget; saturation = where prefill duty hits 100%.`
-       : `All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where a miss's ${state.ttft_pct === 'mean' ? 'mean' : 'p' + state.ttft_pct} TTFT hits the budget; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
+       ? `All four ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. cache = the warm p5 population that fits the pool; decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where ${ttftStatName(state.ttft_pct)} hits the budget${state.ttft_pct === 'mean' ? '' : ' (proxy: mean queue wait + that percentile\'s own prefill)'}; saturation = where prefill duty hits 100%.`
+       : `All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where ${ttftStatName(state.ttft_pct)} hits the budget${state.ttft_pct === 'mean' ? '' : ' (proxy: mean queue wait + that percentile\'s own prefill)'}; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
      sub:`MFU 30–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`

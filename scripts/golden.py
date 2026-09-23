@@ -260,6 +260,13 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         m, topo, wl, chunk, st["sla"], turn, st["think"], mfu, "fcfs",
         per_pass_overhead=True,
         percentile=None if st["ttft_pct"] == "mean" else float(st["ttft_pct"]))
+    # the own-prefill terms the percentile ceiling is built from, at p95:
+    # the miss-conditional quantile and the all-request one (hit or miss path
+    # by the state's miss share)
+    o["miss_service_q95"] = M.miss_service_quantile(
+        m, topo, wl, chunk, 95.0, turn, mfu, per_pass_overhead=True)
+    o["ttft_service_q95"] = M.ttft_service_quantile(
+        m, topo, wl, chunk, 95.0, turn, mfu, per_pass_overhead=True)[0]
     o["max_users_saturation"] = M.max_users_saturation(
         m, topo, wl, chunk, turn, st["think"], mfu, per_pass_overhead=True)
     # at 10 s, not state.sla: spikeMetrics computes fsla against the same
@@ -322,13 +329,13 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         "duty": o["prefill_duty"],
         # k = 2(SLA - c) in max_users_latency vanishes as this hits 0, and
         # goes NEGATIVE where the miss alone already breaches the budget. c is
-        # the miss's own prefill at the state's TTFT statistic: E[S|miss] for
-        # the mean, its percentile otherwise
+        # the own prefill at the state's TTFT statistic: E[S|miss] for the
+        # mean, the all-request percentile's (ttft_service_quantile) otherwise
         "sla_headroom": 1.0 - (
             o["moments_miss"] if st["ttft_pct"] == "mean"
-            else M.miss_service_quantile(m, topo, wl, chunk,
+            else M.ttft_service_quantile(m, topo, wl, chunk,
                                          float(st["ttft_pct"]), turn, mfu,
-                                         per_pass_overhead=True)
+                                         per_pass_overhead=True)[0]
         ) / st["sla"],
         # ...and the same against the 10 s budget spikeMetrics hard-wires, for
         # the quantities compared at that budget rather than at state.sla
@@ -789,6 +796,7 @@ MC_QUANTITIES = [
     "breakeven_miss_rate", "spike_tolerance", "spike_tolerance_sla10",
     "sla_miss_rate_sla10", "burst_drain_seconds_b32",
     "max_users_latency", "max_users_saturation",
+    "miss_service_q95", "ttft_service_q95",
     "max_users_cache", "warm_p5_all", "max_users_decode",
     "decode_p50_n1", "decode_p50_n8", "decode_p50_n64",
     "steady_n", "steady_per_user_tok_s",
@@ -963,6 +971,9 @@ BAND_FLOOR = 0.02     # below this is noise on any sampled statistic
 BAND_CAP = 0.25       # above this, name the states instead of widening for all
 
 # Quantities that ARE the same statistic take the widest of the group's bands.
+# ttft_service_q95 IS a miss-service quantile wherever the miss share passes
+# the 5% tail, but the probe's default 1% miss share puts it on the hit path,
+# whose affine cost is far less noisy; its band must not come from there.
 # power_draw's d_p is prefill_duty clamped at 1; below the clamp they are the
 # same number, but the clamp shrinks d_p's measured spread on the probe, so an
 # independent derivation hands the identical figure a tighter band and it trips
@@ -971,7 +982,8 @@ BAND_CAP = 0.25       # above this, name the states instead of widening for all
 # the 1 - d_p clamp, i.e. the reciprocal of max_users_decode: it cannot be
 # pinned tighter than the ceiling's own bisection, and the probe's decode
 # ceilings happen to sit where the ceiling's spread is small.
-BAND_GROUPS = [("prefill_duty", "power_d_p"), ("max_users_decode", "power_d_d")]
+BAND_GROUPS = [("prefill_duty", "power_d_p"), ("max_users_decode", "power_d_d"),
+               ("miss_service_q95", "ttft_service_q95")]
 
 
 def bands_from_spread(spread: dict) -> dict:
@@ -1070,6 +1082,14 @@ MAPPING = [
      "spikeMetrics hard-wires SPIKE_SLA_S = 10 instead of state.sla"),
     ("max_users_latency", "model.max_users_latency", "prefill.js maxUsersLatency", "mc",
      "per replica GROUP on both sides; operatingPoint() then scales by replicas"),
+    ("miss_service_q95", "model.miss_service_quantile(percentile=95)",
+     "prefill.js missServiceQuantile(mo, 95)", "mc",
+     "a miss's own prefill at its p95; cost is monotone in L, so both sides "
+     "take numpy's linear percentile over the sorted length draw"),
+    ("ttft_service_q95", "model.ttft_service_quantile(percentile=95)[0]",
+     "prefill.js ttftServiceQuantile(mo, f, 95).c", "mc",
+     "the own-prefill term of the all-request p95: a hit or a miss at its "
+     "conditional quantile, by the state's miss share"),
     ("max_users_saturation", "model.max_users_saturation",
      "prefill.js maxUsersSaturation", "mc", "per replica GROUP on both sides"),
     ("max_users_cache", "model.max_users_cache (warm_capacity which='user')",

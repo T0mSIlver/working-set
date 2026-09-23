@@ -188,14 +188,15 @@ class HDecode(Hypothesis):
 
 class HLatency(Hypothesis):
     key = "H-latency"
-    title = "a miss's mean TTFT reaches the budget at the latency ceiling"
+    title = "the checked TTFT statistic reaches the budget at the latency ceiling"
     requires = frozenset({EXCLUSIVE})
     probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
-        return (f"H-latency: a cache miss's mean TTFT reaches the "
-                f"{cfg.slo.ttft_budget_s:g} s budget near "
-                f"~{p.latency_ceiling_users:g} users.")
+        return (f"H-latency: the p{cfg.slo.percentile} TTFT over all "
+                f"requests (model proxy: mean wait + that percentile's own "
+                f"prefill) reaches the {cfg.slo.ttft_budget_s:g} s budget "
+                f"near ~{p.latency_ceiling_users:g} users.")
 
     def predict(self, cfg, p) -> Prediction:
         return Prediction(value=p.latency_ceiling_users, unit=" users")

@@ -255,33 +255,49 @@ export function prefillServiceMoments(m, topo, wl, cs, chunk, mfuAnchor){
     const hit  = w0 + wSlope*L;
     c1 += cold; c2 += cold*cold; h1 += hit; h2 += hit*hit;
   }
-  return { miss:c1/n, missSq:c2/n, hit:h1/n, hitSq:h2/n,
-           missQ: missQuantiles(st, (L) => (gemm*L + quad*L*L)/(peak*ceil)
-                                            + Math.ceil(L/C)*over) };
+  if (!st.sorted) st.sorted = Float64Array.from(a).sort();
+  // the sorted draw and the two per-class cost lines ride along so a TTFT
+  // percentile can be read at any miss share without another pass
+  return { miss:c1/n, missSq:c2/n, hit:h1/n, hitSq:h2/n, sorted: st.sorted,
+           coldAt: L => (gemm*L + quad*L*L)/(peak*ceil) + Math.ceil(L/C)*over,
+           hitAt:  L => w0 + wSlope*L };
 }
 
 // The TTFT percentiles the latency ceiling can be read at (the segmented
 // control next to the TTFT budget). 'mean' is the pre-percentile behaviour.
 export const TTFT_PCTS = ['mean', '90', '95', '99'];
-// Percentiles of a MISS's own prefill time: numpy's linear percentile of the
-// per-draw cost, as model.miss_service_quantile takes it. The cost is
-// monotone in L, so its order statistics are the cost of L's order
-// statistics; the sort of L is cached on the stats object and shared by
-// every configuration priced from the same draw.
-function missQuantiles(st, cost){
-  if (!st.sorted) st.sorted = Float64Array.from(st.samples).sort();
-  const a = st.sorted, n = a.length, q = {};
-  for (const p of TTFT_PCTS){
-    if (p === 'mean') continue;
-    const r = (parseFloat(p)/100)*(n - 1), lo = Math.floor(r), hi = Math.min(n - 1, lo + 1);
-    const cl = cost(a[lo]);
-    q[p] = cl + (r - lo)*(cost(a[hi]) - cl);
-  }
-  return q;
+// numpy's linear percentile (q in [0, 1]) of a per-draw cost that is
+// monotone in L: its order statistics are the cost of L's order statistics,
+// so the sorted draw (cached on the stats object) is all it needs.
+function costQuantile(sorted, cost, q){
+  const n = sorted.length, r = Math.min(1, Math.max(0, q))*(n - 1);
+  const lo = Math.floor(r), hi = Math.min(n - 1, lo + 1), cl = cost(sorted[lo]);
+  return cl + (r - lo)*(cost(sorted[hi]) - cl);
 }
-// A miss's own prefill at the TTFT statistic the budget is checked at.
-export function missOwn(mo, pct){
-  return (!pct || pct === 'mean') ? mo.miss : mo.missQ[pct];
+// Twin of model.miss_service_quantile: a MISS's own prefill at percentile p.
+export function missServiceQuantile(mo, p){
+  return costQuantile(mo.sorted, mo.coldAt, p/100);
+}
+// Twin of model.ttft_service_quantile: the own-prefill term of the p-th TTFT
+// over ALL requests (the probe's population). With miss share f, misses
+// ranked above hits: past f > 1 - P the P-th request is a miss at
+// q = 1 - (1-P)/f, otherwise a hit at q = P/(1-f).
+export function ttftServiceQuantile(mo, f, p){
+  const P = p/100;
+  return f > 1 - P
+    ? { c: costQuantile(mo.sorted, mo.coldAt, 1 - (1 - P)/f), path: 'miss' }
+    : { c: costQuantile(mo.sorted, mo.hitAt, P/(1 - f)), path: 'hit' };
+}
+// The own-prefill term the budget is checked with: a miss's mean for 'mean',
+// the all-request percentile proxy's otherwise.
+export function ttftOwn(mo, f, pct){
+  return (!pct || pct === 'mean') ? mo.miss
+       : ttftServiceQuantile(mo, f, parseFloat(pct)).c;
+}
+// How the budget label and tooltips name the statistic.
+export function ttftStatName(pct){
+  return (!pct || pct === 'mean') ? "a miss's mean TTFT"
+       : `p${pct} TTFT over all requests`;
 }
 
 // Queueing + burst metrics for one configuration, at `rate` req/s PER GROUP.
@@ -505,18 +521,18 @@ export function maxUsersSaturation(mo, f, think, subR){
   return eS > 0 ? (think||liveThink)/eS : Infinity;
 }
 
-// Users at which a MISS's TTFT reaches the budget. Closed form in both
+// Users at which the TTFT statistic reaches the budget. Closed form in both
 // disciplines (E[S] and E[S^2] do not depend on the arrival rate):
 //   FCFS  lam a/(2(1-lam b)) + c = SLA  ->  lam = k/(a + k b),  k = 2(SLA - c)
 //   PS    c/(1-lam b) = SLA            ->  lam = (1 - c/SLA)/b
-// `pct` picks the TTFT statistic (model.max_users_latency): 'mean' uses
-// c = E[S|miss]; '95' uses c = the p95 of a miss's own prefill, keeping the
-// queue wait at its mean — TTFT_p ~= E[W] + Q_p(S|miss).
+// `pct` picks the statistic (model.max_users_latency): 'mean' uses
+// c = E[S|miss]; '95' uses the proxy E[W] + c_p for the p95 over all
+// requests, c_p from ttftServiceQuantile. A proxy, not Q_p(W + S).
 // ALWAYS strictly inside saturation, since k/(a+kb) < 1/b for any a > 0 — the
 // algebraic form of "the queue diverges before the server does".
 export function maxUsersLatency(mo, f, sla, think, discipline, subR, pct){
   const b = f*mo.miss + (1-f)*mo.hit;
-  const a = f*mo.missSq + (1-f)*mo.hitSq, c = missOwn(mo, pct);
+  const a = f*mo.missSq + (1-f)*mo.hitSq, c = ttftOwn(mo, f, pct);
   if (c >= sla || b <= 0) return 0;
   const lam = discipline === 'ps' ? (1 - c/sla)/b : (2*(sla-c))/(a + 2*(sla-c)*b);
   // lam is the TOTAL rate (the moments mix both classes); a user contributes

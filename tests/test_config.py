@@ -401,7 +401,7 @@ def test_optional_float_is_type_checked_too():
 def test_predict_reference_row():
     """27B / 4xH200 TP4 / chunk 4096 at the measured workload: the explorer's
     reference example (the harness template's predictions block) — cache 403,
-    latency 496 (p95 TTFT; 499 against the mean), saturation 509, miss TTFT
+    latency 500 (all-request p95; 499 for a miss's mean), saturation 509, miss TTFT
     0.92 s, B* 9.8. These are the
     explorer's per-pass-overhead convention; pinned so a convention drift
     (roofline vs explorer) fails here, not in a user's report."""
@@ -411,7 +411,7 @@ def test_predict_reference_row():
     p = predict(cfg, n_iter=300)
     assert p.binding_constraint == "decode"        # at the measured MBU 0.22
     assert 395 <= p.warm_capacity_p5 <= 411        # 403, Monte Carlo
-    assert p.latency_ceiling_users == 496
+    assert p.latency_ceiling_users == 500
     assert p.saturation_ceiling_users == 509
     assert abs(p.ttft_miss_s - 0.916) < 0.005
     assert abs(p.bstar_misses - 9.82) < 0.02

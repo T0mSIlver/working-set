@@ -190,8 +190,9 @@ function harnessHypotheses(P, model, topo, wl, reps){
       + `A run bounds this below unless load reaches eviction.`,
     `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
       + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
-    `H-latency: a cache miss's ${state.ttft_pct === 'mean' ? 'mean' : 'p' + state.ttft_pct} `
-      + `TTFT reaches the ${fmt(state.sla, 0)} s budget `
+    `H-latency: ${state.ttft_pct === 'mean' ? "a cache miss's mean TTFT"
+        : `the p${state.ttft_pct} TTFT over all requests (model proxy: mean wait `
+          + `+ that percentile's own prefill)`} reaches the ${fmt(state.sla, 0)} s budget `
       + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
     `H-saturation: prefill duty reaches 100% near ~${fmt(P.saturation_ceiling_users, 0)} `
       + `users${grp}; above it the queue has no steady state.`,
