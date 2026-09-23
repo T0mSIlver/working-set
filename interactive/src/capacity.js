@@ -1,5 +1,5 @@
 import { CONFIG, DECODE_MBU, GIB, PREFILL_MFU, effective_bw, is_moe, kv_pool_tokens,
-         replicated, state_traffic, w_decode } from './config.js';
+         replicated, state_traffic, tpEff, w_decode } from './config.js';
 import { percentiles } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
@@ -137,6 +137,28 @@ export function prefillMfu(){
   catch (e) { return PREFILL_MFU; }
 }
 
+// The opt-in latency pricing's constants (mirrors RunConfig.decode_latency):
+// null under the default roofline pricing. The compute leg runs at the
+// PREFILL MFU, as workingset prices it (DecodeLatency.mfu = calibration.mfu).
+export function decodeLatency(){
+  try {
+    if (state.dprice !== "latency") return null;
+    return { bw_eff: state.dbw, fixed_s: state.dfixed / 1e3,
+             spec_tokens: state.dspec, mfu: prefillMfu() };
+  } catch (e) { return null; }
+}
+// GEMM compute time of ONE token position at prefill's achieved rate — no
+// attention term, the KV read is already in the byte ledger. Mirrors
+// decode_token_seconds (peak inlined: prefill.js's peakFlops imports this
+// module).
+export function decodeTokenSeconds(model, topo, mfu){
+  if (!(model.params_prefill > 0))
+    throw new Error(`${model.name}: no prefill constants (params_prefill unset)`);
+  const gpu = topo.gpu || CONFIG.GPUS["H200"];
+  const peak = topo.tp * gpu.peak_flops_fp8 * tpEff(topo.tp, gpu.nvlink_domain);
+  return 2 * model.params_prefill / (peak * mfu);
+}
+
 export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // a replicated cache is re-read by every rank that holds a copy: per-step
   // KV and state bytes scale by the storage factor (mirrors decode_curves)
@@ -198,12 +220,23 @@ export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // token (indexer scan) plus the length-capped top-k read per sequence
   const kvReadBpt = model.kv_decode_bpt ?? model.kv_bpt;
   const perTok = topk ? model.kv_decode_const/topk : 0;
+  // opt-in latency pricing (model.decode_lat, baked on by modelFor): every
+  // byte at one bandwidth efficiency, the speculative verify as compute, plus
+  // a fixed per-step latency. Mirrors the `latency` branch of decode_curves.
+  const lat = model.decode_lat || null;
+  const bwLat = lat ? effective_bw(topo) * lat.bw_eff : 0;
+  const tTok = lat ? decodeTokenSeconds(model, topo, lat.mfu) : 0;
   for (let k=0;k<K;k++){
     const n=ns[k];
     // weights + recurrent-state traffic for every active sequence
     const wd = w_decode(model, n) + n*state_traffic(model)
              + (topk ? 0 : n*(model.kv_decode_const ?? 0));
     const col=kvsum[k], tcol=topk?tksum[k]:null;
+    if (lat){
+      const tFix = n*(1 + lat.spec_tokens)*tTok + lat.fixed_s;
+      for (let it=0; it<n_iter; it++)
+        buf[it] = model.mtp / ((wd + col[it]*kvReadBpt + (topk ? tcol[it]*perTok : 0)) / bwLat + tFix);
+    } else
     for (let it=0; it<n_iter; it++)
       buf[it] = model.mtp * bw / (wd + col[it]*kvReadBpt + (topk ? tcol[it]*perTok : 0));
     const [a,b,c] = percentiles(buf, [5,50,95]);

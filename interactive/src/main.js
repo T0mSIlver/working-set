@@ -296,6 +296,24 @@ document.getElementById('i-headcount').addEventListener('input', e=>{
   if (raw !== '' && !Number.isFinite(state.headcount)) state.headcount = null;
   onInput();
 });
+// max_num_seqs: empty = unset (no cap), else a whole number >= 1
+document.getElementById('i-mns').addEventListener('input', e=>{
+  const raw = e.target.value.trim(), n = Math.round(Number(raw));
+  state.mns = raw === '' || !Number.isFinite(n) || n < 1 ? null : Math.min(n, 4096);
+  onInput();
+});
+// the latency pricing's constants; an out-of-range entry is ignored (the
+// state keeps its last legal value), as workingset refuses to price it
+for (const [id, key, lo, hi, int] of [['i-dbw','dbw',0.01,1,false],
+                                      ['i-dfixed','dfixed',0,50,false],
+                                      ['i-dspec','dspec',0,16,true]]){
+  document.getElementById(id).addEventListener('input', e=>{
+    const n = Number(e.target.value);
+    if (e.target.value.trim() === '' || !Number.isFinite(n) || n < lo || n > hi) return;
+    state[key] = int ? Math.round(n) : n;
+    onInput();
+  });
+}
 // metric/control explainer tooltips are keyboard-reachable (CSS shows them on
 // :focus-visible); tile tips are stamped in renderTiles' generated markup
 document.querySelectorAll('.tip').forEach(t=>{ t.tabIndex=0; });
@@ -411,6 +429,18 @@ function syncLabels(){
   document.getElementById('v-gpuname').textContent=CONFIG.GPUS[state.gpu].name;
   document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);
   document.getElementById('v-mbu').textContent=state.mbu.toFixed(2);
+  // the latency pricing does not read the MBU; its own constants show instead
+  const lat = state.dprice === 'latency';
+  document.getElementById('s-mbu').disabled = lat;
+  document.getElementById('dprice-lat').hidden = !lat;
+  for (const [id, key] of [['i-dbw','dbw'],['i-dfixed','dfixed'],['i-dspec','dspec']]){
+    const el = document.getElementById(id);
+    if (document.activeElement !== el && Number(el.value) !== state[key]) el.value = state[key];
+  }
+  document.getElementById('v-mns').textContent = state.mns === null ? 'unset' : 'cap ' + fmt(state.mns, 0);
+  const mnsEl = document.getElementById('i-mns');
+  const mnsText = state.mns === null ? '' : String(state.mns);
+  if (document.activeElement !== mnsEl && mnsEl.value !== mnsText) mnsEl.value = mnsText;
   document.getElementById('v-mfu').textContent=state.mfu.toFixed(2);
   // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
   // per-draft acceptance — the base quantity the speedup is computed from
@@ -474,10 +504,13 @@ const URL_ENUMS = {
   pue: () => ["1.2","1.5","2.0"],
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
   bench: () => Object.keys(CONFIG.BENCHES),
+  dprice: () => ["roofline","latency"],
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
-const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000] };
+const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000], mns: [1, 4096],
+                        dbw: [0.01, 1], dfixed: [0, 50], dspec: [0, 16] };
+const URL_INT = new Set(['tp', 'headcount', 'mns', 'dspec']);
 export function encodeStateURL(){
   const p = new URLSearchParams();
   const put = (k, v) => { if (String(v) !== String(STATE_DEFAULTS[k])) p.set(k, String(v)); };
@@ -537,7 +570,7 @@ function applyURLState(){
     const v = p.get(k);
     if (v === null) continue;
     const n = parseFloat(v);
-    if (Number.isFinite(n)) state[k] = (k === 'tp' || k === 'headcount')
+    if (Number.isFinite(n)) state[k] = URL_INT.has(k)
       ? Math.round(clip(n, lo, hi)) : clip(n, lo, hi);
   }
   for (const k of URL_BOOLS) if (p.get(k) !== null) state[k] = p.get(k) === '1';
@@ -545,7 +578,7 @@ function applyURLState(){
 // reflect enum state into the two segmented controls enforceConstraints does
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
-  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench']])
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'], ['seg-dprice','dprice']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;

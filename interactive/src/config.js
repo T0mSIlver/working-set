@@ -31,6 +31,15 @@ export const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 // Per-row values come back the day a second architecture is measured.
 export const DECODE_MBU    = 0.22;
 
+// OPT-IN decode pricing (research/decode_mbu.md § 8). Mirrors DECODE_BW_EFF,
+// DECODE_FIXED_S and DECODE_SPEC_TOKENS in workingset.model: a decode step is
+//   step_bytes / (effective_bw x bw_eff) + n x (1 + spec) x t_token + fixed
+// with t_token = 2 x params_prefill / (peak x mfu). Read on ONE deployment
+// (TP4, MTP depth 3); the default pricing stays the single DECODE_MBU fold.
+export const DECODE_BW_EFF      = 0.36;
+export const DECODE_FIXED_MS    = 2.7;
+export const DECODE_SPEC_TOKENS = 3;
+
 export const CONFIG = {
   // ---- HARDWARE ----
   // The GPU is a selectable part. H200 is the CALIBRATED baseline (the

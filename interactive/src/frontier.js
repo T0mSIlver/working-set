@@ -37,7 +37,7 @@ export function renderFrontierTable(rows, curKey){
                  ? (hasHeadcount()
                    ? `${fmt(r.op.ceilings[k],0)} sessions<br><span style="color:${muted}">≈ ${fmt(peopleFromSessions(r.op.ceilings[k]),0)} people</span>`
                    : fmt(r.op.ceilings[k],0))
-                 : '—'}</td>`).join('') : '';
+                 : '—'}${k==='decode'&&r.capped?` <span style="color:${muted}">cap</span>`:''}</td>`).join('') : '';
     const why = r.op.binding === 'latency'
       ? 'cannot meet the TTFT budget at any load'
       : (r.op.binding === 'saturation' ? 'prefill saturates before one user'

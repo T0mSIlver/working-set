@@ -1,12 +1,13 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeTopo,
          minTpFor, servableKv, unionKink, withKvDtype } from './config.js';
 import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
-         decodeFloor, maxUsersDecode, missContextSeconds, operatingPoint, prefillChunk,
+         decodeFloor, capDecodeUsers, maxUsersDecode, missContextSeconds, operatingPoint, prefillChunk,
          prefillContextSeconds, prefillSeconds, prefillServiceMoments, serverRate,
-         setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint, ttftMoments } from './prefill.js';
+         setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint, steadyResident,
+         ttftMoments } from './prefill.js';
 import { samplingSig, seedFor } from './mathlib.js';
 import { p_sub } from './workload.js';
-import { decodeCurves, decodeMbu, decodePlan, warmCapacity } from './capacity.js';
+import { decodeCurves, decodeLatency, decodeMbu, decodePlan, warmCapacity } from './capacity.js';
 import { currentTopo, currentWL, ramPerCache, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartEData, clearChartGeomCD, interpAt, renderChartA, renderChartB,
@@ -89,6 +90,9 @@ function modelFor(key){
   // DECODE_MBU); frontierDecSig carries state.mbu so the cached decode
   // ceilings rebuild when it moves.
   m = { ...m, decode_mbu: decodeMbu() };
+  // ...and the opt-in latency pricing, null under the default roofline
+  const lat = decodeLatency();
+  if (lat) m = { ...m, decode_lat: lat };
   return m;
 }
 
@@ -161,7 +165,7 @@ export function computeAndRender(draft, deferFrontierDecode){
   lastSteady=steadyDecodePoint(dc, topo,
                 serverRate(state.users, state.think, wl.sub_ratio)
                   / (topo.replicas || 1),
-                state.out, lastWarmCur.g95);
+                state.out, steadyResident(lastWarmCur.g95));
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
   const noFit = kv_pool_tokens(model,topo) <= 0;
 
@@ -254,18 +258,20 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   // would change them, so any staleness check re-runs the Monte-Carlo on
   // every input event — ~0.5 s per frame — and the 120 ms settle corrects
   // the numbers anyway.
-  let warmFn, decodeUsers, decodeCensored = false;
+  let warmFn, decodeUsers, decodeCensored = false, decodeCapped = false, decodeRaw;
   if (!draft || !lastPlanner){
     seedFor('decodeCeil');
-    decodeUsers = maxUsersDecode(model, topo, wl, decodeFloor(), q.DECODE_ITER || 220);
-    decodeCensored = decodeUsers.censored; decodeUsers = decodeUsers.n;
+    decodeUsers = capDecodeUsers(maxUsersDecode(model, topo, wl, decodeFloor(), q.DECODE_ITER || 220));
+    decodeCensored = decodeUsers.censored; decodeCapped = decodeUsers.capped;
+    decodeRaw = decodeUsers.raw; decodeUsers = decodeUsers.n;
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
                             q.WARM_BUDGET_SCAN, wl, f, warmUsers);
-    lastPlanner = { warmFn, decodeUsers, decodeCensored, fMax: fAxisMax() };
+    lastPlanner = { warmFn, decodeUsers, decodeCensored, decodeCapped, decodeRaw, fMax: fAxisMax() };
   } else {
     warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
-    decodeCensored = lastPlanner.decodeCensored;
+    decodeCensored = lastPlanner.decodeCensored; decodeCapped = lastPlanner.decodeCapped;
+    decodeRaw = lastPlanner.decodeRaw;
   }
   // a draft render reuses the cached curve, but warmUsersCurve's anchors only
   // span the axis it was built for and it CLAMPS beyond its last anchor. So a
@@ -282,6 +288,9 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   const d = plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo);
   const op = operatingPoint(model, topo, wl, cs, {
     mo, reps, warmUsers: warmUsers*reps, decodeUsers: decodeUsers*reps });
+  // the decode ceiling is the scheduler's max_num_seqs, not the bandwidth's
+  op.decodeCapped = decodeCapped;
+  if (decodeCapped) op.decodeRaw = decodeRaw * reps;
   // per-group quantities the tiles quote alongside the user ceilings
   const sp = spikeMetrics(model, topo, wl, cs, rate, prefillChunk());
   const drain = state.burst * mo.miss / Math.max(1e-9, 1 - sp.rho);
@@ -304,7 +313,9 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   renderCeilingBars(op);
   renderDeployCard(op, model, topo, wl, mo, decodeUsers);
   renderTestCard(op, model, topo, wl);
-  renderCostCard(op, model, topo, wl, mo, decodeUsers);
+  // power prices decode time against the BANDWIDTH ceiling x floor (the
+  // aggregate decode throughput), which a max_num_seqs cap does not change
+  renderCostCard(op, model, topo, wl, mo, decodeCapped ? decodeRaw : decodeUsers);
   renderBindingChart(d, op);
 
   // context lines on the spike chart: the same model at other widths that fit
@@ -363,7 +374,13 @@ function frontierWarmSig(wl){
 }
 // the decode ceilings additionally move with the floor and the MBU slider —
 // and ONLY they do (both are closed-form scalings of the same search)
-function frontierDecSig(wl){ return `${frontierWarmSig(wl)}|${state.decode_floor}|${state.mbu}`; }
+// ...and with the decode pricing (whose compute leg reads the MFU) and the
+// max_num_seqs cap
+function frontierDecSig(wl){
+  return `${frontierWarmSig(wl)}|${state.decode_floor}|${state.mbu}|${state.mns}|`
+       + (state.dprice === 'latency'
+          ? `lat|${state.dbw}|${state.dfixed}|${state.dspec}|${state.mfu}` : 'roofline');
+}
 /* Chunked rebuild: a settle used to recompute every stale row in ONE task —
    measured at 500–900 ms of main-thread block once the table reached 27 rows
    (7 models at the time) — so the page froze after each drag. The rebuild now walks the
@@ -451,7 +468,7 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   // programmatic write with no render must not commit rows mixed across two
   // knob values under one signature
   const plan = [];
-  const floor0 = decodeFloor();
+  const floor0 = decodeFloor(), mns0 = state.mns;
   for (const mk of Object.keys(CONFIG.MODELS))
     for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
       if (dp*tp > 8) continue;
@@ -497,8 +514,9 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
       if (decOld[p.key]){ dec[p.key] = decOld[p.key]; }
       else {
         seedFor(`frontierDec|${p.key}`, ssig);
-        const du2 = maxUsersDecode(m2, t2, wl, floor0, 140);
-        dec[p.key] = { decodeUsers: du2.n*reps, censored: du2.censored };
+        const du2 = capDecodeUsers(maxUsersDecode(m2, t2, wl, floor0, 140), mns0);
+        dec[p.key] = { decodeUsers: du2.n*reps, censored: du2.censored, capped: du2.capped,
+                       decodeRaw: du2.raw*reps };
       }
       mo[p.key] = moOld[p.key] || prefillServiceMoments(m2, t2, wl, cs);
     }
@@ -526,7 +544,7 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
 function seatPrice(op, topo, mo, f, wl, r){
   if (!isFinite(op.limit) || op.limit < 1) return Infinity;
   const rateMax = serverRate(op.limit, state.think, wl.sub_ratio) / r.reps;
-  return energyCost(topo, mo, f, rateMax, r.decodeUsers / r.reps).totalMonth / op.limit;
+  return energyCost(topo, mo, f, rateMax, (r.decodeRaw ?? r.decodeUsers) / r.reps).totalMonth / op.limit;
 }
 function assembleFrontier(wl, cs){
   const f = wl.invalidation;
@@ -544,7 +562,7 @@ function assembleFrontier(wl, cs){
              // the whole bill at YOUR load — hardware plus energy
              // (research/power.md) — comparable across rows because every
              // row is priced at the same demand and the same €/GPU-hour
-             eur: energyCost(t2, mo2, f, r2, r.decodeUsers / r.reps).totalMonth,
+             eur: energyCost(t2, mo2, f, r2, (r.decodeRaw ?? r.decodeUsers) / r.reps).totalMonth,
              // and the bill at the row's OWN ceiling, per seat: what one
              // user costs when the configuration is full. At your load the
              // bill is the GPU count and every row on a topology prices the
@@ -684,7 +702,7 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   const offl = warm.o5;
   // ---- the STEADY-STATE decode point (act 2's honest counterpart to act 1's
   // stress test). Every quantity below is per replica GROUP, like groupRate.
-  const sd = noFit ? null : (steady || steadyDecodePoint(dc, topo, groupRate, state.out, warm.g95));
+  const sd = noFit ? null : (steady || steadyDecodePoint(dc, topo, groupRate, state.out, steadyResident(warm.g95)));
   // prefill duty at this load. Above 1 the queue is unbounded, so there is no
   // steady state to be in: requests never reach the decode batch at all, and
   // quoting a decode speed for them would be the most misleading number on the
