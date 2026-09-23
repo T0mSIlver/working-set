@@ -88,10 +88,18 @@ before(async () => {
   await cdp('Runtime.enable', {}, session);
 });
 
-after(() => {
+after(async () => {
   if (skip) return;
-  sock?.close(); chrome?.kill(); server?.close();
-  for (const d of [tmp, profile]) if (d) rmSync(d, { recursive: true, force: true });
+  sock?.close(); server?.close();
+  // Chrome keeps writing its profile until it has exited, so removing the
+  // directory straight after kill() races it (ENOTEMPTY on CI)
+  if (chrome && chrome.exitCode === null && chrome.signalCode === null){
+    const exited = new Promise(r => chrome.once('exit', r));
+    chrome.kill();
+    await Promise.race([exited, sleep(5000)]);
+  }
+  for (const d of [tmp, profile]) if (d)
+    rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 function wsLink(path){
