@@ -21,7 +21,7 @@ import { bStar, warmUsersCurve, warmUsersNow } from '../../interactive/src/plann
 import { energyCost } from '../../interactive/src/cost.js';
 import {
   breakevenMissRate, capDecodeUsers, coldRequestSeconds, decodePowerUsers, contextStats, maxUsersDecode, meanPasses,
-  maxUsersLatency, maxUsersSaturation, mfuCeil, mfuEff, missContextSeconds,
+  maxUsersLatency, maxUsersSaturation, missServiceQuantile, ttftServiceQuantile, mfuCeil, mfuEff, missContextSeconds,
   peakFlops, prefillContextSeconds, prefillFlops, prefillOverheadSeconds,
   prefillSeconds, prefillServiceMoments, serverRate, setLiveThink, setLiveTurn,
   spikeMetrics, steadyDecodePoint, steadyResident, ttftMoments,
@@ -104,8 +104,10 @@ export function driveState(v){
   o.spike_tolerance = bStar(mo, f, state.sla, rate);
   o.spike_tolerance_sla10 = sp.bstar;
   o.max_users_latency = maxUsersLatency(mo, f, state.sla, state.think,
-                                        'fcfs', wl.sub_ratio);
+                                        'fcfs', wl.sub_ratio, state.ttft_pct);
   o.max_users_saturation = maxUsersSaturation(mo, f, state.think, wl.sub_ratio);
+  o.miss_service_q95 = missServiceQuantile(mo, 95);
+  o.ttft_service_q95 = ttftServiceQuantile(mo, f, 95);
 
   // ---- warm fill -----------------------------------------------------
   seedFor('warm');

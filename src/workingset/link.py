@@ -24,10 +24,11 @@ from .config import Endpoint, RunConfig
 
 DEFAULT_BASE = "https://workingset.tomvaucourt.com/"
 
-# interactive/src/state.js fixes the subagent prefix and the reported
-# percentile; everything else in [workload] and [slo] has a control
+# interactive/src/state.js fixes the subagent prefix; everything else in
+# [workload] and [slo] has a control. The TTFT statistic offers these
+# percentiles (prefill.js TTFT_PCTS, besides 'mean')
 EXPLORER_SUB_PREFIX = 3000
-EXPLORER_PERCENTILE = 95
+TTFT_PCTS = (90, 95, 99)
 CHUNKS = (2048, 4096, 8192, 16384, 32768, 65536)
 WOVER = {0.0: "pub", 0.15: "p15"}
 
@@ -174,9 +175,10 @@ def _unmapped(cfg: RunConfig) -> list[str]:
     if w.subagent_prefix_tokens != EXPLORER_SUB_PREFIX:
         out.append(f"workload.subagent_prefix_tokens = {w.subagent_prefix_tokens}: the "
                    f"explorer has no control for it and prices {EXPLORER_SUB_PREFIX}")
-    if s.percentile != EXPLORER_PERCENTILE:
-        out.append(f"slo.percentile = {s.percentile}: the explorer has no control for "
-                   f"it and reports p{EXPLORER_PERCENTILE}")
+    if s.ttft_statistic == "percentile" and s.percentile not in TTFT_PCTS:
+        near = min(TTFT_PCTS, key=lambda p: abs(p - s.percentile))
+        out.append(f"slo.percentile = {s.percentile}: the explorer offers p90, p95 and p99; "
+                   f"the link sets p{near}")
     if d.weight_overhead not in WOVER:
         near = _nearest_wover(d.weight_overhead)
         out.append(f"deployment.weight_overhead = {d.weight_overhead:g}: the explorer "
@@ -204,6 +206,14 @@ def _unmapped(cfg: RunConfig) -> list[str]:
             out.append(f"endpoint.{f.name} = {v!r}: the explorer does not carry it; "
                        f"a config downloaded from the page will have {shown}")
     return out
+
+
+def _ttft_pct(slo) -> str:
+    """The explorer's ttft_pct for [slo]: 'mean' for the miss-mean reading,
+    else the nearest percentile the page offers."""
+    if slo.ttft_statistic == "miss_mean":
+        return "mean"
+    return str(min(TTFT_PCTS, key=lambda p: abs(p - slo.percentile)))
 
 
 def explorer_link(cfg: RunConfig, base: str = DEFAULT_BASE) -> tuple[str, list[str]]:
@@ -262,6 +272,12 @@ def explorer_link(cfg: RunConfig, base: str = DEFAULT_BASE) -> tuple[str, list[s
     defaults = {k.key: k.default for k in KNOBS}
     defaults["mtp"] = M.MODELS[model].mtp
     frag = {k: v for k, v in params.items() if v != _js(defaults[k])}
+    # main.js stampTtftPct: a non-bare link without ttft_pct predates the
+    # control and decodes as a miss's mean, so every non-bare link names its
+    # statistic; a bare link is the page default, p95
+    pct = _ttft_pct(cfg.slo)
+    if frag or pct != "95":
+        frag["ttft_pct"] = pct
     q = urlencode(frag, safe="")
     return base + ("#" + q if q else ""), warnings
 

@@ -4,7 +4,8 @@
    decoder the Node tests share. It throws on a key the page does not keep in
    its state, where the real decoder would ignore it silently. */
 import { CONFIG } from '../../interactive/src/config.js';
-import { STATE_DEFAULTS } from '../../interactive/src/state.js';
+import { STATE_DEFAULTS, ttftPctFromFragment } from '../../interactive/src/state.js';
+import { TTFT_PCTS } from '../../interactive/src/prefill.js';
 
 // Inverse of main.js encodeStateURL(): the fragment carries only the DIFFS
 // from STATE_DEFAULTS, so the type of each key is read off the defaults
@@ -24,5 +25,7 @@ export function decodeStateURL(url){
   const p = new URLSearchParams(q);
   if (!p.has('mtp')) st.mtp = CONFIG.MODELS[st.model].mtp;
   if (!p.has('gpuh')) st.gpuh = CONFIG.GPUS[st.gpu].eur_gpu_h;
+  // a non-bare link without ttft_pct predates the control: a miss's mean
+  st.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);
   return st;
 }

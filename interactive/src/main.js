@@ -28,10 +28,10 @@
    that state.js depends on must never depend on state.js.
    ========================================================================== */
 import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, unionKink } from './config.js';
-import { requestRate, steadyResident } from './prefill.js';
+import { TTFT_PCTS, requestRate, steadyResident } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
-import { STATE_DEFAULTS, capSliderMax, currentTopo, currentWL, hasHeadcount,
+import { STATE_DEFAULTS, stampTtftPct, ttftPctFromFragment, capSliderMax, currentTopo, currentWL, hasHeadcount,
          sessionsFromHeadcount, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartCGeom, chartDGeom, clearChartGeomCD, drawCross, interpAt, lastChartE,
@@ -413,6 +413,7 @@ function syncLabels(){
   }
   document.getElementById('v-think').textContent=fmt(state.think,0);
   document.getElementById('v-sla').textContent=fmt(state.sla,0);
+  document.getElementById('v-sla-stat').textContent=ttftStatLabel();
   document.getElementById('v-decode_floor').textContent=fmt(state.decode_floor,0);
   document.getElementById('v-turn').textContent=fmt(state.turn,0);
   document.getElementById('v-out').textContent=fmt(state.out,0);
@@ -485,6 +486,9 @@ function syncLabels(){
   document.getElementById('v-gpuh').textContent=state.gpuh.toFixed(2);
 }
 
+// the statistic the TTFT budget is checked at, as the budget label prints it
+function ttftStatLabel(){ return state.ttft_pct === 'mean' ? 'miss mean' : `p${state.ttft_pct} all req.`; }
+
 /* ---- share link: the whole configuration in the URL fragment ------------
    Encodes only the DIFFS from STATE_DEFAULTS, so a default page shares as a
    bare URL. The fragment (not the query string) keeps every permutation on
@@ -502,6 +506,7 @@ const URL_ENUMS = {
   pue: () => ["1.2","1.5","2.0"],
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
   bench: () => Object.keys(CONFIG.BENCHES),
+  ttft_pct: () => TTFT_PCTS,
   dprice: () => ["roofline","latency"],
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
@@ -529,6 +534,10 @@ export function encodeStateURL(){
   // booleans encode as 1/0, so the diff test must compare the BOOLEANS —
   // comparing "0" to "false" would stamp the key into every default link
   for (const k of URL_BOOLS) if (state[k] !== STATE_DEFAULTS[k]) p.set(k, state[k] ? '1' : '0');
+  // links from before the TTFT statistic existed decode as a miss's mean
+  // (applyURLState), so every non-bare link names its statistic explicitly;
+  // the default page still shares as a bare URL
+  stampTtftPct(p, state.ttft_pct);
   const q = p.toString();
   return location.origin === "null"   // file:// — origin is unusable
     ? location.href.split('#')[0] + (q ? '#' + q : '')
@@ -542,6 +551,9 @@ function applyURLState(){
     const v = p.get(k);
     if (v !== null && opts().includes(v)) state[k] = v;
   }
+  // a link without ttft_pct predates the control: those pages checked a
+  // miss's mean TTFT, so that is what it reproduces
+  state.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);
   // a shared model carries its own MTP default unless the link pins one —
   // the same reset the model buttons apply on click
   if (p.get('model') !== null && p.get('mtp') === null)
@@ -576,7 +588,8 @@ function applyURLState(){
 // reflect enum state into the two segmented controls enforceConstraints does
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
-  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'], ['seg-dprice','dprice']])
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'],
+                                  ['seg-dprice','dprice'], ['seg-ttft_pct','ttft_pct']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;

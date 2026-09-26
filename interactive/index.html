@@ -532,8 +532,14 @@ details.more .more-body{padding:0 0 16px}
           <input class="population" type="number" id="i-headcount" min="0" step="1" inputmode="numeric" placeholder="people with access">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Time to first token a cache miss must meet. Sets the latency ceiling and B*. The model solves it against the mean TTFT, so a p95 budget binds sooner than shown.">TTFT budget</span> <span class="val"><span id="v-sla">10</span> s</span></label>
+          <label class="flabel"><span class="tip" data-tip="Time to first token the SLO allows, at the statistic picked below it. p90, p95 and p99 are over all requests, hits and misses, as the load test measures them; the model checks mean queue wait plus the percentile of the hit/miss service mix, not the true percentile. mean is the older reading, a cache miss's mean TTFT. Sets the latency ceiling. B*, the burst drain and f_sla still use a miss's mean.">TTFT budget</span> <span class="val"><span id="v-sla-stat">p95 all req.</span> ≤ <span id="v-sla">10</span> s</span></label>
           <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
+          <div class="seg" id="seg-ttft_pct" data-key="ttft_pct" role="group" aria-label="TTFT statistic">
+            <button data-v="mean" aria-pressed="false">mean</button>
+            <button data-v="90" aria-pressed="false">p90</button>
+            <button data-v="95" aria-pressed="true">p95</button>
+            <button data-v="99" aria-pressed="false">p99</button>
+          </div>
       </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Decode speed each session must keep when every warm session decodes at once. The decode ceiling is solved against it. The study uses 40 tok/s; the comfortable mark is 1.25× the floor. Agents want 40 or more; a person reading chat reads 5 to 8 tok/s. Halving the floor roughly doubles the decode ceiling.">Per-user decode floor</span> <span class="val"><span id="v-decode_floor">40</span> tok/s</span></label>

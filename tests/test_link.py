@@ -85,7 +85,7 @@ def test_fixture_set_covers_every_knob():
         seen |= set(_frag(explorer_link(load_config(p))[0]))
     # headcount/active/spu ride the population fixture; every other knob the
     # every-knob one
-    assert {k.key for k in KNOBS} == seen
+    assert {k.key for k in KNOBS} | {"ttft_pct"} == seen
 
 
 def test_default_config_is_the_bare_page():
@@ -99,10 +99,10 @@ def _warned(cfg) -> str:
 def test_unmapped_fields_warn():
     c = RunConfig()
     c = replace(c, workload=replace(c.workload, subagent_prefix_tokens=5000),
-                slo=replace(c.slo, percentile=99),
+                slo=replace(c.slo, percentile=97),
                 deployment=replace(c.deployment, max_num_batched_tokens=3000))
     w = _warned(c)
-    for field in ("workload.subagent_prefix_tokens", "slo.percentile",
+    for field in ("workload.subagent_prefix_tokens", "slo.percentile = 97",
                   "deployment.max_num_batched_tokens"):
         assert field in w
 
@@ -148,10 +148,10 @@ def test_more_than_one_node_is_refused(tmp_path, capsys):
 def test_cli_prints_the_url_and_warns_on_stderr(tmp_path, capsys):
     c = RunConfig()
     p = tmp_path / "w.toml"
-    p.write_text(replace(c, slo=replace(c.slo, percentile=99)).dumps())
+    p.write_text(replace(c, slo=replace(c.slo, percentile=98)).dumps())
     assert cli.main(["link", str(p), "--base", "http://127.0.0.1:8123/"]) == 0
     out, err = capsys.readouterr()
-    assert out.strip() == "http://127.0.0.1:8123/"
+    assert out.strip() == "http://127.0.0.1:8123/#ttft_pct=99"
     assert "slo.percentile" in err
 
 
@@ -199,3 +199,12 @@ def test_precision_beyond_six_decimals_is_kept():
     # conversion dust is still trimmed: 0.07 * 100 is 7, not 7.000000000000001
     c = replace(c, workload=replace(c.workload, miss_rate=0.07))
     assert _frag(explorer_link(c)[0])["inval"] == "7"
+
+
+def test_every_non_bare_link_names_its_ttft_statistic():
+    c = RunConfig()
+    assert explorer_link(c)[0] == DEFAULT_BASE                         # bare = p95
+    miss = replace(c, slo=replace(c.slo, ttft_statistic="miss_mean"))
+    assert _frag(explorer_link(miss)[0]) == {"ttft_pct": "mean"}
+    busy = replace(c, workload=replace(c.workload, users=128.0))
+    assert _frag(explorer_link(busy)[0]) == {"users": "128", "ttft_pct": "95"}

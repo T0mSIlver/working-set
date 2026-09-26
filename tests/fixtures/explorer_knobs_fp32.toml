@@ -1,6 +1,6 @@
 # workingset.toml — the configuration on screen in the interactive explorer.
-# Qwen3.6-35B-A3B · 1×H200 · max_num_batched_tokens 32768 · generated 2026-09-06
-# reproduce this page: https://workingset.tomvaucourt.com/#model=35BA3B&state_dt=fp32
+# Qwen3.6-35B-A3B · 1×H200 · max_num_batched_tokens 32768 · generated 2026-09-26
+# reproduce this page: https://workingset.tomvaucourt.com/#model=35BA3B&state_dt=fp32&ttft_pct=mean
 # No predictions live here: `ws predict workingset.toml` computes them.
 
 schema_version = 1
@@ -38,6 +38,7 @@ users = 64
 ttft_budget_s = 10
 itl_floor_tok_s = 40
 percentile = 95
+ttft_statistic = "miss_mean"
 
 [endpoint]
 base_url = "http://localhost:8000/v1"

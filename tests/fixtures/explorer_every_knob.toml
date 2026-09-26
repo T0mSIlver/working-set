@@ -1,6 +1,6 @@
 # workingset.toml — the configuration on screen in the interactive explorer.
 # Qwen3.8-Flash-Next · 8×B300 DP2×TP4 [KV replicated] · max_num_batched_tokens 8192 · generated 2026-09-26
-# reproduce this page: https://workingset.tomvaucourt.com/#model=Q38FN&gpu=B300&wdt=nvfp4&kv=fp16&state_dt=fp32&wover=p15&kvshard=replicate&chunk=8192&ngpu=8&tp=4&ram=256&cap=500&user_median=45.5&user_sigma=0.9&sub_median=12&sub_sigma=1.1&sub_ratio=0.25&sys=20&inval=2.5&users=96&think=45&turn=3000&out=800&sub_shares_prefix=1&sla=15&decode_floor=30&mfu=0.4&mbu=0.25&mtp=2.1&mns=48&dprice=latency&dbw=0.4&dfixed=3.1&dspec=2
+# reproduce this page: https://workingset.tomvaucourt.com/#model=Q38FN&gpu=B300&wdt=nvfp4&kv=fp16&state_dt=fp32&wover=p15&kvshard=replicate&chunk=8192&ngpu=8&tp=4&ram=256&cap=500&user_median=45.5&user_sigma=0.9&sub_median=12&sub_sigma=1.1&sub_ratio=0.25&sys=20&inval=2.5&users=96&think=45&turn=3000&out=800&sub_shares_prefix=1&sla=15&decode_floor=30&mfu=0.4&mbu=0.25&mtp=2.1&mns=48&dprice=latency&dbw=0.4&dfixed=3.1&dspec=2&ttft_pct=99
 # DP2: every figure is PER REPLICA GROUP — point base_url at ONE group.
 # No predictions live here: `ws predict workingset.toml` computes them.
 
@@ -39,7 +39,8 @@ users = 48
 [slo]
 ttft_budget_s = 15
 itl_floor_tok_s = 30
-percentile = 95
+percentile = 99
+ttft_statistic = "percentile"
 
 [endpoint]
 base_url = "http://localhost:8000/v1"

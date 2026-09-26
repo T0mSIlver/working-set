@@ -64,6 +64,9 @@ export const state = {
   // product is snapped to that slider's legal values by main.js.
   headcount: null, active: 1.0, spu: 1.0,
   think: 30, sla: 10, turn: 2000, out: AVG_OUT_TOK, burst: 32,
+  // the TTFT statistic `sla` is checked at: 'mean' | '90' | '95' | '99'.
+  // 95 matches the harness's [slo] percentile, the figure an SLO states.
+  ttft_pct: '95',
   // per-user decode speed the DECODE ceiling is solved against. A workload
   // property, not a hardware one: the study's 40 is an agentic-coding comfort
   // standard, and a chat deployment judged at it can read as decode-bound
@@ -94,6 +97,21 @@ export const state = {
 // state is applied: the share link encodes only the DIFFS from this, so a
 // default page shares as a bare URL and every link stays readable.
 export const STATE_DEFAULTS = { ...state };
+
+// The TTFT statistic of a share-link fragment. A non-empty fragment without
+// ttft_pct was shared before the control existed, when the page checked a
+// miss's mean TTFT, so it decodes as 'mean'; a bare URL is today's default.
+export function ttftPctFromFragment(params, options){
+  const v = params.get('ttft_pct');
+  if (v !== null) return options.includes(v) ? v : STATE_DEFAULTS.ttft_pct;
+  return [...params.keys()].length ? 'mean' : STATE_DEFAULTS.ttft_pct;
+}
+// ...and the encoder's side: every non-bare link names its statistic, so no
+// new link can be read as a legacy one. Mutates and returns `params`.
+export function stampTtftPct(params, pct){
+  if ([...params.keys()].length && !params.has('ttft_pct')) params.set('ttft_pct', String(pct));
+  return params;
+}
 
 export function sessionsFromHeadcount(headcount, active=1.0, spu=1.0){
   return headcount * active * spu;

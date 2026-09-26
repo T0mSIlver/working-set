@@ -1766,6 +1766,84 @@ def prefill_service_moments(model: Model, topo: Topology, wl, chunk: float,
     return e_s, e_s2, e_cold, e_warm
 
 
+def miss_service_quantile(model: Model, topo: Topology, wl, chunk: float,
+                          percentile: float, turn_tokens: float = 0.0,
+                          mfu: float = MFU_DEFAULT,
+                          per_pass_overhead: bool = False) -> float:
+    """The `percentile`-th percentile of a MISS's own prefill time (seconds).
+
+    A miss re-prefills its whole context and that cost is monotone in the
+    context length, so this is the service time of a miss at the
+    `percentile`-th percentile of the context-length distribution (the
+    user/subagent lognormal mixture, truncated at the cap). Same draws as
+    prefill_service_moments, so percentile -> E[S | miss] ordering is exact
+    rather than a sampling accident.
+    """
+    if not 0 < percentile < 100:
+        raise ValueError(f"percentile must be in (0, 100), got {percentile!r}")
+    cold, _ = _prefill_service_arrays(model, topo, wl, chunk, turn_tokens,
+                                      mfu, per_pass_overhead)
+    return float(np.percentile(cold, percentile))
+
+
+def ttft_service_quantile(model: Model, topo: Topology, wl, chunk: float,
+                          percentile: float, turn_tokens: float = 0.0,
+                          mfu: float = MFU_DEFAULT,
+                          per_pass_overhead: bool = False) -> float:
+    """The own-prefill term of the `percentile`-th TTFT over ALL requests,
+    the population the probe scores (probe/population.py, ttft_all_pX) and
+    the one an SLO is written against, in seconds.
+
+    It is the `percentile`-th quantile of the MIXTURE of the two service
+    distributions, misses at weight m = wl.invalidation and hits at 1 - m:
+    the smallest sampled service time s with
+        m F_miss(s) + (1 - m) F_hit(s) >= P.
+    A mixture rather than a hit/miss split because the two overlap: a hit's
+    long new turn over a long cached context can outlast a short miss, so no
+    rank of one class above the other holds.
+
+    Monotone in m only when the miss service distribution dominates the
+    hit's (F_miss <= F_hit everywhere, e.g. every miss costs at least what a
+    hit does). That fails with short prompts and long warm turns: at a
+    1,000-token prompt median and an 8,000-token turn a hit re-prefills more
+    than a miss does, and more misses LOWER c_p and raise the ceiling.
+
+    Both per-draw costs are monotone in the context length, so each class's
+    samples sort by sorting the lengths once; the explorer's
+    ttftServiceQuantile walks the same two sorted sequences as a merge.
+    """
+    if not 0 < percentile < 100:
+        raise ValueError(f"percentile must be in (0, 100), got {percentile!r}")
+    cold, warm = _prefill_service_arrays(model, topo, wl, chunk, turn_tokens,
+                                         mfu, per_pass_overhead)
+    return _mixture_quantile(cold, warm, wl.invalidation, percentile / 100.0)
+
+
+def _mixture_quantile(cold, warm, m: float, p: float) -> float:
+    """Smallest value v of cold U warm with weighted CDF >= p, cold draws
+    weighing m / n each and warm draws (1 - m) / n. Ties rank a warm draw
+    first; the accumulation runs in sorted order, as the mirror's merge does.
+    """
+    n = len(cold)
+    vals = np.concatenate([np.sort(warm), np.sort(cold)])
+    w = np.concatenate([np.full(n, (1.0 - m) / n), np.full(n, m / n)])
+    order = np.argsort(vals, kind="stable")
+    cum = np.cumsum(w[order])
+    i = int(np.searchsorted(cum, p * (1.0 - 1e-12), side="left"))
+    return float(vals[order][min(i, 2 * n - 1)])
+
+
+def _ttft_own(model, topo, wl, chunk, turn_tokens, mfu, per_pass_overhead,
+              e_cold: float, percentile) -> float:
+    """E[S | miss] when `percentile` is None (a miss's mean TTFT), else the
+    own-prefill term of the all-request percentile (ttft_service_quantile)
+    — the one term the TTFT statistic changes."""
+    if percentile is None:
+        return e_cold
+    return ttft_service_quantile(model, topo, wl, chunk, percentile,
+                                 turn_tokens, mfu, per_pass_overhead)
+
+
 def queue_wait_seconds(model: Model, topo: Topology, wl, req_rate: float,
                        chunk: float, turn_tokens: float = 0.0,
                        mfu: float = MFU_DEFAULT,
@@ -1794,8 +1872,14 @@ def prefill_ttft_seconds(model: Model, topo: Topology, wl, req_rate: float,
                          chunk: float, turn_tokens: float = 0.0,
                          mfu: float = MFU_DEFAULT,
                          request: str = "cold", discipline: str = "fcfs",
-                         per_pass_overhead: bool = False) -> float:
+                         per_pass_overhead: bool = False,
+                         percentile: float | None = None) -> float:
     """Mean time-to-first-token: queueing delay + this request's own prefill.
+
+    `percentile` (None = a miss's mean TTFT): return a PROXY for the
+    `percentile`-th TTFT over ALL requests instead — mean wait plus the
+    own-prefill term of ttft_service_quantile. `request` must be left at
+    "cold" then; the statistic covers both classes. See max_users_latency.
 
     `discipline` brackets what vLLM actually does, because vLLM is neither:
 
@@ -1825,7 +1909,12 @@ def prefill_ttft_seconds(model: Model, topo: Topology, wl, req_rate: float,
         raise ValueError(f"discipline must be 'fcfs' or 'ps', got {discipline!r}")
     e_s, e_s2, e_cold, e_warm = prefill_service_moments(
         model, topo, wl, chunk, turn_tokens, mfu, per_pass_overhead)
-    own = e_cold if request == "cold" else e_warm
+    if percentile is not None and request != "cold":
+        raise ValueError("percentile is an all-request statistic; "
+                         "leave request='cold'")
+    own = (_ttft_own(model, topo, wl, chunk, turn_tokens, mfu,
+                     per_pass_overhead, e_cold, percentile)
+           if request == "cold" else e_warm)
     rho = req_rate * e_s
     if rho >= 1:
         return float("inf")
@@ -1838,8 +1927,11 @@ def sla_miss_rate(model: Model, topo: Topology, wl, req_rate: float,
                   chunk: float, sla_seconds: float,
                   turn_tokens: float = 0.0, mfu: float = MFU_DEFAULT,
                   discipline: str = "fcfs", request: str = "cold",
-                  per_pass_overhead: bool = False, hi: float = 1.0) -> float:
-    """Largest miss rate whose mean TTFT still meets `sla_seconds`.
+                  per_pass_overhead: bool = False, hi: float = 1.0,
+                  percentile: float | None = None) -> float:
+    """Largest miss rate whose mean TTFT still meets `sla_seconds`
+    (`percentile` set: whose all-request p-th TTFT proxy does, as in
+    max_users_latency).
 
     The planning counterpart to breakeven_miss_rate: f* asks when the server
     saturates, this asks when it stops being fast enough, and the second
@@ -1856,7 +1948,8 @@ def sla_miss_rate(model: Model, topo: Topology, wl, req_rate: float,
         return prefill_ttft_seconds(model, topo, replace(wl, invalidation=f),
                                     req_rate, chunk, turn_tokens, mfu,
                                     request=request, discipline=discipline,
-                                    per_pass_overhead=per_pass_overhead)
+                                    per_pass_overhead=per_pass_overhead,
+                                    percentile=percentile)
 
     if ttft(0.0) > sla_seconds:
         return 0.0
@@ -2639,14 +2732,31 @@ def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
                       per_pass_overhead: bool = False,
                       closed_z_s: float = None,
                       out_tokens: float = OUT_TOKENS_DEFAULT,
-                      decode_toks: float = DECODE_FLOOR_TOKS) -> float:
-    """Users at which a MISS's mean TTFT reaches `sla_seconds`.
+                      decode_toks: float = DECODE_FLOOR_TOKS,
+                      percentile: float | None = None) -> float:
+    """Users at which the TTFT statistic reaches `sla_seconds`: a MISS's
+    mean TTFT when `percentile` is None, else a proxy for the
+    `percentile`-th TTFT over ALL requests.
+
+    THE PERCENTILE PROXY. The probe scores p-th TTFT over every request, so
+    that is the population here. The proxy is
+        TTFT_p ~= E[W] + c_p
+    with c_p = ttft_service_quantile, the P-th quantile of the hit/miss
+    service mixture at the workload's miss share. It is c -> c_p in both
+    closed forms below. It is NOT Q_p(W + S): the wait enters at its P-K mean
+    because the model has no distribution for it, and a percentile of a sum
+    is not the sum of a mean and a percentile. How far the proxy sits from
+    the true percentile, and in which direction, is unmeasured.
+
+    Default None (the mean) keeps every published table reproducible until
+    the docs re-issue; the service-level path (predict, via
+    [slo] percentile, default 95) and the explorer pass the percentile.
 
     Closed form in both disciplines, because E[S] and E[S^2] do not depend on
     the arrival rate:
         FCFS  lam a / (2(1 - lam b)) + c = SLA  ->  lam = k / (a + k b)
         PS    c / (1 - lam b) = SLA            ->  lam = (1 - c/SLA) / b
-    with a = E[S^2], b = E[S], c = E[S | miss], k = 2(SLA - c).
+    with a = E[S^2], b = E[S], c = E[S | miss] (or c_p), k = 2(SLA - c).
 
     `lam` is the TOTAL arrival rate (the moments mix both request classes),
     and each user contributes (1 + sub_ratio) requests per interval, so the
@@ -2673,6 +2783,9 @@ def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
     a, b, c = (lambda m: (m[1], m[0], m[2]))(
         prefill_service_moments(model, topo, wl, chunk, turn_tokens, mfu,
                                 per_pass_overhead))
+    c_mean = c
+    c = _ttft_own(model, topo, wl, chunk, turn_tokens, mfu, per_pass_overhead,
+                  c_mean, percentile)
     if c >= sla_seconds or b <= 0:
         return 0.0
     if discipline == "ps":
@@ -2702,7 +2815,8 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                     closed: bool = False,
                     z_think_s: float = MEASURED_THINK_Z_S,
                     out_tokens: float = OUT_TOKENS_DEFAULT,
-                    n_iter: int = 400, seed: int = 0) -> dict:
+                    n_iter: int = 400, seed: int = 0,
+                    ttft_percentile: float | None = None) -> dict:
     """All four ceilings in ONE unit — max concurrent users — plus which binds.
 
     THE two-axis planner. `binding` is the argmin: whichever ceiling is lowest
@@ -2719,6 +2833,9 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
     and decode keeps its published worst-case reading (every user decoding
     at once) rather than the closed steady-state duty — both are stated in
     docs/scenarios.md § 9.
+
+    `ttft_percentile` is the latency column's statistic (max_users_latency):
+    None checks a miss's mean TTFT, a number the all-request percentile proxy.
     """
     if users < 0:
         raise ValueError(f"users must be >= 0, got {users!r}")
@@ -2732,7 +2849,8 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                                      turn_tokens, think_time_s, mfu,
                                      discipline, per_pass_overhead,
                                      closed_z_s=z, out_tokens=out_tokens,
-                                     decode_toks=decode_floor),
+                                     decode_toks=decode_floor,
+                                     percentile=ttft_percentile),
         "saturation": max_users_saturation(model, topo, wl, chunk, turn_tokens,
                                            think_time_s, mfu,
                                            per_pass_overhead,

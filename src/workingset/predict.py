@@ -96,7 +96,11 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         sla_seconds=slo.ttft_budget_s, think_time_s=w.think_time_s,
         decode_floor=slo.itl_floor_tok_s, mfu=cal.mfu, ram_gib=ram,
         per_pass_overhead=True, closed=closed, z_think_s=w.think_time_s,
-        out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed)
+        out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
+        # the SLO is a percentile of TTFT, so the latency column checks
+        # that percentile, not the mean (model.max_users_latency)
+        ttft_percentile=(None if slo.ttft_statistic == "miss_mean"
+                         else slo.percentile))
     # operating_point prices decode at the study default MBU; re-price at the
     # configured one so the calibration block is honoured
     lat = cfg.decode_latency()

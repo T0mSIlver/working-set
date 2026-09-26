@@ -26,7 +26,9 @@ function hypothesis(){
   $('hypSentence').innerHTML =
     `<b>${esc(name)}</b> (${esc(String(state.wdt).toUpperCase())}) on <b>${state.ngpu}×${esc(state.gpu)}</b>, ${split}`
     + (chunk ? `, chunk ${n0(chunk / 1024)}k` : '')
-    + `, serves ${who} with a cache miss answered within <b>${state.sla} s</b> `
+    + `, serves ${who} with `
+    + (state.ttft_pct === 'mean' ? `a cache miss's mean time to first token under <b>${state.sla} s</b> `
+                                 : `a p${state.ttft_pct} time to first token under <b>${state.sla} s</b> `)
     + `and every user decoding at <b>${state.decode_floor} tok/s</b> or faster.`;
 }
 
