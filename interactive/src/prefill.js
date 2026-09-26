@@ -448,25 +448,41 @@ export function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
 }
 
 // The scheduler's cap on concurrent sequences (vLLM --max-num-seqs, per
-// replica group; state.mns, null = not stated). Mirrors predict(): the decode
-// ceiling counts sequences decoding AT ONCE and the engine never runs more
-// than the cap, so past it a request queues instead of slowing the batch —
-// when the cap sits below the bandwidth ceiling, the cap IS the ceiling.
-export function capDecodeUsers(res, mns){
+// replica group; state.mns, null = not stated). Mirrors predict() and
+// model.cap_decode_ceiling. The cap limits the batch that decodes AT THE
+// LOAD, so it binds where that steady batch fills it (`slots`, from
+// decodeSlotUsers); past it requests queue for a slot. A cap below the
+// bandwidth ceiling also keeps every batch above the floor, so that ceiling
+// is never reached and lifts (`limited`); at or above it, it stands.
+export function capDecodeUsers(res, mns, slots){
   const cap = mns === undefined ? state.mns : mns;
-  if (cap === null || cap === undefined || !(cap < res.n)) return { ...res, capped: false, raw: res.n };
-  return { n: cap, censored: false, capped: true, raw: res.n };
+  if (cap === null || cap === undefined) return { ...res, capped: false, limited: false, raw: res.n };
+  const limited = cap <= res.n, bw = limited ? Infinity : res.n;
+  if (slots < bw) return { n: slots, censored: false, capped: true, limited, raw: res.n };
+  return { ...res, n: bw, censored: !limited && res.censored, capped: false, limited, raw: res.n };
+}
+// per-user p50 with the cap full, per replica group: the speed the slots
+// ceiling and the capped power capacity are both priced at
+export function p50AtCap(model, topo, wl, mns, n_iter){
+  return decodeCurves(model, topo, wl, mns, Math.max(1, mns-1), n_iter || 220).p50.slice(-1)[0];
+}
+// Users per group at which the steady decode batch fills the cap. The flow
+// balance of steadyDecodePoint at n = mns, rate x out = mns x v(mns),
+// converted to users as maxUsersSaturation converts its rate. Mirrors
+// model.max_users_decode_slots.
+export function decodeSlotUsers(pu, mns, think, outTok, subR){
+  if (mns === null || mns === undefined || !(pu > 0)) return Infinity;
+  if (!(outTok > 0)) return Infinity;
+  return mns * pu / outTok * (think || liveThink) / (1 + (subR || 0));
 }
 // The decode capacity power prices (cost.js powerDraw reads users x floor as
-// the aggregate decode tok/s). Uncapped that is the ceiling at the floor; under
-// a max_num_seqs cap the batch never grows past the cap, so the capacity is the
-// aggregate AT the cap, cap x p50(cap), returned in the same users-at-floor
-// units. Mirrors golden.py's power pricing of a capped state.
-export function decodePowerUsers(model, topo, wl, capRes, floor, n_iter){
-  if (!capRes.capped) return capRes.n;
-  const n = capRes.n;
-  const pu = decodeCurves(model, topo, wl, n, Math.max(1, n-1), n_iter || 220).p50.slice(-1)[0];
-  return n * pu / (floor || DECODE_FLOOR_TOKS);
+// the aggregate decode tok/s). Uncapped that is the ceiling at the floor; when
+// the cap holds the batch (`limited`), the batch never grows past it, so the
+// capacity is the aggregate AT the cap, cap x p50(cap), returned in the same
+// users-at-floor units. Mirrors golden.py's power pricing of a capped state.
+export function decodePowerUsers(capRes, mns, pu, floor){
+  if (!capRes.limited) return capRes.raw;
+  return mns * pu / (floor || DECODE_FLOOR_TOKS);
 }
 // ...and the steady decode batch stops there too: a batch above the cap is a
 // machine that does not exist (predict's resident = min(p95, max_num_seqs))

@@ -297,11 +297,23 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     dec, cens = _decode_ceiling(m, topo, wl, st, seed)
     o["max_users_decode"] = dec
     o["max_users_decode_censored"] = cens
-    # the scheduler's cap, as predict() applies it: a max_num_seqs below the
-    # bandwidth ceiling IS the ceiling
+    # the scheduler's cap, as predict() applies it: it binds where the
+    # steady decode batch at the load fills it, and a cap below the
+    # bandwidth ceiling lifts that ceiling (model.cap_decode_ceiling)
     mns = st["mns"]
-    capped = mns is not None and mns < dec
-    o["decode_ceiling"] = float(mns) if capped else dec
+    p50_cap = None
+    if mns is not None:
+        p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
+                                        seed=seed, mbu=st["mbu"],
+                                        latency=lat)[1][0])
+        slots = M.max_users_decode_slots(m, topo, wl, mns,
+                                         think_time_s=st["think"],
+                                         out_tokens=st["out"],
+                                         per_user_tok_s=p50_cap)
+        ceil, capped = M.cap_decode_ceiling(dec, mns, slots)
+    else:
+        ceil, capped = dec, False
+    o["decode_ceiling"] = float(ceil)
     o["decode_capped"] = bool(capped)
     curve = M.decode_curves(m, topo, wl, [1, 8, 64], n_iter=DECODE_ITER,
                             seed=seed, mbu=st["mbu"], latency=lat)
@@ -326,11 +338,10 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # under a max_num_seqs cap the decode capacity power prices is the
     # aggregate AT the cap, cap x p50(cap) tok/s, handed over in the
     # users-at-floor units power_draw reads (prefill.js decodePowerUsers)
+    # (the batch is held under the cap whenever the cap sits below the
+    # bandwidth ceiling, whichever term the decode ceiling reports)
     dec_power = dec
-    if capped:
-        p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
-                                        seed=seed, mbu=st["mbu"],
-                                        latency=lat)[1][0])
+    if mns is not None and mns <= dec:
         dec_power = mns * p50_cap / st["decode_floor"]
     e = M.energy_cost(m, topo, wl, rate, dec_power, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,
@@ -1150,9 +1161,11 @@ MAPPING = [
     ("warm_p5_all", "model.warm_capacity(which='all')[0]",
      "capacity.js warmCapacity(...).all[0]", "mc", ""),
     ("max_users_decode", "model.max_users_decode", "prefill.js maxUsersDecode(...).n", "mc", ""),
-    ("decode_ceiling / decode_capped", "predict.py: min(max_users_decode, max_num_seqs)",
-     "prefill.js capDecodeUsers(maxUsersDecode(...))", "mc",
-     "equals max_users_decode unless state.mns sits below it"),
+    ("decode_ceiling / decode_capped", "model.cap_decode_ceiling(max_users_decode, max_num_seqs, max_users_decode_slots)",
+     "prefill.js capDecodeUsers(maxUsersDecode(...), mns, decodeSlotUsers(...))", "mc",
+     "equals max_users_decode unless state.mns is set: then the users at which "
+     "the steady decode batch fills it, or the bandwidth ceiling where that "
+     "applies and comes first"),
     ("decode_p50_n*", "model.decode_curves (p50)", "capacity.js decodeCurves (p50)", "mc",
      "latency=DecodeLatency when state.dprice is 'latency' (render.js modelFor bakes "
      "decode_lat onto the model)"),

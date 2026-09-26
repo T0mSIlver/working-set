@@ -20,7 +20,7 @@ import { decodeCurves, decodePlan, warmCapacity }
 import { bStar, warmUsersCurve, warmUsersNow } from '../../interactive/src/planner.js';
 import { energyCost } from '../../interactive/src/cost.js';
 import {
-  breakevenMissRate, capDecodeUsers, coldRequestSeconds, decodePowerUsers, contextStats, maxUsersDecode, meanPasses,
+  breakevenMissRate, capDecodeUsers, coldRequestSeconds, decodePowerUsers, decodeSlotUsers, p50AtCap, contextStats, maxUsersDecode, meanPasses,
   maxUsersLatency, maxUsersSaturation, missServiceQuantile, ttftServiceQuantile, mfuCeil, mfuEff, missContextSeconds,
   peakFlops, prefillContextSeconds, prefillFlops, prefillOverheadSeconds,
   prefillSeconds, prefillServiceMoments, serverRate, setLiveThink, setLiveTurn,
@@ -130,7 +130,13 @@ export function driveState(v){
   o.max_users_decode = dec.n;
   o.max_users_decode_censored = dec.censored;
   // the max_num_seqs cap render.js applies to the planner and frontier
-  const decC = capDecodeUsers(dec);
+  let capPu = null;
+  if (state.mns !== null){
+    seedFor('decodeCapPower');
+    capPu = p50AtCap(m, topo, wl, state.mns, DECODE_ITER);
+  }
+  const decC = capDecodeUsers(dec, state.mns,
+                              decodeSlotUsers(capPu, state.mns, state.think, state.out, wl.sub_ratio));
   o.decode_ceiling = decC.n;
   o.decode_capped = decC.capped;
 
@@ -152,12 +158,9 @@ export function driveState(v){
   o.steady_saturated = sd.saturated;
 
   // ---- power and the bill --------------------------------------------
-  // under a cap, the aggregate at the cap (render.js prices the cost card so)
-  let decPower = decC.n;
-  if (decC.capped){
-    seedFor('decodeCapPower');
-    decPower = decodePowerUsers(m, topo, wl, decC, state.decode_floor, DECODE_ITER);
-  }
+  // under a cap that holds the batch, the aggregate at the cap (render.js
+  // prices the cost card so)
+  const decPower = decodePowerUsers(decC, state.mns, capPu, state.decode_floor);
   const e = energyCost(topo, mo, f, rate, decPower);
   o.power_d_p = e.dP;
   o.power_d_d = e.dD;

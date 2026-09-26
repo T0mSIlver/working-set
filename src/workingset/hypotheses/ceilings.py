@@ -138,15 +138,21 @@ class HDecode(Hypothesis):
     probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
-        if getattr(p, "decode_capped_by_max_num_seqs", False):
-            # a different claim, not a smaller number: the batch is pinned at
-            # the cap, so decode speed never falls to the floor by bandwidth
-            return (f"H-decode: the scheduler caps the batch at "
-                    f"{p.decode_ceiling_users:g} sequences (max_num_seqs), below "
-                    f"the bandwidth ceiling: per-user decode stays above "
-                    f"{cfg.slo.itl_floor_tok_s:g} tok/s and requests past the "
-                    "cap queue instead — watch TTFT. No decode-floor failure "
-                    "is expected, so this row cannot be bracketed.")
+        # only a cap below the bandwidth crossing keeps every batch above the
+        # floor; above it, a long-output load can fill the cap past the floor
+        if (getattr(p, "decode_capped_by_max_num_seqs", False)
+                and getattr(p, "decode_cap_below_bandwidth", False)):
+            # a different claim, not a smaller number: the batch never grows
+            # past the cap, so decode speed never falls to the floor by
+            # bandwidth; the cap binds on slots, where the load's own batch
+            # fills it
+            return (f"H-decode: the decode batch at the load fills "
+                    f"max_num_seqs ({cfg.deployment.max_num_seqs} sequences) "
+                    f"near ~{p.decode_ceiling_users:g} users; past it requests "
+                    "queue for a decode slot — watch TTFT. Per-user decode "
+                    f"stays above {cfg.slo.itl_floor_tok_s:g} tok/s, so no "
+                    "decode-floor failure is expected and this row cannot be "
+                    "bracketed.")
         seqs = getattr(p, "steady_decode_seqs", None)
         held = (f"~{seqs:g} at the ~{p.operating_point_users:g}-user "
                 "operating point" if seqs is not None

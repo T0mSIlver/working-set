@@ -1,7 +1,7 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeTopo,
          minTpFor, servableKv, unionKink, withKvDtype } from './config.js';
 import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
-         decodeFloor, capDecodeUsers, decodePowerUsers, maxUsersDecode, missContextSeconds, operatingPoint, prefillChunk,
+         decodeFloor, capDecodeUsers, decodePowerUsers, decodeSlotUsers, maxUsersDecode, p50AtCap, missContextSeconds, operatingPoint, prefillChunk,
          prefillContextSeconds, prefillSeconds, prefillServiceMoments, serverRate,
          setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint, steadyResident,
          ttftMoments } from './prefill.js';
@@ -259,25 +259,29 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   // would change them, so any staleness check re-runs the Monte-Carlo on
   // every input event — ~0.5 s per frame — and the 120 ms settle corrects
   // the numbers anyway.
-  let warmFn, decodeUsers, decodeCensored = false, decodeCapped = false, decodeRaw, decodePower;
+  // The sampled halves are the bandwidth search and v(max_num_seqs); the cap
+  // itself is applied below on every render, because where the steady batch
+  // fills it moves with think time and output length.
+  let warmFn, decRes, capPu = null;
   if (!draft || !lastPlanner){
     seedFor('decodeCeil');
-    decodeUsers = capDecodeUsers(maxUsersDecode(model, topo, wl, decodeFloor(), q.DECODE_ITER || 220));
-    decodeCensored = decodeUsers.censored; decodeCapped = decodeUsers.capped;
-    if (decodeCapped){
+    decRes = maxUsersDecode(model, topo, wl, decodeFloor(), q.DECODE_ITER || 220);
+    if (state.mns !== null){
       seedFor('decodeCapPower');
-      decodePower = decodePowerUsers(model, topo, wl, decodeUsers, decodeFloor(), q.DECODE_ITER || 220);
-    } else decodePower = decodeUsers.n;
-    decodeRaw = decodeUsers.raw; decodeUsers = decodeUsers.n;
+      capPu = p50AtCap(model, topo, wl, state.mns, q.DECODE_ITER || 220);
+    }
     seedFor('warmCurve');
     warmFn = warmUsersCurve(model, topo, ramPerCache(topo), Math.max(80, q.WARM_ITER/3),
                             q.WARM_BUDGET_SCAN, wl, f, warmUsers);
-    lastPlanner = { warmFn, decodeUsers, decodeCensored, decodeCapped, decodeRaw, decodePower, fMax: fAxisMax() };
+    lastPlanner = { warmFn, decRes, capPu, mns: state.mns, fMax: fAxisMax() };
   } else {
-    warmFn = lastPlanner.warmFn; decodeUsers = lastPlanner.decodeUsers;
-    decodeCensored = lastPlanner.decodeCensored; decodeCapped = lastPlanner.decodeCapped;
-    decodeRaw = lastPlanner.decodeRaw; decodePower = lastPlanner.decodePower;
+    warmFn = lastPlanner.warmFn; decRes = lastPlanner.decRes; capPu = lastPlanner.capPu;
   }
+  const mnsP = lastPlanner.mns;
+  const dcap = capDecodeUsers(decRes, mnsP,
+                              decodeSlotUsers(capPu, mnsP, state.think, state.out, wl.sub_ratio));
+  const decodeUsers = dcap.n, decodeCapped = dcap.capped, decodeRaw = dcap.raw;
+  const decodePower = decodePowerUsers(dcap, mnsP, capPu, decodeFloor());
   // a draft render reuses the cached curve, but warmUsersCurve's anchors only
   // span the axis it was built for and it CLAMPS beyond its last anchor. So a
   // drag across the 50% boundary would draw chart G's cache line flat from
@@ -293,9 +297,10 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   const d = plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo);
   const op = operatingPoint(model, topo, wl, cs, {
     mo, reps, warmUsers: warmUsers*reps, decodeUsers: decodeUsers*reps });
-  // the decode ceiling is the scheduler's max_num_seqs, not the bandwidth's
-  op.decodeCapped = decodeCapped;
-  if (decodeCapped) op.decodeRaw = decodeRaw * reps;
+  // the decode ceiling is where the steady batch fills max_num_seqs, not the
+  // bandwidth's; the sensitivity panel re-applies the cap along its sweeps
+  op.decodeCapped = decodeCapped; op.decodeCapBelowBw = dcap.limited;
+  if (mnsP !== null){ op.decodeRaw = decodeRaw * reps; op.capPu = capPu; }
   // per-group quantities the tiles quote alongside the user ceilings
   const sp = spikeMetrics(model, topo, wl, cs, rate, prefillChunk());
   const drain = state.burst * mo.miss / Math.max(1e-9, 1 - sp.rho);
@@ -519,14 +524,16 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
       if (decOld[p.key]){ dec[p.key] = decOld[p.key]; }
       else {
         seedFor(`frontierDec|${p.key}`, ssig);
-        const du2 = capDecodeUsers(maxUsersDecode(m2, t2, wl, floor0, 140), mns0);
-        let pow = du2.n;
-        if (du2.capped){
+        const raw = maxUsersDecode(m2, t2, wl, floor0, 140);
+        let pu = null;
+        if (mns0 !== null){
           seedFor(`frontierDecPow|${p.key}`, ssig);
-          pow = decodePowerUsers(m2, t2, wl, du2, floor0, 140);
+          pu = p50AtCap(m2, t2, wl, mns0, 140);
         }
-        dec[p.key] = { decodeUsers: du2.n*reps, censored: du2.censored, capped: du2.capped,
-                       decodePower: pow*reps };
+        // the cap is applied at assembly: where the steady batch fills it
+        // moves with think time and output length, which this cache is not
+        // keyed on
+        dec[p.key] = { raw, pu, mns: mns0, floor: floor0 };
       }
       mo[p.key] = moOld[p.key] || prefillServiceMoments(m2, t2, wl, cs);
     }
@@ -559,7 +566,11 @@ function seatPrice(op, topo, mo, f, wl, r){
 function assembleFrontier(wl, cs){
   const f = wl.invalidation;
   const rows = lastFrontier.base.map(r0=>{
-    const r = { ...r0, ...lastFrontierDec.dec[r0.key] };
+    const d = lastFrontierDec.dec[r0.key];
+    const dcap = capDecodeUsers(d.raw, d.mns,
+                                decodeSlotUsers(d.pu, d.mns, state.think, state.out, wl.sub_ratio));
+    const r = { ...r0, decodeUsers: dcap.n*r0.reps, censored: dcap.censored, capped: dcap.capped,
+                decodePower: decodePowerUsers(dcap, d.mns, d.pu, d.floor)*r0.reps };
     const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu, state.kvshard);
     const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
     const mo2 = lastFrontierMo.mo[r.key]
