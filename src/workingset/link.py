@@ -127,6 +127,15 @@ KNOBS: tuple[Knob, ...] = (
          5, 100, True, " tok/s"),
     Knob("mfu", C + "mfu", lambda c: c.calibration.mfu, 0.45, 0.10, 1.00),
     Knob("mbu", C + "mbu", lambda c: c.calibration.mbu, 0.22, 0.10, 1.00),
+    # per replica group on both sides, so no replica multiply
+    Knob("mns", D + "max_num_seqs", lambda c: c.deployment.max_num_seqs, None, 1, 4096, True),
+    Knob("dprice", C + "decode_pricing", lambda c: c.calibration.decode_pricing, "roofline"),
+    Knob("dbw", C + "decode_bw_eff", lambda c: c.calibration.decode_bw_eff, M.DECODE_BW_EFF,
+         0.01, 1),
+    Knob("dfixed", C + "decode_fixed_ms", lambda c: c.calibration.decode_fixed_ms,
+         M.DECODE_FIXED_S * 1e3, 0, 50, unit=" ms"),
+    Knob("dspec", C + "spec_tokens", lambda c: c.calibration.spec_tokens, M.DECODE_SPEC_TOKENS,
+         0, 16, True),
     # an unset mtp is the model's own, which the page applies on its own when
     # the link names the model; encodeStateURL diffs mtp against it likewise
     Knob("mtp", C + "mtp", lambda c: c.calibration.mtp, None, 1.0, 3.0),
@@ -168,13 +177,6 @@ def _unmapped(cfg: RunConfig) -> list[str]:
     if s.percentile != EXPLORER_PERCENTILE:
         out.append(f"slo.percentile = {s.percentile}: the explorer has no control for "
                    f"it and reports p{EXPLORER_PERCENTILE}")
-    if d.max_num_seqs is not None:
-        out.append(f"deployment.max_num_seqs = {d.max_num_seqs}: the explorer has no "
-                   "control for it; its decode ceiling is the roofline's alone")
-    if c.decode_pricing != "roofline":
-        out.append(f"calibration.decode_pricing = {c.decode_pricing!r} (with "
-                   "decode_bw_eff, decode_fixed_ms, spec_tokens): the explorer has "
-                   "no control for it and prices decode with the roofline at mbu")
     if d.weight_overhead not in WOVER:
         near = _nearest_wover(d.weight_overhead)
         out.append(f"deployment.weight_overhead = {d.weight_overhead:g}: the explorer "
