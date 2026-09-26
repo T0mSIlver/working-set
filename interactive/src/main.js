@@ -28,7 +28,7 @@
    that state.js depends on must never depend on state.js.
    ========================================================================== */
 import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, unionKink } from './config.js';
-import { decodeComfort, decodeFloor, requestRate } from './prefill.js';
+import { decodeComfort, decodeFloor, requestRate, steadyResident } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
 import { STATE_DEFAULTS, capSliderMax, currentTopo, currentWL, hasHeadcount,
@@ -625,7 +625,7 @@ function redrawCharts(){
     renderNoFit('chartC'); renderNoFit('chartD');
     clearChartGeomCD();
   } else {
-    renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress,lastSteady);
+    renderChartC(lastDC,{p5:steadyResident(lastWarmCur.g5),p95:steadyResident(lastWarmCur.g95)},lastStress,lastSteady);
     renderChartD(lastDC,lastStress,unionKink(activeModel()),lastSteady);
   }
   renderChartE(lastChartE);   // re-render from cached series, no new draws
