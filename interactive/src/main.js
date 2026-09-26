@@ -28,7 +28,7 @@
    that state.js depends on must never depend on state.js.
    ========================================================================== */
 import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, unionKink } from './config.js';
-import { decodeComfort, decodeFloor, requestRate } from './prefill.js';
+import { requestRate } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
 import { STATE_DEFAULTS, capSliderMax, currentTopo, currentWL, hasHeadcount,
@@ -42,7 +42,7 @@ import { activeModel, computeAndRender, frontierDecodeDeferred, lastCS, lastDC,
 import { PLANNER_LABEL } from './planner.js';
 import { lastFlipAxes, renderFlipPanel } from './sensitivity.js';
 import { deployCmdText, lastDeploy, renderDeployCard } from './deploy.js';
-import { frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable } from './frontier.js';
+import { frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable, wireFrontierTable } from './frontier.js';
 
 /* ============================================================================
    CONTROL WIRING
@@ -302,11 +302,8 @@ document.querySelectorAll('.tip').forEach(t=>{ t.tabIndex=0; });
 document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
   state.sub_shares_prefix=e.target.checked; computeAndRender(false);
 });
-// frontier detail columns: display-only, re-renders from the cached rows
-document.getElementById('t-ceilcols').addEventListener('change',e=>{
-  state.showCeil = e.target.checked;
-  if (lastFrontierRows) renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
-});
+// frontier table: header sort and column picker, display-only
+wireFrontierTable();
 // chart H's benchmark axis: display-only too — the score is a lookup, not a
 // model input, so this re-renders from the cached rows rather than recomputing
 // (a recompute would redraw every other chart from a fresh RNG state for a
@@ -394,12 +391,6 @@ function syncLabels(){
   document.getElementById('v-think').textContent=fmt(state.think,0);
   document.getElementById('v-sla').textContent=fmt(state.sla,0);
   document.getElementById('v-decode_floor').textContent=fmt(state.decode_floor,0);
-  // chart C's dashed guide lines move with the slider, so its caption has to
-  // name the thresholds actually drawn rather than the study's 40/50
-  const csC = document.getElementById('cs-C');
-  if (csC) csC.innerHTML = 'p50 line, p5\u2013p95 band, <b>log</b> axis. Shaded = the '
-    + 'GPU-resident warm-capacity zone; dashed = the ' + fmt(decodeFloor(),0)
-    + ' tok/s floor and ' + fmt(decodeComfort(),0) + ' tok/s comfortable mark.';
   document.getElementById('v-turn').textContent=fmt(state.turn,0);
   document.getElementById('v-out').textContent=fmt(state.out,0);
   document.getElementById('v-burst').textContent=fmt(state.burst,0);
@@ -549,7 +540,6 @@ function syncEnumSegs(){
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;
-  document.getElementById('t-ceilcols').checked = state.showCeil;
 }
 document.getElementById('shareBtn').addEventListener('click', e => {
   const url = encodeStateURL();
