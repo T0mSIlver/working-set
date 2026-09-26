@@ -62,6 +62,9 @@ class Predictions:
     # True when decode_ceiling_users is where the steady decode batch fills
     # deployment.max_num_seqs, not the bandwidth ceiling
     decode_capped_by_max_num_seqs: bool = False
+    # True when max_num_seqs sits below the bandwidth ceiling: no batch can
+    # fall to the floor, so that ceiling drops out
+    decode_cap_below_bandwidth: bool = False
 
     def to_dict(self) -> dict:
         """JSON-safe: non-finite floats become None (strict JSON has no inf)."""
@@ -119,8 +122,9 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     # where that batch fills the cap, and past it requests queue for a slot.
     # A cap below the bandwidth ceiling also keeps every batch above the
     # floor, which lifts that ceiling (model.cap_decode_ceiling).
-    capped = False
+    capped = below_bw = False
     if dep.max_num_seqs is not None:
+        below_bw = dep.max_num_seqs < op["ceilings"]["decode"]
         slots = M.max_users_decode_slots(
             m, t, wl, dep.max_num_seqs, think_time_s=w.think_time_s,
             out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
@@ -188,6 +192,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         bstar_misses=round(bstar, 2),
         replicas=t.replicas or 1,
         decode_capped_by_max_num_seqs=capped,
+        decode_cap_below_bandwidth=below_bw,
         **steady,
     )
 

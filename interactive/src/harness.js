@@ -179,6 +179,7 @@ function harnessPredictions(op, model, wl, topo){
     bstar_misses: Math.round(op.bstar * 10) / 10,
   };
   if (op.decodeCapped) P.decode_capped_by_max_num_seqs = true;
+  if (op.decodeCapBelowBw) P.decode_cap_below_bandwidth = true;
   // the ITL / steady-decode predictions exist only where the steady point
   // does (duty < 1 and the demand is on the sampled axis) — every hypothesis
   // that quotes them is dropped without them
@@ -200,7 +201,7 @@ function harnessHypotheses(P, model, topo, wl, reps){
     `H-cache: >= ${fmt(P.warm_capacity_p5, 0)} user sessions stay warm (p5)${grp}. `
       + `A run bounds this below unless load reaches eviction.`,
     // capped: a different claim, not a smaller number (mirrors HDecode)
-    P.decode_capped_by_max_num_seqs
+    P.decode_capped_by_max_num_seqs && P.decode_cap_below_bandwidth
       ? `H-decode: the decode batch at the load fills max_num_seqs (${fmt(state.mns, 0)} `
         + `sequences) near ~${fmt(P.decode_ceiling_users, 0)} users${grp}; past it requests `
         + `queue for a decode slot — watch TTFT. Per-user decode stays above `

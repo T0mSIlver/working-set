@@ -299,7 +299,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     mo, reps, warmUsers: warmUsers*reps, decodeUsers: decodeUsers*reps });
   // the decode ceiling is where the steady batch fills max_num_seqs, not the
   // bandwidth's; the sensitivity panel re-applies the cap along its sweeps
-  op.decodeCapped = decodeCapped;
+  op.decodeCapped = decodeCapped; op.decodeCapBelowBw = dcap.limited;
   if (mnsP !== null){ op.decodeRaw = decodeRaw * reps; op.capPu = capPu; }
   // per-group quantities the tiles quote alongside the user ceilings
   const sp = spikeMetrics(model, topo, wl, cs, rate, prefillChunk());

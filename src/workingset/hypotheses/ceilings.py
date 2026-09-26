@@ -138,7 +138,10 @@ class HDecode(Hypothesis):
     probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
-        if getattr(p, "decode_capped_by_max_num_seqs", False):
+        # only a cap below the bandwidth crossing keeps every batch above the
+        # floor; above it, a long-output load can fill the cap past the floor
+        if (getattr(p, "decode_capped_by_max_num_seqs", False)
+                and getattr(p, "decode_cap_below_bandwidth", False)):
             # a different claim, not a smaller number: the batch never grows
             # past the cap, so decode speed never falls to the floor by
             # bandwidth; the cap binds on slots, where the load's own batch

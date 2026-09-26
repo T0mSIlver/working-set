@@ -678,3 +678,19 @@ def test_main_tolerates_a_console_that_cannot_encode_the_report(capsys):
         assert b"? supported ? bounded" in buf.buffer.getvalue()
     finally:
         sys.stdout = old
+
+
+def test_a_cap_above_the_bandwidth_crossing_keeps_the_floor_claim():
+    """Long outputs can fill a cap that sits above the bandwidth crossing
+    before the warm population reaches it. That batch runs below the floor,
+    so H-decode must keep the floor claim, not say no failure is expected."""
+    from workingset.hypotheses.ceilings import HDecode
+    dep = {"model": "27B", "gpu": "H200", "tensor_parallel": 4}
+    free = predict(RunConfig.from_dict({"deployment": dep}), n_iter=200)
+    cfg = RunConfig.from_dict({
+        "deployment": {**dep, "max_num_seqs": free.decode_ceiling_users + 50},
+        "workload": {"max_output_tokens": 8000}})
+    p = predict(cfg, n_iter=200)
+    assert p.decode_capped_by_max_num_seqs and not p.decode_cap_below_bandwidth
+    assert p.decode_ceiling_users < free.decode_ceiling_users
+    assert "no decode-floor failure" not in HDecode().statement(cfg, p)
