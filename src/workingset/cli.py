@@ -78,7 +78,7 @@ def cmd_predict(args) -> int:
               f"-> {_fmt_count(users)} /group on DP{d.replicas}")
     print()
     rows = [("cache (warm p5, users)", p.warm_capacity_p5),
-            ("decode (max_num_seqs cap)" if p.decode_capped_by_max_num_seqs
+            ("decode (max_num_seqs full)" if p.decode_capped_by_max_num_seqs
              else "decode (users at floor)", p.decode_ceiling_users),
             ("latency (miss TTFT = budget)", p.latency_ceiling_users),
             ("saturation (prefill duty 100%)", p.saturation_ceiling_users)]
@@ -176,7 +176,7 @@ def _add_deploy_flags(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--chunk", type=int, help="max_num_batched_tokens")
     ap.add_argument("--max-model-len", type=int)
     ap.add_argument("--max-num-seqs", type=int,
-                    help="vLLM --max-num-seqs; caps the decode ceiling")
+                    help="vLLM --max-num-seqs; binds where the steady decode batch fills it")
     ap.add_argument("--ram-gib", type=float, help="CPU KV offload per group, GiB")
     ap.add_argument("--users", type=float,
                     help="operating point, users per group (fractional is "

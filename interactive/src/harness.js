@@ -201,10 +201,11 @@ function harnessHypotheses(P, model, topo, wl, reps){
       + `A run bounds this below unless load reaches eviction.`,
     // capped: a different claim, not a smaller number (mirrors HDecode)
     P.decode_capped_by_max_num_seqs
-      ? `H-decode: the scheduler caps the batch at ${fmt(P.decode_ceiling_users, 0)} `
-        + `sequences (max_num_seqs), below the bandwidth ceiling: per-user decode stays `
-        + `above ${fmt(decodeFloor(), 0)} tok/s and requests past the cap queue instead — `
-        + `watch TTFT. No decode-floor failure is expected, so this row cannot be bracketed.`
+      ? `H-decode: the decode batch at the load fills max_num_seqs (${fmt(state.mns, 0)} `
+        + `sequences) near ~${fmt(P.decode_ceiling_users, 0)} users${grp}; past it requests `
+        + `queue for a decode slot — watch TTFT. Per-user decode stays above `
+        + `${fmt(decodeFloor(), 0)} tok/s, so no decode-floor failure is expected and this `
+        + `row cannot be bracketed.`
       : `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
         + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
     `H-latency: ${state.ttft_pct === 'mean' ? "a cache miss's mean TTFT"

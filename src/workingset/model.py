@@ -2634,6 +2634,64 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
             "demanded_tok_s": demand * reps}
 
 
+def max_users_decode_slots(model: Model, topo: Topology, wl: Workload,
+                           max_num_seqs: int,
+                           think_time_s: float = THINK_TIME_S,
+                           out_tokens: float = OUT_TOKENS_DEFAULT,
+                           union: str = "linear", n_iter: int = 400,
+                           seed: int = 0, mbu: float = None,
+                           latency: "DecodeLatency | None" = None,
+                           per_user_tok_s: float = None) -> float:
+    """Users per replica group at which the STEADY decode batch reaches
+    max_num_seqs.
+
+    The scheduler caps the sequences decoding at once, and at a given load the
+    batch that decodes is steady_decode_point's, not the warm population: an
+    open-loop user spends most of each interval waiting on a tool or a human.
+    So the cap binds where that batch reaches it. By the same flow balance,
+
+        rate_group x out_tokens = max_num_seqs x v(max_num_seqs)
+
+    and past that rate the decode slots cannot retire what arrives: requests
+    queue for a slot, with no steady state (steady_decode_point saturates at
+    resident = max_num_seqs, the same point). Converted to users the way
+    max_users_saturation converts its rate: users = rate x think / (1 + r).
+    Under a closed loop `think_time_s` is the waiting time Z alone, so this
+    open conversion undercounts: the conservative side.
+
+    `per_user_tok_s` is v(max_num_seqs) when the caller already drew it.
+    """
+    if max_num_seqs < 1:
+        raise ValueError(f"max_num_seqs must be >= 1, got {max_num_seqs!r}")
+    if out_tokens <= 0:
+        return math.inf
+    v = per_user_tok_s
+    if v is None:
+        v = float(decode_curves(model, topo, wl, [int(max_num_seqs)],
+                                n_iter=n_iter, seed=seed, union=union,
+                                mbu=mbu, latency=latency)[1][0])
+    rate = max_num_seqs * v / out_tokens
+    return rate * think_time_s / (1.0 + wl.sub_ratio)
+
+
+def cap_decode_ceiling(bandwidth: float, max_num_seqs: int | None,
+                       slots: float) -> tuple:
+    """(decode ceiling, capped) once max_num_seqs is set; users per group.
+
+    `bandwidth` is max_users_decode: every warm user decoding at once, per-user
+    p50 at the floor. The engine never runs more than max_num_seqs at once, so
+    a cap below that crossing keeps every batch above the floor and the
+    bandwidth ceiling is never reached. At or above it, the crossing stands.
+    `slots` is max_users_decode_slots, where the steady batch fills the cap.
+    The ceiling is the lower of the two that apply, and `capped` says the
+    slots term is the one binding.
+    """
+    if max_num_seqs is None:
+        return bandwidth, False
+    bw = math.inf if max_num_seqs < bandwidth else bandwidth
+    return (slots, True) if slots < bw else (bw, False)
+
+
 def _check_closed_args(closed_z_s: float, out_tokens: float,
                        decode_toks: float) -> None:
     if closed_z_s < 0:

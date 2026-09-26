@@ -42,7 +42,7 @@ import { activeModel, computeAndRender, frontierDecodeDeferred, lastCS, lastDC,
 import { PLANNER_LABEL } from './planner.js';
 import { lastFlipAxes, renderFlipPanel } from './sensitivity.js';
 import { deployCmdText, lastDeploy, renderDeployCard } from './deploy.js';
-import { frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable, wireFrontierTable } from './frontier.js';
+import { SAME_MODEL_TIE, frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable, wireFrontierTable } from './frontier.js';
 
 /* ============================================================================
    CONTROL WIRING
@@ -695,7 +695,7 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
     const r=best.r, on=geom.par.has(r);
     const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
     tt.innerHTML=`<div class="tth">${esc(frontierRowName(r))}${r.key===geom.curKey?' — yours':''}</div>`
-      +`<div class="row"><span class="sw" style="background:${best.color}"></span>binds on ${esc(PLANNER_LABEL[r.op.binding])} · ${on?'efficient':'dominated'}</div>`
+      +`<div class="row"><span class="sw" style="background:${best.color}"></span>binds on ${esc(PLANNER_LABEL[r.op.binding])} · ${on?(geom.tied.has(r)?`efficient: within ${fmt((SAME_MODEL_TIE-1)*100,0)}% of a cheaper split`:'efficient'):'dominated'}</div>`
       // both versions, active one first: the tooltip is where a reader checks
       // whether the axis they are on is the whole story for this model
       +Object.entries(CONFIG.BENCHES)

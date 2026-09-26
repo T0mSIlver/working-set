@@ -147,6 +147,8 @@ export function wireFrontierTable(){
    handed (assembleFrontier's one commit point, and redrawCharts for theme
    flips), never from a half-rebuilt set. */
 export let frontierChartGeom = null;
+// seat prices of one model's splits within this factor both count as efficient
+export const SAME_MODEL_TIE = 1.05;
 // short row name for a direct label: the model as its button reads (a full
 // name is ~25 characters and three of them stack at a 560-wide viewBox) and
 // the split as the DP×TP shorthand the split control uses
@@ -218,9 +220,19 @@ export function renderFrontierChart(rows, curKey){
   // at €315.0 / €315.4 / €315.9 all count as efficient and the higher
   // score among them does not win. Scores tie exactly (same model).
   const near = (a,b) => perUser(b) <= perUser(a)*1.01;
-  const par = new Set(live.filter(a => !live.some(b => b !== a
-      && frontierScore(b) >= frontierScore(a) && near(a,b)
-      && (frontierScore(b) > frontierScore(a) || perUser(b) < perUser(a)))));
+  // Two splits of the SAME model tie within SAME_MODEL_TIE. What separates
+  // them is modelled, not measured: at 4 GPUs DP2×TP2 against TP4 is the
+  // assumed TP_EFFICIENCY of 0.90 per TP doubling (a 10% swing per step),
+  // and the latency decode constants were fitted on one TP4 deployment, so
+  // any other TP degree is extrapolated. Half of one doubling's assumed loss
+  // is the resolution the model has between two splits.
+  const tie = (a,b) => a.mk === b.mk && perUser(a) <= perUser(b)*SAME_MODEL_TIE;
+  const beats = (b,a) => frontierScore(b) >= frontierScore(a) && near(a,b)
+      && (frontierScore(b) > frontierScore(a) || perUser(b) < perUser(a));
+  const par = new Set(live.filter(a => !live.some(b => b !== a && beats(b,a) && !tie(a,b))));
+  // efficient only through the tie: a cheaper split of the same model is on
+  // the set too, and the tooltip says so
+  const tied = new Set([...par].filter(a => live.some(b => b !== a && beats(b,a))));
   const qs = live.map(r => frontierScore(r)*100), es = live.map(perUser);
   // x = € per seat (log), y = score (%): both grow away from the origin, so
   // the efficient set is the upper-left edge. Headroom above the top score
@@ -248,7 +260,7 @@ export function renderFrontierChart(rows, curKey){
   // row's price, then a jump up to that row's score. Lead-out: flat at the
   // top row's score to the right edge — a bigger budget buys nothing
   // better. No lead-in: below the cheapest price nothing carries the load.
-  const stair = [...par].sort((a,b)=>frontierScore(a)-frontierScore(b));
+  const stair = [...par].sort((a,b)=>frontierScore(a)-frontierScore(b) || perUser(a)-perUser(b));
   const P = r => [sx(perUser(r)), sy(frontierScore(r)*100)];
   if (stair.length){
     const [x0,y0] = P(stair[0]);
@@ -345,5 +357,5 @@ export function renderFrontierChart(rows, curKey){
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">${esc(bench.name)}, pass@1</text>`;
   box.innerHTML = svgEl(g, W, H,
     `Every configuration that carries the load as monthly cost per seat at capacity versus ${bench.name} score, with the Pareto-efficient set joined as a staircase`);
-  frontierChartGeom = { W,H,mL,mR,mT,pw,ph, pts, par, curKey };
+  frontierChartGeom = { W,H,mL,mR,mT,pw,ph, pts, par, tied, curKey };
 }

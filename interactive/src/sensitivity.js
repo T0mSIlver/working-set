@@ -1,6 +1,6 @@
 import { DECODE_MBU, GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, effective_bw,
          kv_pool_tokens, replicated, state_traffic, w_decode } from './config.js';
-import { contextStats, decodeFloor, liveTurn, maxUsersLatency, maxUsersSaturation,
+import { capDecodeUsers, contextStats, decodeFloor, decodeSlotUsers, liveTurn, maxUsersLatency, maxUsersSaturation,
          prefillChunk, prefillServiceMoments, setLiveTurn } from './prefill.js';
 import { clip, seedFor } from './mathlib.js';
 import { decodeTokenSeconds } from './capacity.js';
@@ -93,11 +93,14 @@ export function setLastFlipAxes(v){ lastFlipAxes = v; }
 export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const f0 = wl.invalidation, subR = wl.sub_ratio;
   // decodeNow is the BANDWIDTH ceiling the stand-ins calibrate against; a
-  // max_num_seqs cap (state.mns, per group) is applied on top of every point
+  // max_num_seqs cap (state.mns, per group) is applied on top of every point,
+  // at the swept think time and v(max_num_seqs) held at its current draw
   const cacheNow = op.ceilings.cache, decodeNow = op.decodeRaw ?? op.ceilings.decode;
-  const capD = u => (state.mns === null || state.mns === undefined) ? u : Math.min(u, state.mns * reps);
+  const capD = (u, think_) => (state.mns === null || state.mns === undefined) ? u
+    : reps * capDecodeUsers({ n: u / reps, censored: false }, state.mns,
+        decodeSlotUsers(op.capPu, state.mns, think_, state.out, subR)).n;
   const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU) => {
-    const c = { cache: cacheU, decode: capD(decodeU),
+    const c = { cache: cacheU, decode: capD(decodeU, think_),
       latency: reps * maxUsersLatency(mo_, f_, sla_, think_, undefined, subR,
                                       state.ttft_pct),
       saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };

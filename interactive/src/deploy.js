@@ -114,7 +114,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     ['KV cache', state.kv==='fp8'?'FP8 (fp8_e4m3)':'FP16 (auto)'],
     ['max_model_len', `${fmt(wl.cap,0)} tok`],
     ['max_num_seqs', state.mns !== null
-       ? `${fmt(state.mns,0)}${reps>1?' per group':''} (set; ${op.decodeCapped?'caps the decode ceiling':'above the decode ceiling'})`
+       ? `${fmt(state.mns,0)}${reps>1?' per group':''} (set; ${op.decodeCapped?'sets the decode ceiling':'does not set the decode ceiling'})`
        : `${fmt(sug,0)}${reps>1?' per group':''}`],
     ['CPU offload', state.ram>0?`${fmt(state.ram,0)} GiB${dp>1?` (${fmt(ramGrp,0)}/group)`:''}`:'off'],
     ['Speculative', specOn?`${SPEC_CONFIG[state.model] ? 'DSpark' : 'MTP'} ${state.mtp.toFixed(2)}× (${specDrafts} drafts)`

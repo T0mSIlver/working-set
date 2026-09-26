@@ -59,8 +59,8 @@ class Predictions:
     itl_worst_freeze_ms: float | None = None   # last chunk of a cold re-prefill
     itl_freeze_lo_ms: float | None = None      # MFU 55% — the bracket's low edge
     itl_freeze_hi_ms: float | None = None      # MFU_LOW — the bracket's high edge
-    # True when decode_ceiling_users is deployment.max_num_seqs rather than
-    # the bandwidth roofline: the scheduler's cap came first
+    # True when decode_ceiling_users is where the steady decode batch fills
+    # deployment.max_num_seqs, not the bandwidth ceiling
     decode_capped_by_max_num_seqs: bool = False
 
     def to_dict(self) -> dict:
@@ -114,19 +114,23 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
         op["fits"] = users <= op["limit"]
 
-    # The scheduler's own cap on concurrent sequences. The decode ceiling is
-    # a count of sequences decoding AT ONCE (the stress convention), and
-    # max_num_seqs is the most the engine will ever run at once: past it a
-    # request queues instead of slowing the batch, so the floor is never
-    # reached by bandwidth — the cap is the ceiling.
+    # The scheduler's own cap on concurrent sequences. It limits the batch
+    # that actually decodes at the load (steady_decode_point), so it binds
+    # where that batch fills the cap, and past it requests queue for a slot.
+    # A cap below the bandwidth ceiling also keeps every batch above the
+    # floor, which lifts that ceiling (model.cap_decode_ceiling).
     capped = False
-    if dep.max_num_seqs is not None and dep.max_num_seqs < op["ceilings"]["decode"]:
-        op["ceilings"]["decode"] = float(dep.max_num_seqs)
+    if dep.max_num_seqs is not None:
+        slots = M.max_users_decode_slots(
+            m, t, wl, dep.max_num_seqs, think_time_s=w.think_time_s,
+            out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
+            mbu=cal.mbu, latency=lat)
+        op["ceilings"]["decode"], capped = M.cap_decode_ceiling(
+            op["ceilings"]["decode"], dep.max_num_seqs, slots)
         op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
         op["limit"] = op["ceilings"][op["binding"]]
         op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
         op["fits"] = users <= op["limit"]
-        capped = True
 
     # op["ceilings"]["cache"] is already the user-class warm p5 (the plan
     # column); the all-classes count is what the pool physically holds
