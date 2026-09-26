@@ -481,10 +481,17 @@ export function poissonCdf(k, mean){
 // The largest MEAN decode batch whose p99 stays within the cap: the batch is
 // an infinite-server occupancy, Poisson about the steady point's mean.
 // Mirrors model.decode_slot_mean.
+// Memoized: a pure function of the cap, and each call is a 60-step bisection
+// over an O(cap) sum, where the frontier re-ranks every row and the
+// sensitivity panel every point on each render at caps up to ~10k.
+const slotMeanMemo = new Map();
 export function decodeSlotMean(mns, q){
-  const Q = q ?? DECODE_SLOT_QUANTILE;
+  const Q = q ?? DECODE_SLOT_QUANTILE, key = `${mns}|${Q}`;
+  const hit = slotMeanMemo.get(key);
+  if (hit !== undefined) return hit;
   let lo = 0, hi = mns;
   for (let i = 0; i < 60; i++){ const mid = (lo+hi)/2; if (poissonCdf(mns, mid) >= Q) lo = mid; else hi = mid; }
+  slotMeanMemo.set(key, lo);
   return lo;
 }
 // The max_num_seqs working-set recommends, per group: the largest batch whose
