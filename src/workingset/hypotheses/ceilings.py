@@ -146,8 +146,10 @@ class HDecode(Hypothesis):
             # past the cap, so decode speed never falls to the floor by
             # bandwidth; the cap binds on slots, where the load's own batch
             # fills it
-            return (f"H-decode: the decode batch at the load fills "
-                    f"max_num_seqs ({cfg.deployment.max_num_seqs} sequences) "
+            rec = (", recommended" if getattr(p, "max_num_seqs_recommended",
+                                               False) else "")
+            return (f"H-decode: the p99 decode batch at the load reaches "
+                    f"max_num_seqs ({p.max_num_seqs} sequences{rec}) "
                     f"near ~{p.decode_ceiling_users:g} users; past it requests "
                     "queue for a decode slot — watch TTFT. Per-user decode "
                     f"stays above {cfg.slo.itl_floor_tok_s:g} tok/s, so no "

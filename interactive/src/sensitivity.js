@@ -93,14 +93,19 @@ export function setLastFlipAxes(v){ lastFlipAxes = v; }
 export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const f0 = wl.invalidation, subR = wl.sub_ratio;
   // decodeNow is the BANDWIDTH ceiling the stand-ins calibrate against; a
-  // max_num_seqs cap (state.mns, per group) is applied on top of every point,
-  // at the swept think time and v(max_num_seqs) held at its current draw
+  // max_num_seqs cap (op.mns, per group: set or recommended) is applied on
+  // top of every point, at the swept think time, with the cap and the decode
+  // speed at its p99-bound batch held at their current values
   const cacheNow = op.ceilings.cache, decodeNow = op.decodeRaw ?? op.ceilings.decode;
-  const capD = (u, think_) => (state.mns === null || state.mns === undefined) ? u
-    : reps * capDecodeUsers({ n: u / reps, censored: false }, state.mns,
-        decodeSlotUsers(op.capPu, state.mns, think_, state.out, subR)).n;
-  const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU) => {
-    const c = { cache: cacheU, decode: capD(decodeU, think_),
+  // `vs` scales that decode speed on the axes that move it (MBU, speedup,
+  // MFU, context): there the bandwidth ceiling moves in proportion to speed,
+  // so its ratio to decodeNow stands in for the speed ratio. The floor axis
+  // moves the ceiling without the speed and passes 1.
+  const capD = (u, think_, vs) => op.mns === undefined ? u
+    : reps * capDecodeUsers({ n: u / reps, censored: false }, op.mns,
+        decodeSlotUsers(op.slotPu * vs, op.mns, think_, state.out, subR)).n;
+  const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU, vs = 1) => {
+    const c = { cache: cacheU, decode: capD(decodeU, think_, vs),
       latency: reps * maxUsersLatency(mo_, f_, sla_, think_, undefined, subR,
                                       state.ttft_pct),
       saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };
@@ -116,6 +121,9 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const aD = decodeUsersApprox(model, topo, cs.samples);
   const calD = aD > 0 ? (decodeNow / reps) / aD : 0;
 
+  // a decode-speed axis at the current load and budgets
+  const vRatio = decU => decodeNow > 0 ? decU / decodeNow : 1;
+  const speedAt = decU => evalAt(mo, f0, state.sla, state.think, cacheNow, decU, vRatio(decU));
   const axes = [];
   const sweep = (K, lo, hi, at, cur) => {
     const vs = [];
@@ -182,7 +190,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
         ? decodeUsersApprox({ ...model, decode_lat: { ...model.decode_lat, mfu: v } },
                             topo, cs.samples) * calD * reps
         : decodeNow;
-      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decU);
+      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decU, vRatio(decU));
     }, mfuCur) });
   // 6 · speculative-decode speedup — decode speed is exactly linear in it,
   //     so the mean-context stand-in only has to move the crossing point
@@ -190,8 +198,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     axes.push({ label: 'Speculative speedup', cur: state.mtp, lo: 1.0, hi: 3.0,
       fmt: v => '×' + v.toFixed(2), approx: true,
       pts: sweep(21, 1.0, 3.0, v =>
-        evalAt(mo, f0, state.sla, state.think, cacheNow,
-               decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
+        speedAt(decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
   // 6a · decode efficiency (MBU) — one constant for every row, measured on
   //      one deployment; decode speed is exactly linear in it, like the
   //      speedup, so the same mean-context stand-in serves. The latency
@@ -200,8 +207,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     axes.push({ label: 'Decode MBU', cur: state.mbu, lo: 0.10, hi: 1.00,
       fmt: v => fmt(v * 100, 0) + '%', approx: true,
       pts: sweep(19, 0.10, 1.00, v =>
-        evalAt(mo, f0, state.sla, state.think, cacheNow,
-               decodeUsersApprox({ ...model, decode_mbu: v }, topo, cs.samples) * calD * reps), state.mbu) });
+        speedAt(decodeUsersApprox({ ...model, decode_mbu: v }, topo, cs.samples) * calD * reps), state.mbu) });
   // 6b · per-user decode floor — moves the DECODE ceiling only, and steeply
   //      (the ceiling is the reciprocal of per-user speed). This is the row
   //      that answers "is my deployment actually decode-bound, or just judged
@@ -242,7 +248,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       pts: sweep(13, lo, hi, v => {
         const q = at(v);
         return evalAt(q.mo2, f0, state.sla, state.think,
-                      q.warm * cC * reps, q.dec * cD * reps);
+                      q.warm * cC * reps, q.dec * cD * reps, vRatio(q.dec * cD * reps));
       }, cur) });
   };
   {

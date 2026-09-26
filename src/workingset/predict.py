@@ -59,12 +59,16 @@ class Predictions:
     itl_worst_freeze_ms: float | None = None   # last chunk of a cold re-prefill
     itl_freeze_lo_ms: float | None = None      # MFU 55% — the bracket's low edge
     itl_freeze_hi_ms: float | None = None      # MFU_LOW — the bracket's high edge
-    # True when decode_ceiling_users is where the steady decode batch fills
-    # deployment.max_num_seqs, not the bandwidth ceiling
+    # True when decode_ceiling_users is where the steady decode batch's p99
+    # reaches max_num_seqs, not the bandwidth ceiling
     decode_capped_by_max_num_seqs: bool = False
     # True when max_num_seqs sits below the bandwidth ceiling: no batch can
     # fall to the floor, so that ceiling drops out
     decode_cap_below_bandwidth: bool = False
+    # the cap priced: deployment.max_num_seqs, else the recommended one
+    # (model.recommended_max_num_seqs)
+    max_num_seqs: int = 0
+    max_num_seqs_recommended: bool = False
 
     def to_dict(self) -> dict:
         """JSON-safe: non-finite floats become None (strict JSON has no inf)."""
@@ -117,25 +121,6 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
         op["fits"] = users <= op["limit"]
 
-    # The scheduler's own cap on concurrent sequences. It limits the batch
-    # that actually decodes at the load (steady_decode_point), so it binds
-    # where that batch fills the cap, and past it requests queue for a slot.
-    # A cap below the bandwidth ceiling also keeps every batch above the
-    # floor, which lifts that ceiling (model.cap_decode_ceiling).
-    capped = below_bw = False
-    if dep.max_num_seqs is not None:
-        below_bw = dep.max_num_seqs <= op["ceilings"]["decode"]
-        slots = M.max_users_decode_slots(
-            m, t, wl, dep.max_num_seqs, think_time_s=w.think_time_s,
-            out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
-            mbu=cal.mbu, latency=lat)
-        op["ceilings"]["decode"], capped = M.cap_decode_ceiling(
-            op["ceilings"]["decode"], dep.max_num_seqs, slots)
-        op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
-        op["limit"] = op["ceilings"][op["binding"]]
-        op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
-        op["fits"] = users <= op["limit"]
-
     # op["ceilings"]["cache"] is already the user-class warm p5 (the plan
     # column); the all-classes count is what the pool physically holds
     draw = int(4000 + M.kv_pool_tokens(m, t) / 8000)
@@ -144,8 +129,29 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     # the most sessions HBM ever holds at once: the decode batch cannot
     # outgrow it, so the steady point stops there (offload is storage, not
     # a place to decode from — hence ram_gib=0)
-    _, _, resident95 = M.warm_capacity(m, t, wl, ram_gib=0, n_iter=n_iter,
-                                       draw=draw, seed=seed, which="gpu")
+    resident5, _, resident95 = M.warm_capacity(m, t, wl, ram_gib=0,
+                                               n_iter=n_iter, draw=draw,
+                                               seed=seed, which="gpu")
+
+    # The scheduler's cap on concurrent sequences: the configured one, else
+    # the one working-set recommends. It limits the batch that decodes at
+    # the load (steady_decode_point), so it binds where that batch's p99
+    # reaches the cap, and past it requests queue for a slot. A cap at or
+    # below the bandwidth ceiling also keeps every batch on the floor, which
+    # lifts that ceiling (model.cap_decode_ceiling).
+    bw = op["ceilings"]["decode"]
+    mns = (dep.max_num_seqs if dep.max_num_seqs is not None
+           else M.recommended_max_num_seqs(bw, resident5))
+    below_bw = mns <= bw
+    slots = M.max_users_decode_slots(
+        m, t, wl, mns, think_time_s=w.think_time_s,
+        out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
+        mbu=cal.mbu, latency=lat)
+    op["ceilings"]["decode"], capped = M.cap_decode_ceiling(bw, mns, slots)
+    op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
+    op["limit"] = op["ceilings"][op["binding"]]
+    op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
+    op["fits"] = users <= op["limit"]
 
     rate = op["req_rate"]                       # main-agent req/s
     rate_total = rate * (1.0 + wl.sub_ratio)    # what the prefill server sees
@@ -193,6 +199,8 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         replicas=t.replicas or 1,
         decode_capped_by_max_num_seqs=capped,
         decode_cap_below_bandwidth=below_bw,
+        max_num_seqs=mns,
+        max_num_seqs_recommended=dep.max_num_seqs is None,
         **steady,
     )
 

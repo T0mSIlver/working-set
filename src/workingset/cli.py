@@ -60,7 +60,8 @@ def cmd_predict(args) -> int:
               else "")
     print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}{layout}), "
           f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}"
-          + (f", max_num_seqs {d.max_num_seqs}" if d.max_num_seqs is not None else ""))
+          + f", max_num_seqs {p.max_num_seqs}"
+          + (" (recommended)" if p.max_num_seqs_recommended else ""))
     lat = cfg.decode_latency()
     if lat is not None:
         print(f"decode pricing: latency (bytes at {lat.bw_eff:g} of bandwidth + "
@@ -78,7 +79,7 @@ def cmd_predict(args) -> int:
               f"-> {_fmt_count(users)} /group on DP{d.replicas}")
     print()
     rows = [("cache (warm p5, users)", p.warm_capacity_p5),
-            ("decode (max_num_seqs full)" if p.decode_capped_by_max_num_seqs
+            ("decode (max_num_seqs at p99)" if p.decode_capped_by_max_num_seqs
              else "decode (users at floor)", p.decode_ceiling_users),
             ("latency (miss TTFT = budget)", p.latency_ceiling_users),
             ("saturation (prefill duty 100%)", p.saturation_ceiling_users)]
@@ -176,7 +177,7 @@ def _add_deploy_flags(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--chunk", type=int, help="max_num_batched_tokens")
     ap.add_argument("--max-model-len", type=int)
     ap.add_argument("--max-num-seqs", type=int,
-                    help="vLLM --max-num-seqs; binds where the steady decode batch fills it")
+                    help="vLLM --max-num-seqs (default: the recommended value); binds where the p99 decode batch reaches it")
     ap.add_argument("--ram-gib", type=float, help="CPU KV offload per group, GiB")
     ap.add_argument("--users", type=float,
                     help="operating point, users per group (fractional is "

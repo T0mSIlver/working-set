@@ -353,7 +353,18 @@
    },
    "observed_rel": 1.0,
    "max_rel": 1.0,
-   "hypothesis": "max_users_decode after the max_num_seqs cap: the same statistic wherever the cap does not bind, so it inherits that entry's two independent integer bisections at small ceilings. Every capped state agrees exactly."
+   "hypothesis": "max_users_decode after the max_num_seqs cap: where the bandwidth ceiling binds it is the same statistic, and where the cap binds it is proportional to the recommended cap, itself floor(min(max_users_decode, GPU-resident warm p5)). Either way it inherits that entry's two independent integer bisections at small ceilings."
+  },
+  {
+   "quantity": "max_num_seqs",
+   "where": {
+    "_decode_ceiling": {
+     "lte": 25
+    }
+   },
+   "observed_rel": 0.5,
+   "max_rel": 1.0,
+   "hypothesis": "the recommended cap is floor(min(max_users_decode, GPU-resident warm p5)), so at small ceilings it inherits max_users_decode's two independent integer bisections: every failing state has a cap of 7 or below, where one sequence either way is 14-50%."
   },
   {
    "quantity": "max_users_cache",
