@@ -489,7 +489,7 @@ details.more .more-body{padding:0 0 16px}
     <div class="box hypbox">
       <div class="ctl-grid hyp-grid">
         <div class="field">
-          <label class="flabel"><span class="tip" id="model-tip" /span></label>
+          <label class="flabel"><span class="tip" id="model-tip" data-tip="">Model</span></label>
           <div class="seg" id="seg-model" data-key="model">
             <button data-v="27B" aria-pressed="true">Qwen3.8-27B</button>
             <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
@@ -553,35 +553,35 @@ details.more .more-body{padding:0 0 16px}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="wover-tip" /span></label>
+          <label class="flabel"><span class="tip" id="wover-tip" data-tip="">Deployed-weight overhead</span></label>
           <div class="seg" id="seg-wover" data-key="wover">
             <button data-v="pub" aria-pressed="true">As published</button>
             <button data-v="p15" aria-pressed="false">+15%</button>
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="kv-tip" /span></label>
+          <label class="flabel"><span class="tip" id="kv-tip" data-tip="">KV cache dtype</span></label>
           <div class="seg" id="seg-kv" data-key="kv">
             <button data-v="fp8" aria-pressed="true">FP8</button>
             <button data-v="fp16" aria-pressed="false">FP16</button>
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="state-tip" /span></label>
+          <label class="flabel"><span class="tip" id="state-tip" data-tip="">Recurrent state dtype</span></label>
           <div class="seg" id="seg-state" data-key="state_dt">
             <button data-v="bf16" aria-pressed="true">bf16</button>
             <button data-v="fp32" aria-pressed="false">fp32</button>
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="kvshard-tip" /span></label>
+          <label class="flabel"><span class="tip" id="kvshard-tip" data-tip="">KV cache across TP ranks</span></label>
           <div class="seg" id="seg-kvshard" data-key="kvshard">
             <button data-v="dcp" aria-pressed="true">Sharded (DCP)</button>
             <button data-v="replicate" aria-pressed="false">Replicated</button>
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mtp-tip" /span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
+          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
           <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.01" value="2.94">
         </div>
         <div class="field">
@@ -706,7 +706,7 @@ details.more .more-body{padding:0 0 16px}
           <input type="range" id="s-mfu" min="0.10" max="1.00" step="0.01" value="0.45">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mbu-tip" /span> <span class="val"><span id="v-mbu">0.22</span></span></label>
+          <label class="flabel"><span class="tip" id="mbu-tip" data-tip="">Decode efficiency (MBU)</span> <span class="val"><span id="v-mbu">0.22</span></span></label>
           <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
         </div>
         </div>
