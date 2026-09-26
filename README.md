@@ -17,7 +17,7 @@ hardware plus a duty-cycle power model), a **sensitivity panel** showing which a
 would flip the decision, the **steady-state decode point** (how many
 sessions are actually decoding at your load, and how fast each one runs —
 Little's law, not the all-warm stress test), **shareable links** that
-encode the whole configuration, and a **"Test these hypotheses" button**
+encode the whole configuration, and a **download button** in the Test step
 that hands out the configuration on screen as a `workingset.toml` — feed it to
 `ws test` below and measure the real limits on a live vLLM endpoint.
 
@@ -51,7 +51,7 @@ uv run pytest                            # self-checks + config round-trips
 ```
 
 The explorer's `workingset.toml` needs no checkout at all: the three `uvx`
-lines above are exactly what its "Test these hypotheses" card prints. To run
+lines above are exactly what its Test step prints. To run
 the model at a commit PyPI does not have yet, point `--from` at git:
 `uvx --from git+https://github.com/T0mSIlver/working-set ws …`.
 

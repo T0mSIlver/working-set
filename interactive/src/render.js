@@ -199,7 +199,6 @@ export function computeAndRender(draft, deferFrontierDecode){
                  lastStress, lastSteady);
     renderChartD(dc, lastStress, unionKink(model), lastSteady);
   }
-  updateCsD(model);
 
   renderChartE(noFit ? null : chartEData(model, topo, wl, lastCS, lastStress));
   renderChartECompanions(model, topo, wl, lastCS, lastStress, noFit, draft);
@@ -588,16 +587,6 @@ function assembleFrontier(wl, cs){
   renderFrontierChart(rows, curKey);
 }
 
-// chart D's subtitle explains the n=32 slope break, but only when the active
-// model is MoE and actually has one
-function updateCsD(model){
-  const kink = unionKink(model);
-  document.getElementById('cs-D').textContent =
-    "System p50 tok/s (×replicas for DP). Where the load's output-token demand"
-    + " crosses this curve is the steady-state batch size." + (kink
-      ? ` Slope break at n = ${kink}: the expert-union kink — past it every routed expert is read each step.`
-      : "");
-}
 
 // The study's worst case: every GPU-resident p5-warm session decoding at once.
 // Read off the decode sweep at that concurrency — the axis is sized to contain
