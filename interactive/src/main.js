@@ -28,7 +28,7 @@
    that state.js depends on must never depend on state.js.
    ========================================================================== */
 import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, unionKink } from './config.js';
-import { TTFT_PCTS, decodeComfort, decodeFloor, requestRate } from './prefill.js';
+import { TTFT_PCTS, requestRate, steadyResident } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
 import { STATE_DEFAULTS, stampTtftPct, ttftPctFromFragment, capSliderMax, currentTopo, currentWL, hasHeadcount,
@@ -42,7 +42,7 @@ import { activeModel, computeAndRender, frontierDecodeDeferred, lastCS, lastDC,
 import { PLANNER_LABEL } from './planner.js';
 import { lastFlipAxes, renderFlipPanel } from './sensitivity.js';
 import { deployCmdText, lastDeploy, renderDeployCard } from './deploy.js';
-import { frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable } from './frontier.js';
+import { frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable, wireFrontierTable } from './frontier.js';
 
 /* ============================================================================
    CONTROL WIRING
@@ -296,17 +296,37 @@ document.getElementById('i-headcount').addEventListener('input', e=>{
   if (raw !== '' && !Number.isFinite(state.headcount)) state.headcount = null;
   onInput();
 });
+// max_num_seqs: empty = unset (no cap), else a whole number in [1, 4096],
+// which workingset also requires. Anything else keeps the last valid value
+// and flags the field until it is corrected.
+document.getElementById('i-mns').addEventListener('input', e=>{
+  const raw = e.target.value.trim(), n = Number(raw);
+  const ok = raw === '' || (Number.isInteger(n) && n >= 1 && n <= 4096);
+  e.target.setAttribute('aria-invalid', ok ? 'false' : 'true');
+  if (!ok) return;
+  state.mns = raw === '' ? null : n;
+  onInput();
+});
+// the latency pricing's constants; an out-of-range entry is ignored (the
+// state keeps its last legal value), as workingset refuses to price it
+for (const [id, key, lo, hi, int] of [['i-dbw','dbw',0.01,1,false],
+                                      ['i-dfixed','dfixed',0,50,false],
+                                      ['i-dspec','dspec',0,16,true]]){
+  document.getElementById(id).addEventListener('input', e=>{
+    const n = Number(e.target.value);
+    if (e.target.value.trim() === '' || !Number.isFinite(n) || n < lo || n > hi) return;
+    state[key] = int ? Math.round(n) : n;
+    onInput();
+  });
+}
 // metric/control explainer tooltips are keyboard-reachable (CSS shows them on
 // :focus-visible); tile tips are stamped in renderTiles' generated markup
 document.querySelectorAll('.tip').forEach(t=>{ t.tabIndex=0; });
 document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
   state.sub_shares_prefix=e.target.checked; computeAndRender(false);
 });
-// frontier detail columns: display-only, re-renders from the cached rows
-document.getElementById('t-ceilcols').addEventListener('change',e=>{
-  state.showCeil = e.target.checked;
-  if (lastFrontierRows) renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
-});
+// frontier table: header sort and column picker, display-only
+wireFrontierTable();
 // chart H's benchmark axis: display-only too — the score is a lookup, not a
 // model input, so this re-renders from the cached rows rather than recomputing
 // (a recompute would redraw every other chart from a fresh RNG state for a
@@ -395,12 +415,6 @@ function syncLabels(){
   document.getElementById('v-sla').textContent=fmt(state.sla,0);
   document.getElementById('v-sla-stat').textContent=ttftStatLabel();
   document.getElementById('v-decode_floor').textContent=fmt(state.decode_floor,0);
-  // chart C's dashed guide lines move with the slider, so its caption has to
-  // name the thresholds actually drawn rather than the study's 40/50
-  const csC = document.getElementById('cs-C');
-  if (csC) csC.innerHTML = 'p50 line, p5\u2013p95 band, <b>log</b> axis. Shaded = the '
-    + 'GPU-resident warm-capacity zone; dashed = the ' + fmt(decodeFloor(),0)
-    + ' tok/s floor and ' + fmt(decodeComfort(),0) + ' tok/s comfortable mark.';
   document.getElementById('v-turn').textContent=fmt(state.turn,0);
   document.getElementById('v-out').textContent=fmt(state.out,0);
   document.getElementById('v-burst').textContent=fmt(state.burst,0);
@@ -412,6 +426,20 @@ function syncLabels(){
   document.getElementById('v-gpuname').textContent=CONFIG.GPUS[state.gpu].name;
   document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);
   document.getElementById('v-mbu').textContent=state.mbu.toFixed(2);
+  // the latency pricing does not read the MBU; its own constants show instead
+  const lat = state.dprice === 'latency';
+  document.getElementById('s-mbu').disabled = lat;
+  document.getElementById('dprice-lat').hidden = !lat;
+  for (const [id, key] of [['i-dbw','dbw'],['i-dfixed','dfixed'],['i-dspec','dspec']]){
+    const el = document.getElementById(id);
+    if (document.activeElement !== el && Number(el.value) !== state[key]) el.value = state[key];
+  }
+  document.getElementById('v-mns').textContent = state.mns === null ? 'unset' : 'cap ' + fmt(state.mns, 0);
+  const mnsEl = document.getElementById('i-mns');
+  const mnsText = state.mns === null ? '' : String(state.mns);
+  if (document.activeElement !== mnsEl && mnsEl.value !== mnsText){
+    mnsEl.value = mnsText; mnsEl.setAttribute('aria-invalid', 'false');
+  }
   document.getElementById('v-mfu').textContent=state.mfu.toFixed(2);
   // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
   // per-draft acceptance — the base quantity the speedup is computed from
@@ -479,10 +507,13 @@ const URL_ENUMS = {
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
   bench: () => Object.keys(CONFIG.BENCHES),
   ttft_pct: () => TTFT_PCTS,
+  dprice: () => ["roofline","latency"],
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
-const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000] };
+const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000], mns: [1, 4096],
+                        dbw: [0.01, 1], dfixed: [0, 50], dspec: [0, 16] };
+const URL_INT = new Set(['tp', 'headcount', 'mns', 'dspec']);
 export function encodeStateURL(){
   const p = new URLSearchParams();
   const put = (k, v) => { if (String(v) !== String(STATE_DEFAULTS[k])) p.set(k, String(v)); };
@@ -549,7 +580,7 @@ function applyURLState(){
     const v = p.get(k);
     if (v === null) continue;
     const n = parseFloat(v);
-    if (Number.isFinite(n)) state[k] = (k === 'tp' || k === 'headcount')
+    if (Number.isFinite(n)) state[k] = URL_INT.has(k)
       ? Math.round(clip(n, lo, hi)) : clip(n, lo, hi);
   }
   for (const k of URL_BOOLS) if (p.get(k) !== null) state[k] = p.get(k) === '1';
@@ -558,11 +589,10 @@ function applyURLState(){
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
   for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'],
-                                  ['seg-ttft_pct','ttft_pct']])
+                                  ['seg-dprice','dprice'], ['seg-ttft_pct','ttft_pct']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;
-  document.getElementById('t-ceilcols').checked = state.showCeil;
 }
 document.getElementById('shareBtn').addEventListener('click', e => {
   const url = encodeStateURL();
@@ -598,7 +628,7 @@ function redrawCharts(){
     renderNoFit('chartC'); renderNoFit('chartD');
     clearChartGeomCD();
   } else {
-    renderChartC(lastDC,{p5:lastWarmCur.g5,p95:lastWarmCur.g95},lastStress,lastSteady);
+    renderChartC(lastDC,{p5:steadyResident(lastWarmCur.g5),p95:steadyResident(lastWarmCur.g95)},lastStress,lastSteady);
     renderChartD(lastDC,lastStress,unionKink(activeModel()),lastSteady);
   }
   renderChartE(lastChartE);   // re-render from cached series, no new draws

@@ -1,0 +1,57 @@
+# workingset.toml — the configuration on screen in the interactive explorer.
+# Qwen3.8-Flash-Next · 8×B300 DP2×TP4 [KV replicated] · max_num_batched_tokens 8192 · generated 2026-09-26
+# reproduce this page: https://workingset.tomvaucourt.com/#model=Q38FN&gpu=B300&wdt=nvfp4&kv=fp16&state_dt=fp32&wover=p15&kvshard=replicate&chunk=8192&ngpu=8&tp=4&ram=256&cap=500&user_median=45.5&user_sigma=0.9&sub_median=12&sub_sigma=1.1&sub_ratio=0.25&sys=20&inval=2.5&users=96&think=45&turn=3000&out=800&sub_shares_prefix=1&sla=15&decode_floor=30&mfu=0.4&mbu=0.25&mtp=2.1&mns=48&dprice=latency&dbw=0.4&dfixed=3.1&dspec=2&ttft_pct=99
+# DP2: every figure is PER REPLICA GROUP — point base_url at ONE group.
+# No predictions live here: `ws predict workingset.toml` computes them.
+
+schema_version = 1
+
+[deployment]
+model = "Q38FN"
+gpu = "B300"
+tensor_parallel = 4
+replicas = 2
+weight_dtype = "nvfp4"
+kv_dtype = "fp16"
+max_num_batched_tokens = 8192
+max_model_len = 500000
+ram_gib = 128
+recurrent_state_dtype = "fp32"
+kv_sharding = "replicate"
+weight_overhead = 0.15
+max_num_seqs = 48
+
+[workload]
+system_prefix_tokens = 20000
+user_prompt_median_tokens = 45500
+user_prompt_sigma = 0.9
+warm_turn_tokens = 3000
+think_time_s = 45
+subagent_ratio = 0.25
+subagent_median_tokens = 12000
+subagent_sigma = 1.1
+subagent_prefix_tokens = 3000
+sub_shares_prefix = true
+miss_rate = 0.025
+max_output_tokens = 800
+users = 48
+
+[slo]
+ttft_budget_s = 15
+itl_floor_tok_s = 30
+percentile = 99
+ttft_statistic = "percentile"
+
+[endpoint]
+base_url = "http://localhost:8000/v1"
+model = "<your served model id — a Qwen3.8-Flash-Next NVFP4 checkpoint>"
+api_key_env = "VLLM_API_KEY"
+
+[calibration]
+mfu = 0.4
+mbu = 0.25
+mtp = 2.1
+decode_pricing = "latency"
+decode_bw_eff = 0.4
+decode_fixed_ms = 3.1
+spec_tokens = 2

@@ -190,13 +190,28 @@ def test_explorer_toml_names_every_field():
                        ("calibration", Calibration)):
         want = {f.name for f in dataclass_fields(typ)}
         want -= {"metrics_url"}          # optional: no /metrics on the page
-        want -= {"max_num_seqs"}         # optional: no such control; unset = no cap
-        # opt-in decode pricing: Python-only until it is a default, so the
-        # page has no control for it and its TOML leaves the defaults implied
+        want -= {"max_num_seqs"}         # optional: written only when set; unset = no cap
+        # opt-in decode pricing: written only when selected, as dumps() does
+        # (explorer_decode_latency_mns.toml carries all four)
         want -= {"decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens"}
         if block == "workload":
             want -= {"headcount", "peak_active_share", "sessions_per_active_user"}
         assert want == set(raw[block]), f"{block}: {want ^ set(raw[block])}"
+
+
+def test_explorer_decode_toml_reaches_the_model():
+    """The explorer's max_num_seqs and latency-pricing controls, downloaded:
+    35B-A3B on TP2, latency pricing at 2 draft tokens and 2.2 ms, cap 48."""
+    p = Path(__file__).resolve().parent / "fixtures" / "explorer_decode_latency_mns.toml"
+    cfg = load_config(p)
+    assert cfg.deployment.max_num_seqs == 48
+    lat = cfg.decode_latency()
+    assert lat is not None
+    assert (lat.bw_eff, lat.spec_tokens) == (M.DECODE_BW_EFF, 2)
+    assert lat.fixed_s == pytest.approx(2.2e-3)
+    assert lat.mfu == cfg.calibration.mfu
+    cfg.validate()
+    assert load_config(p) == RunConfig.from_dict(tomllib.loads(cfg.dumps("toml")))
 
 
 def test_explorer_headcount_toml_names_population_fields():

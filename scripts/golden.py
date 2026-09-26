@@ -111,6 +111,10 @@ DEFAULT_STATE = {
     "burst": 32,
     "out": M.AVG_OUT_TOK, "decode_floor": M.DECODE_FLOOR_TOKS,
     "ekwh": 0.19, "pue": "1.5", "gpuh": M.GPUS["H200"].eur_gpu_h,
+    # decode pricing ([calibration] decode_pricing and its three constants)
+    # and deployment.max_num_seqs, per replica group; None = unset
+    "dprice": "roofline", "dbw": M.DECODE_BW_EFF, "dfixed": 2.7,
+    "dspec": M.DECODE_SPEC_TOKENS, "mns": None,
 }
 
 # The reference burst prefill.js's spikeMetrics() hard-wires as SPIKE_BURST.
@@ -289,18 +293,28 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # the GPU-resident p95 now CAPS the steady point on both sides (it used
     # to be a diagnostic only), so it runs at the full warm iteration count
     warm_gpu95 = _warm_all(m, topo, wl, ram, draw, seed, "gpu", pct=2)
+    lat = _latency(st)
     dec, cens = _decode_ceiling(m, topo, wl, st, seed)
     o["max_users_decode"] = dec
     o["max_users_decode_censored"] = cens
+    # the scheduler's cap, as predict() applies it: a max_num_seqs below the
+    # bandwidth ceiling IS the ceiling
+    mns = st["mns"]
+    capped = mns is not None and mns < dec
+    o["decode_ceiling"] = float(mns) if capped else dec
+    o["decode_capped"] = bool(capped)
     curve = M.decode_curves(m, topo, wl, [1, 8, 64], n_iter=DECODE_ITER,
-                            seed=seed, mbu=st["mbu"])
+                            seed=seed, mbu=st["mbu"], latency=lat)
     for i, n in enumerate((1, 8, 64)):
         o[f"decode_p50_n{n}"] = float(curve[1][i])
     # capped at the GPU-resident population, the same figure the mirror's
-    # steadyDecodePoint is handed (render.js lastWarmCur.g95)
+    # steadyDecodePoint is handed (render.js lastWarmCur.g95), and at
+    # max_num_seqs when set (predict's resident = min(p95, max_num_seqs))
     sd = M.steady_decode_point(m, topo, wl, rate, out_tokens=st["out"],
                                n_iter=DECODE_ITER, seed=seed, mbu=st["mbu"],
-                               resident=warm_gpu95)
+                               resident=(warm_gpu95 if mns is None
+                                         else min(warm_gpu95, mns)),
+                               latency=lat)
     o["steady_n"] = sd["n"]
     o["steady_per_user_tok_s"] = sd["per_user_tok_s"]
     o["steady_saturated"] = bool(sd["saturated"])
@@ -309,7 +323,16 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     pue = float(st["pue"])
     # decode_floor: the SAME floor `dec` was sized at, which is what the
     # explorer's decodeFloor() feeds powerDraw
-    e = M.energy_cost(m, topo, wl, rate, dec, st["users"], chunk,
+    # under a max_num_seqs cap the decode capacity power prices is the
+    # aggregate AT the cap, cap x p50(cap) tok/s, handed over in the
+    # users-at-floor units power_draw reads (prefill.js decodePowerUsers)
+    dec_power = dec
+    if capped:
+        p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
+                                        seed=seed, mbu=st["mbu"],
+                                        latency=lat)[1][0])
+        dec_power = mns * p50_cap / st["decode_floor"]
+    e = M.energy_cost(m, topo, wl, rate, dec_power, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,
                       out_tokens=st["out"], per_pass_overhead=True,
                       eur_gpu_h=st["gpuh"], decode_floor=st["decode_floor"])
@@ -360,8 +383,10 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         # the flag can flip on noise alone: that band is what the allowlist
         # names. Away from it the two agree on the flag.
         "steady_cap": float(warm_gpu95),
-        "steady_cap_ratio": _steady_cap_ratio(m, topo, wl, st, rate,
-                                              warm_gpu95, seed),
+        # at the resident count the steady search actually stops at
+        "steady_cap_ratio": _steady_cap_ratio(
+            m, topo, wl, st, rate,
+            warm_gpu95 if mns is None else min(warm_gpu95, mns), seed),
     }
     return o, cond
 
@@ -378,7 +403,8 @@ def _steady_cap_ratio(m, topo, wl, st, rate, warm_gpu_p95, seed) -> float:
         return 0.0
     n = max(1, int(math.floor(warm_gpu_p95)))
     p50 = float(M.decode_curves(m, topo, wl, [n], n_iter=COND_DECODE_ITER,
-                                seed=seed, mbu=st["mbu"])[1][0])
+                                seed=seed, mbu=st["mbu"],
+                                latency=_latency(st))[1][0])
     agg = n * p50
     return demand / agg if agg > 0 else float("inf")
 
@@ -425,6 +451,15 @@ def _warm_all(m, topo, wl, ram, draw, seed, which, pct: int = 0,
                                         which=which)[pct]), draw)
 
 
+def _latency(st) -> "M.DecodeLatency | None":
+    """The opt-in decode pricing, built as RunConfig.decode_latency() builds
+    it; None under the default roofline."""
+    if st["dprice"] != "latency":
+        return None
+    return M.DecodeLatency(bw_eff=st["dbw"], fixed_s=st["dfixed"] / 1e3,
+                           spec_tokens=st["dspec"], mfu=st["mfu"])
+
+
 def _decode_ceiling(m, topo, wl, st, seed) -> tuple:
     """(ceiling, censored), searched to the SAME cap the explorer uses.
 
@@ -440,7 +475,7 @@ def _decode_ceiling(m, topo, wl, st, seed) -> tuple:
     try:
         return M.max_users_decode(m, topo, wl, floor=st["decode_floor"],
                                   n_iter=DECODE_ITER, seed=seed, hi=hi,
-                                  mbu=st["mbu"]), False
+                                  mbu=st["mbu"], latency=_latency(st)), False
     except ValueError:
         return float(hi), True
 
@@ -528,6 +563,10 @@ KNOB_SWEEP = [
     # (a no-op on anchors whose tp <= kv_heads — the GLM-5.3 TP8 anchor is
     # the one that moves, by 8x on the pool)
     ("kvshard", ["replicate"]),
+    # the opt-in latency decode pricing at its defaults, and the scheduler's
+    # max_num_seqs cap above and below each anchor's decode ceiling
+    ("dprice", ["latency"]),
+    ("mns", [4, 32, 256]),
 ]
 
 # Deployments the knob sweep is run on: a dense single GPU, an MoE on TP2, a
@@ -662,9 +701,12 @@ SPREAD_PROBE = [
 # how many knobs of the sweep each anchor gets (the first anchor gets all of
 # them; the others cover the knobs most likely to interact with topology)
 ANCHOR_KNOBS = {
-    1: {"chunk", "inval", "sla", "decode_floor", "mbu", "users", "out", "ram"},
-    2: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "kvshard"},
-    3: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "out"},
+    1: {"chunk", "inval", "sla", "decode_floor", "mbu", "users", "out", "ram",
+        "dprice", "mns"},
+    2: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "kvshard",
+        "dprice"},
+    3: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "out",
+        "dprice", "mns"},
     4: {"kvshard", "users", "decode_floor", "ram"},
     5: {"kvshard"},
     6: {"kvshard"},
@@ -677,6 +719,13 @@ KNOB_COMBOS = [
     (4, {"kvshard": "replicate", "ram": 256}),
     (5, {"kvshard": "replicate", "ram": 256}),
     (6, {"kvshard": "replicate", "ram": 256}),
+    # the latency pricing off its defaults (speculation off, a different fixed
+    # cost and bandwidth efficiency, a moved MFU its compute leg reads), and
+    # together with a cap
+    (0, {"dprice": "latency", "dspec": 0, "dfixed": 1.5, "dbw": 0.5}),
+    (0, {"dprice": "latency", "mfu": 0.3, "users": 200}),
+    (1, {"dprice": "latency", "dspec": 5, "mns": 16, "users": 200}),
+    (3, {"dprice": "latency", "mns": 8, "users": 400}),
 ]
 
 
@@ -797,7 +846,7 @@ MC_QUANTITIES = [
     "sla_miss_rate_sla10", "burst_drain_seconds_b32",
     "max_users_latency", "max_users_saturation",
     "miss_service_q95", "ttft_service_q95",
-    "max_users_cache", "warm_p5_all", "max_users_decode",
+    "max_users_cache", "warm_p5_all", "max_users_decode", "decode_ceiling",
     "decode_p50_n1", "decode_p50_n8", "decode_p50_n64",
     "steady_n", "steady_per_user_tok_s",
     "power_d_p", "power_d_d", "power_per_gpu_w", "power_kw",
@@ -806,7 +855,7 @@ MC_QUANTITIES = [
 ]
 
 # booleans: compared for equality, never for a relative error
-FLAG_QUANTITIES = ["max_users_decode_censored", "steady_saturated"]
+FLAG_QUANTITIES = ["max_users_decode_censored", "steady_saturated", "decode_capped"]
 
 SPREAD_SEEDS = (0, 1, 2)
 
@@ -982,7 +1031,8 @@ BAND_CAP = 0.25       # above this, name the states instead of widening for all
 # the 1 - d_p clamp, i.e. the reciprocal of max_users_decode: it cannot be
 # pinned tighter than the ceiling's own bisection, and the probe's decode
 # ceilings happen to sit where the ceiling's spread is small.
-BAND_GROUPS = [("prefill_duty", "power_d_p"), ("max_users_decode", "power_d_d"),
+BAND_GROUPS = [("prefill_duty", "power_d_p"),
+               ("max_users_decode", "power_d_d", "decode_ceiling"),
                ("miss_service_q95", "ttft_service_q95")]
 
 
@@ -1100,12 +1150,19 @@ MAPPING = [
     ("warm_p5_all", "model.warm_capacity(which='all')[0]",
      "capacity.js warmCapacity(...).all[0]", "mc", ""),
     ("max_users_decode", "model.max_users_decode", "prefill.js maxUsersDecode(...).n", "mc", ""),
-    ("decode_p50_n*", "model.decode_curves (p50)", "capacity.js decodeCurves (p50)", "mc", ""),
+    ("decode_ceiling / decode_capped", "predict.py: min(max_users_decode, max_num_seqs)",
+     "prefill.js capDecodeUsers(maxUsersDecode(...))", "mc",
+     "equals max_users_decode unless state.mns sits below it"),
+    ("decode_p50_n*", "model.decode_curves (p50)", "capacity.js decodeCurves (p50)", "mc",
+     "latency=DecodeLatency when state.dprice is 'latency' (render.js modelFor bakes "
+     "decode_lat onto the model)"),
     ("steady_n / steady_per_user_tok_s", "model.steady_decode_point",
      "prefill.js steadyDecodePoint", "mc",
      "Python bisects integer n re-sampling each probe; the explorer inverts the "
      "linearly-interpolated aggregate of one pre-sampled sweep"),
-    ("power_*", "model.power_draw", "cost.js powerDraw (inside energyCost)", "mc", ""),
+    ("power_*", "model.power_draw", "cost.js powerDraw (inside energyCost)", "mc",
+     "under a max_num_seqs cap the decode capacity is cap x p50(cap) on both sides "
+     "(prefill.js decodePowerUsers)"),
     ("energy_*", "model.energy_cost", "cost.js energyCost", "mc", ""),
     ("(state -> model)", "golden.py state_model / state_topo / state_wl",
      "render.js modelFor + state.js currentTopo/currentWL", "n/a",

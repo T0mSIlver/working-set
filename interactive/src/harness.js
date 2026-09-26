@@ -93,6 +93,8 @@ export function workingsetConfig(state, model, topo, wl){
       ['recurrent_state_dtype', state.state_dt],
       ['kv_sharding', state.kvshard],
       ['weight_overhead', state.wover === 'p15' ? 0.15 : 0],
+      // written only when set, as `ws` writes it: unset = no cap
+      ...(state.mns !== null ? [['max_num_seqs', int(state.mns)]] : []),
     ]],
     ['workload', [
       ['system_prefix_tokens', int(wl.sys_user)],
@@ -134,6 +136,12 @@ export function workingsetConfig(state, model, topo, wl){
       ['mfu', flt(state.mfu)],
       ['mbu', flt(state.mbu)],
       ['mtp', flt(state.mtp)],
+      // the opt-in latency pricing's keys, written only when selected (as
+      // RunConfig.dumps does): under roofline they price nothing
+      ...(state.dprice === 'latency'
+        ? [['decode_pricing', 'latency'], ['decode_bw_eff', flt(state.dbw)],
+           ['decode_fixed_ms', flt(state.dfixed)], ['spec_tokens', int(state.dspec)]]
+        : []),
     ]],
   ];
   return head.join('\n') + '\n\nschema_version = 1\n\n'
@@ -170,6 +178,7 @@ function harnessPredictions(op, model, wl, topo){
     ttft_miss_s: Math.round(op.ttftMiss * 10) / 10,
     bstar_misses: Math.round(op.bstar * 10) / 10,
   };
+  if (op.decodeCapped) P.decode_capped_by_max_num_seqs = true;
   // the ITL / steady-decode predictions exist only where the steady point
   // does (duty < 1 and the demand is on the sampled axis) — every hypothesis
   // that quotes them is dropped without them
@@ -190,8 +199,14 @@ function harnessHypotheses(P, model, topo, wl, reps){
   const out = [
     `H-cache: >= ${fmt(P.warm_capacity_p5, 0)} user sessions stay warm (p5)${grp}. `
       + `A run bounds this below unless load reaches eviction.`,
-    `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
-      + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
+    // capped: a different claim, not a smaller number (mirrors HDecode)
+    P.decode_capped_by_max_num_seqs
+      ? `H-decode: the scheduler caps the batch at ${fmt(P.decode_ceiling_users, 0)} `
+        + `sequences (max_num_seqs), below the bandwidth ceiling: per-user decode stays `
+        + `above ${fmt(decodeFloor(), 0)} tok/s and requests past the cap queue instead — `
+        + `watch TTFT. No decode-floor failure is expected, so this row cannot be bracketed.`
+      : `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
+        + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
     `H-latency: ${state.ttft_pct === 'mean' ? "a cache miss's mean TTFT"
         : `the p${state.ttft_pct} TTFT over all requests (model proxy: mean wait `
           + `+ the p${state.ttft_pct} of the hit/miss service mixture)`} reaches the ${fmt(state.sla, 0)} s budget `

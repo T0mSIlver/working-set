@@ -5,6 +5,7 @@
     ws report RUN.json                         re-print a run's report
     ws hypotheses                              list the H-* and what they need
     ws init [--model KEY --gpu PART --tp N ...] write a starter config
+    ws link CONFIG [--base URL]                the explorer URL showing CONFIG
     ws models                                  list model / GPU keys
     ws selfcheck                               run the model's self-checks
     ws metrics probe|tail|window ...           sample a live /metrics endpoint
@@ -22,6 +23,7 @@ from dataclasses import replace
 from . import __version__
 from . import model as M
 from .config import RunConfig, load_config
+from .link import DEFAULT_BASE, cmd_link
 from .predict import predict
 from .test_cmd import cmd_hypotheses, cmd_report, cmd_test
 
@@ -207,6 +209,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     _add_deploy_flags(p)
     p.set_defaults(fn=cmd_init)
+
+    p = sub.add_parser(
+        "link", help="print the explorer URL that shows a configuration",
+        description="Print the interactive explorer's share URL for CONFIG. "
+                    "A field the explorer has no control for, or a value it "
+                    "would clamp, is named on stderr with what the page shows "
+                    "instead.")
+    p.add_argument("config", help="workingset.toml / .json / a harness .py")
+    p.add_argument("--base", default=DEFAULT_BASE,
+                   help=f"explorer URL (default {DEFAULT_BASE}); "
+                        "http://127.0.0.1:PORT/ for a local copy of interactive/")
+    p.set_defaults(fn=cmd_link)
 
     p = sub.add_parser(
         "test", help="test the predictions against a live endpoint",

@@ -20,11 +20,11 @@ import { decodeCurves, decodePlan, warmCapacity }
 import { bStar, warmUsersCurve, warmUsersNow } from '../../interactive/src/planner.js';
 import { energyCost } from '../../interactive/src/cost.js';
 import {
-  breakevenMissRate, coldRequestSeconds, contextStats, maxUsersDecode, meanPasses,
+  breakevenMissRate, capDecodeUsers, coldRequestSeconds, decodePowerUsers, contextStats, maxUsersDecode, meanPasses,
   maxUsersLatency, maxUsersSaturation, missServiceQuantile, ttftServiceQuantile, mfuCeil, mfuEff, missContextSeconds,
   peakFlops, prefillContextSeconds, prefillFlops, prefillOverheadSeconds,
   prefillSeconds, prefillServiceMoments, serverRate, setLiveThink, setLiveTurn,
-  spikeMetrics, steadyDecodePoint, ttftMoments,
+  spikeMetrics, steadyDecodePoint, steadyResident, ttftMoments,
 } from '../../interactive/src/prefill.js';
 
 // the three lengths and the one context golden.py prices every state at
@@ -129,6 +129,10 @@ export function driveState(v){
   const dec = maxUsersDecode(m, topo, wl, state.decode_floor, DECODE_ITER);
   o.max_users_decode = dec.n;
   o.max_users_decode_censored = dec.censored;
+  // the max_num_seqs cap render.js applies to the planner and frontier
+  const decC = capDecodeUsers(dec);
+  o.decode_ceiling = decC.n;
+  o.decode_capped = decC.capped;
 
   seedFor('decode');
   const dcPts = decodeCurves(m, topo, wl, 64, 63, DECODE_ITER);
@@ -142,13 +146,19 @@ export function driveState(v){
   const plan = decodePlan(wc.gpu[2], false);
   seedFor('decode');
   const dc = decodeCurves(m, topo, wl, plan.nMax, plan.step, plan.iter);
-  const sd = steadyDecodePoint(dc, topo, rate, state.out, wc.gpu[2]);
+  const sd = steadyDecodePoint(dc, topo, rate, state.out, steadyResident(wc.gpu[2]));
   o.steady_n = sd.n;
   o.steady_per_user_tok_s = sd.pu;
   o.steady_saturated = sd.saturated;
 
   // ---- power and the bill --------------------------------------------
-  const e = energyCost(topo, mo, f, rate, dec.n);
+  // under a cap, the aggregate at the cap (render.js prices the cost card so)
+  let decPower = decC.n;
+  if (decC.capped){
+    seedFor('decodeCapPower');
+    decPower = decodePowerUsers(m, topo, wl, decC, state.decode_floor, DECODE_ITER);
+  }
+  const e = energyCost(topo, mo, f, rate, decPower);
   o.power_d_p = e.dP;
   o.power_d_d = e.dD;
   o.power_per_gpu_w = e.perGpu;

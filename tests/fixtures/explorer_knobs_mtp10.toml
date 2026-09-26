@@ -1,6 +1,6 @@
 # workingset.toml — the configuration on screen in the interactive explorer.
-# Qwen3.6-35B-A3B · 1×H200 · max_num_batched_tokens 32768 · generated 2026-09-06
-# reproduce this page: https://workingset.tomvaucourt.com/#model=35BA3B&mtp=1
+# Qwen3.6-35B-A3B · 1×H200 · max_num_batched_tokens 32768 · generated 2026-09-26
+# reproduce this page: https://workingset.tomvaucourt.com/#model=35BA3B&mtp=1&ttft_pct=mean
 # No predictions live here: `ws predict workingset.toml` computes them.
 
 schema_version = 1

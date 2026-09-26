@@ -345,6 +345,17 @@
    "hypothesis": "two independent integer bisections on a sampled monotone curve. At a ceiling of ONE the relative error is 1 by definition: it says one side's single decoder just clears the floor and the other's just misses it. Every failing state has a ceiling of 23 or below; above that the two agree inside the band."
   },
   {
+   "quantity": "decode_ceiling",
+   "where": {
+    "_decode_ceiling": {
+     "lte": 25
+    }
+   },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "max_users_decode after the max_num_seqs cap: the same statistic wherever the cap does not bind, so it inherits that entry's two independent integer bisections at small ceilings. Every capped state agrees exactly."
+  },
+  {
    "quantity": "max_users_cache",
    "where": {
     "_warm_p5": {

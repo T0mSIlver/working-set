@@ -24,39 +24,16 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
-import { CONFIG } from '../../interactive/src/config.js';
-import { STATE_DEFAULTS, currentTopo, currentWL, state, stampTtftPct,
-         ttftPctFromFragment } from '../../interactive/src/state.js';
+import { currentTopo, currentWL, state, stampTtftPct, ttftPctFromFragment } from '../../interactive/src/state.js';
 import { TTFT_PCTS } from '../../interactive/src/prefill.js';
 import { setLiveThink, setLiveTurn } from '../../interactive/src/prefill.js';
 import { activeModel } from '../../interactive/src/render.js';
 import { workingsetConfig } from '../../interactive/src/harness.js';
+import { decodeStateURL } from './decode-url.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, '../fixtures');
 const URL_LINE = /^# reproduce this page: (\S+)\s*$/m;
-
-// Inverse of main.js encodeStateURL(): the fragment carries only the DIFFS
-// from STATE_DEFAULTS, so the type of each key is read off the defaults
-// rather than from a second copy of the enum tables. The two keys that are
-// re-seeded from the selection rather than defaulted globally get the same
-// treatment encodeStateURL gives them when it decides not to write them.
-function decodeStateURL(url){
-  const st = { ...STATE_DEFAULTS };
-  const q = url.includes('#') ? url.slice(url.indexOf('#') + 1) : '';
-  for (const [k, v] of new URLSearchParams(q)){
-    if (!(k in STATE_DEFAULTS)) throw new Error(`unknown state key in URL: ${k}`);
-    st[k] = STATE_DEFAULTS[k] === null ? Number(v)
-          : typeof STATE_DEFAULTS[k] === 'boolean' ? v === '1'
-          : typeof STATE_DEFAULTS[k] === 'number' ? Number(v)
-          : v;
-  }
-  const p = new URLSearchParams(q);
-  if (!p.has('mtp')) st.mtp = CONFIG.MODELS[st.model].mtp;
-  if (!p.has('gpuh')) st.gpuh = CONFIG.GPUS[st.gpu].eur_gpu_h;
-  st.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);
-  return st;
-}
 
 test('share links: legacy fragments decode as mean, bare URLs as p95, new links name it', () => {
   const dec = q => ttftPctFromFragment(new URLSearchParams(q), TTFT_PCTS);

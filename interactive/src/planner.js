@@ -330,7 +330,7 @@ export function renderCeilingBars(op){
   if (!box) return;
   if (!op){ box.innerHTML = '<p class="cs">model weights do not fit this configuration.</p>'; return; }
   const C = PLANNER_COLORS(), keys = ['cache','decode','latency','saturation'];
-  const W=1120, rowH=46, mT=10, mL=112, mR=hasHeadcount()?230:92;
+  const W=1120, rowH=46, mT=10, mL=112, mR=(hasHeadcount()?230:92)+(op.decodeCapped?150:0);
   const H=mT+rowH*keys.length+34;
   const pw = W-mL-mR;
   const top = Math.max(op.users, ...keys.map(k=>op.ceilings[k]).filter(isFinite))*1.08 || 1;
@@ -350,7 +350,8 @@ export function renderCeilingBars(op){
     g+=`<text class="axlbl" x="${mL-10}" y="${y+18}" text-anchor="end" fill="${bind?C[k]:muted}"`
       +`${bind?' font-weight="700"':''}>${esc(PLANNER_LABEL[k])}</text>`;
     g+=`<text class="dlabel" x="${mL+pw+8}" y="${y+18}" text-anchor="start" fill="${bind?C[k]:muted}"`
-      +`${bind?' font-weight="700"':''}>${isFinite(v)?ceilingText(v):'—'}${bind?' ← binds':''}</text>`;
+      +`${bind?' font-weight="700"':''}>${isFinite(v)?ceilingText(v):'—'}`
+      +`${k==='decode'&&op.decodeCapped?' (max_num_seqs cap)':''}${bind?' ← binds':''}</text>`;
   });
   // the load you asked for, across all four
   const X = sx(Math.min(op.users, top));

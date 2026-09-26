@@ -3,6 +3,7 @@ import { DECODE_MBU, GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, effective
 import { contextStats, decodeFloor, liveTurn, maxUsersLatency, maxUsersSaturation,
          prefillChunk, prefillServiceMoments, setLiveTurn } from './prefill.js';
 import { clip, seedFor } from './mathlib.js';
+import { decodeTokenSeconds } from './capacity.js';
 import { p_sub, sampleReqInto } from './workload.js';
 import { ramPerCache, state } from './state.js';
 import { cssv, esc, fmt, linScale, svgEl } from './svg.js';
@@ -72,7 +73,14 @@ function decodeUsersApprox(model, topo, samples, floor){
   const perSeq = mL * kvReadBpt + state_traffic(model)
     + (model.kv_decode_const ? (tk ? mT * (model.kv_decode_const / tk)
                                    : model.kv_decode_const) : 0);
-  const speed = n => model.mtp * bw / (w_decode(model, n) + n * perSeq);
+  // the opt-in latency pricing, mean-field like the roofline line above
+  const lat = model.decode_lat || null;
+  const bwLat = lat ? effective_bw(topo) * lat.bw_eff : 0;
+  const tTok = lat ? decodeTokenSeconds(model, topo, lat.mfu) : 0;
+  const speed = lat
+    ? n => model.mtp / ((w_decode(model, n) + n * perSeq) / bwLat
+                        + n * (1 + lat.spec_tokens) * tTok + lat.fixed_s)
+    : n => model.mtp * bw / (w_decode(model, n) + n * perSeq);
   if (speed(1) < F) return 0;
   let lo = 1, hi = 2;
   while (speed(hi) >= F && hi < 1e7){ lo = hi; hi *= 2; }
@@ -84,9 +92,12 @@ export let lastFlipAxes = null;
 export function setLastFlipAxes(v){ lastFlipAxes = v; }
 export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const f0 = wl.invalidation, subR = wl.sub_ratio;
-  const cacheNow = op.ceilings.cache, decodeNow = op.ceilings.decode;
+  // decodeNow is the BANDWIDTH ceiling the stand-ins calibrate against; a
+  // max_num_seqs cap (state.mns, per group) is applied on top of every point
+  const cacheNow = op.ceilings.cache, decodeNow = op.decodeRaw ?? op.ceilings.decode;
+  const capD = u => (state.mns === null || state.mns === undefined) ? u : Math.min(u, state.mns * reps);
   const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU) => {
-    const c = { cache: cacheU, decode: decodeU,
+    const c = { cache: cacheU, decode: capD(decodeU),
       latency: reps * maxUsersLatency(mo_, f_, sla_, think_, undefined, subR,
                                       state.ttft_pct),
       saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };
@@ -155,12 +166,21 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   }
   // 5 · prefill MFU — the study's softest input; not a slider, a structural
   //     unknown, so the sweep runs over the whole stated [30%, 55%] bracket
-  axes.push({ label: 'Prefill MFU', cur: PREFILL_MFU, lo: PREFILL_MFU_LO, hi: PREFILL_MFU_HI,
+  //     Under the latency pricing decode is calibrated at the MFU slider, so
+  //     the marker sits there and the sweep widens to contain it
+  const mfuCur = model.decode_lat ? state.mfu : PREFILL_MFU;
+  const mfuLo = Math.min(PREFILL_MFU_LO, mfuCur), mfuHi = Math.max(PREFILL_MFU_HI, mfuCur);
+  axes.push({ label: 'Prefill MFU', cur: mfuCur, lo: mfuLo, hi: mfuHi,
     fmt: v => fmt(v * 100, 0) + '%', approx: false,
-    pts: sweep(16, PREFILL_MFU_LO, PREFILL_MFU_HI, v => {
+    pts: sweep(16, mfuLo, mfuHi, v => {
       const mo2 = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), v);
-      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
-    }, PREFILL_MFU) });
+      // under the latency pricing the verify compute runs at this MFU too
+      const decU = model.decode_lat && calD > 0
+        ? decodeUsersApprox({ ...model, decode_lat: { ...model.decode_lat, mfu: v } },
+                            topo, cs.samples) * calD * reps
+        : decodeNow;
+      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decU);
+    }, mfuCur) });
   // 6 · speculative-decode speedup — decode speed is exactly linear in it,
   //     so the mean-context stand-in only has to move the crossing point
   if (calD > 0)
@@ -171,8 +191,9 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
                decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
   // 6a · decode efficiency (MBU) — one constant for every row, measured on
   //      one deployment; decode speed is exactly linear in it, like the
-  //      speedup, so the same mean-context stand-in serves
-  if (calD > 0)
+  //      speedup, so the same mean-context stand-in serves. The latency
+  //      pricing does not read it, so the row is dropped there
+  if (calD > 0 && !model.decode_lat)
     axes.push({ label: 'Decode MBU', cur: state.mbu, lo: 0.10, hi: 1.00,
       fmt: v => fmt(v * 100, 0) + '%', approx: true,
       pts: sweep(19, 0.10, 1.00, v =>

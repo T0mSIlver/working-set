@@ -42,7 +42,7 @@ regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
 the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
-(882 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
+(899 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
 plus a 26-state named spread probe at three seeds and two sampling scales). The JS
 side is ~80 s. That is the price of pricing every legal deployment rather than
 a sample of them.
@@ -128,7 +128,8 @@ clamped at 1, and the clamp shrinks its measured spread, so an independent
 derivation would hand the identical figure a tighter band and it would trip on
 noise its twin absorbs.
 
-`flag` — booleans (`steady_saturated`, `max_users_decode_censored`). Equal or
+`flag` — booleans (`steady_saturated`, `max_users_decode_censored`,
+`decode_capped`). Equal or
 not.
 
 **Censored warm fills.** `capacity.js`'s `warmOnce` stops a single fill at

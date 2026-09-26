@@ -447,6 +447,33 @@ export function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
   return { n: lo, censored: false };
 }
 
+// The scheduler's cap on concurrent sequences (vLLM --max-num-seqs, per
+// replica group; state.mns, null = not stated). Mirrors predict(): the decode
+// ceiling counts sequences decoding AT ONCE and the engine never runs more
+// than the cap, so past it a request queues instead of slowing the batch —
+// when the cap sits below the bandwidth ceiling, the cap IS the ceiling.
+export function capDecodeUsers(res, mns){
+  const cap = mns === undefined ? state.mns : mns;
+  if (cap === null || cap === undefined || !(cap < res.n)) return { ...res, capped: false, raw: res.n };
+  return { n: cap, censored: false, capped: true, raw: res.n };
+}
+// The decode capacity power prices (cost.js powerDraw reads users x floor as
+// the aggregate decode tok/s). Uncapped that is the ceiling at the floor; under
+// a max_num_seqs cap the batch never grows past the cap, so the capacity is the
+// aggregate AT the cap, cap x p50(cap), returned in the same users-at-floor
+// units. Mirrors golden.py's power pricing of a capped state.
+export function decodePowerUsers(model, topo, wl, capRes, floor, n_iter){
+  if (!capRes.capped) return capRes.n;
+  const n = capRes.n;
+  const pu = decodeCurves(model, topo, wl, n, Math.max(1, n-1), n_iter || 220).p50.slice(-1)[0];
+  return n * pu / (floor || DECODE_FLOOR_TOKS);
+}
+// ...and the steady decode batch stops there too: a batch above the cap is a
+// machine that does not exist (predict's resident = min(p95, max_num_seqs))
+export function steadyResident(g95){
+  return state.mns === null || state.mns === undefined ? g95 : Math.min(g95, state.mns);
+}
+
 /* ---- the STEADY-STATE decode point -----------------------------------------
    Every other decode readout on this page is a STRESS test: it asks what one
    user gets when the whole warm population decodes at once. That is the right
