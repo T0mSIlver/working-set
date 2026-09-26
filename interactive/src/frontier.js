@@ -127,18 +127,18 @@ export function wireFrontierTable(){
   });
 }
 
-/* ---- Chart H: the frontier as a picture — €/user vs Terminal-Bench ------
+/* ---- Chart H: the frontier as a picture — Terminal-Bench vs €/seat ------
    The table ranks by max users and prints a bill; the hardware line of
    the bill is a function of the GPU count alone, so users-vs-cost collapsed
    every row on one topology onto a band and said "run fewer GPUs". The buying question is
-   what a seat costs against what the model can do: y = the bill with the
+   what a seat costs against what the model can do: x = the bill with the
    row FULL divided by the users it then carries — its €/seat at capacity
    (log; seats span more than a decade). Not the bill at your load over your
    users: that is the GPU count again, and every row on a topology would
-   price the same. x =
+   price the same. y =
    the model's Terminal-Bench score on the version state.bench selects
    (research/terminal_bench.md; one value per model, so a model's rows stack
-   in a column and the column is the price of the topology choice). The two
+   on one horizontal line whose spread is the price of the topology choice). The two
    versions rank the top of this field differently — 2.1 is saturated, 4.0
    is not — so the toggle is part of the reading, not a preference. The Pareto-efficient set (no other
    row scores >= for <= money) is a staircase: for any capability floor,
@@ -202,8 +202,10 @@ export function renderFrontierChart(rows, curKey){
   // same width rule as chart G: act 3 panels are page-wide, so the viewBox
   // must track the paint width or the type scales with it
   const wide = (typeof window !== 'undefined' ? window.innerWidth : 1400) >= 900;
-  const W = wide ? 1120 : 560, H = wide ? 400 : 330;
-  const mL = wide ? 64 : 56, mR = wide ? 22 : 16, mT = 18, mB = wide ? 46 : 42;
+  const W = wide ? 1120 : 560, H = wide ? 420 : 360;
+  // the top margin holds the score source and the census: one line side by
+  // side when wide, two stacked lines when narrow
+  const mL = wide ? 56 : 48, mR = wide ? 22 : 16, mT = wide ? 26 : 40, mB = wide ? 46 : 42;
   const pw=W-mL-mR, ph=H-mT-mB;
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
   const surface=cssv('--surface'), text=cssv('--text');
@@ -220,41 +222,42 @@ export function renderFrontierChart(rows, curKey){
       && frontierScore(b) >= frontierScore(a) && near(a,b)
       && (frontierScore(b) > frontierScore(a) || perUser(b) < perUser(a)))));
   const qs = live.map(r => frontierScore(r)*100), es = live.map(perUser);
-  // right-hand slack is for the direct labels, which sit to the upper right;
-  // the axis is a percentage, so it never runs past 100. The low end floors at
-  // -5 rather than 0: two models score a MEASURED 0.0% on 4.0, and clamping to
-  // 0 drew their dots half on top of the price ticks. No tick is labelled below
-  // 0 (the loop starts at ceil(xLo/10)*10), so the slack is drawing room only.
-  const xLo = Math.max(-5, Math.floor((Math.min(...qs)-4)/5)*5), xHi = Math.min(100, Math.max(...qs) + (wide ? 8 : 14));
-  const yLo = Math.min(...es)*0.7, yHi = Math.max(...es)*1.5;
-  const sx = linScale(xLo, xHi, mL, mL+pw), sy = logScale(yLo, yHi, mT+ph, mT);
+  // x = € per seat (log), y = score (%): both grow away from the origin, so
+  // the efficient set is the upper-left edge. Headroom above the top score
+  // is for the direct labels, which sit to the upper left; the axis is a
+  // percentage, so it never runs past 100. The low end floors at -5 rather
+  // than 0: two models score a MEASURED 0.0% on 4.0, and clamping to 0 drew
+  // their dots on top of the price ticks. No tick is labelled below 0 (the
+  // loop starts at ceil(yLo/10)*10), so the slack is drawing room only.
+  const yLo = Math.max(-5, Math.floor((Math.min(...qs)-4)/5)*5), yHi = Math.min(100, Math.max(...qs) + (wide ? 8 : 12));
+  const xLo = Math.min(...es)*0.7, xHi = Math.max(...es)*1.5;
+  const sx = logScale(xLo, xHi, mL, mL+pw), sy = linScale(yLo, yHi, mT+ph, mT);
   let g='';
-  for (const t of logTicks(yLo,yHi)){
-    const Y=sy(t);
-    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
-    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${eurTick(t)}</text>`;
-  }
-  for (let t=Math.ceil(xLo/10)*10; t<=xHi; t+=10){
+  for (const t of logTicks(xLo,xHi)){
     const X=sx(t);
     g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${grid}" stroke-width="1"/>`;
-    g+=`<text class="axtick" x="${X}" y="${mT+ph+16}" text-anchor="middle">${t}%</text>`;
+    g+=`<text class="axtick" x="${X}" y="${mT+ph+16}" text-anchor="middle">${eurTick(t)}</text>`;
   }
-  // the staircase is the function "cheapest seat that scores at least q":
-  // flat at a row's price up to its score, then a jump to the next
-  // efficient row's price. Each step is vertical at x_{i-1} (past that
-  // score, the cheaper row no longer qualifies) then horizontal to x_i.
-  // Lead-in: horizontal at the cheapest row's price from the left edge —
-  // for any lower floor it is still the cheapest. No lead-out: nothing
-  // scores higher than the last row, so the function ends there.
+  for (let t=Math.ceil(yLo/10)*10; t<=yHi; t+=10){
+    const Y=sy(t);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${t}%</text>`;
+  }
+  // the staircase is the function "best score a seat budget of p buys":
+  // flat at an efficient row's score from its price to the next efficient
+  // row's price, then a jump up to that row's score. Lead-out: flat at the
+  // top row's score to the right edge — a bigger budget buys nothing
+  // better. No lead-in: below the cheapest price nothing carries the load.
   const stair = [...par].sort((a,b)=>frontierScore(a)-frontierScore(b));
-  const P = r => [sx(frontierScore(r)*100), sy(perUser(r))];
+  const P = r => [sx(perUser(r)), sy(frontierScore(r)*100)];
   if (stair.length){
     const [x0,y0] = P(stair[0]);
-    let d = `M ${mL} ${y0} L ${x0} ${y0}`;
+    let d = `M ${x0} ${y0}`;
     for (let i=1;i<stair.length;i++){
       const [x,y] = P(stair[i]);
-      d += ` L ${P(stair[i-1])[0]} ${y} L ${x} ${y}`;
+      d += ` L ${x} ${P(stair[i-1])[1]} L ${x} ${y}`;
     }
+    d += ` L ${mL+pw} ${P(stair[stair.length-1])[1]}`;
     g+=`<path d="${d}" fill="none" stroke="${muted}" stroke-width="1.5" stroke-linejoin="round" opacity="0.7"/>`;
   }
   // dots: dominated first (dimmed), then the efficient set, then the
@@ -281,47 +284,45 @@ export function renderFrontierChart(rows, curKey){
     if (!par.has(cur))
       g+=`<text class="dlabel" x="${x+14}" y="${y+4}" text-anchor="start" fill="${muted}">you</text>`;
   }
-  // direct labels on the efficient set only, to the LOWER RIGHT of each dot:
-  // a higher score for less money (the price axis grows upward) is empty of
-  // efficient dots by definition — but not of dominated ones, and the 1%
-  // tolerance lets a dearer dot sit just above, so every drawn dot is an
-  // obstacle too. Labels that would collide are pushed down in y order; one
-  // that would run past the right edge flips to the upper left instead.
-  // Width is estimated (no layout pass in an SVG string). A displaced label
-  // gets a hairline leader back to its dot: two efficient rows at nearly the
-  // same price stack two labels, and without the leader the reader cannot
-  // tell which name is which dot.
+  // direct labels on the efficient set only, to the UPPER LEFT of each dot:
+  // a higher score for less money is empty of efficient dots by definition —
+  // but not of dominated ones, and the 1% tolerance lets a dearer dot sit
+  // just beside, so every drawn dot is an obstacle too. Labels that would
+  // collide are pushed up in y order; one that would run past the left edge
+  // flips to the lower right instead. Width is estimated (no layout pass in
+  // an SVG string). A displaced label gets a hairline leader back to its
+  // dot: two efficient rows at nearly the same score stack two labels, and
+  // without the leader the reader cannot tell which name is which dot.
   const placed = pts.map(p => ({ x0: p.x-6, x1: p.x+6, y0: p.y-6, y1: p.y+6 }));
   const overlaps = (a,b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-  for (const r of [...stair].sort((a,b)=>P(a)[1]-P(b)[1])){
+  for (const r of [...stair].sort((a,b)=>P(b)[1]-P(a)[1])){
     const [x,y] = P(r), name = frontierShortLabel(r) + (r.key===curKey ? ' (you)' : '');
     const w = name.length*5.9, h = 12;
-    let end = x + 9 + w > W - mR;
-    let bx = end ? x-9-w : x+9, by = end ? y-16 : y+4;
+    const flip = x - 9 - w < mL;
+    const bx = flip ? x+9 : x-9-w, by = flip ? y+4 : y-18;
     let bb = { x0: bx, x1: bx+w, y0: by, y1: by+h };
     for (let k=0;k<12;k++){
       const hit = placed.find(q => overlaps(bb,q));
       if (!hit) break;
-      bb = { ...bb, y0: hit.y1+2, y1: hit.y1+2+h };
+      bb = { ...bb, y0: hit.y0-2-h, y1: hit.y0-2 };
     }
-    if (bb.y1 > mT+ph){                                     // off the bottom: go above,
-      bb = { ...bb, y0: y-16, y1: y-4 };                     // pushing UP past what is placed
+    if (bb.y0 < mT){                                        // off the top: go below,
+      bb = { ...bb, y0: y+6, y1: y+6+h };                    // pushing DOWN past what is placed
       for (let k=0;k<12;k++){
         const hit = placed.find(q => overlaps(bb,q));
         if (!hit) break;
-        bb = { ...bb, y0: hit.y0-2-h, y1: hit.y0-2 };
+        bb = { ...bb, y0: hit.y1+2, y1: hit.y1+2+h };
       }
     }
     placed.push(bb);
     if (bb.y0 !== by){
-      const lx = end ? bb.x1+3 : bb.x0-3, ly = bb.y1-6;
+      const lx = flip ? bb.x0-3 : bb.x1+3, ly = bb.y1-6;
       g+=`<line x1="${x}" y1="${y}" x2="${lx}" y2="${ly}" stroke="${muted}" stroke-width="1" opacity="0.7"/>`;
     }
-    g+=`<text class="dlabel" x="${end?bb.x1:bb.x0}" y="${bb.y1-2}" text-anchor="${end?'end':'start'}">${esc(name)}</text>`;
+    g+=`<text class="dlabel" x="${flip?bb.x0:bb.x1}" y="${bb.y1-2}" text-anchor="${flip?'start':'end'}">${esc(name)}</text>`;
   }
-  // the census sits inside the plot, top right: a higher score for less
-  // money than every efficient row is empty, and the footer already holds
-  // the axis title at the narrow width
+  // the census and the score source sit in the top margin, outside the
+  // plot, where no dot or label can land
   const notes = [`at ${fmt(users,0)} users`];
   // the plan grid holds six DP x TP shapes; the split control offers every
   // divisor, so a DP3 or TP6 selection matches no row and gets no ring —
@@ -332,16 +333,17 @@ export function renderFrontierChart(rows, curKey){
   if (unscored) notes.push(`${unscored} unscored`);
   if (notViable) notes.push(`${notViable} not viable${curNotViable?' (yours among them)':''}`);
   if (!rows.some(r => r.key === curKey)) notes.push('your split is not in the grid');
-  g+=`<text class="axtick" x="${mL+pw-4}" y="${mT+11}" text-anchor="end">${esc(notes.join(' · '))}</text>`;
-  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   // a row scored from its vendor card (QUALITY[mk].source) is not an AA
-  // measurement: the axis title names it rather than label it AA
+  // measurement: the source line names it rather than label it AA
   const vendor = [...new Set(live.filter(r => CONFIG.QUALITY[r.mk].source).map(r => FRONTIER_SHORT[r.mk] || r.mk))];
   const bench = CONFIG.BENCHES[state.bench];
-  const axisSrc = `Artificial Analysis, ${bench.harness}` + (vendor.length ? `; ${vendor.join(', ')}: vendor card` : '');
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">${esc(bench.name)}, pass@1 (${esc(axisSrc)})</text>`;
-  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">€ per seat per month, configuration full (log)</text>`;
+  const axisSrc = `scores: Artificial Analysis, ${bench.harness}` + (vendor.length ? `; ${vendor.join(', ')}: vendor card` : '');
+  g+=`<text class="axtick" x="${mL}" y="${wide ? mT-10 : 12}" text-anchor="start">${esc(axisSrc)}</text>`;
+  g+=`<text class="axtick" x="${wide ? mL+pw : mL}" y="${wide ? mT-10 : 26}" text-anchor="${wide ? 'end' : 'start'}">${esc(notes.join(' · '))}</text>`;
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">€ per seat per month, configuration full (log)</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">${esc(bench.name)}, pass@1</text>`;
   box.innerHTML = svgEl(g, W, H,
-    `Every configuration that carries the load as ${bench.name} score versus monthly cost per seat at capacity, with the Pareto-efficient set joined as a staircase`);
+    `Every configuration that carries the load as monthly cost per seat at capacity versus ${bench.name} score, with the Pareto-efficient set joined as a staircase`);
   frontierChartGeom = { W,H,mL,mR,mT,pw,ph, pts, par, curKey };
 }

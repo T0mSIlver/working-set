@@ -8,6 +8,7 @@
 //     the existing controls (the same click/input events they listen to)
 import { state, STATE_DEFAULTS } from './state.js';
 import { CONFIG } from './config.js';
+import { frontierChartGeom, frontierRowName } from './frontier.js';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -117,8 +118,14 @@ document.getElementById('frontierTable').addEventListener('click', e => {
   select(tr.cells[0].textContent.trim());
 });
 
-document.getElementById('chartH').addEventListener('click', () => {
-  const tt = document.getElementById('ttH');
-  const h = tt && +getComputedStyle(tt).opacity > 0 && tt.querySelector('.tth');
-  if (h) select(h.textContent.trim());
+// the nearest dot within the hover handler's radius (main.js), found from
+// the click itself: a tap closes the tooltip before its click arrives
+document.getElementById('chartH').addEventListener('click', e => {
+  const g = frontierChartGeom, svg = e.currentTarget.querySelector('svg');
+  if (!g || !svg) return;
+  const rect = svg.getBoundingClientRect(), scale = rect.width / g.W;
+  const vx = (e.clientX - rect.left) / scale, vy = (e.clientY - rect.top) / scale;
+  let best = null, bd = Infinity;
+  for (const p of g.pts){ const d = Math.hypot(p.x - vx, p.y - vy); if (d < bd){ bd = d; best = p; } }
+  if (best && bd <= Math.max(12, 24 / scale)) select(frontierRowName(best.r));
 });
