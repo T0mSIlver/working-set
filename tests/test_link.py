@@ -129,6 +129,25 @@ def test_headcount_off_the_users_grid_warns():
     assert "125 sessions" in _warned(c) and "prices 124" in _warned(c)
 
 
+def test_headcount_warning_uses_the_clamped_sliders():
+    c = RunConfig()
+    c = replace(c, workload=replace(c.workload, users=None, headcount=100,
+                                    sessions_per_active_user=12))
+    # spu clamps to 8 on the page: 100 x 1.0 x 8 = 800 sessions, a multiple of 4
+    assert not any("workload.headcount" in w for w in explorer_link(c)[1])
+
+
+def test_more_than_one_node_is_refused(tmp_path, capsys):
+    c = RunConfig()
+    c = replace(c, deployment=replace(c.deployment, tensor_parallel=8, replicas=2))
+    with pytest.raises(ValueError, match="16 GPUs"):
+        explorer_link(c)
+    p = tmp_path / "w.toml"
+    p.write_text(c.dumps())
+    assert cli.main(["link", str(p)]) == 2
+    assert "16 GPUs" in capsys.readouterr().err
+
+
 def test_cli_prints_the_url_and_warns_on_stderr(tmp_path, capsys):
     c = RunConfig()
     p = tmp_path / "w.toml"

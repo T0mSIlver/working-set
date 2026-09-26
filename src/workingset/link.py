@@ -208,6 +208,13 @@ def explorer_link(cfg: RunConfig, base: str = DEFAULT_BASE) -> tuple[str, list[s
     """(share URL, warnings). A warning names a config field the page will
     not show as written, and what it shows instead."""
     cfg.validate()
+    d = cfg.deployment
+    if d.tensor_parallel * d.replicas > 8:
+        # the page holds one 8-GPU node: it would clamp the count and re-derive
+        # the split (clampTp), pricing a different topology under the same users
+        raise ValueError(f"deployment: TP{d.tensor_parallel} x {d.replicas} replicas = "
+                         f"{d.tensor_parallel * d.replicas} GPUs; the explorer shows at "
+                         "most one 8-GPU node, so no link can show this config")
     warnings = _unmapped(cfg)
     params: dict[str, str] = {}
     for k in KNOBS:
@@ -237,8 +244,11 @@ def explorer_link(cfg: RunConfig, base: str = DEFAULT_BASE) -> tuple[str, list[s
                     f"model's maximum, {M.MODELS[cfg.deployment.model].max_ctx:,.0f} tokens")
         params[k.key] = _js(shown)
     if (w := cfg.workload).headcount is not None:
-        raw = M.sessions_from_headcount(w.headcount, w.peak_active_share,
-                                        w.sessions_per_active_user)
+        # the page derives users from its sliders, which clamp active and spu
+        knob = {k.key: k for k in KNOBS}
+        active = min(max(w.peak_active_share, knob["active"].lo), knob["active"].hi)
+        spu = min(max(w.sessions_per_active_user, knob["spu"].lo), knob["spu"].hi)
+        raw = M.sessions_from_headcount(w.headcount, active, spu)
         page = min(max(_js_round(raw / 4) * 4, 4), 1024)    # main.js syncLabels
         if abs(raw - page) > 1e-6:
             warnings.append(f"workload.headcount -> {raw:g} sessions: the explorer prices "
