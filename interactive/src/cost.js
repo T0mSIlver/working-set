@@ -94,8 +94,5 @@ export function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
     `<div class="deploy">`
     + `<div><h4>Draw</h4><dl class="spec">${draw}</dl></div>`
     + `<div><h4>Bill</h4><dl class="spec">${bill}</dl></div>`
-    + `<p class="verdictline" style="color:${cssv('--muted')};font-weight:400">`
-    + `Output assumed at ${fmt(state.out, 0)} tokens per request (unmeasured). `
-    + `Per-user and per-token figures divide the total. Two seemingly equal configurations rarely bill equally: hardware and idle watts scale with GPU count, decode watts with the load.</p>`
     + `</div>`;
 }

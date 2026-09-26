@@ -4,77 +4,127 @@ import { cssv, esc, fmt, linScale, logScale, logTicks, svgEl } from './svg.js';
 import { PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
 
 /* ---- The frontier table ---- */
-/* A DECISION table: the row's ranking columns are the verdict at YOUR load,
-   the max-user count, what binds, and the headroom multiple — the four raw
-   ceiling columns that used to force the comparison onto the reader now sit
-   behind a toggle (state.showCeil). Cached rows re-render on toggle. */
+/* A DECISION table. Every column is one entry in frontierColumns(): its
+   header, its cell and the value it sorts by. The default view is the verdict
+   columns only (score on the active benchmark, the verdict at YOUR load, max
+   users, what binds, €/seat); the rest are opt-in from the column picker.
+   Clicking a header sorts by it; sort and optional columns are view state
+   and re-render from the cached rows. The four ceilings ride state.showCeil
+   so old share links that set it still open with them. */
 export let lastFrontierRows = null, lastFrontierCurKey = null;
-export function renderFrontierTable(rows, curKey){
-  lastFrontierRows = rows; lastFrontierCurKey = curKey;
+const OPTIONAL = { otherBench: false, headroom: false, bstar: false, eur: false };
+let sortBy = null, sortDir = 1;   // null = the order the rows were handed in (max users)
+function frontierColumns(){
   const C = PLANNER_COLORS();
   // status colors as var() references, so they track a theme flip without a
   // re-render (the bind column's chart palette still needs the redraw hook)
   const good='var(--good)', warn='var(--warn)', crit='var(--crit)', muted='var(--muted)';
-  const ceilHead = state.showCeil
-    ? `<th class="num">cache</th><th class="num">decode</th>`
-      + `<th class="num">latency</th><th class="num">saturation</th>` : '';
-  // both benchmark columns, always: the reader compares the two orderings
-  // without touching the toggle, which only moves chart H's axis. The active
-  // one is emphasised so the column driving the chart is unambiguous.
-  const benchHead = Object.entries(CONFIG.BENCHES).map(([k, b]) =>
-    `<th class="num"${k===state.bench?' style="color:var(--text)"':` style="color:${muted};font-weight:500"`}>${esc(b.label)}</th>`).join('');
-  const head = `<tr><th>configuration</th>${benchHead}<th>your load</th><th class="num">${hasHeadcount()?'max sessions / people':'max users'}</th>`
-             + `<th>binds on</th><th class="num">headroom</th>${ceilHead}`
-             + `<th class="num">B*</th><th class="num">€/mo</th><th class="num">€/seat</th></tr>`;   // .num headers right-align over their digits
-  const body = rows.map(r=>{
-    const you = r.key===curKey ? ' class="you"' : '';
-    const viable = r.op.limit >= 1;
-    const fits = viable && r.op.fits;
-    const ceilCells = state.showCeil ? ['cache','decode','latency','saturation']
-      .map(k=>`<td class="num"${k===r.op.binding?` style="color:${C[k]};font-weight:650"`:''}>`
-             + `${k==='decode'&&r.censored?'≥ ':''}`
-             + `${isFinite(r.op.ceilings[k])
-                 ? (hasHeadcount()
-                   ? `${fmt(r.op.ceilings[k],0)} sessions<br><span style="color:${muted}">≈ ${fmt(peopleFromSessions(r.op.ceilings[k]),0)} people</span>`
-                   : fmt(r.op.ceilings[k],0))
-                 : '—'}</td>`).join('') : '';
-    const why = r.op.binding === 'latency'
-      ? 'cannot meet the TTFT budget at any load'
-      : (r.op.binding === 'saturation' ? 'prefill saturates before one user'
-      : `${PLANNER_LABEL[r.op.binding]} allows under one user`);
-    const room = viable ? r.op.limit/r.op.users : 0;
-    // a censored decode search is a floor, not an estimate — carry the '≥'
-    // through every figure derived from it, not just the headline
-    const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
-    // the model's scores, not the row's: every split of a model shares them
-    const benchCells = Object.keys(CONFIG.BENCHES).map(k => {
-      const q = frontierScore(r, k);
-      return `<td class="num"${k===state.bench?'':` style="color:${muted}"`}>`
-           + `${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</td>`;
-    }).join('');
-    return `<tr${you}><td>${esc(frontierRowName(r))}</td>${benchCells}`
-         + (viable
-            ? `<td class="v" style="color:${fits?good:crit}">${fits?'✓ fits':'✗ over'}</td>`
-            : `<td class="v" style="color:${muted}">—</td>`)
-         + (viable
+  const viable = r => r.op.limit >= 1;
+  const fits = r => viable(r) && r.op.fits;
+  const room = r => viable(r) ? r.op.limit/r.op.users : NaN;
+  // a censored decode search is a floor, not an estimate — carry the '≥'
+  // through every figure derived from it, not just the headline
+  const cen = r => r.op.binding==='decode' && r.censored ? '≥ ' : '';
+  const dim = on => on ? '' : ` style="color:${muted}"`;
+  const cols = [{ key:'name', head:'configuration', asc:true, sort:r => frontierRowName(r),
+                  cell:r => `<td>${esc(frontierRowName(r))}</td>` }];
+  // the model's scores, not the row's: every split of a model shares them.
+  // The active benchmark is always shown; the other one is opt-in.
+  for (const [k, b] of Object.entries(CONFIG.BENCHES)){
+    if (k !== state.bench && !OPTIONAL.otherBench) continue;
+    cols.push({ key:'bench:'+k, head:b.label, num:true, sort:r => frontierScore(r, k),
+      cell:r => { const q = frontierScore(r, k);
+        return `<td class="num"${k===state.bench?'':dim(false)}>${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</td>`; } });
+  }
+  cols.push({ key:'load', head:'your load', sort:room,
+    cell:r => viable(r)
+      ? `<td class="v" style="color:${fits(r)?good:crit}">${fits(r)?'✓ fits':'✗ over'}</td>`
+      : `<td class="v" style="color:${muted}">—</td>` });
+  cols.push({ key:'users', head:hasHeadcount()?'max sessions / people':'max users', num:true,
+    sort:r => viable(r) ? r.op.limit : NaN,
+    cell:r => {
+      if (!viable(r)){
+        const why = r.op.binding === 'latency' ? 'cannot meet the TTFT budget at any load'
+          : r.op.binding === 'saturation' ? 'prefill saturates before one user'
+          : `${PLANNER_LABEL[r.op.binding]} allows under one user`;
+        return `<td class="num" style="color:${muted}">not viable<br><span style="font-size:10.5px">${esc(why)}</span></td>`;
+      }
+      const c = cen(r);
+      return hasHeadcount()
+        ? `<td class="num">${c}${fmt(r.op.limit,0)} sessions<br><span style="color:${muted}">≈ ${c}${fmt(peopleFromSessions(r.op.limit),0)} people${r.reps>1?` · ${c}${fmt(r.op.limit/r.reps,0)}/grp`:''}</span></td>`
+        : `<td class="num">${c}${fmt(r.op.limit,0)}${r.reps>1?` <span style="color:${muted}">(${c}${fmt(r.op.limit/r.reps,0)}/grp)</span>`:''}</td>`;
+    } });
+  cols.push({ key:'binds', head:'binds on', asc:true, sort:r => PLANNER_LABEL[r.op.binding],
+    cell:r => `<td class="bind" style="color:${C[r.op.binding]}">${esc(PLANNER_LABEL[r.op.binding])}</td>` });
+  if (OPTIONAL.headroom) cols.push({ key:'headroom', head:'headroom', num:true, sort:room,
+    cell:r => { const x = room(r);
+      return viable(r)
+        ? `<td class="num" style="color:${fits(r)?(x>1.25?good:warn):crit}">×${fmt(x, x<10?1:0)}${cen(r)?'+':''}</td>`
+        : `<td class="num" style="color:${muted}">—</td>`; } });
+  if (state.showCeil) for (const k of ['cache','decode','latency','saturation'])
+    cols.push({ key:'ceil:'+k, head:k, num:true, sort:r => isFinite(r.op.ceilings[k]) ? r.op.ceilings[k] : NaN,
+      cell:r => `<td class="num"${k===r.op.binding?` style="color:${C[k]};font-weight:650"`:''}>`
+        + `${k==='decode'&&r.censored?'≥ ':''}`
+        + `${isFinite(r.op.ceilings[k])
             ? (hasHeadcount()
-              ? `<td class="num">${cen}${fmt(r.op.limit,0)} sessions<br><span style="color:${muted}">≈ ${cen}${fmt(peopleFromSessions(r.op.limit),0)} people${r.reps>1?` · ${cen}${fmt(r.op.limit/r.reps,0)}/grp`:''}</span></td>`
-              : `<td class="num">${cen}${fmt(r.op.limit,0)}${r.reps>1?` <span style="color:${muted}">(${cen}${fmt(r.op.limit/r.reps,0)}/grp)</span>`:''}</td>`)
-            : `<td class="num" style="color:${muted}">not viable<br><span style="font-size:10.5px">${esc(why)}</span></td>`)
-         + `<td class="bind" style="color:${C[r.op.binding]}">${esc(PLANNER_LABEL[r.op.binding])}</td>`
-         + (viable
-            ? `<td class="num" style="color:${fits?(room>1.25?good:warn):crit}">×${fmt(room, room<10?1:0)}${cen?'+':''}</td>`
-            : `<td class="num" style="color:${muted}">—</td>`)
-         + ceilCells
-         + `<td class="num">${fmt(r.bstar,1)}</td>`
-         // energy is meaningful only where the load can actually be served
-         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable ? fmt(r.eur,0) : '—'}</td>`
-         // chart H's y: the bill with the row full, per user it then carries;
-         // priced at a censored limit it is an upper bound, hence '≤'
-         + `<td class="num"${viable&&fits?'':` style="color:${muted}"`}>${viable && isFinite(r.eurSeat) ? (cen?'≤ ':'')+fmt(r.eurSeat,0) : '—'}</td></tr>`;
-  }).join('');
+              ? `${fmt(r.op.ceilings[k],0)} sessions<br><span style="color:${muted}">≈ ${fmt(peopleFromSessions(r.op.ceilings[k]),0)} people</span>`
+              : fmt(r.op.ceilings[k],0))
+            : '—'}</td>` });
+  if (OPTIONAL.bstar) cols.push({ key:'bstar', head:'B*', num:true, sort:r => r.bstar,
+    cell:r => `<td class="num">${fmt(r.bstar,1)}</td>` });
+  // energy is meaningful only where the load can actually be served
+  if (OPTIONAL.eur) cols.push({ key:'eur', head:'€/mo', num:true, asc:true, sort:r => viable(r) ? r.eur : NaN,
+    cell:r => `<td class="num"${dim(fits(r))}>${viable(r) ? fmt(r.eur,0) : '—'}</td>` });
+  // chart H's y: the bill with the row full, per user it then carries;
+  // priced at a censored limit it is an upper bound, hence '≤'
+  cols.push({ key:'seat', head:'€/seat', num:true, asc:true,
+    sort:r => viable(r) && isFinite(r.eurSeat) ? r.eurSeat : NaN,
+    cell:r => `<td class="num"${dim(fits(r))}>${viable(r) && isFinite(r.eurSeat) ? (cen(r)?'≤ ':'')+fmt(r.eurSeat,0) : '—'}</td>` });
+  return cols;
+}
+export function renderFrontierTable(rows, curKey){
+  lastFrontierRows = rows; lastFrontierCurKey = curKey;
+  const cols = frontierColumns();
+  const sc = cols.find(c => c.key === sortBy);
+  // rows without a value (not viable, unscored) sink in either direction
+  const sorted = sc ? rows.map((r, i) => [r, sc.sort(r), i]).sort(([, a, i], [, b, j]) => {
+    const na = typeof a === 'number' && !isFinite(a), nb = typeof b === 'number' && !isFinite(b);
+    if (na || nb) return na - nb || i - j;
+    return (typeof a === 'string' ? a.localeCompare(b) : a - b) * sortDir || i - j;
+  }).map(([r]) => r) : rows;
+  const other = Object.entries(CONFIG.BENCHES).find(([k]) => k !== state.bench);
+  const picks = [['otherBench', other ? other[1].label : 'other benchmark'], ['headroom', 'headroom'],
+                 ['ceil', 'the four ceilings'], ['bstar', 'B*'], ['eur', '€/mo']];
+  const picker = `<div class="colpick"><span class="lbl">columns</span>`
+    + picks.map(([k, l]) => `<button type="button" data-col="${k}" aria-pressed="${k === 'ceil' ? state.showCeil : OPTIONAL[k]}">${esc(l)}</button>`).join('')
+    + `</div>`;
+  const head = '<tr>' + cols.map(c => {
+    const on = c.key === sortBy;
+    const arrow = on ? (sortDir > 0 ? ' ▲' : ' ▼') : '';
+    return `<th${c.num ? ' class="num"' : ''} data-sort="${c.key}" aria-sort="${on ? (sortDir > 0 ? 'ascending' : 'descending') : 'none'}"`
+         + `${c.key === 'bench:'+state.bench ? ' style="color:var(--text)"' : ''}>${esc(c.head)}${arrow}</th>`;
+  }).join('') + '</tr>';
+  const body = sorted.map(r => `<tr${r.key===curKey ? ' class="you"' : ''}>${cols.map(c => c.cell(r)).join('')}</tr>`).join('');
   document.getElementById('frontierTable').innerHTML =
-    `<div class="ftable-wrap"><table class="ftable">${head}${body}</table></div>`;
+    `${picker}<div class="ftable-wrap"><table class="ftable">${head}${body}</table></div>`;
+}
+// one listener for the header sort and the column picker; both re-render
+// from the cached rows (display only, no recompute)
+export function wireFrontierTable(){
+  document.getElementById('frontierTable').addEventListener('click', e => {
+    const th = e.target.closest('th[data-sort]'), pick = e.target.closest('button[data-col]');
+    if (th){
+      const c = frontierColumns().find(c => c.key === th.dataset.sort);
+      if (sortBy === c.key){
+        // third click on a column returns to the default order
+        if (sortDir === (c.asc ? -1 : 1)) sortBy = null; else sortDir = -sortDir;
+      } else { sortBy = c.key; sortDir = c.asc ? 1 : -1; }
+    } else if (pick){
+      const k = pick.dataset.col;
+      if (k === 'ceil') state.showCeil = !state.showCeil; else OPTIONAL[k] = !OPTIONAL[k];
+    } else return;
+    if (lastFrontierRows) renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
+  });
 }
 
 /* ---- Chart H: the frontier as a picture — €/user vs Terminal-Bench ------
