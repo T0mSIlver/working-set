@@ -341,7 +341,7 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # (the batch is held under the cap whenever the cap sits below the
     # bandwidth ceiling, whichever term the decode ceiling reports)
     dec_power = dec
-    if mns is not None and mns < dec:
+    if mns is not None and mns <= dec:
         dec_power = mns * p50_cap / st["decode_floor"]
     e = M.energy_cost(m, topo, wl, rate, dec_power, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,

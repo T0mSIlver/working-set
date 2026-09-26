@@ -124,7 +124,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     # floor, which lifts that ceiling (model.cap_decode_ceiling).
     capped = below_bw = False
     if dep.max_num_seqs is not None:
-        below_bw = dep.max_num_seqs < op["ceilings"]["decode"]
+        below_bw = dep.max_num_seqs <= op["ceilings"]["decode"]
         slots = M.max_users_decode_slots(
             m, t, wl, dep.max_num_seqs, think_time_s=w.think_time_s,
             out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,

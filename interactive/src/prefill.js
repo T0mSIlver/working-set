@@ -457,7 +457,7 @@ export function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
 export function capDecodeUsers(res, mns, slots){
   const cap = mns === undefined ? state.mns : mns;
   if (cap === null || cap === undefined) return { ...res, capped: false, limited: false, raw: res.n };
-  const limited = cap < res.n, bw = limited ? Infinity : res.n;
+  const limited = cap <= res.n, bw = limited ? Infinity : res.n;
   if (slots < bw) return { n: slots, censored: false, capped: true, limited, raw: res.n };
   return { ...res, n: bw, censored: !limited && res.censored, capped: false, limited, raw: res.n };
 }

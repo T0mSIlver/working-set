@@ -474,8 +474,10 @@ def test_cap_decode_ceiling_picks_the_term_that_applies():
     assert cap_decode_ceiling(100.0, None, 5.0) == (100.0, False)
     # a cap below the floor crossing: only the slots term applies
     assert cap_decode_ceiling(100.0, 64, 300.0) == (300.0, True)
-    # at or above it, the crossing stands unless the slots fill first
-    assert cap_decode_ceiling(100.0, 100, 300.0) == (100.0, False)
+    # a cap AT the crossing still keeps every batch on the floor
+    assert cap_decode_ceiling(100.0, 100, 300.0) == (300.0, True)
+    # above it, the crossing stands unless the slots fill first
+    assert cap_decode_ceiling(100.0, 101, 300.0) == (100.0, False)
     assert cap_decode_ceiling(100.0, 128, 90.0) == (90.0, True)
 
 

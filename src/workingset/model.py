@@ -2680,15 +2680,15 @@ def cap_decode_ceiling(bandwidth: float, max_num_seqs: int | None,
 
     `bandwidth` is max_users_decode: every warm user decoding at once, per-user
     p50 at the floor. The engine never runs more than max_num_seqs at once, so
-    a cap below that crossing keeps every batch above the floor and the
-    bandwidth ceiling is never reached. At or above it, the crossing stands.
+    a cap at or below that crossing keeps every batch at or above the floor
+    and the bandwidth ceiling is never reached. Above it, the crossing stands.
     `slots` is max_users_decode_slots, where the steady batch fills the cap.
     The ceiling is the lower of the two that apply, and `capped` says the
     slots term is the one binding.
     """
     if max_num_seqs is None:
         return bandwidth, False
-    bw = math.inf if max_num_seqs < bandwidth else bandwidth
+    bw = math.inf if max_num_seqs <= bandwidth else bandwidth
     return (slots, True) if slots < bw else (bw, False)
 
 
