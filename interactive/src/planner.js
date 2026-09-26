@@ -351,7 +351,7 @@ export function renderCeilingBars(op){
       +`${bind?' font-weight="700"':''}>${esc(PLANNER_LABEL[k])}</text>`;
     g+=`<text class="dlabel" x="${mL+pw+8}" y="${y+18}" text-anchor="start" fill="${bind?C[k]:muted}"`
       +`${bind?' font-weight="700"':''}>${isFinite(v)?ceilingText(v):'—'}`
-      +`${k==='decode'&&op.decodeCapped?' (max_num_seqs full)':''}${bind?' ← binds':''}</text>`;
+      +`${k==='decode'&&op.decodeCapped?` (max_num_seqs ${fmt(op.mns,0)} at p99)`:''}${bind?' ← binds':''}</text>`;
   });
   // the load you asked for, across all four
   const X = sx(Math.min(op.users, top));

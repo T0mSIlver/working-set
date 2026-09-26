@@ -738,7 +738,7 @@ details.more .more-body{padding:0 0 16px}
           </div>
         </div>
         <div class="field">
-          <label class="flabel" for="i-mns"><span class="tip" data-tip="vLLM --max-num-seqs, per replica group. The scheduler never runs more sequences at once, so past it a request queues instead of slowing the batch. It binds where the batch decoding at your load fills it, which takes far more users than sequences, and below the bandwidth's decode ceiling it lifts that ceiling. Empty means no cap, as in every published figure. Mirrors deployment.max_num_seqs.">max_num_seqs</span> <span class="val" id="v-mns">unset</span></label>
+          <label class="flabel" for="i-mns"><span class="tip" data-tip="vLLM --max-num-seqs, per replica group. The scheduler never runs more sequences at once, so past it a request queues instead of slowing the batch. Empty means the recommended value: the largest batch whose per-user decode meets the floor, within the GPU-resident sessions. It binds where the 99th-percentile batch decoding at your load reaches it, which takes far more users than sequences. Mirrors deployment.max_num_seqs.">max_num_seqs</span> <span class="val" id="v-mns">unset</span></label>
           <input class="population" type="number" id="i-mns" min="1" max="4096" step="1" inputmode="numeric" placeholder="unset, no cap">
         </div>
         </div>

@@ -251,7 +251,11 @@ def test_h_decode_says_which_batch_the_ladder_reached_and_what_would_test_it():
     """The decode ceiling counts sequences decoding AT ONCE; a closed loop
     with think time holds a small batch, so "no decode-floor failure" on a
     realistic ladder is not evidence. The row says what batch was reached."""
-    preds = replace(predict(RunConfig(), n_iter=40), decode_ceiling_users=31)
+    # the floor claim is the one made when a cap set above the floor crossing
+    # leaves the bandwidth ceiling binding (the recommended cap never does)
+    preds = replace(predict(RunConfig(), n_iter=40), decode_ceiling_users=31,
+                    decode_capped_by_max_num_seqs=False,
+                    decode_cap_below_bandwidth=False)
     ladder = [rung(32, decode_seqs=5.5), rung(64, decode_seqs=12.25),
               rung(16, decode_seqs=float("nan"))]
     _, m, v = score(REGISTRY.get("H-decode"), ladder_ctx(preds, ladder))

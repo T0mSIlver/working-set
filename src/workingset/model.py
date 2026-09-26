@@ -2634,6 +2634,57 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
             "demanded_tok_s": demand * reps}
 
 
+DECODE_SLOT_QUANTILE = 0.99   # the decode batch percentile a cap must hold
+
+
+def poisson_cdf(k: int, mean: float) -> float:
+    """P(N <= k) for N ~ Poisson(mean), summed term by term in log space so a
+    mean in the thousands does not underflow. Mirrors poissonCdf in
+    interactive/src/prefill.js, operation for operation."""
+    if mean <= 0:
+        return 1.0
+    lm, lp, s = math.log(mean), -mean, math.exp(-mean)
+    for i in range(1, int(k) + 1):
+        lp += lm - math.log(i)
+        s += math.exp(lp)
+    return min(1.0, s)
+
+
+def decode_slot_mean(max_num_seqs: int,
+                     quantile: float = DECODE_SLOT_QUANTILE) -> float:
+    """The largest MEAN decode batch whose `quantile` stays within
+    max_num_seqs.
+
+    Requests enter the batch as a random stream and each decodes for its own
+    time, so the number decoding at once is an infinite-server queue's
+    occupancy: Poisson with the steady_decode_point mean (M/G/inf; exact for
+    Poisson arrivals, whatever the decode-time distribution). Binding where
+    the MEAN reaches the cap would leave the batch over it about half the
+    time, with a wait for a slot that never drains. Arrivals burstier than
+    Poisson (an agent turn's back-to-back requests) widen the batch further,
+    so this is the optimistic side of the percentile."""
+    if max_num_seqs < 1:
+        raise ValueError(f"max_num_seqs must be >= 1, got {max_num_seqs!r}")
+    lo, hi = 0.0, float(max_num_seqs)
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if poisson_cdf(max_num_seqs, mid) >= quantile:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def recommended_max_num_seqs(bandwidth: float, resident: float) -> int:
+    """The max_num_seqs working-set recommends, per replica group: the largest
+    batch whose per-user p50 still meets the floor (max_users_decode, read as
+    sequences), within the GPU-resident warm p5 (beyond it nobody warm is
+    left to admit). Past the floor crossing a bigger batch only slows every
+    sequence below the floor, so queueing is the better answer. Mirrors
+    recommendedMns in interactive/src/prefill.js."""
+    return max(1, int(math.floor(min(bandwidth, resident))))
+
+
 def max_users_decode_slots(model: Model, topo: Topology, wl: Workload,
                            max_num_seqs: int,
                            think_time_s: float = THINK_TIME_S,
@@ -2641,36 +2692,37 @@ def max_users_decode_slots(model: Model, topo: Topology, wl: Workload,
                            union: str = "linear", n_iter: int = 400,
                            seed: int = 0, mbu: float = None,
                            latency: "DecodeLatency | None" = None,
-                           per_user_tok_s: float = None) -> float:
-    """Users per replica group at which the STEADY decode batch reaches
-    max_num_seqs.
+                           per_user_tok_s: float = None,
+                           quantile: float = DECODE_SLOT_QUANTILE) -> float:
+    """Users per replica group at which the steady decode batch's `quantile`
+    reaches max_num_seqs.
 
     The scheduler caps the sequences decoding at once, and at a given load the
     batch that decodes is steady_decode_point's, not the warm population: an
     open-loop user spends most of each interval waiting on a tool or a human.
-    So the cap binds where that batch reaches it. By the same flow balance,
+    The batch fluctuates around that mean (decode_slot_mean), so the cap
+    binds where the mean reaches m = decode_slot_mean(max_num_seqs). By the
+    steady point's flow balance,
 
-        rate_group x out_tokens = max_num_seqs x v(max_num_seqs)
+        rate_group x out_tokens = m x v(m)
 
-    and past that rate the decode slots cannot retire what arrives: requests
-    queue for a slot, with no steady state (steady_decode_point saturates at
-    resident = max_num_seqs, the same point). Converted to users the way
-    max_users_saturation converts its rate: users = rate x think / (1 + r).
-    Under a closed loop `think_time_s` is the waiting time Z alone, so this
-    open conversion undercounts: the conservative side.
+    converted to users the way max_users_saturation converts its rate:
+    users = rate x think / (1 + r). v is read at ceil(m), the conservative
+    side of the integer the decode curve is sampled at. Under a closed loop
+    `think_time_s` is the waiting time Z alone, so this open conversion
+    undercounts: the conservative side again.
 
-    `per_user_tok_s` is v(max_num_seqs) when the caller already drew it.
+    `per_user_tok_s` is v(ceil(m)) when the caller already drew it.
     """
-    if max_num_seqs < 1:
-        raise ValueError(f"max_num_seqs must be >= 1, got {max_num_seqs!r}")
+    m = decode_slot_mean(max_num_seqs, quantile)
     if out_tokens <= 0:
         return math.inf
     v = per_user_tok_s
     if v is None:
-        v = float(decode_curves(model, topo, wl, [int(max_num_seqs)],
+        v = float(decode_curves(model, topo, wl, [max(1, math.ceil(m))],
                                 n_iter=n_iter, seed=seed, union=union,
                                 mbu=mbu, latency=latency)[1][0])
-    rate = max_num_seqs * v / out_tokens
+    rate = m * v / out_tokens
     return rate * think_time_s / (1.0 + wl.sub_ratio)
 
 

@@ -300,19 +300,24 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # the scheduler's cap, as predict() applies it: it binds where the
     # steady decode batch at the load fills it, and a cap below the
     # bandwidth ceiling lifts that ceiling (model.cap_decode_ceiling)
-    mns = st["mns"]
-    p50_cap = None
-    if mns is not None:
-        p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
-                                        seed=seed, mbu=st["mbu"],
-                                        latency=lat)[1][0])
-        slots = M.max_users_decode_slots(m, topo, wl, mns,
-                                         think_time_s=st["think"],
-                                         out_tokens=st["out"],
-                                         per_user_tok_s=p50_cap)
-        ceil, capped = M.cap_decode_ceiling(dec, mns, slots)
-    else:
-        ceil, capped = dec, False
+    # unset = the recommended cap, off the same GPU-resident p5 the
+    # explorer's planner reads (lastWarmCur.g5)
+    warm_gpu5 = _warm_all(m, topo, wl, ram, draw, seed, "gpu", pct=0)
+    mns = (st["mns"] if st["mns"] is not None
+           else M.recommended_max_num_seqs(dec, warm_gpu5))
+    p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
+                                    seed=seed, mbu=st["mbu"],
+                                    latency=lat)[1][0])
+    k_slot = max(1, math.ceil(M.decode_slot_mean(mns)))
+    p50_slot = float(M.decode_curves(m, topo, wl, [k_slot], n_iter=DECODE_ITER,
+                                     seed=seed, mbu=st["mbu"],
+                                     latency=lat)[1][0])
+    slots = M.max_users_decode_slots(m, topo, wl, mns,
+                                     think_time_s=st["think"],
+                                     out_tokens=st["out"],
+                                     per_user_tok_s=p50_slot)
+    ceil, capped = M.cap_decode_ceiling(dec, mns, slots)
+    o["max_num_seqs"] = float(mns)
     o["decode_ceiling"] = float(ceil)
     o["decode_capped"] = bool(capped)
     curve = M.decode_curves(m, topo, wl, [1, 8, 64], n_iter=DECODE_ITER,
@@ -324,8 +329,8 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # max_num_seqs when set (predict's resident = min(p95, max_num_seqs))
     sd = M.steady_decode_point(m, topo, wl, rate, out_tokens=st["out"],
                                n_iter=DECODE_ITER, seed=seed, mbu=st["mbu"],
-                               resident=(warm_gpu95 if mns is None
-                                         else min(warm_gpu95, mns)),
+                               resident=(warm_gpu95 if st["mns"] is None
+                                         else min(warm_gpu95, st["mns"])),
                                latency=lat)
     o["steady_n"] = sd["n"]
     o["steady_per_user_tok_s"] = sd["per_user_tok_s"]
@@ -341,7 +346,7 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # (the batch is held under the cap whenever the cap sits below the
     # bandwidth ceiling, whichever term the decode ceiling reports)
     dec_power = dec
-    if mns is not None and mns <= dec:
+    if mns <= dec:
         dec_power = mns * p50_cap / st["decode_floor"]
     e = M.energy_cost(m, topo, wl, rate, dec_power, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,
@@ -397,7 +402,7 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         # at the resident count the steady search actually stops at
         "steady_cap_ratio": _steady_cap_ratio(
             m, topo, wl, st, rate,
-            warm_gpu95 if mns is None else min(warm_gpu95, mns), seed),
+            warm_gpu95 if st["mns"] is None else min(warm_gpu95, st["mns"]), seed),
     }
     return o, cond
 
@@ -858,7 +863,7 @@ MC_QUANTITIES = [
     "max_users_latency", "max_users_saturation",
     "miss_service_q95", "ttft_service_q95",
     "max_users_cache", "warm_p5_all", "max_users_decode", "decode_ceiling",
-    "decode_p50_n1", "decode_p50_n8", "decode_p50_n64",
+    "max_num_seqs", "decode_p50_n1", "decode_p50_n8", "decode_p50_n64",
     "steady_n", "steady_per_user_tok_s",
     "power_d_p", "power_d_d", "power_per_gpu_w", "power_kw",
     "energy_eur_month", "energy_total_month", "energy_eur_user",
@@ -1042,8 +1047,14 @@ BAND_CAP = 0.25       # above this, name the states instead of widening for all
 # the 1 - d_p clamp, i.e. the reciprocal of max_users_decode: it cannot be
 # pinned tighter than the ceiling's own bisection, and the probe's decode
 # ceilings happen to sit where the ceiling's spread is small.
+# max_num_seqs, when unset, is the recommended cap: floor(min(the decode
+# ceiling, the GPU-resident warm p5)), so where residency binds it is a warm
+# count and one session either way moves it by its own 1/n. decode_ceiling is
+# then the slots ceiling at that cap, proportional to it. Both take the warm
+# count's band.
 BAND_GROUPS = [("prefill_duty", "power_d_p"),
-               ("max_users_decode", "power_d_d", "decode_ceiling"),
+               ("max_users_decode", "power_d_d"),
+               ("warm_p5_all", "max_num_seqs", "decode_ceiling"),
                ("miss_service_q95", "ttft_service_q95")]
 
 
@@ -1163,9 +1174,13 @@ MAPPING = [
     ("max_users_decode", "model.max_users_decode", "prefill.js maxUsersDecode(...).n", "mc", ""),
     ("decode_ceiling / decode_capped", "model.cap_decode_ceiling(max_users_decode, max_num_seqs, max_users_decode_slots)",
      "prefill.js capDecodeUsers(maxUsersDecode(...), mns, decodeSlotUsers(...))", "mc",
-     "equals max_users_decode unless state.mns is set: then the users at which "
-     "the steady decode batch fills it, or the bandwidth ceiling where that "
-     "applies and comes first"),
+     "the users at which the steady decode batch's p99 reaches the cap (set, "
+     "else recommended), or the bandwidth ceiling where the cap sits above "
+     "it and that comes first"),
+    ("max_num_seqs", "state.mns, else model.recommended_max_num_seqs",
+     "prefill.js effectiveMns", "mc",
+     "the recommended cap is min(max_users_decode, GPU-resident warm p5), both "
+     "sampled"),
     ("decode_p50_n*", "model.decode_curves (p50)", "capacity.js decodeCurves (p50)", "mc",
      "latency=DecodeLatency when state.dprice is 'latency' (render.js modelFor bakes "
      "decode_lat onto the model)"),

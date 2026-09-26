@@ -439,34 +439,64 @@ def test_predict_reference_row():
     assert p.replicas == 1
 
 
+def _bandwidth_ceiling(cfg):
+    """max_users_decode as predict() prices it at the default calibration."""
+    from workingset import model as M
+    return M.max_users_decode(cfg.to_model(), cfg.to_topology(),
+                              cfg.to_workload(), n_iter=200)
+
+
 def test_max_num_seqs_caps_the_steady_batch_not_the_warm_population():
-    """The cap binds where the batch decoding AT THE LOAD fills it, not where
-    the whole warm population would. Below the bandwidth ceiling it also keeps
-    every batch above the floor, so that ceiling lifts; at or above it, the
-    bandwidth ceiling stands. The other three ceilings never move."""
+    """The cap binds where the p99 of the batch decoding AT THE LOAD reaches
+    it, not where the whole warm population would. At or below the bandwidth
+    ceiling it keeps every batch on the floor, so that ceiling lifts; above
+    it, the bandwidth ceiling stands. The other three ceilings never move."""
     from workingset import model as M
     base = {"model": "27B", "gpu": "H200", "tensor_parallel": 4}
-    free = predict(RunConfig.from_dict({"deployment": base}), n_iter=200)
-    assert not free.decode_capped_by_max_num_seqs
+    free_cfg = RunConfig.from_dict({"deployment": base})
+    bw = _bandwidth_ceiling(free_cfg)
+    # unset: the recommended cap, which never sits above the floor crossing
+    free = predict(free_cfg, n_iter=200)
+    assert free.max_num_seqs_recommended and 1 <= free.max_num_seqs <= bw
+    assert free.decode_capped_by_max_num_seqs and free.decode_cap_below_bandwidth
     tight_cfg = RunConfig.from_dict({"deployment": {**base, "max_num_seqs": 32}})
     tight = predict(tight_cfg, n_iter=200)
-    assert tight.decode_capped_by_max_num_seqs
+    assert tight.decode_capped_by_max_num_seqs and tight.max_num_seqs == 32
+    assert not tight.max_num_seqs_recommended
     # far more users than slots: most of them are waiting, not decoding
     assert tight.decode_ceiling_users > 32
-    # ...and at that load the steady batch is the cap, by construction
+    # ...and at that load the MEAN steady batch is the one whose p99 is the
+    # cap, a little under it: the slots term reads speed at the batch rounded
+    # up, the slower side
     m, t, wl = tight_cfg.to_model(), tight_cfg.to_topology(), tight_cfg.to_workload()
     w = tight_cfg.workload
     rate = M.request_rate(tight.decode_ceiling_users, w.think_time_s, wl.sub_ratio)
     sp = M.steady_decode_point(m, t, wl, rate, out_tokens=w.max_output_tokens,
                                n_iter=200, resident=10_000)
-    assert abs(sp["n"] - 32) < 0.5
+    assert M.decode_slot_mean(32) - 2 < sp["n"] <= M.decode_slot_mean(32)
     loose = predict(RunConfig.from_dict(
-        {"deployment": {**base, "max_num_seqs": free.decode_ceiling_users + 50}}),
-        n_iter=200)
+        {"deployment": {**base, "max_num_seqs": int(bw) + 50}}), n_iter=200)
     assert not loose.decode_capped_by_max_num_seqs
-    assert loose.decode_ceiling_users == free.decode_ceiling_users
+    assert loose.decode_ceiling_users == bw
     for k in ("warm_capacity_p5", "latency_ceiling_users", "saturation_ceiling_users"):
         assert getattr(tight, k) == getattr(free, k)
+
+
+def test_the_slot_mean_holds_the_cap_at_its_p99():
+    from workingset.model import decode_slot_mean, poisson_cdf
+    for cap in (1, 8, 96, 1024):
+        m = decode_slot_mean(cap)
+        assert m < cap and abs(poisson_cdf(cap, m) - 0.99) < 1e-6
+    # a mean in the thousands must not underflow
+    assert abs(poisson_cdf(4096, 4096.0) - 0.5) < 0.01
+
+
+def test_the_recommended_cap_is_the_floor_crossing_within_residency():
+    from workingset.model import recommended_max_num_seqs
+    assert recommended_max_num_seqs(118.0, 400.7) == 118
+    assert recommended_max_num_seqs(118.0, 60.9) == 60
+    # even one decoder under the floor: a cap of one, and the ceiling stays 0
+    assert recommended_max_num_seqs(0.0, 60.0) == 1
 
 
 def test_cap_decode_ceiling_picks_the_term_that_applies():
@@ -493,8 +523,9 @@ def test_max_num_seqs_bounds_the_steady_batch_and_rewords_h_decode():
     pf, pc = predict(free, n_iter=200), predict(capped, n_iter=200)
     assert pf.steady_decode_seqs is not None and pf.steady_decode_seqs > 64
     assert pc.steady_decode_seqs is None and pc.itl_normal_ms is None
-    assert "max_num_seqs" in HDecode().statement(capped, pc)
-    assert "max_num_seqs" not in HDecode().statement(free, pf)
+    assert "max_num_seqs (64 sequences)" in HDecode().statement(capped, pc)
+    # unset prices the recommended cap, and says so
+    assert "recommended" in HDecode().statement(free, pf)
 
 
 def test_max_num_seqs_round_trips_and_validates(tmp_path):
@@ -507,6 +538,8 @@ def test_max_num_seqs_round_trips_and_validates(tmp_path):
         {"deployment": {"model": "27B"}}).dumps("toml")
     with pytest.raises(ValueError, match="max_num_seqs"):
         RunConfig.from_dict({"deployment": {"model": "27B", "max_num_seqs": 0}}).validate()
+
+
 def test_latency_decode_pricing_is_opt_in_and_reproduces_its_calibration():
     """The three-leg decode pricing: off by default (nothing published moves),
     and when selected it must reproduce the held-batch step times it was read
@@ -688,11 +721,11 @@ def test_a_cap_above_the_bandwidth_crossing_keeps_the_floor_claim():
     so H-decode must keep the floor claim, not say no failure is expected."""
     from workingset.hypotheses.ceilings import HDecode
     dep = {"model": "27B", "gpu": "H200", "tensor_parallel": 4}
-    free = predict(RunConfig.from_dict({"deployment": dep}), n_iter=200)
+    bw = _bandwidth_ceiling(RunConfig.from_dict({"deployment": dep}))
     cfg = RunConfig.from_dict({
-        "deployment": {**dep, "max_num_seqs": free.decode_ceiling_users + 50},
+        "deployment": {**dep, "max_num_seqs": int(bw) + 50},
         "workload": {"max_output_tokens": 8000}})
     p = predict(cfg, n_iter=200)
     assert p.decode_capped_by_max_num_seqs and not p.decode_cap_below_bandwidth
-    assert p.decode_ceiling_users < free.decode_ceiling_users
+    assert p.decode_ceiling_users < bw
     assert "no decode-floor failure" not in HDecode().statement(cfg, p)

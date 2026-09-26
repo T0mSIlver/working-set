@@ -27,9 +27,10 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const base = m0.name.split(" (")[0];
   const warmSys = lastWarmCur.p5*reps;
   const userSys = warmSys*(1-p_sub(wl));
-  // largest decode batch that keeps per-user p50 at the 40 tok/s floor, capped
-  // at the GPU-resident warm population — beyond it there is nobody warm to admit
-  const sug = Math.max(1, Math.round(Math.min(decodeUsers, lastWarmCur.g5)));
+  // the recommended cap the planner priced (recommendedMns): the largest decode
+  // batch that keeps per-user p50 at the floor, within the GPU-resident warm
+  // population — beyond it there is nobody warm to admit
+  const sug = op.mns;
   // draft counts mirror the research notes; a model missing here must not
   // emit num_speculative_tokens:undefined, so it gates specOn too
   // the DeepSeek Flash models draft with DSpark, not MTP — V4.1 has no MTP
@@ -115,7 +116,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     ['max_model_len', `${fmt(wl.cap,0)} tok`],
     ['max_num_seqs', state.mns !== null
        ? `${fmt(state.mns,0)}${reps>1?' per group':''} (set; ${op.decodeCapped?'sets the decode ceiling':'does not set the decode ceiling'})`
-       : `${fmt(sug,0)}${reps>1?' per group':''}`],
+       : `${fmt(sug,0)}${reps>1?' per group':''} (recommended)`],
     ['CPU offload', state.ram>0?`${fmt(state.ram,0)} GiB${dp>1?` (${fmt(ramGrp,0)}/group)`:''}`:'off'],
     ['Speculative', specOn?`${SPEC_CONFIG[state.model] ? 'DSpark' : 'MTP'} ${state.mtp.toFixed(2)}× (${specDrafts} drafts)`
                    :(eagle?`EAGLE-style ${state.mtp.toFixed(2)}× (external, unmeasured)`:'off')],

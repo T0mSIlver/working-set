@@ -180,6 +180,10 @@ function harnessPredictions(op, model, wl, topo){
   };
   if (op.decodeCapped) P.decode_capped_by_max_num_seqs = true;
   if (op.decodeCapBelowBw) P.decode_cap_below_bandwidth = true;
+  if (op.mns !== undefined){
+    P.max_num_seqs = op.mns;
+    if (op.mnsRecommended) P.max_num_seqs_recommended = true;
+  }
   // the ITL / steady-decode predictions exist only where the steady point
   // does (duty < 1 and the demand is on the sampled axis) — every hypothesis
   // that quotes them is dropped without them
@@ -202,8 +206,9 @@ function harnessHypotheses(P, model, topo, wl, reps){
       + `A run bounds this below unless load reaches eviction.`,
     // capped: a different claim, not a smaller number (mirrors HDecode)
     P.decode_capped_by_max_num_seqs && P.decode_cap_below_bandwidth
-      ? `H-decode: the decode batch at the load fills max_num_seqs (${fmt(state.mns, 0)} `
-        + `sequences) near ~${fmt(P.decode_ceiling_users, 0)} users${grp}; past it requests `
+      ? `H-decode: the p99 decode batch at the load reaches max_num_seqs (${fmt(P.max_num_seqs, 0)} `
+        + `sequences${P.max_num_seqs_recommended ? ', recommended' : ''}) near `
+        + `~${fmt(P.decode_ceiling_users, 0)} users${grp}; past it requests `
         + `queue for a decode slot — watch TTFT. Per-user decode stays above `
         + `${fmt(decodeFloor(), 0)} tok/s, so no decode-floor failure is expected and this `
         + `row cannot be bracketed.`

@@ -448,12 +448,13 @@ export function maxUsersDecode(model, topo, wl, floor, n_iter, hi){
 }
 
 // The scheduler's cap on concurrent sequences (vLLM --max-num-seqs, per
-// replica group; state.mns, null = not stated). Mirrors predict() and
-// model.cap_decode_ceiling. The cap limits the batch that decodes AT THE
-// LOAD, so it binds where that steady batch fills it (`slots`, from
-// decodeSlotUsers); past it requests queue for a slot. A cap below the
-// bandwidth ceiling also keeps every batch above the floor, so that ceiling
-// is never reached and lifts (`limited`); at or above it, it stands.
+// replica group; effectiveMns: state.mns, else the recommended value).
+// Mirrors predict() and model.cap_decode_ceiling. The cap limits the batch
+// that decodes AT THE LOAD, so it binds where that steady batch's p99
+// reaches it (`slots`, from decodeSlotUsers); past it requests queue for a
+// slot. A cap at or below the bandwidth ceiling also keeps every batch on
+// the floor, so that ceiling is never reached and lifts (`limited`); above
+// it, it stands.
 export function capDecodeUsers(res, mns, slots){
   const cap = mns === undefined ? state.mns : mns;
   if (cap === null || cap === undefined) return { ...res, capped: false, limited: false, raw: res.n };
@@ -461,19 +462,56 @@ export function capDecodeUsers(res, mns, slots){
   if (slots < bw) return { n: slots, censored: false, capped: true, limited, raw: res.n };
   return { ...res, n: bw, censored: !limited && res.censored, capped: false, limited, raw: res.n };
 }
-// per-user p50 with the cap full, per replica group: the speed the slots
-// ceiling and the capped power capacity are both priced at
-export function p50AtCap(model, topo, wl, mns, n_iter){
-  return decodeCurves(model, topo, wl, mns, Math.max(1, mns-1), n_iter || 220).p50.slice(-1)[0];
+// per-user p50 with a batch of n, per replica group: at the cap it prices
+// the capped power capacity, at ceil(decodeSlotMean) the slots ceiling
+export function p50AtCap(model, topo, wl, n, n_iter){
+  return decodeCurves(model, topo, wl, n, Math.max(1, n-1), n_iter || 220).p50.slice(-1)[0];
 }
-// Users per group at which the steady decode batch fills the cap. The flow
-// balance of steadyDecodePoint at n = mns, rate x out = mns x v(mns),
-// converted to users as maxUsersSaturation converts its rate. Mirrors
-// model.max_users_decode_slots.
+// the decode batch percentile a cap must hold (model.DECODE_SLOT_QUANTILE)
+export const DECODE_SLOT_QUANTILE = 0.99;
+// P(N <= k), N ~ Poisson(mean), term by term in log space. Mirrors
+// model.poisson_cdf operation for operation.
+export function poissonCdf(k, mean){
+  if (!(mean > 0)) return 1;
+  const lm = Math.log(mean);
+  let lp = -mean, s = Math.exp(-mean);
+  for (let i = 1; i <= k; i++){ lp += lm - Math.log(i); s += Math.exp(lp); }
+  return Math.min(1, s);
+}
+// The largest MEAN decode batch whose p99 stays within the cap: the batch is
+// an infinite-server occupancy, Poisson about the steady point's mean.
+// Mirrors model.decode_slot_mean.
+// Memoized: a pure function of the cap, and each call is a 60-step bisection
+// over an O(cap) sum, where the frontier re-ranks every row and the
+// sensitivity panel every point on each render at caps up to ~10k.
+const slotMeanMemo = new Map();
+export function decodeSlotMean(mns, q){
+  const Q = q ?? DECODE_SLOT_QUANTILE, key = `${mns}|${Q}`;
+  const hit = slotMeanMemo.get(key);
+  if (hit !== undefined) return hit;
+  let lo = 0, hi = mns;
+  for (let i = 0; i < 60; i++){ const mid = (lo+hi)/2; if (poissonCdf(mns, mid) >= Q) lo = mid; else hi = mid; }
+  slotMeanMemo.set(key, lo);
+  return lo;
+}
+// The max_num_seqs working-set recommends, per group: the largest batch whose
+// per-user p50 meets the floor, within the GPU-resident warm p5. Mirrors
+// model.recommended_max_num_seqs.
+export function recommendedMns(bandwidth, resident){
+  return Math.max(1, Math.floor(Math.min(bandwidth, resident)));
+}
+// the cap priced: the one set, else the recommended one
+export function effectiveMns(bandwidth, resident){
+  return state.mns === null || state.mns === undefined ? recommendedMns(bandwidth, resident) : state.mns;
+}
+// Users per group at which the steady decode batch's p99 reaches the cap:
+// the flow balance of steadyDecodePoint at the mean m = decodeSlotMean(mns),
+// rate x out = m x v(m), with v read at ceil(m) (`pu`), converted to users
+// as maxUsersSaturation converts its rate. Mirrors model.max_users_decode_slots.
 export function decodeSlotUsers(pu, mns, think, outTok, subR){
   if (mns === null || mns === undefined || !(pu > 0)) return Infinity;
   if (!(outTok > 0)) return Infinity;
-  return mns * pu / outTok * (think || liveThink) / (1 + (subR || 0));
+  return decodeSlotMean(mns) * pu / outTok * (think || liveThink) / (1 + (subR || 0));
 }
 // The decode capacity power prices (cost.js powerDraw reads users x floor as
 // the aggregate decode tok/s). Uncapped that is the ceiling at the floor; when
