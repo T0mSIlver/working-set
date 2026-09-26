@@ -1,4 +1,5 @@
-import { AVG_OUT_TOK, CONFIG, DECODE_FLOOR_TOKS, DECODE_MBU, PREFILL_MFU, makeGrid } from './config.js';
+import { AVG_OUT_TOK, CONFIG, DECODE_BW_EFF, DECODE_FIXED_MS, DECODE_FLOOR_TOKS, DECODE_MBU, DECODE_SPEC_TOKENS,
+         PREFILL_MFU, makeGrid } from './config.js';
 
 /* ============================================================================
    STATE
@@ -27,6 +28,17 @@ export const state = {
   // anchors rather than brackets and the reader should be able to argue with
   // them. Both are GLOBAL: one value for every row, never reseeded per model.
   mbu: DECODE_MBU, mfu: PREFILL_MFU,
+  // Decode pricing: "roofline" = bytes over the MBU fold (every published
+  // figure); "latency" = workingset's opt-in DecodeLatency, priced with
+  // dbw (bandwidth efficiency), dfixed (ms per step) and dspec (speculative
+  // tokens verified per sequence) and the prefill MFU. mbu is unused there.
+  // Mirrors [calibration] decode_pricing / decode_bw_eff / decode_fixed_ms /
+  // spec_tokens.
+  dprice: "roofline", dbw: DECODE_BW_EFF, dfixed: DECODE_FIXED_MS, dspec: DECODE_SPEC_TOKENS,
+  // vLLM --max-num-seqs per replica group; null = not stated (the decode
+  // ceiling is the bandwidth's alone). Mirrors deployment.max_num_seqs: it
+  // caps the decode ceiling and the steady decode batch.
+  mns: null,
   // max_num_batched_tokens. A string enum (the pue idiom) over the powers of
   // two chart E ticks: an A/B arm selector, not a free knob. The tiles, the
   // deploy recipe and the generated harness CONFIG all follow it; the MFU

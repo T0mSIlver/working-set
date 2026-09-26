@@ -100,12 +100,9 @@ def test_unmapped_fields_warn():
     c = RunConfig()
     c = replace(c, workload=replace(c.workload, subagent_prefix_tokens=5000),
                 slo=replace(c.slo, percentile=99),
-                deployment=replace(c.deployment, max_num_seqs=32,
-                                   max_num_batched_tokens=3000),
-                calibration=replace(c.calibration, decode_pricing="latency"))
+                deployment=replace(c.deployment, max_num_batched_tokens=3000))
     w = _warned(c)
     for field in ("workload.subagent_prefix_tokens", "slo.percentile",
-                  "deployment.max_num_seqs", "calibration.decode_pricing",
                   "deployment.max_num_batched_tokens"):
         assert field in w
 

@@ -69,7 +69,7 @@ function frontierColumns(){
             ? (hasHeadcount()
               ? `${fmt(r.op.ceilings[k],0)} sessions<br><span style="color:${muted}">≈ ${fmt(peopleFromSessions(r.op.ceilings[k]),0)} people</span>`
               : fmt(r.op.ceilings[k],0))
-            : '—'}</td>` });
+            : '—'}${k==='decode'&&r.capped?` <span style="color:${muted}">cap</span>`:''}</td>` });
   if (OPTIONAL.bstar) cols.push({ key:'bstar', head:'B*', num:true, sort:r => r.bstar,
     cell:r => `<td class="num">${fmt(r.bstar,1)}</td>` });
   // energy is meaningful only where the load can actually be served

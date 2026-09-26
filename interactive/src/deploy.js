@@ -52,7 +52,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     `  --tensor-parallel-size ${topo.tp}`,
     `  --kv-cache-dtype ${state.kv==='fp8'?'fp8_e4m3':'auto'}`,
     `  --max-model-len ${wl.cap}`,
-    `  --max-num-seqs ${sug}`,
+    `  --max-num-seqs ${state.mns ?? sug}`,
     `  --max-num-batched-tokens ${prefillChunk()}`,
   ];
   // Q3.8-Flash-Next's vLLM recipe: plain TP8 is incompatible with the FP8
@@ -99,6 +99,11 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   if (specBlocked) cmts.push(`# NOT EMITTED: --speculative-config — the page prices ${state.mtp.toFixed(2)}× speculative decoding, but vLLM's DCP path had no speculative-decoding support as of 2026-08; set the MTP slider to 1.0 for a recipe that matches, or choose Replicated`);
   if (illegalTp) cmts.push(`# TP${topo.tp} is not a width vLLM accepts for ${heads} KV heads (tp must divide the heads or the heads divide tp): the page prices this as if the cache sharded — an extrapolation no command realizes`);
   if (eagle) cmts.push(`# the modelled ${state.mtp.toFixed(2)}× speedup assumes an EXTERNAL EAGLE-style draft (no MTP module; unmeasured)`);
+  // the latency pricing charges each verified draft token as compute: its
+  // draft count should be the one this command starts the server with
+  const recipeDrafts = specOn && !specBlocked ? specDrafts : 0;
+  if (state.dprice === 'latency' && state.dspec !== recipeDrafts)
+    cmts.push(`# decode is priced (latency pricing) at ${state.dspec} draft tokens per step; this command drafts ${recipeDrafts} — set Draft tokens to ${recipeDrafts} to price this server`);
   if (state.ram>0) cmts.push(`# --kv-offloading-size is GiB per group${dp>1?` (${fmt(state.ram,0)} GiB total across ${dp} groups)`:''}; a storage tier — restore latency unpriced`);
   deployCmdText = lines.join(' \\\n') + (cmts.length ? '\n'+cmts.join('\n') : '');
 
@@ -108,7 +113,9 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     ['Hardware', esc(topo.name)],
     ['KV cache', state.kv==='fp8'?'FP8 (fp8_e4m3)':'FP16 (auto)'],
     ['max_model_len', `${fmt(wl.cap,0)} tok`],
-    ['max_num_seqs', `${fmt(sug,0)}${reps>1?' per group':''}`],
+    ['max_num_seqs', state.mns !== null
+       ? `${fmt(state.mns,0)}${reps>1?' per group':''} (set; ${op.decodeCapped?'caps the decode ceiling':'above the decode ceiling'})`
+       : `${fmt(sug,0)}${reps>1?' per group':''}`],
     ['CPU offload', state.ram>0?`${fmt(state.ram,0)} GiB${dp>1?` (${fmt(ramGrp,0)}/group)`:''}`:'off'],
     ['Speculative', specOn?`${SPEC_CONFIG[state.model] ? 'DSpark' : 'MTP'} ${state.mtp.toFixed(2)}× (${specDrafts} drafts)`
                    :(eagle?`EAGLE-style ${state.mtp.toFixed(2)}× (external, unmeasured)`:'off')],

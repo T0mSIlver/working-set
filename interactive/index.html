@@ -134,6 +134,13 @@ input[type=number].population{
   padding:6px 8px; outline:none;
 }
 input[type=number].population:focus{border-color:var(--s1)}
+input[type=number].population[aria-invalid=true]{border-color:var(--crit)}
+.latrow{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:6px}
+.latrow[hidden]{display:none}
+.latrow label{display:flex; flex-direction:column; gap:2px; font-size:11.5px; color:var(--text-2)}
+.latrow input{width:100%; box-sizing:border-box; border:1px solid var(--border); border-radius:7px;
+  background:var(--control); color:var(--text); font:inherit; font-size:12.5px; padding:5px 6px; outline:none}
+.latrow input:focus{border-color:var(--s1)}
 input[type=range]:disabled{opacity:.38}
 
 /* toggle */
@@ -708,6 +715,25 @@ details.more .more-body{padding:0 0 16px}
         <div class="field">
           <label class="flabel"><span class="tip" id="mbu-tip" data-tip="">Decode efficiency (MBU)</span> <span class="val"><span id="v-mbu">0.22</span></span></label>
           <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="How a decode step is priced. Roofline, the default and every published figure: step bytes over the group's bandwidth times the MBU. Latency, opt-in (research/decode_mbu.md § 8): every byte at one bandwidth efficiency, plus the speculative verify as (1 + draft tokens) tokens of compute per sequence at the prefill MFU, plus a fixed time per step. Its three constants come from one deployment (TP4, MTP depth 3); set draft tokens to your server's num_speculative_tokens first. Under Latency the MBU slider is unused and the MFU slider moves decode too. Above about 64 sequences the measured step jumped 1.2 to 1.6×, which this form does not price. Mirrors [calibration] decode_pricing.">Decode pricing</span></label>
+          <div class="seg" id="seg-dprice" data-key="dprice">
+            <button data-v="roofline" aria-pressed="true">Roofline (MBU)</button>
+            <button data-v="latency" aria-pressed="false">Latency</button>
+          </div>
+          <div class="latrow" id="dprice-lat" hidden>
+            <label><span class="tip" data-tip="Share of the group's advertised bandwidth every decode byte streams at under the latency pricing. 0.36 on one TP4 deployment. Mirrors decode_bw_eff.">BW eff</span>
+              <input type="number" id="i-dbw" min="0.05" max="1" step="0.01" value="0.36"></label>
+            <label><span class="tip" data-tip="Per-step time that bytes and compute leave over: TP all-reduces, draft-head passes, kernel launches. 2.7 ms at TP4, 64 layers, MTP depth 3. Mirrors decode_fixed_ms.">Fixed ms</span>
+              <input type="number" id="i-dfixed" min="0" max="50" step="0.1" value="2.7"></label>
+            <label><span class="tip" data-tip="Speculative tokens verified per sequence per step (vLLM num_speculative_tokens; 0 is off). Each costs one token of compute per sequence. Mirrors spec_tokens.">Draft tokens</span>
+              <input type="number" id="i-dspec" min="0" max="16" step="1" value="3"></label>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel" for="i-mns"><span class="tip" data-tip="vLLM --max-num-seqs, per replica group. The scheduler never runs more sequences at once, so past it a request queues instead of slowing the batch. Below the bandwidth's decode ceiling it becomes the decode ceiling, and the steady decode batch stops there too. Empty means no cap, as in every published figure. Mirrors deployment.max_num_seqs.">max_num_seqs</span> <span class="val" id="v-mns">unset</span></label>
+          <input class="population" type="number" id="i-mns" min="1" max="4096" step="1" inputmode="numeric" placeholder="unset, no cap">
         </div>
         </div>
         <p class="caldef" id="calDefaults"></p>
