@@ -2914,6 +2914,267 @@ def max_users_latency(model: Model, topo: Topology, wl, chunk: float,
     return max(0.0, lam * cycle / (1.0 + wl.sub_ratio))
 
 
+# ============================================================================
+# THE LATENCY LIMITS USERS FEEL  (issue #94)
+# ----------------------------------------------------------------------------
+# The p-th TTFT over all requests sits in the miss tail, so it mostly reports
+# prompt length: a long cold prompt misses a 10 s budget on an idle server
+# and no user count fixes that. Two latencies grow with load instead, and
+# they are the limits the verdict uses:
+#
+#   slowed generation   while a cold prefill runs, every step that carries
+#                       one of its chunks takes decode step + chunk pass, and
+#                       every decoding stream gets one step's tokens in that
+#                       time. The limit is the share of wall time spent in
+#                       such steps.
+#   cold-request wait   the time before a cold request's own prefill starts:
+#                       FCFS M/G/1 over the hit/miss service mixture.
+#
+# A cold request's own prefill on an idle server (idle_cold_ttft) is a
+# property of the deployment and the prompt length, not a limit.
+#
+# Both are priced per replica group.
+# ============================================================================
+
+IDLE_TTFT_PROMPTS = (10_000, 50_000, 100_000, 200_000)
+
+
+def context_quantile(wl, percentile: float, n: int = 200_000,
+                     seed: int = 0) -> float:
+    """The `percentile`-th context length (tokens), numpy's linear
+    interpolation over the same draw context_moments takes."""
+    if not 0 < percentile < 100:
+        raise ValueError(f"percentile must be in (0, 100), got {percentile!r}")
+    full, _, _, _ = wl.sample(np.random.default_rng(seed), n)
+    return float(np.percentile(full.astype(float), percentile))
+
+
+def idle_cold_ttft(model: Model, topo: Topology, prompt_tokens: float,
+                   chunk: float, mfu: float = MFU_DEFAULT) -> float:
+    """Seconds to the first token of a cold request of `prompt_tokens` on an
+    idle replica group: its whole prompt re-prefilled, every chunk paying the
+    weight stream (miss_context_seconds). No queue, no decode batch."""
+    return miss_context_seconds(model, topo, prompt_tokens, chunk,
+                                mfu_anchor=mfu)
+
+
+def idle_cold_ttft_table(model: Model, topo: Topology, chunk: float,
+                         max_model_len: float,
+                         mfu: float = MFU_DEFAULT) -> tuple:
+    """((prompt_tokens, seconds), ...) at IDLE_TTFT_PROMPTS up to
+    `max_model_len`, and at max_model_len itself."""
+    lengths = [L for L in IDLE_TTFT_PROMPTS if L < max_model_len]
+    lengths.append(int(max_model_len))
+    return tuple((L, idle_cold_ttft(model, topo, L, chunk, mfu))
+                 for L in lengths)
+
+
+def slowed_steps(model: Model, topo: Topology, wl, chunk: float,
+                 decode_toks: float = DECODE_FLOOR_TOKS,
+                 mfu: float = MFU_DEFAULT) -> dict:
+    """The step lengths slowed generation is built from, in seconds.
+
+    decode_s   one decode step: model.mtp accepted tokens per step at
+               `decode_toks` per stream, so mtp / decode_toks. Priced at the
+               decode floor rather than at the load's own batch: the floor is
+               the slowest step the decode SLO admits, and a fixed step keeps
+               the slowed share linear in the request rate. The chunk pass
+               dominates the mixed step, so the choice moves the share little.
+    chunk_s    one full-chunk prefill pass, priced as itl_spike prices it:
+               marginal (the decode batch already streams the weights), at
+               prior = E[L] / 2, the mean cache a chunk of a cold re-prefill
+               attends over.
+    mixed_s    decode_s + chunk_s, a step that carries the chunk.
+    speed      model.mtp / mixed_s, tokens per second a stream gets while a
+               cold prefill runs.
+    """
+    if decode_toks <= 0:
+        raise ValueError(f"decode_toks must be > 0, got {decode_toks!r}")
+    decode_s = model.mtp / decode_toks
+    chunk_s = prefill_seconds(model, topo, chunk, mfu,
+                              prior=mean_context(wl) / 2)
+    mixed_s = decode_s + chunk_s
+    return {"decode_s": decode_s, "chunk_s": chunk_s, "mixed_s": mixed_s,
+            "speed": model.mtp / mixed_s}
+
+
+def slowed_share(model: Model, topo: Topology, wl, req_rate: float,
+                 chunk: float, decode_toks: float = DECODE_FLOOR_TOKS,
+                 mfu: float = MFU_DEFAULT,
+                 per_pass_overhead: bool = False) -> float:
+    """Fraction of wall time spent in steps that carry a cold-prefill chunk.
+
+        share = min(1, cold duty x mixed_s / chunk_s)
+        cold duty = req_rate x f x E[S | miss]
+
+    Cold duty is the machine time cold prefills need per second; each second
+    of it runs in steps that also carry the decode batch, which stretches it
+    by mixed_s / chunk_s. `req_rate` is the TOTAL arrival rate at the group.
+    Warm-turn prefills are left out: a few thousand tokens slow a step far
+    less than a full chunk does.
+    """
+    if req_rate < 0:
+        raise ValueError(f"req_rate must be >= 0, got {req_rate!r}")
+    st = slowed_steps(model, topo, wl, chunk, decode_toks, mfu)
+    e_cold = cold_request_seconds(model, topo, wl, chunk, mfu,
+                                  per_pass_overhead=per_pass_overhead)
+    cold_duty = req_rate * wl.invalidation * e_cold
+    return min(1.0, cold_duty * st["mixed_s"] / st["chunk_s"])
+
+
+def slowed_stretch(model: Model, topo: Topology, wl, chunk: float,
+                   percentile: float = 95.0,
+                   decode_toks: float = DECODE_FLOOR_TOKS,
+                   mfu: float = MFU_DEFAULT) -> float:
+    """Seconds one cold request of the `percentile`-th prompt length keeps
+    every stream slowed: its chunks, each run as a mixed step.
+
+        stretch = ceil(L_p / C) x decode_s + prefill_context_seconds(L_p, C)
+
+    Each chunk is priced with the cache it actually attends over (marginal
+    pricing, as the chunk leg of the mixed step), so a long prompt's later
+    chunks cost more than the E[L] / 2 chunk the slowed speed quotes.
+    """
+    length = context_quantile(wl, percentile)
+    st = slowed_steps(model, topo, wl, chunk, decode_toks, mfu)
+    return (math.ceil(length / chunk) * st["decode_s"]
+            + prefill_context_seconds(model, topo, length, chunk, mfu))
+
+
+def wait_quantile(mean_wait: float, rho: float, p: float) -> float:
+    """The p-th quantile (p in (0, 1)) of an M/G/1 FCFS wait, from its mean.
+
+    An approximation: P(W > t) ~= rho exp(-t rho / E[W]). It keeps the exact
+    atom P(W = 0) = 1 - rho and the exact mean, and is exact for exponential
+    service; this workload's heavy-tailed miss service makes the true tail
+    heavier. So
+        W_p = (E[W] / rho) ln(rho / (1 - p))   when p > 1 - rho, else 0.
+    vLLM is neither FCFS nor processor sharing (prefill_ttft_seconds), so read
+    this as the FCFS end of that bracket.
+    """
+    if not 0 < p < 1:
+        raise ValueError(f"p must be in (0, 1), got {p!r}")
+    if rho >= 1:
+        return float("inf")
+    if rho <= 0 or p <= 1 - rho:
+        return 0.0
+    return mean_wait / rho * math.log(rho / (1 - p))
+
+
+def cold_wait_seconds(model: Model, topo: Topology, wl, req_rate: float,
+                      chunk: float, turn_tokens: float = 0.0,
+                      mfu: float = MFU_DEFAULT,
+                      per_pass_overhead: bool = False,
+                      percentile: float | None = None) -> float:
+    """Time before a cold request's prefill starts. FCFS makes every request
+    wait the same, so this is the queue wait: its mean (queue_wait_seconds)
+    when `percentile` is None, else its `percentile`-th (wait_quantile).
+    `req_rate` is the TOTAL arrival rate at the group."""
+    if req_rate < 0:
+        raise ValueError(f"req_rate must be >= 0, got {req_rate!r}")
+    e_s, e_s2, _, _ = prefill_service_moments(model, topo, wl, chunk,
+                                              turn_tokens, mfu,
+                                              per_pass_overhead)
+    rho = req_rate * e_s
+    if rho >= 1:
+        return float("inf")
+    mean = req_rate * e_s2 / (2 * (1 - rho))
+    if percentile is None:
+        return mean
+    return wait_quantile(mean, rho, percentile / 100.0)
+
+
+def _users_at_rate(lam: float, wl, think_time_s: float, e_s: float,
+                   e_s2: float, discipline: str, closed_z_s,
+                   out_tokens: float, decode_toks: float) -> float:
+    """Users whose TOTAL arrival rate is `lam`: lam x think / (1 + r) open,
+    lam x (Z + R(lam) + decode) / (1 + r) closed (max_users_latency's
+    conversion). inf when lam is at or past the prefill wall, where no
+    population reaches it."""
+    if not math.isfinite(lam) or lam * e_s >= 1:
+        return float("inf")
+    if closed_z_s is None:
+        return max(0.0, lam * think_time_s / (1.0 + wl.sub_ratio))
+    _check_closed_args(closed_z_s, out_tokens, decode_toks)
+    if discipline == "ps":
+        resp = e_s / (1 - lam * e_s)
+    else:
+        resp = lam * e_s2 / (2 * (1 - lam * e_s)) + e_s
+    cycle = closed_z_s + resp + out_tokens / decode_toks
+    return max(0.0, lam * cycle / (1.0 + wl.sub_ratio))
+
+
+def max_users_slowed(model: Model, topo: Topology, wl, chunk: float,
+                     share_max: float = 0.05, turn_tokens: float = 0.0,
+                     think_time_s: float = THINK_TIME_S,
+                     mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
+                     per_pass_overhead: bool = False,
+                     closed_z_s: float = None,
+                     out_tokens: float = OUT_TOKENS_DEFAULT,
+                     decode_toks: float = DECODE_FLOOR_TOKS) -> float:
+    """Users at which the slowed share reaches `share_max`.
+
+    The share is linear in the request rate below its cap at 1, so
+        lam = share_max x chunk_s / (f x E[S | miss] x mixed_s)
+    and the users conversion is max_users_latency's. inf when nothing misses,
+    when share_max >= 1, or when lam lies past the prefill wall (saturation
+    binds first there).
+    """
+    if not share_max > 0:
+        raise ValueError(f"share_max must be > 0, got {share_max!r}")
+    e_s, e_s2, e_cold, _ = prefill_service_moments(
+        model, topo, wl, chunk, turn_tokens, mfu, per_pass_overhead)
+    st = slowed_steps(model, topo, wl, chunk, decode_toks, mfu)
+    per_rate = wl.invalidation * e_cold * st["mixed_s"] / st["chunk_s"]
+    if share_max >= 1 or per_rate <= 0:
+        return float("inf")
+    return _users_at_rate(share_max / per_rate, wl, think_time_s, e_s, e_s2,
+                          discipline, closed_z_s, out_tokens, decode_toks)
+
+
+def max_users_cold_wait(model: Model, topo: Topology, wl, chunk: float,
+                        budget_s: float = 5.0, turn_tokens: float = 0.0,
+                        think_time_s: float = THINK_TIME_S,
+                        mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
+                        per_pass_overhead: bool = False,
+                        closed_z_s: float = None,
+                        out_tokens: float = OUT_TOKENS_DEFAULT,
+                        decode_toks: float = DECODE_FLOOR_TOKS,
+                        percentile: float | None = None) -> float:
+    """Users at which the cold-request wait reaches `budget_s`.
+
+    Mean (`percentile` None): lam a / (2(1 - lam b)) = B, so
+        lam = 2B / (a + 2B b),   a = E[S^2], b = E[S].
+    p-th: W_p(rho) = a / (2 b (1 - rho)) x ln(rho / (1 - p)) rises from 0 at
+    rho = 1 - p to inf at rho = 1, so rho is found by bisection and
+    lam = rho / b. The users conversion is max_users_latency's.
+    """
+    if not budget_s > 0:
+        raise ValueError(f"budget_s must be > 0, got {budget_s!r}")
+    e_s, e_s2, _, _ = prefill_service_moments(model, topo, wl, chunk,
+                                              turn_tokens, mfu,
+                                              per_pass_overhead)
+    if e_s <= 0:
+        return float("inf")
+    if percentile is None:
+        lam = 2 * budget_s / (e_s2 + 2 * budget_s * e_s)
+    else:
+        if not 0 < percentile < 100:
+            raise ValueError(f"percentile must be in (0, 100), got {percentile!r}")
+        p = percentile / 100.0
+        resid = e_s2 / (2 * e_s)            # E[W] (1 - rho) / rho
+        lo, hi = 1 - p, 1.0
+        for _ in range(100):
+            mid = 0.5 * (lo + hi)
+            if resid / (1 - mid) * math.log(mid / (1 - p)) < budget_s:
+                lo = mid
+            else:
+                hi = mid
+        lam = lo / e_s
+    return _users_at_rate(lam, wl, think_time_s, e_s, e_s2, discipline,
+                          closed_z_s, out_tokens, decode_toks)
+
+
 def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                     chunk: float = CHUNK_DEFAULT, turn_tokens: float = 2_000,
                     sla_seconds: float = 10.0,
@@ -2926,10 +3187,19 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                     z_think_s: float = MEASURED_THINK_Z_S,
                     out_tokens: float = OUT_TOKENS_DEFAULT,
                     n_iter: int = 400, seed: int = 0,
-                    ttft_percentile: float | None = None) -> dict:
-    """All four ceilings in ONE unit — max concurrent users — plus which binds.
+                    ttft_percentile: float | None = None,
+                    slowed_share_max: float = 0.05,
+                    cold_wait_budget_s: float = 5.0) -> dict:
+    """The ceilings in ONE unit — max concurrent users — plus which binds.
 
-    THE two-axis planner. `binding` is the argmin: whichever ceiling is lowest
+    `ceilings` holds the five that decide: cache, decode, cold_wait
+    (max_users_cold_wait at `cold_wait_budget_s`), slowed (max_users_slowed
+    at `slowed_share_max`) and saturation. The TTFT ceiling
+    (max_users_latency at `sla_seconds`) is reported as `ttft_ceiling` and
+    no longer decides: at a realistic miss share the TTFT percentile sits in
+    the miss tail and reports prompt length more than load.
+
+    THE planner. `binding` is the argmin: whichever ceiling is lowest
     is the one that actually limits this deployment, and `headroom` is how much
     of it the requested population uses. Everything is per replica GROUP; a DP
     deployment multiplies the cache and decode ceilings by `topo.replicas` only
@@ -2944,8 +3214,9 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
     at once) rather than the closed steady-state duty — both are stated in
     docs/scenarios.md § 9.
 
-    `ttft_percentile` is the latency column's statistic (max_users_latency):
-    None checks a miss's mean TTFT, a number the all-request percentile proxy.
+    `ttft_percentile` is the statistic of the TTFT ceiling and of the cold
+    wait: None reads a miss's mean TTFT and the mean wait, a number that
+    percentile of each.
     """
     if users < 0:
         raise ValueError(f"users must be >= 0, got {users!r}")
@@ -2955,18 +3226,30 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                                  n_iter=n_iter, seed=seed),
         "decode": max_users_decode(model, topo, wl, floor=decode_floor,
                                    union=union, n_iter=n_iter, seed=seed),
-        "latency": max_users_latency(model, topo, wl, chunk, sla_seconds,
-                                     turn_tokens, think_time_s, mfu,
-                                     discipline, per_pass_overhead,
-                                     closed_z_s=z, out_tokens=out_tokens,
-                                     decode_toks=decode_floor,
-                                     percentile=ttft_percentile),
+        "cold_wait": max_users_cold_wait(model, topo, wl, chunk,
+                                         cold_wait_budget_s, turn_tokens,
+                                         think_time_s, mfu, discipline,
+                                         per_pass_overhead, closed_z_s=z,
+                                         out_tokens=out_tokens,
+                                         decode_toks=decode_floor,
+                                         percentile=ttft_percentile),
+        "slowed": max_users_slowed(model, topo, wl, chunk, slowed_share_max,
+                                   turn_tokens, think_time_s, mfu, discipline,
+                                   per_pass_overhead, closed_z_s=z,
+                                   out_tokens=out_tokens,
+                                   decode_toks=decode_floor),
         "saturation": max_users_saturation(model, topo, wl, chunk, turn_tokens,
                                            think_time_s, mfu,
                                            per_pass_overhead,
                                            closed_z_s=z, out_tokens=out_tokens,
                                            decode_toks=decode_floor),
     }
+    ttft_ceiling = max_users_latency(model, topo, wl, chunk, sla_seconds,
+                                     turn_tokens, think_time_s, mfu,
+                                     discipline, per_pass_overhead,
+                                     closed_z_s=z, out_tokens=out_tokens,
+                                     decode_toks=decode_floor,
+                                     percentile=ttft_percentile)
     binding = min(ceilings, key=ceilings.get)
     limit = ceilings[binding]
     return {
@@ -2981,6 +3264,7 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                                          per_pass_overhead)
                      if closed else request_rate(users, think_time_s)),
         "ceilings": ceilings,
+        "ttft_ceiling": ttft_ceiling,
         "binding": binding,
         "limit": limit,
         "headroom": (users / limit) if limit > 0 else float("inf"),
@@ -3913,12 +4197,15 @@ def _selfcheck():
         except ValueError:
             pass
 
-    # ---- THE OPERATING POINT: four ceilings in one unit --------------------
+    # ---- THE OPERATING POINT: the ceilings in one unit ---------------------
     # the reference load is exactly the study's 64 users / 30 s = 2.13 req/s
     assert abs(request_rate(REF_USERS) - RATE) < 0.01, \
         "64 users at one turn per 30 s must reproduce the 2.13 req/s reference"
     op = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA)
-    assert set(op["ceilings"]) == {"cache", "decode", "latency", "saturation"}
+    # the TTFT ceiling left the verdict (issue #94): it is reported beside it
+    assert set(op["ceilings"]) == {"cache", "decode", "cold_wait", "slowed",
+                                   "saturation"}
+    assert op["ttft_ceiling"] == max_users_latency(m27, tp2, wl, CH, SLA, TURN)
     assert op["binding"] == min(op["ceilings"], key=op["ceilings"].get)
     # the algebraic heart of section 9: the queue diverges before the server
     # does, so the latency ceiling is ALWAYS strictly inside saturation
@@ -4087,14 +4374,15 @@ def _selfcheck():
     except ValueError:
         pass
     # WHICH constraint binds must change with the miss rate — the planner's
-    # whole reason to exist (cache at f=1%, latency once misses get common)
+    # whole reason to exist (decode at f=1%, slowed generation once misses
+    # get common: at f=25% cold chunks fill steps long before any queue grows)
     b_lo = operating_point(m27, tp2, wl, REF_USERS, CH, TURN, SLA,
                            n_iter=200)["binding"]
     b_hi = operating_point(m27, tp2, replace(wl, invalidation=0.25),
                            REF_USERS, CH, TURN, SLA, n_iter=200)["binding"]
     assert b_lo != b_hi, \
         f"the binding constraint must switch with f (got {b_lo} at both ends)"
-    assert b_hi == "latency", f"latency must bind at f=25%, got {b_hi}"
+    assert b_hi == "slowed", f"slowed generation must bind at f=25%, got {b_hi}"
     for bad_users in (-1,):
         try:
             operating_point(m27, tp2, wl, bad_users, n_iter=50)

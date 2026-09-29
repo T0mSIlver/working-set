@@ -194,6 +194,9 @@ def test_explorer_toml_names_every_field():
         # opt-in decode pricing: written only when selected, as dumps() does
         # (explorer_decode_latency_mns.toml carries all four)
         want -= {"decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens"}
+        # the page has no control for these two yet, so it can only mean the
+        # defaults, which is what a file without them reads as
+        want -= {"slowed_share_max", "cold_wait_budget_s"}
         if block == "workload":
             want -= {"headcount", "peak_active_share", "sessions_per_active_user"}
             # `ws test` only, written when image_share > 0: the page prices text
@@ -419,22 +422,27 @@ def test_optional_float_is_type_checked_too():
 def test_predict_reference_row():
     """27B / 4xH200 TP4 / chunk 4096 at the measured workload: the explorer's
     reference example (the harness template's predictions block) — cache 403,
-    latency 500 (all-request p95; 499 for a miss's mean), saturation 509, miss TTFT
-    0.92 s, B* 9.8. These are the
+    TTFT 500 (all-request p95; 499 for a miss's mean), cold wait 456, slowed
+    generation 81, saturation 509, miss TTFT 0.92 s, B* 9.8. These are the
     explorer's per-pass-overhead convention; pinned so a convention drift
     (roofline vs explorer) fails here, not in a user's report."""
     cfg = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
                                               "tensor_parallel": 4,
                                               "max_num_batched_tokens": 4096}})
     p = predict(cfg, n_iter=300)
-    assert p.binding_constraint == "decode"        # at the measured MBU 0.22
+    # was "decode": the TTFT ceiling left the verdict and the 5% slowed
+    # share binds first (issue #94)
+    assert p.binding_constraint == "slowed"
     assert 395 <= p.warm_capacity_p5 <= 411        # 403, Monte Carlo
     assert p.latency_ceiling_users == 500
+    assert p.cold_wait_ceiling_users == 456
+    assert p.slowed_ceiling_users == 81
     assert p.saturation_ceiling_users == 509
     assert abs(p.ttft_miss_s - 0.916) < 0.005
     assert abs(p.bstar_misses - 9.82) < 0.02
     assert p.predicted_limit_users == min(p.warm_capacity_p5, p.decode_ceiling_users,
-                                          p.latency_ceiling_users,
+                                          p.cold_wait_ceiling_users,
+                                          p.slowed_ceiling_users,
                                           p.saturation_ceiling_users)
     assert 0 < p.prefill_duty < 1
     assert math.isfinite(p.ttft_miss_s) and p.ttft_miss_s > p.ttft_hit_s
@@ -624,7 +632,7 @@ def test_predict_prints_headcount_conversion_and_people_ceilings(tmp_path, capsy
     assert cli.main(["predict", str(p), "--n-iter", "20"]) == 0
     out = capsys.readouterr().out
     assert "2,000 people x 0.35 active x 2.0 sessions = 1,400 sessions -> 175 /group on DP8" in out
-    assert out.count(" people") == 5       # conversion plus all four ceilings
+    assert out.count(" people") == 6       # conversion plus all five ceilings
 
 
 def test_predict_closed_uses_configured_think():

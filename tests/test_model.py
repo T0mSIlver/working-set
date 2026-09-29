@@ -1,5 +1,6 @@
 """The model's own self-checks, run as a test. They are the calibration
 anchors (measured pools, MFU band, decode measurement) and take ~1 min."""
+import math
 import sys
 from pathlib import Path
 
@@ -144,7 +145,7 @@ def test_latency_ceiling_mean_is_the_old_behaviour():
                               per_pass_overhead=True)
     assert got == pytest.approx(want, rel=1e-12)
     op = M.operating_point(m, topo, wl, 64, chunk=4096, per_pass_overhead=True)
-    assert op["ceilings"]["latency"] == pytest.approx(want, rel=1e-12)
+    assert op["ttft_ceiling"] == pytest.approx(want, rel=1e-12)
 
 
 def test_capped_workload_quantile_sits_at_the_cap():
@@ -170,3 +171,49 @@ def test_percentile_rejects_out_of_range():
             M.miss_service_quantile(m, topo, wl, 4096, bad)
         with pytest.raises(ValueError):
             M.ttft_service_quantile(m, topo, wl, 4096, bad)
+
+
+# ---- slowed generation and cold-request wait (issue #94) ------------------
+
+def test_slowed_share_rises_with_load_and_caps_at_one():
+    m, topo, wl = _ref_latency_args(invalidation=0.09)
+    shares = [M.slowed_share(m, topo, wl, r, 4096, per_pass_overhead=True)
+              for r in (0.0, 0.5, 1.0, 2.0, 50.0)]
+    assert shares[0] == 0.0
+    assert all(a < b for a, b in zip(shares[:-2], shares[1:-1]))
+    assert shares[-1] == 1.0
+
+
+def test_wait_quantile_is_exact_for_exponential_service():
+    """M/M/1: P(W > t) = rho exp(-(mu - lam) t), the form the approximation
+    assumes, so the two must agree; below p = 1 - rho the wait is zero."""
+    lam, mu = 0.7, 1.0
+    rho, mean = lam / mu, lam / (mu * (mu - lam))
+    for p in (0.5, 0.9, 0.95, 0.99):
+        exact = math.log(rho / (1 - p)) / (mu - lam)
+        assert M.wait_quantile(mean, rho, p) == pytest.approx(exact, rel=1e-12)
+    assert M.wait_quantile(mean, rho, 0.3) == 0.0
+    assert M.wait_quantile(mean, 1.0, 0.95) == math.inf
+
+
+@pytest.mark.parametrize("percentile", [None, 95.0])
+def test_cold_wait_ceiling_solves_its_budget(percentile):
+    m, topo, wl = _ref_latency_args(invalidation=0.09)
+    users = M.max_users_cold_wait(m, topo, wl, 4096, 5.0, percentile=percentile,
+                                  **KW)
+    rate = M.request_rate(users, M.THINK_TIME_S, wl.sub_ratio)
+    got = M.cold_wait_seconds(m, topo, wl, rate, 4096, percentile=percentile,
+                              **KW)
+    assert got == pytest.approx(5.0, rel=1e-9)
+
+
+def test_slowed_ceiling_solves_its_limit():
+    m, topo, wl = _ref_latency_args(invalidation=0.09)
+    users = M.max_users_slowed(m, topo, wl, 4096, 0.05, **KW)
+    rate = M.request_rate(users, M.THINK_TIME_S, wl.sub_ratio)
+    got = M.slowed_share(m, topo, wl, rate, 4096, per_pass_overhead=True)
+    assert got == pytest.approx(0.05, rel=1e-9)
+    # no misses: nothing is ever slowed
+    none = M.max_users_slowed(m, topo, M.Workload(invalidation=0.0), 4096, 0.05,
+                              **KW)
+    assert none == math.inf
