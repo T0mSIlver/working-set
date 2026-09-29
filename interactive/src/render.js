@@ -569,6 +569,9 @@ function seatPrice(op, topo, mo, f, wl, r){
 }
 function assembleFrontier(wl, cs){
   const f = wl.invalidation;
+  // one context draw for every row's slowed-generation steps: on the no-fit
+  // path cs is null, and operatingPoint would otherwise draw one per row
+  const csSteps = cs || contextStats(wl);
   const rows = lastFrontier.base.map(r0=>{
     const d = lastFrontierDec.dec[r0.key];
     const dcap = capDecodeUsers(d.raw, d.mns,
@@ -579,7 +582,7 @@ function assembleFrontier(wl, cs){
     const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
     const mo2 = lastFrontierMo.mo[r.key]
              || (lastFrontierMo.mo[r.key] = prefillServiceMoments(m2, t2, wl, cs));
-    const op = operatingPoint(m2, t2, wl, cs, {
+    const op = operatingPoint(m2, t2, wl, csSteps, {
                mo: mo2, reps: r.reps,
                warmUsers: r.warmUsers, decodeUsers: r.decodeUsers });
     return { ...r, op,

@@ -107,7 +107,7 @@ def cmd_predict(args) -> int:
           f"TTFT miss {_fmt(p.ttft_miss_s)} s  hit {_fmt(p.ttft_hit_s)} s  "
           f"B* {p.bstar_misses}")
     print(f"  at this load: generation slowed {p.slowed_share:.1%} of the time, "
-          f"to {p.slowed_speed_tok_s:g} tok/s per stream; a {stat} cold prompt "
+          f"to {p.slowed_speed_tok_s:g} tok/s per stream; a p{slo.percentile:g} cold prompt "
           f"slows it for {p.slowed_stretch_s:g} s; a cold request waits "
           f"{_fmt(p.cold_wait_s)} s ({stat}) before its prefill starts")
     print()
