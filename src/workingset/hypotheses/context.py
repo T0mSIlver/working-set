@@ -55,24 +55,8 @@ class LadderView:
                    default=None)
 
     @property
-    def slowed_fails(self) -> list[int]:
-        return self._fails_on("slowed")
-
-    @property
-    def cold_wait_fails(self) -> list[int]:
-        return self._fails_on("cold wait")
-
-    @property
     def decode_fails(self) -> list[int]:
         return self._fails_on("decode")
-
-    @property
-    def slowed_lo(self) -> int | None:
-        return self._lo_for("slowed")
-
-    @property
-    def cold_wait_lo(self) -> int | None:
-        return self._lo_for("cold wait")
 
     @property
     def decode_lo(self) -> int | None:
