@@ -67,6 +67,11 @@ export const state = {
   // the TTFT statistic `sla` is checked at: 'mean' | '90' | '95' | '99'.
   // 95 matches the harness's [slo] percentile, the figure an SLO states.
   ttft_pct: '95',
+  // the two latency limits in the verdict ([slo] slowed_share_max as a
+  // percent, [slo] cold_wait_budget_s): the most wall time streams may spend
+  // in steps carrying a cold-prefill chunk, and the longest a cold request
+  // may wait before its prefill starts, at the ttft_pct statistic
+  slowed_pct: 5, cold_wait: 5,
   // per-user decode speed the DECODE ceiling is solved against. A workload
   // property, not a hardware one: the study's 40 is an agentic-coding comfort
   // standard, and a chat deployment judged at it can read as decode-bound

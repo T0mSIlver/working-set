@@ -25,6 +25,8 @@ import {
   peakFlops, prefillContextSeconds, prefillFlops, prefillOverheadSeconds,
   prefillSeconds, prefillServiceMoments, serverRate, setLiveThink, setLiveTurn,
   spikeMetrics, steadyDecodePoint, steadyResident, ttftMoments,
+  coldWait, idleColdTtft, maxUsersColdWait, maxUsersSlowed, slowedShare,
+  slowedSteps, slowedStretch, stretchPct,
 } from '../../interactive/src/prefill.js';
 
 // the three lengths and the one context golden.py prices every state at
@@ -106,6 +108,18 @@ export function driveState(v){
   o.max_users_latency = maxUsersLatency(mo, f, state.sla, state.think,
                                         'fcfs', wl.sub_ratio, state.ttft_pct);
   o.max_users_saturation = maxUsersSaturation(mo, f, state.think, wl.sub_ratio);
+
+  const steps = slowedSteps(m, topo, cs, chunk, state.decode_floor);
+  o.slowed_chunk_seconds = steps.chunkS;
+  o.slowed_speed = steps.speed;
+  o.slowed_share = slowedShare(mo, steps, f, rate);
+  o.slowed_stretch = slowedStretch(m, topo, cs, chunk, steps, stretchPct(state.ttft_pct));
+  o.cold_wait_seconds = coldWait(mo, f, rate, state.ttft_pct);
+  o.max_users_slowed = maxUsersSlowed(mo, steps, f, state.slowed_pct/100,
+                                      state.think, wl.sub_ratio);
+  o.max_users_cold_wait = maxUsersColdWait(mo, f, state.cold_wait, state.think,
+                                           wl.sub_ratio, state.ttft_pct);
+  o.idle_cold_ttft_cap = idleColdTtft(m, topo, wl.cap, chunk);
   o.miss_service_q95 = missServiceQuantile(mo, 95);
   o.ttft_service_q95 = ttftServiceQuantile(mo, f, 95);
 
