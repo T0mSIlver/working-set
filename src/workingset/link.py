@@ -175,6 +175,9 @@ def _unmapped(cfg: RunConfig) -> list[str]:
     if w.subagent_prefix_tokens != EXPLORER_SUB_PREFIX:
         out.append(f"workload.subagent_prefix_tokens = {w.subagent_prefix_tokens}: the "
                    f"explorer has no control for it and prices {EXPLORER_SUB_PREFIX}")
+    if w.image_share:
+        out.append(f"workload.image_share = {w.image_share:g}: the explorer "
+                   "prices text only; images reach `ws test`, not the link")
     if s.ttft_statistic == "percentile" and s.percentile not in TTFT_PCTS:
         near = min(TTFT_PCTS, key=lambda p: abs(p - s.percentile))
         out.append(f"slo.percentile = {s.percentile}: the explorer offers p90, p95 and p99; "

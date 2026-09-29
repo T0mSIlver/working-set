@@ -1060,3 +1060,118 @@ def test_a_rung_and_a_burst_started_cold_still_get_their_server_window():
 
     assert asyncio.run(go()).server is not None
     assert asyncio.run(go_burst()).server is not None
+
+
+# ============================================================================
+# image requests (vision deployments)
+# ============================================================================
+def _png_size(uri: str) -> tuple[int, int]:
+    """Width and height of a data-URI PNG, after checking the pixel stream
+    inflates to exactly one filter byte plus one RGB row per scanline."""
+    import base64
+    import struct
+    import zlib
+    head = "data:image/png;base64,"
+    assert uri.startswith(head)
+    png = base64.b64decode(uri[len(head):])
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and png[12:16] == b"IHDR"
+    w, h = struct.unpack(">II", png[16:24])
+    idat = png.index(b"IDAT")
+    n = struct.unpack(">I", png[idat - 4:idat])[0]
+    assert len(zlib.decompress(png[idat + 4:idat + 4 + n])) == h * (1 + 3 * w)
+    return w, h
+
+
+def _image_turns(nonce: str, share: float, n: int = 12):
+    cfg = small_cfg(image_share=share, images_per_request=1, image_width=8,
+                    image_height=4)
+    pre = build_prefixes(cfg.workload, 4.0)
+    s = make_session(cfg.workload, small_opts(run_nonce=nonce), pre, uid=5,
+                     is_sub=False)
+    out = []
+    for _ in range(n):
+        prompt, _ = s.next_turn(force_miss=False)
+        out.append((prompt, list(s.turn_images), s.n_new_images))
+        s.commit("reply ")
+    return out
+
+
+def test_images_follow_the_seed_and_the_run_nonce():
+    """A repeated seed attaches images on the same turns, with pixels the last
+    run never sent; a pinned nonce reproduces them; and turning images on
+    moves no text byte, so the load is the text-only run's plus images."""
+    a, again, b = (_image_turns("run-a", 0.5), _image_turns("run-a", 0.5),
+                   _image_turns("run-b", 0.5))
+    assert a == again
+    assert [t[2] for t in a] == [t[2] for t in b]
+    assert 0 < sum(t[2] for t in a) < len(a) - 1
+    uris = lambda turns: {u for t in turns for _, u in t[1]}   # noqa: E731
+    assert not uris(a) & uris(b)
+    text_only = _image_turns("run-a", 0.0)
+    assert [t[0] for t in a] == [t[0] for t in text_only]
+    assert all(not t[1] for t in text_only)
+
+
+def test_image_requests_carry_their_history_on_the_chat_route():
+    seen: list = []
+
+    async def go():
+        cfg = small_cfg(miss_rate=0.0, image_share=1.0, images_per_request=2,
+                        image_width=16, image_height=8)
+        opts = small_opts(sample_requests=1, sample_warm_turns=2)
+        pre = build_prefixes(cfg.workload, opts.chars_per_token)
+        async with client_for(fake_server(n_tokens=3, seen=seen)) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m", api="chat")
+            return await run_sample(c, ep, cfg, opts, pre)
+
+    s = asyncio.run(go())
+    contents = [b["messages"][0]["content"] for b in seen]
+    assert isinstance(contents[0], str)             # establishing turn: text
+    images = [[p["image_url"]["url"] for p in c if p["type"] == "image_url"]
+              for c in contents[1:]]
+    assert [len(i) for i in images] == [2, 4, 6]    # two hits, then the miss
+    # each turn re-sends the earlier images, in order, ahead of its new ones
+    assert images[0] == images[1][:2] and images[1] == images[2][:4]
+    assert all(_png_size(u) == (16, 8) for u in images[2])
+    # the text parts rejoin to the text prompt the turn would have sent alone
+    joined = ["".join(p["text"] for p in c if p["type"] == "text")
+              for c in contents[1:]]
+    assert joined[1].startswith(joined[0] + "tok tok tok ")
+    assert joined[2].startswith("[miss-salt ")
+    # and every turn's first image sits where the first warm turn put it:
+    # after the establishing reply, ahead of that turn's text; behind the
+    # salt on the miss
+    lead = [c[0] for c in contents[1:]]
+    first_ctx = contents[0] + "tok tok tok "
+    assert lead[0] == lead[1] == {"type": "text", "text": first_ctx}
+    assert lead[2]["text"].endswith(first_ctx) and contents[3][1] == \
+        {"type": "image_url", "image_url": {"url": images[0][0]}}
+    assert [(t.n_images, t.n_images_new) for t in s.traces] == \
+        [(0, 0), (2, 2), (4, 2), (6, 2)]
+    assert s.images["n_new"] == 2 and s.images["n_without"] == 0
+
+
+def test_a_text_only_run_writes_no_image_keys():
+    """Records and configs from before images existed keep their bytes."""
+    async def go():
+        cfg, opts = small_cfg(miss_rate=0.0), small_opts(sample_requests=1)
+        pre = build_prefixes(cfg.workload, opts.chars_per_token)
+        async with client_for(fake_server(n_tokens=3)) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m", api="chat")
+            return await run_sample(c, ep, cfg, opts, pre)
+
+    blob = json.dumps(asyncio.run(go()).to_dict(), default=str)
+    blob += json.dumps(RunConfig().to_dict()) + RunConfig().dumps("toml")
+    assert "image" not in blob
+
+
+def test_images_on_the_completions_route_fail_before_any_request(tmp_path,
+                                                                 capsys):
+    from workingset import cli
+    cfg = tmp_path / "workingset.toml"
+    cfg.write_text(replace(RunConfig(), workload=replace(
+        RunConfig().workload, image_share=0.5)).dumps("toml"))
+    assert cli.main(["test", str(cfg), "--dry-run"]) == 2
+    assert "--api chat" in capsys.readouterr().err
+    assert cli.main(["test", str(cfg), "--dry-run", "--api", "chat"]) == 0
+    assert "images   : 50% of warm turns" in capsys.readouterr().out

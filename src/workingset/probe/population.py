@@ -87,10 +87,13 @@ class Rung:
     partial: bool = False              # interrupted mid-window: shown, never counted
     spike: dict = field(default_factory=dict)   # see probe.spike_evidence
     server: dict | None = None         # metrics window delta, opaque
+    images: dict | None = None         # see image_split; None = text only
     traces: list = field(default_factory=list, repr=False)
 
     def to_dict(self, traces: bool = True) -> dict:
         d = {k: v for k, v in asdict(self).items() if k != "traces"}
+        if d["images"] is None:
+            d.pop("images")
         d["traces"] = [t.to_dict() for t in self.traces] if traces else []
         return d
 
@@ -134,6 +137,29 @@ def decode_batch(traces: list) -> tuple[float, int]:
     if not vals:
         return float("nan"), 0
     return sum(vals) / len(vals), len(vals)
+
+
+def image_split(hit: list, p: int) -> dict | None:
+    """TTFT of warm turns that sent a NEW image against those that did not,
+    so the encoder's cost reads off one run. None when no turn carried one.
+
+    Split on new images, not on any image: a history image sits inside the
+    cached prefix and costs a hit nothing, so counting its turns as "with
+    images" would dilute the encoder cost toward the text-only TTFT. Hits
+    only, since a miss re-prefills everything whatever it carries."""
+    if not any(t.n_images for t in hit):
+        return None
+    new = [t.ttft for t in hit if t.n_images_new]
+    old = [t.ttft for t in hit if not t.n_images_new]
+    cached = [t.cached_tokens / t.ptok_achieved for t in hit
+              if t.n_images_new and t.cached_tokens is not None
+              and t.ptok_achieved]
+    return {"n_new": len(new), "n_without": len(old),
+            "ttft_new_p50": pct(new, 50), "ttft_new_pX": pct(new, p),
+            "ttft_without_p50": pct(old, 50), "ttft_without_pX": pct(old, p),
+            # share of an image turn's prompt the server had cached: the
+            # history plus the prefix, never the new image itself
+            "cached_share_new_p50": pct(cached, 50)}
 
 
 SPIKE_MIN_FRAC = 0.5     # a cold prefill counts as "deep" at half the cap
@@ -275,9 +301,11 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
         res.cached_frac = sum(1 for t in cached
                               if t.cached_tokens > 0.5 * t.ptok_achieved) / len(cached)
 
+    # text-only turns: an image's tokens are not in chars / chars_per_token
     ratios = [t.ptok_achieved / t.ptok_intended for t in ok
-              if t.ptok_achieved and t.ptok_intended]
+              if t.ptok_achieved and t.ptok_intended and not t.n_images]
     res.ptok_ratio = pct(ratios, 50)
+    res.images = image_split(hit, p)
 
     # SLO verdict for this rung
     budget, floor = slo.ttft_budget_s, slo.itl_floor_tok_s
@@ -328,10 +356,13 @@ async def user_loop(client, ep: EndpointSpec, cfg, opts, uid: int, is_sub: bool,
         prompt, kind = session.next_turn()
         tr = RequestTrace(uid=uid, is_sub=is_sub, kind=kind,
                           t_send=time.monotonic(),
-                          ptok_intended=session.intended_prompt_tokens(prompt))
+                          ptok_intended=session.intended_prompt_tokens(prompt),
+                          n_images=len(session.turn_images),
+                          n_images_new=session.n_new_images)
         traces.append(tr)
         reply = await send_request(client, ep, opts, prompt, tr,
-                                   wl.max_output_tokens, metrics)
+                                   wl.max_output_tokens, metrics,
+                                   images=session.turn_images)
         session.commit(reply)
 
 
@@ -417,10 +448,13 @@ class Sample:
     cached_frac: float = float("nan")
     spike: dict = field(default_factory=dict)
     server: dict | None = None
+    images: dict | None = None
     traces: list = field(default_factory=list, repr=False)
 
     def to_dict(self, traces: bool = True) -> dict:
         d = {k: v for k, v in asdict(self).items() if k != "traces"}
+        if d["images"] is None:
+            d.pop("images")
         d["traces"] = [t.to_dict() for t in self.traces] if traces else []
         return d
 
@@ -471,9 +505,11 @@ def eval_sample(traces: list, server: dict | None = None,
         if ctoks:
             s.freeze_per_ktok = 1e3 * sum(t.n_freeze for t in g_tok) / ctoks
             s.chunk_tok_ratio = ctoks / sum(t.n_chunks for t in g_tok)
+    # text-only turns: an image's tokens are not in chars / chars_per_token
     ratios = [t.ptok_achieved / t.ptok_intended for t in ok
-              if t.ptok_achieved and t.ptok_intended]
+              if t.ptok_achieved and t.ptok_intended and not t.n_images]
     s.ptok_ratio = pct(ratios, 50)
+    s.images = image_split(hit, 95)
     cached = [t for t in hit if t.cached_tokens is not None and t.ptok_achieved]
     if cached:
         s.cached_frac = sum(1 for t in cached
@@ -506,10 +542,13 @@ async def run_sample(client, ep: EndpointSpec, cfg, opts, prefixes: Prefixes,
             prompt, kind = session.next_turn(force_miss=force)
             tr = RequestTrace(uid=session.uid, is_sub=False, kind=kind,
                               t_send=time.monotonic(),
-                              ptok_intended=session.intended_prompt_tokens(prompt))
+                              ptok_intended=session.intended_prompt_tokens(prompt),
+                              n_images=len(session.turn_images),
+                              n_images_new=session.n_new_images)
             traces.append(tr)
             reply = await send_request(client, ep, opts, prompt, tr,
-                                       wl.max_output_tokens, metrics)
+                                       wl.max_output_tokens, metrics,
+                                       images=session.turn_images)
             session.commit(reply)
 
     await asyncio.gather(*[one(i) for i in range(max(1, opts.sample_requests))])

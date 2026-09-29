@@ -207,6 +207,13 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
         "--seed " + f"{opts.seed} is never answered from the last run's "
         "prefix cache; the shared prefix stays byte-stable on purpose")
 
+    if wl.image_share:
+        w(f"images   : {wl.image_share:.0%} of warm turns attach "
+          f"{wl.images_per_request} new {wl.image_width}x{wl.image_height} "
+          "PNG(s), kept in the session history; drawn from the seed and the "
+          "run nonce. The burst's fired misses and the shared-mode probe "
+          "stay text only")
+
     # the sampler is CONSTRUCTED, never started: --dry-run still sends
     # nothing, and its scrape interval is what makes the rails' detection lag
     # a number rather than a shrug
@@ -472,7 +479,12 @@ def cmd_test(args) -> int:
     if metrics_url != cfg.endpoint.metrics_url:
         cfg = replace(cfg, endpoint=replace(cfg.endpoint,
                                             metrics_url=metrics_url))
-    preds = predict(cfg, n_iter=args.n_iter, seed=args.predict_seed)
+    if cfg.workload.image_share and (args.api or "completions") != "chat":
+        # refused here, with the arguments, not by the first image request
+        print("ws test: error: workload.image_share > 0 sends images, which "
+              "need --api chat (/completions takes text only)", file=sys.stderr)
+        return 2
+    preds =predict(cfg, n_iter=args.n_iter, seed=args.predict_seed)
     opts = build_options(args, cfg)
     ep = build_endpoint(args, cfg)
 

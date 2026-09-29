@@ -22,7 +22,9 @@ from __future__ import annotations
 import hashlib
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from .image import data_uri
 
 # seeds fixed so the prefixes are byte-stable across processes as well as
 # across sessions: two runs of the same config warm the SAME cache entry
@@ -148,6 +150,18 @@ class Session:
     nonce: int = 0          # `nonce_bits(opts.run_nonce)`, mixed into the salt
     ctx_tokens: int = 0     # the drawn prompt length; 0 = read it off the text
     n_resets: int = 0       # times the history hit HISTORY_RESET_FRAC
+    # --- images (`WorkloadCfg.image_share` > 0, chat only) -----------------
+    image_share: float = 0.0
+    images_per_request: int = 1
+    image_size: tuple = (1280, 800)
+    image_rng: random.Random | None = None   # which turns attach images
+    image_ids: random.Random | None = None   # the pixels of each new image
+    # (offset into `history`, data URI): an image stays where its turn put it
+    history_images: list = field(default_factory=list)
+    # the last prompt's images as (offset into the prompt, data URI), and how
+    # many of them that turn attached for the first time
+    turn_images: list = field(default_factory=list)
+    n_new_images: int = 0
 
     def next_turn(self, force_miss: bool | None = None) -> tuple[str, str]:
         """Return (prompt, kind). kind is "first" (session establishment),
@@ -170,13 +184,37 @@ class Session:
             self.rng, self.warm_turn_tokens, self.cpt)
         prompt = salt + self.prefix_text + "\n" + self.ctx + self.history + turn_text
         self._pending_turn_text = turn_text
+        if self.image_share:
+            self._attach_images(first, len(prompt) - len(turn_text)
+                                - len(self.history))
         return prompt, ("first" if first else ("miss" if is_miss else "hit"))
+
+    def _attach_images(self, first: bool, base: int) -> None:
+        """Place the history's images and, on `image_share` of the warm
+        turns, `images_per_request` new ones ahead of the turn's text.
+
+        The draw is on `image_rng`, not `rng`, so turning images on moves no
+        think time, length or miss draw. The pixels come from `image_ids`,
+        which takes the run nonce: a repeated seed attaches images on the same
+        turns but with pixels the server has never hashed."""
+        new = []
+        if not first and self.image_rng.random() < self.image_share:
+            w, h = self.image_size
+            new = [data_uri(self.image_ids.getrandbits(64), w, h)
+                   for _ in range(self.images_per_request)]
+        self._pending_images = new
+        self.n_new_images = len(new)
+        self.turn_images = ([(base + off, uri) for off, uri in self.history_images]
+                            + [(base + len(self.history), uri) for uri in new])
 
     def commit(self, reply: str) -> None:
         """The response joins the context: the next warm turn extends the
         cached sequence exactly the way a real agentic session does — until
         the history outgrows HISTORY_RESET_FRAC of the drawn context, when
         the session restarts from prefix + context."""
+        self.history_images += [(len(self.history), uri) for uri in
+                                getattr(self, "_pending_images", ())]
+        self._pending_images = []
         self.history += getattr(self, "_pending_turn_text", "") + reply
         self._pending_turn_text = ""
         self.n_turn += 1
@@ -184,6 +222,7 @@ class Session:
             (len(self.prefix_text) + len(self.ctx)) / self.cpt)
         if len(self.history) / self.cpt > HISTORY_RESET_FRAC * drawn:
             self.history = ""
+            self.history_images = []
             self.n_resets += 1
 
     def intended_prompt_tokens(self, prompt: str) -> int:
@@ -221,10 +260,20 @@ def make_session(wl, opts, prefixes: Prefixes, uid: int, is_sub: bool,
     full = draw_session_tokens(rng, median, sigma, prefix_tok,
                                opts.context_cap_tokens)
     ctx = make_text(text_rng, max(full - prefix_tok, 0), cpt)
-    return Session(uid=uid, is_sub=is_sub, prefix_text=prefix_txt,
-                   prefix_tokens=prefix_tok, ctx=ctx, rng=rng, cpt=cpt,
-                   warm_turn_tokens=wl.warm_turn_tokens,
-                   miss_rate=wl.miss_rate, nonce=bits, ctx_tokens=full)
+    s = Session(uid=uid, is_sub=is_sub, prefix_text=prefix_txt,
+                prefix_tokens=prefix_tok, ctx=ctx, rng=rng, cpt=cpt,
+                warm_turn_tokens=wl.warm_turn_tokens,
+                miss_rate=wl.miss_rate, nonce=bits, ctx_tokens=full)
+    share = getattr(wl, "image_share", 0.0)
+    if share:
+        # string seeds: `random` hashes them with SHA-512, so they are stable
+        # across processes and cannot collide with the integer seeds above
+        s.image_share = share
+        s.images_per_request = wl.images_per_request
+        s.image_size = (wl.image_width, wl.image_height)
+        s.image_rng = random.Random(f"image-turns {seed} {uid}")
+        s.image_ids = random.Random(f"image-pixels {seed} {uid} {bits:016x}")
+    return s
 
 
 def sampler_selfcheck(wl, opts) -> tuple[list[dict], bool]:
