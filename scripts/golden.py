@@ -108,6 +108,7 @@ DEFAULT_STATE = {
     "user_median": 31, "user_sigma": 0.81, "sub_median": 8, "sub_sigma": 0.90,
     "sub_ratio": 0.10, "sub_shares_prefix": False, "sys": 15, "inval": 1.0,
     "users": 64, "think": 30, "sla": 10, "ttft_pct": "95", "turn": 2000,
+    "slowed_pct": 5, "cold_wait": 5,
     "burst": 32,
     "out": M.AVG_OUT_TOK, "decode_floor": M.DECODE_FLOOR_TOKS,
     "ekwh": 0.19, "pue": "1.5", "gpuh": M.GPUS["H200"].eur_gpu_h,
@@ -273,6 +274,31 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         m, topo, wl, chunk, 95.0, turn, mfu, per_pass_overhead=True)
     o["max_users_saturation"] = M.max_users_saturation(
         m, topo, wl, chunk, turn, st["think"], mfu, per_pass_overhead=True)
+
+    # the two latency limits in the verdict, and the at-load figures behind
+    # them. The cold wait reads the state's TTFT statistic (the mean under
+    # 'mean'); the stretch quotes the p95 prompt there, as [slo] percentile
+    pct = None if st["ttft_pct"] == "mean" else float(st["ttft_pct"])
+    floor = st["decode_floor"]
+    steps = M.slowed_steps(m, topo, wl, chunk, floor, mfu)
+    o["slowed_chunk_seconds"] = steps["chunk_s"]
+    o["slowed_speed"] = steps["speed"]
+    o["slowed_share"] = M.slowed_share(m, topo, wl, rate, chunk, floor, mfu,
+                                       per_pass_overhead=True)
+    o["slowed_stretch"] = M.slowed_stretch(m, topo, wl, chunk,
+                                           95.0 if pct is None else pct,
+                                           floor, mfu)
+    o["cold_wait_seconds"] = M.cold_wait_seconds(
+        m, topo, wl, rate, chunk, turn, mfu, per_pass_overhead=True,
+        percentile=pct)
+    o["max_users_slowed"] = M.max_users_slowed(
+        m, topo, wl, chunk, st["slowed_pct"] / 100, turn, st["think"], mfu,
+        per_pass_overhead=True, decode_toks=floor)
+    o["max_users_cold_wait"] = M.max_users_cold_wait(
+        m, topo, wl, chunk, float(st["cold_wait"]), turn, st["think"], mfu,
+        per_pass_overhead=True, percentile=pct)
+    # a cold request of the context cap on an idle group
+    o["idle_cold_ttft_cap"] = M.idle_cold_ttft(m, topo, wl.cap, chunk, mfu)
     # at 10 s, not state.sla: spikeMetrics computes fsla against the same
     # hard-wired SPIKE_SLA_S its bstar uses, so 10 is the only budget at which
     # the two sides are answering the same question
@@ -392,6 +418,17 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         # runs on L^4, so its sampling variance scales with this
         "ctx_cv2": (o["ctx_mean_sq"] / o["ctx_mean"] ** 2 - 1.0
                     if o["ctx_mean"] > 0 else 0.0),
+        # rho - (1 - p): the p-th cold wait is (E[W]/rho) ln(rho/(1 - p)),
+        # which leaves zero at this margin's 0, so near it a sampling
+        # difference in rho is a large relative one in the wait (1 under
+        # 'mean', where no log is taken)
+        "wait_margin": (1.0 if pct is None else
+                        o["prefill_duty"] - (1.0 - pct / 100.0)),
+        # how close the stretch's prompt length sits to a whole number of
+        # chunks, relative to it: ceil(L_p / C) steps up by one decode step
+        # there, and each sampler's L_p lands on its own side
+        "stretch_chunk_edge": _chunk_edge(
+            M.context_quantile(wl, 95.0 if pct is None else pct), chunk),
         # HOW CLOSE TO THE RESIDENT CAP the load sits. Both sides stop the
         # steady search at the GPU-resident warm p95 (a batch of n needs n
         # contexts in HBM) and report `saturated` past it. Each side draws
@@ -405,6 +442,11 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
             warm_gpu95 if st["mns"] is None else min(warm_gpu95, st["mns"]), seed),
     }
     return o, cond
+
+
+def _chunk_edge(length: float, chunk: float) -> float:
+    """|L - C round(L / C)| / L: the relative distance to a chunk boundary."""
+    return abs(length - chunk * round(length / chunk)) / length
 
 
 def _steady_cap_ratio(m, topo, wl, st, rate, warm_gpu_p95, seed) -> float:
@@ -556,6 +598,10 @@ KNOB_SWEEP = [
     ("inval", [0.0, 5.0, 25.0, 60.0]),
     ("sla", [2, 30, 60]),
     ("ttft_pct", ["mean", "90", "99"]),
+    # the two latency limits in the verdict ([slo] slowed_share_max as a
+    # percent, [slo] cold_wait_budget_s)
+    ("slowed_pct", [1, 20]),
+    ("cold_wait", [1, 30]),
     ("decode_floor", [5, 20, 80]),
     ("turn", [500, 8000, 16000]),
     ("out", [100, 1200, 4000]),
@@ -839,7 +885,7 @@ def sampling(n: int, seed: int):
     probe — the emitted vectors always run the unpatched module.
     """
     names = ("context_moments", "mean_passes", "mean_context",
-             "_prefill_service_arrays")
+             "context_quantile", "_prefill_service_arrays")
     saved = {k: getattr(M, k) for k in names}
     try:
         for k in names:
@@ -861,6 +907,8 @@ MC_QUANTITIES = [
     "breakeven_miss_rate", "spike_tolerance", "spike_tolerance_sla10",
     "sla_miss_rate_sla10", "burst_drain_seconds_b32",
     "max_users_latency", "max_users_saturation",
+    "slowed_chunk_seconds", "slowed_speed", "slowed_share", "slowed_stretch",
+    "cold_wait_seconds", "max_users_slowed", "max_users_cold_wait",
     "miss_service_q95", "ttft_service_q95",
     "max_users_cache", "warm_p5_all", "max_users_decode", "decode_ceiling",
     "max_num_seqs", "decode_p50_n1", "decode_p50_n8", "decode_p50_n64",
@@ -1053,6 +1101,8 @@ BAND_CAP = 0.25       # above this, name the states instead of widening for all
 # then the slots ceiling at that cap, proportional to it. Both take the warm
 # count's band.
 BAND_GROUPS = [("prefill_duty", "power_d_p"),
+               # the p-th cold wait is the P-K mean wait times ln(rho/(1-p))/rho
+               ("queue_wait_seconds", "cold_wait_seconds"),
                ("max_users_decode", "power_d_d"),
                ("warm_p5_all", "max_num_seqs", "decode_ceiling"),
                ("miss_service_q95", "ttft_service_q95")]
@@ -1164,6 +1214,21 @@ MAPPING = [
      "service mixture at the state's miss share"),
     ("max_users_saturation", "model.max_users_saturation",
      "prefill.js maxUsersSaturation", "mc", "per replica GROUP on both sides"),
+    ("slowed_chunk_seconds / slowed_speed", "model.slowed_steps",
+     "prefill.js slowedSteps -> {chunkS, speed}", "mc",
+     "sampled only through E[L] / 2, the prior the chunk is priced at"),
+    ("slowed_share", "model.slowed_share", "prefill.js slowedShare", "mc", ""),
+    ("slowed_stretch", "model.slowed_stretch", "prefill.js slowedStretch", "mc",
+     "at the p95 prompt under 'mean', else at the state's percentile"),
+    ("cold_wait_seconds", "model.cold_wait_seconds", "prefill.js coldWait", "mc",
+     "the mean wait under 'mean', else its exponential-tail percentile"),
+    ("max_users_slowed", "model.max_users_slowed", "prefill.js maxUsersSlowed", "mc",
+     "per replica GROUP on both sides; operatingPoint() then scales by replicas"),
+    ("max_users_cold_wait", "model.max_users_cold_wait",
+     "prefill.js maxUsersColdWait", "mc",
+     "per replica GROUP on both sides; operatingPoint() then scales by replicas"),
+    ("idle_cold_ttft_cap", "model.idle_cold_ttft(cap)", "prefill.js idleColdTtft",
+     "exact", ""),
     ("max_users_cache", "model.max_users_cache (warm_capacity which='user')",
      "planner.js warmUsersNow", "mc",
      "STANDING APPROXIMATION: the explorer scales "

@@ -1,7 +1,7 @@
 import { CONFIG, makeGrid } from './config.js';
 import { hasHeadcount, peopleFromSessions, state } from './state.js';
 import { cssv, esc, fmt, linScale, logScale, logTicks, svgEl } from './svg.js';
-import { PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
+import { CEILING_KEYS, PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
 
 /* ---- The frontier table ---- */
 /* A DECISION table. Every column is one entry in frontierColumns(): its
@@ -61,7 +61,7 @@ function frontierColumns(){
       return viable(r)
         ? `<td class="num" style="color:${fits(r)?(x>1.25?good:warn):crit}">×${fmt(x, x<10?1:0)}${cen(r)?'+':''}</td>`
         : `<td class="num" style="color:${muted}">—</td>`; } });
-  if (state.showCeil) for (const k of ['cache','decode','latency','saturation'])
+  if (state.showCeil) for (const k of CEILING_KEYS)
     cols.push({ key:'ceil:'+k, head:k, num:true, sort:r => isFinite(r.op.ceilings[k]) ? r.op.ceilings[k] : NaN,
       cell:r => `<td class="num"${k===r.op.binding?` style="color:${C[k]};font-weight:650"`:''}>`
         + `${k==='decode'&&r.censored?'≥ ':''}`

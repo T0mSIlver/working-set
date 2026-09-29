@@ -1,6 +1,6 @@
 import { PREFILL_MFU_HI, PREFILL_MFU_LO } from './config.js';
-import { decodeFloor, maxUsersLatency, maxUsersSaturation, prefillChunk,
-         prefillServiceMoments, serverRate, ttftOwn, ttftStatName } from './prefill.js';
+import { decodeFloor, maxUsersColdWait, maxUsersSaturation, maxUsersSlowed, prefillChunk,
+         prefillServiceMoments, serverRate, slowedSteps, ttftOwn, ttftStatName } from './prefill.js';
 import { clip } from './mathlib.js';
 import { p_sub } from './workload.js';
 import { warmCapacity } from './capacity.js';
@@ -18,11 +18,14 @@ import { paintTiles, pendingLoadTiles } from './render.js';
 // DASH pattern — hue is never the only channel that distinguishes them.
 export const PLANNER_COLORS = () => ({
   cache: cssv('--s1'), decode: cssv('--s4'),
-  latency: cssv('--s2'), saturation: cssv('--muted'),
+  cold_wait: cssv('--s2'), slowed: cssv('--s3'), saturation: cssv('--muted'),
 });
-const PLANNER_DASH = { cache:'', decode:'7 3', latency:'2 3', saturation:'11 4' };
-export const PLANNER_LABEL = { cache:'cache', decode:'decode', latency:'latency',
-                        saturation:'saturation' };
+const PLANNER_DASH = { cache:'', decode:'7 3', cold_wait:'2 3', slowed:'5 2 1 2',
+                       saturation:'11 4' };
+export const PLANNER_LABEL = { cache:'cache', decode:'decode', cold_wait:'cold wait',
+                        slowed:'slowed generation', saturation:'saturation' };
+// the ceilings in the verdict (prefill.js operatingPoint), in display order
+export const CEILING_KEYS = ['cache', 'decode', 'cold_wait', 'slowed', 'saturation'];
 const ceilingText = value => hasHeadcount()
   ? `${fmt(value,0)} sessions ≈ ${fmt(peopleFromSessions(value),0)} people`
   : fmt(value,0);
@@ -82,7 +85,8 @@ export function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
   // the ceilings are per replica GROUP, so the load one group sees is the
   // system population divided by the replica count
   const perGroup = u => u * reps;
-  const series = { cache:[], decode:[], latency:[], saturation:[], env:[], binding:[] };
+  const series = { cache:[], decode:[], cold_wait:[], slowed:[], saturation:[], env:[], binding:[] };
+  const steps = slowedSteps(model, topo, cs, prefillChunk());
   const spike = { mid:[], lo:[], hi:[] };
   const moLo = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), PREFILL_MFU_LO);
   const moHi = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), PREFILL_MFU_HI);
@@ -90,8 +94,10 @@ export function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
     const c = {
       cache: warmFn(f) * reps,
       decode: decodeUsers * reps,
-      latency: perGroup(maxUsersLatency(mo, f, sla, think, undefined,
-                                        wl.sub_ratio, state.ttft_pct)),
+      cold_wait: perGroup(maxUsersColdWait(mo, f, state.cold_wait, think,
+                                           wl.sub_ratio, state.ttft_pct)),
+      slowed: perGroup(maxUsersSlowed(mo, steps, f, state.slowed_pct/100, think,
+                                      wl.sub_ratio)),
       saturation: perGroup(maxUsersSaturation(mo, f, think, wl.sub_ratio)),
     };
     let bind='cache'; for (const k in c) if (c[k] < c[bind]) bind = k;
@@ -204,7 +210,7 @@ export function renderBindingChart(d, op){
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
   const surface=cssv('--surface'), text=cssv('--text');
   const C = PLANNER_COLORS();
-  const all = [...d.cache, ...d.decode, ...d.latency, ...d.saturation, op.users]
+  const all = [...CEILING_KEYS.flatMap(k => d[k]), op.users]
                 .filter(v=>isFinite(v) && v>0);
   const yLo = Math.max(1, Math.min(...all, op.users)*0.6);
   const yHi = Math.max(...all)*1.25;
@@ -228,12 +234,12 @@ export function renderBindingChart(d, op){
   // line it covered whichever series was binding — i.e. always hid the one
   // the reader came for
   g+=`<path d="${path(d.env)}" fill="none" stroke="${text}" stroke-width="7" stroke-linejoin="round" opacity="0.14"/>`;
-  for (const k of ['cache','decode','latency','saturation'])
+  for (const k of CEILING_KEYS)
     g+=`<path d="${path(d[k])}" fill="none" stroke="${C[k]}" stroke-width="2" stroke-linejoin="round"`
       +`${PLANNER_DASH[k]?` stroke-dasharray="${PLANNER_DASH[k]}"`:''}/>`;
   // ...and direct-label each line at its right terminus, so the chart is
   // readable without cross-referencing a legend
-  for (const k of ['cache','decode','latency','saturation']){
+  for (const k of CEILING_KEYS){
     const v = d[k][d[k].length-1];
     if (!isFinite(v)) continue;
     g+=`<text class="dlabel" x="${mL+pw-3}" y="${sy(clip(v,yLo,yHi))-5}" text-anchor="end" fill="${C[k]}">${esc(PLANNER_LABEL[k])}</text>`;
@@ -329,7 +335,7 @@ export function renderCeilingBars(op){
   const box = document.getElementById('ceilingBars');
   if (!box) return;
   if (!op){ box.innerHTML = '<p class="cs">model weights do not fit this configuration.</p>'; return; }
-  const C = PLANNER_COLORS(), keys = ['cache','decode','latency','saturation'];
+  const C = PLANNER_COLORS(), keys = CEILING_KEYS;
   const W=1120, rowH=46, mT=10, mL=112, mR=(hasHeadcount()?230:92)+(op.decodeCapped?150:0);
   const H=mT+rowH*keys.length+34;
   const pw = W-mL-mR;

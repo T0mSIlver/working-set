@@ -641,7 +641,101 @@ export function maxUsersLatency(mo, f, sla, think, discipline, subR, pct){
   return Math.max(0, lam*(think||liveThink)/(1 + (subR || 0)));
 }
 
-// All four ceilings in one unit, plus which binds. `warmUsers` is passed in
+/* ---- THE LATENCY LIMITS USERS FEEL (model.py, issue #94) ------------------
+   Twins of the model's slowed-generation and cold-request-wait functions.
+   Per replica GROUP, open loop, `rate` the TOTAL arrival rate at the group.
+   -------------------------------------------------------------------------- */
+// the prompt lengths a cold request's idle TTFT is quoted at
+export const IDLE_TTFT_PROMPTS = [10000, 50000, 100000, 200000];
+// Twin of model.idle_cold_ttft: a cold prompt re-prefilled on an idle group.
+export function idleColdTtft(m, topo, L, chunk){
+  return missContextSeconds(m, topo, L, chunk || PREFILL_CHUNK, 0);
+}
+// Twin of model.idle_cold_ttft_table: [[tokens, seconds], ...] up to the cap.
+export function idleColdTtftTable(m, topo, chunk, cap){
+  const Ls = IDLE_TTFT_PROMPTS.filter(L => L < cap).concat([Math.trunc(cap)]);
+  return Ls.map(L => [L, idleColdTtft(m, topo, L, chunk)]);
+}
+// Twin of model.context_quantile: numpy's linear percentile of the draw.
+export function contextQuantile(cs, p){
+  if (!cs.sorted) cs.sorted = Float64Array.from(cs.samples).sort();
+  return costQuantile(cs.sorted, L => L, p/100);
+}
+// The statistic a percentile control names: 'mean' -> null, else a number.
+function pctOf(pct){ return (!pct || pct === 'mean') ? null : parseFloat(pct); }
+// Twin of model.slowed_steps: the decode step at the floor, one full-chunk
+// pass (marginal, prior E[L]/2 as itl_spike), their sum, and the tok/s a
+// stream gets in a step that carries the chunk.
+export function slowedSteps(m, topo, cs, chunk, floor, mfu){
+  const C = chunk || PREFILL_CHUNK;
+  const decodeS = m.mtp / (floor || state.decode_floor);
+  const chunkS = prefillSeconds(m, topo, C, cs.mean/2, mfu);
+  const mixedS = decodeS + chunkS;
+  return { decodeS, chunkS, mixedS, speed: m.mtp / mixedS };
+}
+// Twin of model.slowed_share: min(1, rate f E[S|miss] x mixed / chunk).
+export function slowedShare(mo, steps, f, rate){
+  return Math.min(1, rate*f*mo.miss*steps.mixedS/steps.chunkS);
+}
+// Twin of model.slowed_stretch: ceil(L_p/C) decode steps + L_p's chunked
+// marginal prefill, L_p the p-th prompt length.
+export function slowedStretch(m, topo, cs, chunk, steps, p){
+  const C = chunk || PREFILL_CHUNK, L = contextQuantile(cs, p);
+  return Math.ceil(L/C)*steps.decodeS + prefillContextSeconds(m, topo, L, C, 0);
+}
+// Twin of model.wait_quantile: P(W > t) ~= rho exp(-t rho / E[W]), so
+// W_p = (E[W]/rho) ln(rho/(1-p)) when p > 1 - rho, else 0. An approximation.
+export function waitQuantile(meanWait, rho, p){
+  if (rho >= 1) return Infinity;
+  if (rho <= 0 || p <= 1 - rho) return 0;
+  return meanWait/rho * Math.log(rho/(1 - p));
+}
+// Twin of model.cold_wait_seconds: the wait before a cold request's prefill
+// starts, FCFS — the mean under 'mean', else its pct-th.
+export function coldWait(mo, f, rate, pct){
+  const eS = f*mo.miss + (1-f)*mo.hit, eS2 = f*mo.missSq + (1-f)*mo.hitSq;
+  const rho = rate*eS;
+  if (rho >= 1) return Infinity;
+  const mean = rate*eS2/(2*(1 - rho)), p = pctOf(pct);
+  return p === null ? mean : waitQuantile(mean, rho, p/100);
+}
+// users whose total rate is lam; Infinity at or past the prefill wall
+function usersAtRate(lam, eS, think, subR){
+  if (!isFinite(lam) || lam*eS >= 1) return Infinity;
+  return Math.max(0, lam*(think||liveThink)/(1 + (subR || 0)));
+}
+// Twin of model.max_users_slowed: the share is linear in the rate, so
+// lam = shareMax x chunk / (f E[S|miss] x mixed).
+export function maxUsersSlowed(mo, steps, f, shareMax, think, subR){
+  const perRate = f*mo.miss*steps.mixedS/steps.chunkS;
+  if (shareMax >= 1 || !(perRate > 0)) return Infinity;
+  return usersAtRate(shareMax/perRate, f*mo.miss + (1-f)*mo.hit, think, subR);
+}
+// Twin of model.max_users_cold_wait. Mean: lam = 2B/(a + 2B b). pct-th:
+// W_p(rho) = a/(2b(1-rho)) ln(rho/(1-p)) rises from 0 at rho = 1-p, so rho
+// by bisection (100 halvings, as Python) and lam = rho/b.
+export function maxUsersColdWait(mo, f, budget, think, subR, pct){
+  const b = f*mo.miss + (1-f)*mo.hit, a = f*mo.missSq + (1-f)*mo.hitSq;
+  if (!(b > 0)) return Infinity;
+  const p = pctOf(pct);
+  let lam;
+  if (p === null) lam = 2*budget/(a + 2*budget*b);
+  else {
+    const q = p/100, resid = a/(2*b);
+    let lo = 1 - q, hi = 1;
+    for (let i = 0; i < 100; i++){
+      const mid = 0.5*(lo + hi);
+      if (resid/(1 - mid)*Math.log(mid/(1 - q)) < budget) lo = mid; else hi = mid;
+    }
+    lam = lo/b;
+  }
+  return usersAtRate(lam, b, think, subR);
+}
+// The prompt percentile the slowed stretch is quoted at: the TTFT control's
+// percentile, 95 under 'mean' (Python's [slo] percentile).
+export function stretchPct(pct){ return pctOf(pct) ?? 95; }
+
+// The ceilings in one unit, plus which binds. `warmUsers` is passed in
 // because the caller has already paid for the Monte-Carlo warm fill.
 export function operatingPoint(model, topo, wl, cs, opts){
   const o = opts || {};
@@ -657,18 +751,28 @@ export function operatingPoint(model, topo, wl, cs, opts){
   // per group instead — a different, also-consistent choice, documented in its
   // operating_point() docstring; on TP topologies (replicas = 1) they agree.
   const reps = o.reps || 1;
+  const pct = o.ttftPct ?? state.ttft_pct;
+  const steps = o.steps || slowedSteps(model, topo, cs || contextStats(wl),
+                                       o.chunk ?? prefillChunk(), o.floor);
+  // the five that decide (model.operating_point); the TTFT ceiling is
+  // reported beside them as ttftCeiling and no longer binds
   const ceilings = {
     cache:      o.warmUsers,
     decode:     o.decodeUsers,
-    latency:    reps * maxUsersLatency(mo, f, sla, think, o.discipline,
-                                       wl.sub_ratio, o.ttftPct ?? state.ttft_pct),
+    cold_wait:  reps * maxUsersColdWait(mo, f, o.coldWait ?? state.cold_wait,
+                                        think, wl.sub_ratio, pct),
+    slowed:     reps * maxUsersSlowed(mo, steps, f,
+                                      (o.slowedPct ?? state.slowed_pct)/100,
+                                      think, wl.sub_ratio),
     saturation: reps * maxUsersSaturation(mo, f, think, wl.sub_ratio),
   };
+  const ttftCeiling = reps * maxUsersLatency(mo, f, sla, think, o.discipline,
+                                             wl.sub_ratio, pct);
   let binding = 'cache';
   for (const k in ceilings) if (ceilings[k] < ceilings[binding]) binding = k;
   const limit = ceilings[binding];
   const users = o.users ?? state.users;
-  return { ceilings, binding, limit, users,
+  return { ceilings, ttftCeiling, steps, binding, limit, users,
            reqRate: requestRate(users, think),
            headroom: limit > 0 ? users/limit : Infinity,
            fits: users <= limit };

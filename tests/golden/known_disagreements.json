@@ -3,7 +3,7 @@
  "_what": "Differences between src/workingset/model.py and interactive/src/*.js that are known, measured and explained. CI is green on this set and red on anything else. An entry is a DEBT, not a decision: it records that the two implementations disagree and why we believe they do, never that the disagreement is correct. Delete an entry when the difference is fixed - the test ASSERTS that every entry matched something, so a stale allowlist fails the build.",
  "_fields": {
   "quantity": "vectors.json out-key, exact or with a trailing * as a prefix glob",
-  "where": "matches the vector's state fields, the derived n_gpu / replicas, and the vector's cond block under a _ prefix (_duty, _sla_headroom, _sla10_headroom, _warm_p5, _decode_ceiling, _ctx_cv2, _steady_cap_ratio, _sla_f_unreachable). Values: a literal, a list, or {gt|gte|lt|lte|ne|nin}. An entry with NO where and max_rel 1.0 pins nothing at all - relErr is bounded by 1 for any finite pair - so every entry here is gated on the condition that causes it. Use _sla10_headroom, not _sla_headroom, for the quantities compared at the hard-wired 10 s budget.",
+  "where": "matches the vector's state fields, the derived n_gpu / replicas, and the vector's cond block under a _ prefix (_duty, _sla_headroom, _sla10_headroom, _warm_p5, _decode_ceiling, _ctx_cv2, _steady_cap_ratio, _sla_f_unreachable, _wait_margin, _stretch_chunk_edge). Values: a literal, a list, or {gt|gte|lt|lte|ne|nin}. An entry with NO where and max_rel 1.0 pins nothing at all - relErr is bounded by 1 for any finite pair - so every entry here is gated on the condition that causes it. Use _sla10_headroom, not _sla_headroom, for the quantities compared at the hard-wired 10 s budget.",
   "observed_rel": "the worst relative error actually measured on the date in _measured_at (entries carrying an older count were measured on that set and re-verified on this one)",
   "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
   "hypothesis": "one line on the cause"
@@ -393,6 +393,97 @@
    "observed_rel": 0.071,
    "max_rel": 0.1,
    "hypothesis": "SIGN-STABLE SAMPLER-STRUCTURE BIAS, not a state-dependent one, which is why this entry has no `where`: the mirror reads 5-7% LOW on every one of the 30 states past the band and never high. decodeCurves draws one context pool per iteration and reads it cumulatively (common random numbers across n) where decode_curves redraws per n, and at n = 1 the per-user speed is a median of 1/(a + b L) on a single draw - the most tail-sensitive statistic compared, hardest under FP16 KV where the sampled term dominates the step. decode_p50_n8 and _n64, the same estimator once the average over n contexts washes the structure out, stay inside their bands everywhere; that is the evidence for this reading rather than a formula difference."
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "_duty": {
+     "gt": 0.85
+    }
+   },
+   "observed_rel": 0.457,
+   "max_rel": "Infinity",
+   "hypothesis": "the p-th cold wait is the P-K mean wait times ln(rho/(1 - p))/rho, so it carries the same 1/(1 - rho) amplification as queue_wait_seconds, and past rho = 1 one side can return Infinity. 3 states at duty 0.92-0.99, worst 46%."
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    }
+   },
+   "observed_rel": 0.121,
+   "max_rel": 0.2,
+   "hypothesis": "the same bounded 1/(1 - rho) amplification as queue_wait_seconds at duty 0.70-0.85. 1 state, 12.1% at duty 0.82."
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "_ctx_cv2": {
+     "gt": 0.9
+    }
+   },
+   "observed_rel": 0.146,
+   "max_rel": 0.2,
+   "hypothesis": "as queue_wait_seconds: the wait is linear in E[S^2], which runs on L^4 and inherits its heavy-tail sampling error. 1 state, 14.6% at cv2 1.9."
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "_wait_margin": {
+     "gte": 0,
+     "lt": 0.01
+    }
+   },
+   "observed_rel": 0.482,
+   "max_rel": 1.0,
+   "hypothesis": "ILL-CONDITIONED at the zero atom: the p-th wait is (E[W]/rho) ln(rho/(1 - p)), and at rho within 0.01 of 1 - p the log is a difference of two nearly equal numbers, so a 0.5% difference in rho moves the wait by tens of percent, and by 100% where one side lands under 1 - p (wait 0). The waits there are a few milliseconds. 6 states, worst 48%."
+  },
+  {
+   "quantity": "max_users_cold_wait",
+   "where": {
+    "_ctx_cv2": {
+     "gt": 0.9
+    }
+   },
+   "observed_rel": 0.062,
+   "max_rel": 0.12,
+   "hypothesis": "the ceiling solves a wait linear in E[S^2]/E[S], so it inherits E[S^2]'s heavy-tail sampling error, damped by the log. 1 state, 6.2% at cv2 1.9."
+  },
+  {
+   "quantity": "max_users_cold_wait",
+   "where": {
+    "model": [
+     "MM35"
+    ],
+    "gpu": [
+     "B300"
+    ],
+    "ngpu": [
+     6
+    ],
+    "tp": [
+     1
+    ],
+    "wdt": [
+     "nvfp4"
+    ]
+   },
+   "observed_rel": 0.058,
+   "max_rel": 0.08,
+   "hypothesis": "one named state, a hair over its 5.8% band (0.05802) at a ceiling under one user; no formula difference found. Named rather than a wider band, so the licence does not spread."
+  },
+  {
+   "quantity": "slowed_stretch",
+   "where": {
+    "_stretch_chunk_edge": {
+     "lt": 0.01
+    }
+   },
+   "observed_rel": 0.208,
+   "max_rel": 0.35,
+   "hypothesis": "ceil(L_p / C) steps by one where the p-th prompt length crosses a chunk boundary; within 1% of one the two samplers' L_p land on opposite sides and the stretch differs by one decode step, which is a fifth of a 0.2 s stretch. 2 states, both 0.24% from the boundary."
   }
  ]
 }

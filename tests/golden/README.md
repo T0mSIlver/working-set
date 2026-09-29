@@ -42,7 +42,7 @@ regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
 the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
-(899 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
+(906 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
 plus a 26-state named spread probe at three seeds and two sampling scales). The JS
 side is ~80 s. That is the price of pricing every legal deployment rather than
 a sample of them.
@@ -178,6 +178,8 @@ can be gated on the **cause** rather than on a model name.
 | `_decode_ceiling` | same, for the decode bisection |
 | `_ctx_cv2` | squared coefficient of variation of the context length; `E[S^2\|miss]` runs on `L^4`, so its sampling variance scales with this |
 | `_steady_cap_ratio` | demand / aggregate throughput at the resident cap (the GPU-resident warm p95, where both `steady_decode_point` and `steadyDecodePoint` stop). At `>= 1` both report `saturated`; the cap itself is a Monte-Carlo draw on each side, so `n` there differs by the draw |
+| `_wait_margin` | `rho - (1 - p)`; the p-th cold wait `(E[W]/rho) ln(rho/(1 - p))` leaves zero at 0, so near it a small difference in rho is a large relative one in the wait (1 under `mean`) |
+| `_stretch_chunk_edge` | `|L_p - C round(L_p/C)| / L_p`: how close the stretch's prompt length sits to a chunk boundary, where `ceil(L_p/C)` adds a decode step |
 
 ```jsonc
 {

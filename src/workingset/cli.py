@@ -78,24 +78,42 @@ def cmd_predict(args) -> int:
               f"{w.sessions_per_active_user:.1f} sessions = {_fmt_count(sessions)} sessions "
               f"-> {_fmt_count(users)} /group on DP{d.replicas}")
     print()
-    rows = [("cache (warm p5, users)", p.warm_capacity_p5),
-            ("decode (max_num_seqs at p99)" if p.decode_capped_by_max_num_seqs
+    slo = cfg.slo
+    stat = ("mean" if slo.ttft_statistic == "miss_mean"
+            else f"p{slo.percentile}")
+    rows = [("cache", "cache (warm p5, users)", p.warm_capacity_p5),
+            ("decode", "decode (max_num_seqs at p99)"
+             if p.decode_capped_by_max_num_seqs
              else "decode (users at floor)", p.decode_ceiling_users),
-            ("latency (miss TTFT = budget)", p.latency_ceiling_users),
-            ("saturation (prefill duty 100%)", p.saturation_ceiling_users)]
-    for k, v in rows:
-        mark = "  <- binds" if k.startswith(p.binding_constraint) else ""
+            ("cold_wait", f"cold request waits {slo.cold_wait_budget_s:g} s ({stat})",
+             p.cold_wait_ceiling_users),
+            ("slowed", f"generation slowed {slo.slowed_share_max:.0%} of the time",
+             p.slowed_ceiling_users),
+            ("saturation", "saturation (prefill duty 100%)",
+             p.saturation_ceiling_users)]
+    for key, k, v in rows:
+        mark = "  <- binds" if key == p.binding_constraint else ""
         people = ""
         if w.headcount is not None:
             denom = w.peak_active_share * w.sessions_per_active_user
             people = f"  ≈ {_fmt_count(v * d.replicas / denom)} people"
-        print(f"  {k:32} {_fmt(v):>14}{people}{mark}")
+        print(f"  {k:36} {_fmt(v):>14}{people}{mark}")
     if p.replicas > 1:
         print(f"  (per replica group; x{p.replicas} under balanced routing)")
+    print(f"  not in the verdict: {stat} TTFT reaches {slo.ttft_budget_s:g} s "
+          f"at {_fmt(p.latency_ceiling_users)} users")
     print()
     print(f"  req/s main {p.req_rate_main}  prefill duty {p.prefill_duty:.1%}  "
           f"TTFT miss {_fmt(p.ttft_miss_s)} s  hit {_fmt(p.ttft_hit_s)} s  "
           f"B* {p.bstar_misses}")
+    print(f"  at this load: generation slowed {p.slowed_share:.1%} of the time, "
+          f"to {p.slowed_speed_tok_s:g} tok/s per stream; a p{slo.percentile:g} cold prompt "
+          f"slows it for {p.slowed_stretch_s:g} s; a cold request waits "
+          f"{_fmt(p.cold_wait_s)} s ({stat}) before its prefill starts")
+    print()
+    print("  cold request, idle server: prompt tokens -> time to first token")
+    for tokens, s in p.idle_cold_ttft_s:
+        print(f"  {tokens:>12,}  {s:8.2f} s")
     return 0
 
 

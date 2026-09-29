@@ -148,11 +148,15 @@ class WorkloadCfg:
 
 
 _IMAGE_KEYS = ("image_share", "images_per_request", "image_width", "image_height")
+_SLO_LIMIT_KEYS = ("slowed_share_max", "cold_wait_budget_s")
 TTFT_STATISTICS = ("percentile", "miss_mean")
 
 
 @dataclass(frozen=True)
 class SLO:
+    # The TTFT budget the probe measures against and the TTFT ceiling `ws
+    # predict` reports. It no longer decides the verdict: slowed_share_max
+    # and cold_wait_budget_s below do (model.operating_point).
     ttft_budget_s: float = 10.0
     itl_floor_tok_s: float = M.DECODE_FLOOR_TOKS
     # the TTFT percentile the budget is read at: the probe's measured verdict
@@ -164,6 +168,12 @@ class SLO:
     # percentile existed (an explorer page in `mean` mode exports this).
     # The probe's measurement always reads the percentile.
     ttft_statistic: str = "percentile"
+    # the most wall time decoding streams may spend in steps that carry a
+    # cold-prefill chunk (model.slowed_share)
+    slowed_share_max: float = 0.05
+    # the longest a cold request may wait before its prefill starts, at
+    # `percentile` (the mean under ttft_statistic "miss_mean")
+    cold_wait_budget_s: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -280,6 +290,12 @@ class RunConfig:
         if not 0 < self.slo.percentile < 100:
             raise ValueError("slo.percentile must be in (0, 100), got "
                              f"{self.slo.percentile!r}")
+        if not 0 < self.slo.slowed_share_max <= 1:
+            raise ValueError("slo.slowed_share_max must be in (0, 1], got "
+                             f"{self.slo.slowed_share_max!r}")
+        if not self.slo.cold_wait_budget_s > 0:
+            raise ValueError("slo.cold_wait_budget_s must be > 0, got "
+                             f"{self.slo.cold_wait_budget_s!r}")
         w = self.workload
         if w.headcount is not None and w.users is not None:
             raise ValueError("workload.headcount and workload.users cannot both be set; "
@@ -347,6 +363,12 @@ class RunConfig:
         if not self.workload.image_share:
             for k in _IMAGE_KEYS:
                 d["workload"].pop(k)
+        # the two latency limits are left out at their defaults, like the
+        # image keys, so a file written here still loads in a release that
+        # predates them
+        for k in _SLO_LIMIT_KEYS:
+            if d["slo"][k] == getattr(SLO(), k):
+                d["slo"].pop(k)
         return d
 
     @classmethod

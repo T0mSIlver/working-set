@@ -1,4 +1,4 @@
-"""Price a RunConfig: the four ceilings, the binding one, and the operating
+"""Price a RunConfig: the ceilings, the binding one, and the operating
 point's load figures. This is the `predictions` block the explorer's generated
 harness used to carry — produced here from the model instead of stored.
 
@@ -31,6 +31,8 @@ class Predictions:
     warm_capacity_p5: int           # user-class warm sessions, p5 = the cache ceiling
     cache_ceiling_users: int        # every reusable session (users + subagents), p5
     decode_ceiling_users: int
+    # where the p-th TTFT reaches [slo] ttft_budget_s; reported, not in the
+    # verdict (model.operating_point)
     latency_ceiling_users: int
     saturation_ceiling_users: int   # 999999 when never binds at this rate
     binding_constraint: str
@@ -69,6 +71,23 @@ class Predictions:
     # (model.recommended_max_num_seqs)
     max_num_seqs: int = 0
     max_num_seqs_recommended: bool = False
+    # --- the two latency limits in the verdict ----------------------------
+    # users per replica group where the slowed share reaches
+    # [slo] slowed_share_max, and where the cold-request wait reaches
+    # [slo] cold_wait_budget_s; 999999 when never reached
+    slowed_ceiling_users: int = 999999
+    cold_wait_ceiling_users: int = 999999
+    # at the operating point: a stream's tok/s in a step that carries a
+    # full chunk, the share of wall time in such steps, how long one cold
+    # request of the p-th prompt length keeps streams slowed, and the p-th
+    # wait before a cold request's prefill starts (inf past saturation)
+    slowed_speed_tok_s: float = 0.0
+    slowed_share: float = 0.0
+    slowed_stretch_s: float = 0.0
+    cold_wait_s: float = 0.0
+    # ((prompt tokens, seconds), ...): a cold request's TTFT on an idle
+    # group, a property of the deployment rather than a limit
+    idle_cold_ttft_s: tuple = ()
 
     def to_dict(self) -> dict:
         """JSON-safe: non-finite floats become None (strict JSON has no inf)."""
@@ -83,10 +102,15 @@ class Predictions:
                 "cache_ceiling_users": self.cache_ceiling_users * r,
                 "decode_ceiling_users": self.decode_ceiling_users * r,
                 "latency_ceiling_users": self.latency_ceiling_users * r,
-                "saturation_ceiling_users": (self.saturation_ceiling_users * r
-                                             if self.saturation_ceiling_users < 999999
-                                             else 999999),
+                "cold_wait_ceiling_users": _scale(self.cold_wait_ceiling_users, r),
+                "slowed_ceiling_users": _scale(self.slowed_ceiling_users, r),
+                "saturation_ceiling_users": _scale(self.saturation_ceiling_users, r),
                 "predicted_limit_users": self.predicted_limit_users * r}
+
+
+def _scale(users: int, replicas: int) -> int:
+    """A per-group ceiling on the whole deployment; 999999 stays 'never'."""
+    return users * replicas if users < 999999 else 999999
 
 
 def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
@@ -98,16 +122,18 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     users = cfg.users_per_group()
 
     ram = dep.ram_gib
+    pct = None if slo.ttft_statistic == "miss_mean" else slo.percentile
     op = M.operating_point(
         m, t, wl, users, chunk=chunk, turn_tokens=w.warm_turn_tokens,
         sla_seconds=slo.ttft_budget_s, think_time_s=w.think_time_s,
         decode_floor=slo.itl_floor_tok_s, mfu=cal.mfu, ram_gib=ram,
         per_pass_overhead=True, closed=closed, z_think_s=w.think_time_s,
         out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
-        # the SLO is a percentile of TTFT, so the latency column checks
-        # that percentile, not the mean (model.max_users_latency)
-        ttft_percentile=(None if slo.ttft_statistic == "miss_mean"
-                         else slo.percentile))
+        # the SLO is a percentile, so the TTFT ceiling and the cold wait
+        # check that percentile, not the mean (model.max_users_latency)
+        ttft_percentile=pct,
+        slowed_share_max=slo.slowed_share_max,
+        cold_wait_budget_s=slo.cold_wait_budget_s)
     # operating_point prices decode at the study default MBU; re-price at the
     # configured one so the calibration block is honoured
     lat = cfg.decode_latency()
@@ -169,6 +195,16 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     bstar = M.spike_tolerance(m, t, wl, slo.ttft_budget_s, rate_total, chunk,
                               w.warm_turn_tokens, cal.mfu, per_pass_overhead=True)
 
+    steps = M.slowed_steps(m, t, wl, chunk, slo.itl_floor_tok_s, cal.mfu)
+    share = M.slowed_share(m, t, wl, rate_total, chunk, slo.itl_floor_tok_s,
+                           cal.mfu, per_pass_overhead=True)
+    stretch = M.slowed_stretch(m, t, wl, chunk, float(slo.percentile),
+                               slo.itl_floor_tok_s, cal.mfu)
+    cold_wait = M.cold_wait_seconds(m, t, wl, rate_total, chunk,
+                                    w.warm_turn_tokens, cal.mfu,
+                                    per_pass_overhead=True, percentile=pct)
+    idle = M.idle_cold_ttft_table(m, t, chunk, dep.max_model_len, cal.mfu)
+
     def _int(x: float) -> int:
         return 999999 if not math.isfinite(x) else int(round(x))
 
@@ -186,7 +222,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         warm_capacity_p5=_int(op["ceilings"]["cache"]),
         cache_ceiling_users=_int(p5_all),
         decode_ceiling_users=_int(op["ceilings"]["decode"]),
-        latency_ceiling_users=_int(op["ceilings"]["latency"]),
+        latency_ceiling_users=_int(op["ttft_ceiling"]),
         saturation_ceiling_users=_int(op["ceilings"]["saturation"]),
         binding_constraint=op["binding"],
         predicted_limit_users=_int(op["limit"]),
@@ -201,6 +237,13 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         decode_cap_below_bandwidth=below_bw,
         max_num_seqs=mns,
         max_num_seqs_recommended=dep.max_num_seqs is None,
+        slowed_ceiling_users=_int(op["ceilings"]["slowed"]),
+        cold_wait_ceiling_users=_int(op["ceilings"]["cold_wait"]),
+        slowed_speed_tok_s=round(steps["speed"], 2),
+        slowed_share=round(share, 4),
+        slowed_stretch_s=round(stretch, 2),
+        cold_wait_s=round(cold_wait, 3) if math.isfinite(cold_wait) else math.inf,
+        idle_cold_ttft_s=tuple((L, round(s, 2)) for L, s in idle),
         **steady,
     )
 

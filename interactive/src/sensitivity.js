@@ -1,13 +1,13 @@
 import { DECODE_MBU, GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, effective_bw,
          kv_pool_tokens, replicated, state_traffic, w_decode } from './config.js';
-import { capDecodeUsers, contextStats, decodeFloor, decodeSlotUsers, liveTurn, maxUsersLatency, maxUsersSaturation,
-         prefillChunk, prefillServiceMoments, setLiveTurn } from './prefill.js';
+import { capDecodeUsers, contextStats, decodeFloor, decodeSlotUsers, liveTurn, maxUsersColdWait, maxUsersSaturation,
+         maxUsersSlowed, prefillChunk, prefillServiceMoments, setLiveTurn, slowedSteps } from './prefill.js';
 import { clip, seedFor } from './mathlib.js';
 import { decodeTokenSeconds } from './capacity.js';
 import { p_sub, sampleReqInto } from './workload.js';
 import { ramPerCache, state } from './state.js';
 import { cssv, esc, fmt, linScale, svgEl } from './svg.js';
-import { PLANNER_COLORS, PLANNER_LABEL, fAxisMax } from './planner.js';
+import { CEILING_KEYS, PLANNER_COLORS, PLANNER_LABEL, fAxisMax } from './planner.js';
 
 /* ---- "What would flip this decision" — the sensitivity panel --------------
    Chart G already sweeps ONE assumption (the miss rate) and marks where the
@@ -104,10 +104,16 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const capD = (u, think_, vs) => op.mns === undefined ? u
     : reps * capDecodeUsers({ n: u / reps, censored: false }, op.mns,
         decodeSlotUsers(op.slotPu * vs, op.mns, think_, state.out, subR)).n;
-  const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU, vs = 1) => {
+  // the slowed-generation step lengths at the current settings; the axes
+  // that move them (MFU, decode floor, the context draw) pass their own.
+  // sla_ no longer moves the verdict: the TTFT ceiling left it (issue #94)
+  const steps0 = slowedSteps(model, topo, cs, prefillChunk());
+  const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU, vs = 1, steps = steps0) => {
     const c = { cache: cacheU, decode: capD(decodeU, think_, vs),
-      latency: reps * maxUsersLatency(mo_, f_, sla_, think_, undefined, subR,
-                                      state.ttft_pct),
+      cold_wait: reps * maxUsersColdWait(mo_, f_, state.cold_wait, think_, subR,
+                                         state.ttft_pct),
+      slowed: reps * maxUsersSlowed(mo_, steps, f_, state.slowed_pct/100,
+                                    think_, subR),
       saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };
     let bind = 'cache';
     for (const k in c) if (c[k] < c[bind]) bind = k;
@@ -190,7 +196,8 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
         ? decodeUsersApprox({ ...model, decode_lat: { ...model.decode_lat, mfu: v } },
                             topo, cs.samples) * calD * reps
         : decodeNow;
-      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decU, vRatio(decU));
+      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decU, vRatio(decU),
+                    slowedSteps(model, topo, cs, prefillChunk(), undefined, v));
     }, mfuCur) });
   // 6 · speculative-decode speedup — decode speed is exactly linear in it,
   //     so the mean-context stand-in only has to move the crossing point
@@ -217,7 +224,8 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       fmt: v => fmt(v, 0) + ' tok/s', approx: true,
       pts: sweep(20, 5, 100, v =>
         evalAt(mo, f0, state.sla, state.think, cacheNow,
-               decodeUsersApprox(model, topo, cs.samples, v) * calD * reps),
+               decodeUsersApprox(model, topo, cs.samples, v) * calD * reps, 1,
+               slowedSteps(model, topo, cs, prefillChunk(), v)),
         state.decode_floor) });
   // 7 & 8 · the prompt-length distribution — median and shape. Both re-draw
   //     the context stats (4k samples: flip resolution, not tile precision)
@@ -233,7 +241,8 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       const cs2 = contextStats(wl2, 4000);
       const mo2 = prefillServiceMoments(model, topo, wl2, cs2, prefillChunk());
       seedFor('flip|' + key + 'w|' + v.toFixed(4));
-      return { mo2, warm: warmUsersApprox(model, topo, wl2, 3000),
+      return { mo2, steps: slowedSteps(model, topo, cs2, prefillChunk()),
+               warm: warmUsersApprox(model, topo, wl2, 3000),
                dec: decodeUsersApprox(model, topo, cs2.samples) };
     };
     // per-axis anchor at the CURRENT value, same seeds and sample counts as
@@ -248,7 +257,8 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       pts: sweep(13, lo, hi, v => {
         const q = at(v);
         return evalAt(q.mo2, f0, state.sla, state.think,
-                      q.warm * cC * reps, q.dec * cD * reps, vRatio(q.dec * cD * reps));
+                      q.warm * cC * reps, q.dec * cD * reps, vRatio(q.dec * cD * reps),
+                      q.steps);
       }, cur) });
   };
   {
@@ -302,7 +312,7 @@ export function renderFlipPanel(axes){
   }
   const C = PLANNER_COLORS(), crit = cssv('--crit'), muted = cssv('--muted');
   const text = cssv('--text'), good = cssv('--good');
-  leg.innerHTML = ['cache', 'decode', 'latency', 'saturation'].map(k =>
+  leg.innerHTML = CEILING_KEYS.map(k =>
     `<span class="li"><span class="sw" style="background:${C[k]}"></span>${PLANNER_LABEL[k]} binds</span>`).join('')
     + `<span class="li"><span class="sw" style="background:${crit};height:3px"></span>your load does not fit</span>`
     + `<span class="li"><span style="color:${text};font-size:10px">▼</span>&nbsp;your value</span>`

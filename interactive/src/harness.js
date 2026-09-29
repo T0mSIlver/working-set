@@ -166,7 +166,10 @@ function harnessPredictions(op, model, wl, topo){
   const P = {
     warm_capacity_p5: Math.round(lastWarmCur.p5 * (1 - p_sub(wl))),
     decode_ceiling_users: perG(op.ceilings.decode),
-    latency_ceiling_users: perG(op.ceilings.latency),
+    // the TTFT ceiling, reported beside the verdict (prefill.js operatingPoint)
+    latency_ceiling_users: perG(op.ttftCeiling),
+    cold_wait_ceiling_users: isFinite(op.ceilings.cold_wait) ? perG(op.ceilings.cold_wait) : 999999,
+    slowed_ceiling_users: isFinite(op.ceilings.slowed) ? perG(op.ceilings.slowed) : 999999,
     saturation_ceiling_users: isFinite(op.ceilings.saturation) ? perG(op.ceilings.saturation) : 999999,
     binding_constraint: op.binding,
     predicted_limit_users: perG(op.limit),
