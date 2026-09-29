@@ -46,6 +46,10 @@ def build_options(args, cfg) -> ProbeOptions:
         v = getattr(args, flag, None)
         if v is not None:
             kw[field] = v
+    # the same flag overrides the slow-gap threshold, which otherwise follows
+    # the predicted mixed step
+    if getattr(args, "freeze_threshold_ms", None) is not None:
+        kw["slow_threshold_ms"] = args.freeze_threshold_ms
     kw["ignore_eos"] = not getattr(args, "no_ignore_eos", False)
     tok = getattr(args, "tokenizer", None)
     if tok:
@@ -197,8 +201,13 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
       + ("  (may generate the population it measures)" if args.exclusive
          else "  (shares the endpoint; exclusive hypotheses are skipped)"))
     w(f"metrics  : {args.metrics_url or 'none'}")
-    w(f"SLOs     : p{slo.percentile} TTFT <= {slo.ttft_budget_s:g}s, "
-      f"per-user p50 decode >= {slo.itl_floor_tok_s:g} tok/s")
+    from .probe.latency import slow_threshold_ms
+    thr, thr_src = slow_threshold_ms(cfg, opts)
+    stat = "mean" if slo.ttft_statistic == "miss_mean" else f"p{slo.percentile}"
+    w(f"SLOs     : slowed <= {slo.slowed_share_max:.1%} of the time "
+      f"(a gap >= {thr:.0f} ms, {thr_src}), {stat} cold wait <= "
+      f"{slo.cold_wait_budget_s:g}s, per-user p50 decode >= "
+      f"{slo.itl_floor_tok_s:g} tok/s")
     w(f"probes   : {', '.join(sorted(pl.probes)) or 'none'}")
     w(f"run nonce: {opts.run_nonce or '<none>'} "
       + ("(--run-nonce)" if getattr(args, "run_nonce", None) is not None
@@ -391,7 +400,11 @@ def _progress(kind, payload) -> None:
     elif kind == "rung-done":
         r = payload
         v = "PASS" if r.passed else "FAIL (" + "; ".join(r.reasons) + ")"
-        print(f"  TTFT hit p50 {r.ttft_hit_p50:.2f}s / miss p50 "
+        sl = r.slowed.get("share")
+        cw = r.cold_wait.get("value_s")
+        print(f"  slowed {'-' if sl is None else f'{sl:.1%}'} | cold wait "
+              f"{'-' if cw is None else f'{cw:.2f}s'} | TTFT hit p50 "
+              f"{r.ttft_hit_p50:.2f}s / miss p50 "
               f"{r.ttft_miss_p50:.2f}s | decode p50 {r.decode_p50:.1f} tok/s "
               f"| {r.achieved_rps:.2f} req/s | {v}", flush=True)
     elif kind == "blown":

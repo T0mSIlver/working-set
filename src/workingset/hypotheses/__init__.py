@@ -22,9 +22,10 @@ from .base import (BOUNDED_BELOW, BURST, BURST_PROBE, EXCLUSIVE, GLYPH,
                    Measurement, Prediction, Verdict, bracket_verdict,
                    ratio_verdict)
 from .burst import HBurst
-from .ceilings import HBinding, HCache, HDecode, HLatency, HSaturation
+from .ceilings import HBinding, HCache, HDecode, HSaturation
 from .context import LadderView, RunContext
 from .gaps import HItlMean, HItlSpike, HSteady, HTtftMiss
+from .latency import HColdWait, HSlowed
 
 
 class Registry:
@@ -69,7 +70,7 @@ class Registry:
 
 
 REGISTRY = Registry([
-    HCache(), HDecode(), HLatency(), HSaturation(), HBinding(),
+    HCache(), HDecode(), HSlowed(), HColdWait(), HSaturation(), HBinding(),
     HTtftMiss(), HBurst(), HSteady(), HItlSpike(), HItlMean(),
 ])
 

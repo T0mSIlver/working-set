@@ -81,7 +81,7 @@ def score(h, ctx) -> tuple:
 # registry / selection
 # ============================================================================
 def test_registry_carries_every_harness_hypothesis():
-    assert REGISTRY.keys == ["H-cache", "H-decode", "H-latency",
+    assert REGISTRY.keys == ["H-cache", "H-decode", "H-slowed", "H-cold-wait",
                              "H-saturation", "H-binding", "H-ttft-miss",
                              "H-burst", "H-steady", "H-itl-spike",
                              "H-itl-mean"]
@@ -116,7 +116,7 @@ def test_shared_mode_skips_every_exclusive_hypothesis():
     assert [h.key for h in p.selected] == ["H-ttft-miss", "H-steady",
                                            "H-itl-spike", "H-itl-mean"]
     skipped = {h.key: r for h, r in p.skipped}
-    assert set(skipped) == {"H-cache", "H-decode", "H-latency",
+    assert set(skipped) == {"H-cache", "H-decode", "H-slowed", "H-cold-wait",
                             "H-saturation", "H-binding", "H-burst"}
     assert "--exclusive" in skipped["H-cache"]
     # the ladder is not run, so the cheap ones fall back to their own sample —
@@ -295,42 +295,75 @@ def test_h_decode_brackets_on_a_floor_failure():
     assert (m.lo, m.hi) == (dc - 3, dc + 3) and v.status == SUPPORTED
 
 
-def test_h_latency_brackets_on_a_ttft_failure():
+def slowed_rung(pop, share, **kw) -> Rung:
+    r = rung(pop, slowed={"threshold_ms": 100.0, "share": share,
+                          "speed_tok_s": 4.0, "n_streams": 5,
+                          "longest_run_s": 9.0, "run_pX_s": 9.0}, **kw)
+    return r
+
+
+def waited_rung(pop, wait, **kw) -> Rung:
+    return rung(pop, cold_wait={"n": 5, "idle_source": "model", "mean_s": wait,
+                                "pX_s": wait, "value_s": wait}, **kw)
+
+
+def test_h_slowed_brackets_on_the_share_crossing_its_limit():
     preds = predict(RunConfig(), n_iter=40)
-    lc = preds.latency_ceiling_users
-    ladder = [rung(lc - 2), rung(lc + 2, passed=False,
-                                 reasons=["p95 TTFT 12.00s > 10s"])]
-    _, m, v = score(REGISTRY.get("H-latency"), ladder_ctx(preds, ladder))
-    assert (m.lo, m.hi) == (lc - 2, lc + 2) and v.status == SUPPORTED
+    sc = preds.slowed_ceiling_users
+    limit = RunConfig().slo.slowed_share_max
+    ladder = [slowed_rung(sc - 5, limit / 2),
+              slowed_rung(sc - 2, limit * 0.9),
+              slowed_rung(sc + 2, limit * 2, passed=False,
+                          reasons=["slowed 10.0% of the time > 5.0%"]),
+              slowed_rung(sc + 9, limit * 4, passed=False)]
+    _, m, v = score(REGISTRY.get("H-slowed"), ladder_ctx(preds, ladder))
+    assert (m.lo, m.hi) == (sc - 2, sc + 2) and v.status == SUPPORTED
+    # every rung's own reading is kept for the report
+    assert m.data["by_pop"][sc + 2]["share"] == pytest.approx(limit * 2)
 
 
-def test_h_latency_judges_the_miss_mean_in_miss_mean_mode():
-    """ttft_statistic = "miss_mean" predicts where a miss's mean TTFT meets
-    the budget, so the measurement brackets on each rung's miss-mean TTFT,
-    not on the all-request percentile verdict."""
-    from dataclasses import replace
+def test_h_slowed_says_when_no_rung_crossed_or_none_had_a_stream():
+    preds = predict(RunConfig(), n_iter=40)
+    h = REGISTRY.get("H-slowed")
+    _, m, v = score(h, ladder_ctx(preds, [slowed_rung(40, 0.01)]))
+    assert m.text == "not separable" and v.status == NOT_ESTABLISHED
+    assert "exceeded" in v.text
+    # a rung with no measured stream is skipped, not read as passing
+    _, m, v = score(h, ladder_ctx(preds, [rung(40)]))
+    assert "no rung measured a stream" in v.text
+
+
+def test_h_slowed_refutes_a_limit_the_model_says_never_binds():
+    preds = replace(predict(RunConfig(), n_iter=40), slowed_ceiling_users=999999)
+    _, m, v = score(REGISTRY.get("H-slowed"),
+                    ladder_ctx(preds, [slowed_rung(40, 0.01),
+                                       slowed_rung(80, 0.5)]))
+    assert m.hi == 80 and v.status == REFUTED and "never binds" in v.text
+
+
+def test_h_cold_wait_brackets_on_the_wait_crossing_its_budget():
+    preds = predict(RunConfig(), n_iter=40)
+    cc = preds.cold_wait_ceiling_users
+    budget = RunConfig().slo.cold_wait_budget_s
+    ladder = [waited_rung(cc - 4, budget / 4), waited_rung(cc - 1, budget * .8),
+              waited_rung(cc + 3, budget * 3, passed=False)]
+    ctx = ladder_ctx(preds, ladder)
+    _, m, v = score(REGISTRY.get("H-cold-wait"), ctx)
+    assert (m.lo, m.hi) == (cc - 1, cc + 3) and v.status == SUPPORTED
+    assert m.data["idle_source"] == "model"
+    # the server's queue time rides along and is never forced to agree
+    assert "not the same" in m.data["server_queue_note"]
+
+
+def test_h_cold_wait_reads_the_mean_in_miss_mean_mode():
     cfg = RunConfig.from_dict({"slo": {"ttft_statistic": "miss_mean"}})
     preds = predict(cfg, n_iter=40)
-    lc = preds.latency_ceiling_users
-    # the percentile verdict fails at lc - 2 (a hit tail), but the miss mean
-    # holds there and breaks only at lc + 2
-    ladder = [rung(lc - 2, passed=False, reasons=["p95 TTFT 12.00s > 10s"],
-                   ttft_miss_mean=6.0),
-              rung(lc + 2, ttft_miss_mean=11.0)]
-    ctx = ladder_ctx(preds, ladder, cfg=cfg)
-    h = REGISTRY.get("H-latency")
-    _, m, v = score(h, ctx)
-    assert (m.lo, m.hi) == (lc - 2, lc + 2) and v.status == SUPPORTED
-    assert "mean TTFT" in h.statement(cfg, preds)
-    # no rung with a measured miss: stated, not guessed
-    ctx = ladder_ctx(preds, [rung(lc + 2)], cfg=cfg)
-    _, m, v = score(h, ctx)
-    assert m.text == "not separable" and v.status == NOT_ESTABLISHED
-    assert "no rung measured a miss" in v.text
-    # and percentile mode still reads the percentile verdict, not the miss mean
-    ctx = ladder_ctx(preds, ladder)
-    _, m, _ = score(h, ctx)
-    assert m.hi == lc - 2
+    r = waited_rung(60, 1.0)
+    r.cold_wait["value_s"] = r.cold_wait["mean_s"] = 9.0
+    r.cold_wait["pX_s"] = 1.0
+    _, m, _ = score(REGISTRY.get("H-cold-wait"),
+                    ladder_ctx(preds, [r], cfg=cfg))
+    assert m.hi == 60
 
 
 def test_h_cache_is_bounded_below_when_nothing_evicts():
@@ -1071,7 +1104,7 @@ def test_ws_test_dry_run_on_the_default_config(tmp_path, capsys):
     assert "DRY RUN" in out and "no requests sent" in out
     assert "mode     : shared" in out
     assert "sampler self-check PASSED" in out
-    assert "SKIPPED (6)" in out
+    assert "SKIPPED (7)" in out
     assert "LOAD LADDER" not in out          # no ladder in shared mode
 
 
@@ -1082,7 +1115,7 @@ def test_ws_test_all_dry_run_exclusive(tmp_path, capsys):
                      "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "LOAD LADDER" in out and "BURST PROBE" in out
-    assert "HYPOTHESES SELECTED (10)" in out
+    assert "HYPOTHESES SELECTED (11)" in out
     assert "SKIPPED" not in out
 
 
@@ -1158,3 +1191,22 @@ def test_ws_hypotheses_lists_requirements(capsys):
     for h in REGISTRY:
         assert h.key in out
     assert "burst,exclusive" in out
+
+
+def test_report_prints_the_latency_table_only_for_records_that_have_it(capsys):
+    rec = make_record()
+    print_report(rec)
+    old = capsys.readouterr().out
+    assert "LATENCY LIMITS" not in old and "p95 TTFT <=" in old
+
+    r = Rung.from_dict(rec.rungs[0])
+    r.slowed = {"threshold_ms": 100.0, "share": 0.07, "speed_tok_s": 4.2,
+                "longest_run_s": 8.0, "run_pX_s": 7.0, "n_streams": 9}
+    r.cold_wait = {"n": 4, "idle_source": "model", "mean_s": 1.0,
+                   "pX_s": 2.5, "value_s": 2.5}
+    r.queue_time = {"n": 40, "mean_s": 0.4}
+    rec.rungs = [r.to_dict()]
+    print_report(rec)
+    new = capsys.readouterr().out
+    assert "LATENCY LIMITS" in new and "7%" in new and "2.50s" in new
+    assert "slowed <= 5.0% of the time" in new and "p95 TTFT <=" not in new

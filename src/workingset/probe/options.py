@@ -46,6 +46,9 @@ class ProbeOptions:
     api: str = "completions"            # "completions" | "chat"
     # --- gap accounting ---------------------------------------------------
     freeze_threshold_ms: float = 100.0  # a gap >= this counts as a FREEZE
+    # a gap >= this counts as SLOWED (H-slowed). None = half the predicted
+    # mixed step; `build_options` sets it when --freeze-threshold-ms is given
+    slow_threshold_ms: float | None = None
     seed: int = 0
     # what makes THIS run's misses unmatchable by the last run's cache: mixed
     # into every miss salt and every per-session context (never into the
@@ -65,5 +68,6 @@ class ProbeOptions:
         return (self.rungs, self.max_users, self.ramp_s, self.measure_s,
                 self.turns_per_user, self.chars_per_token,
                 self.context_cap_tokens, self.request_timeout_s,
-                self.ignore_eos, self.api, self.freeze_threshold_ms, self.seed,
+                self.ignore_eos, self.api, self.freeze_threshold_ms,
+                self.slow_threshold_ms, self.seed,
                 self.run_nonce)

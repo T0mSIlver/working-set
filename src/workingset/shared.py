@@ -1731,6 +1731,9 @@ class SharedResult:
     lengths_ktok: list = field(default_factory=list)
     sample: Sample | None = None
     options: dict = field(default_factory=dict)
+    # the "cold request, idle server" table; empty (and left out of the
+    # record) for a run whose sweep sent no forced miss
+    idle_cold: dict = field(default_factory=dict)
 
     # ---- the gate --------------------------------------------------------
     def reading(self, which: str) -> dict:
@@ -1857,6 +1860,12 @@ class SharedResult:
         return f"{why}; note that {UPWARD_BIAS}" if off.get("above") else why
 
     def to_dict(self) -> dict:
+        d = self._to_dict()
+        if self.idle_cold:
+            d["idle_cold"] = self.idle_cold
+        return d
+
+    def _to_dict(self) -> dict:
         return {"fits": {k: f.to_dict() for k, f in self.fits.items()},
                 "operating_point": self.op.to_dict(),
                 "max_extrapolation": self.max_extrapolation,
@@ -1979,6 +1988,63 @@ def build_fits(rows: list[dict]) -> dict:
         [{**r, "y": r["decode_tok_s"]} for r in load], LOAD_COLUMNS,
         target="freeze-excluded decode rate", unit="tok/s")
     return fits
+
+
+def idle_cold_table(rows: list[dict], fits: dict, lengths, cfg) -> dict:
+    """"Cold request, idle server": TTFT at each swept length, the fit read at
+    an idle server (running = waiting = 0), the model, and the fit's
+    extrapolation to `max_model_len`.
+
+    Observed = the forced misses nearest each designed length. `min` is the
+    best a shared server did, the closest thing the sweep has to an idle
+    reading; `n_quiet` counts the ones whose own covariates said nothing else
+    was running or waiting. A fit that pinned `running` above zero (the
+    endpoint never went quiet) is read at that value, and the table says so.
+    Empty when the sweep sent no miss.
+    """
+    from . import model as M
+
+    miss = [r for r in rows if r["kind"] == "miss" and r.get("ptok")]
+    lengths = sorted(int(n) for n in lengths)
+    if not miss or not lengths:
+        return {}
+    m, t = cfg.to_model(), cfg.to_topology()
+    chunk, mfu = cfg.deployment.max_num_batched_tokens, cfg.calibration.mfu
+    fit = fits.get("ttft_miss")
+    usable = fit is not None and fit.usable
+
+    def fitted(tokens):
+        if not usable:
+            return None
+        k = tokens / 1e3
+        v = fit.predict({"L_ktok": k, "L_ktok2": k * k, "running": 0.0,
+                         "waiting": 0.0})
+        return float(v) if math.isfinite(v) else None
+
+    def near(r):
+        return min(lengths, key=lambda n: abs(n - r["ptok"]))
+
+    out_rows = []
+    for n in lengths:
+        got = [r for r in miss if near(r) == n]
+        if not got:
+            continue
+        tt = [r["ttft"] for r in got]
+        quiet = [r for r in got if r.get("running") == 0
+                 and (r.get("waiting") or 0) == 0]
+        out_rows.append({"tokens": n, "n": len(got), "n_quiet": len(quiet),
+                         "ttft_min_s": min(tt), "ttft_p50_s": pct(tt, 50),
+                         "fit_s": fitted(n),
+                         "model_s": M.idle_cold_ttft(m, t, n, chunk, mfu)})
+    cap = int(cfg.deployment.max_model_len)
+    return {"rows": out_rows,
+            "max_model_len": {"tokens": cap, "fit_s": fitted(cap),
+                              "model_s": M.idle_cold_ttft(m, t, cap, chunk,
+                                                          mfu),
+                              "extrapolated": cap > max(lengths)},
+            "fit_refused": None if usable else (
+                fit.refused if fit is not None else "no fit was attempted"),
+            "fit_pinned": dict(fit.pinned) if usable else {}}
 
 
 def _miss_prompt(rng: random.Random, prefix: str, prefix_tokens: int,
@@ -2297,7 +2363,8 @@ def _assemble(cfg, opts, sopts, gov, traces, windows, lengths, preds=None,
         n_covariate_rows=sum(1 for r in scored
                              if r.get("running") is not None),
         lengths_ktok=[round(n / 1e3, 2) for n in lengths],
-        sample=sample, options=sopts.to_dict())
+        sample=sample, options=sopts.to_dict(),
+        idle_cold=idle_cold_table(scored, fits, lengths, cfg))
 
 
 # ============================================================================
