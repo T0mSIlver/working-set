@@ -42,6 +42,7 @@ def print_report(rec, out=None) -> None:
     if rungs:
         _rung_table(w, rungs, p)
         _gap_table(w, rungs, thr, pred)
+        _image_table(w, rungs, p)
         ratios = [r.ptok_ratio for r in rungs if math.isfinite(r.ptok_ratio)]
         if ratios:
             med = pct(ratios, 50)
@@ -77,6 +78,25 @@ def _rung_table(w, rungs, p) -> None:
           f"{fmt(r.ttft_miss_p50, '', 2):>8}/{fmt(r.ttft_miss_pX, 's', 2):<9} "
           f"{fmt(r.decode_p50, '', 1):>8} {fmt(r.achieved_rps, '', 2):>6} "
           f"{verdict}")
+
+
+def _image_table(w, rungs, p) -> None:
+    if not any(r.images for r in rungs):
+        return
+    w("\nIMAGE REQUESTS — warm-turn TTFT with a new image vs without; the gap "
+      "is the encoder plus the image's prefill")
+    w(f"{'users':>6} {'n img':>6} {'n text':>7} "
+      f"{'TTFT img p50/p' + str(p):>18} {'TTFT without p50/p' + str(p):>22} "
+      f"{'cached/img turn':>16}")
+    for r in rungs:
+        m = r.images
+        if not m:
+            continue
+        w(f"{r.pop:>6} {m['n_new']:>6} {m['n_without']:>7} "
+          f"{fmt(m['ttft_new_p50'], '', 2):>9}/{fmt(m['ttft_new_pX'], 's', 2):<8} "
+          f"{fmt(m['ttft_without_p50'], '', 2):>13}/"
+          f"{fmt(m['ttft_without_pX'], 's', 2):<8} "
+          f"{_pct(m['cached_share_new_p50']):>16}")
 
 
 def _gap_table(w, rungs, thr, pred) -> None:
@@ -151,6 +171,12 @@ def _sample_block(w, s: Sample, cpt) -> None:
     if math.isfinite(s.cached_frac):
         w(f"  server-reported prefix-cache hits on warm turns: "
           f"{s.cached_frac:.0%}")
+    if s.images:
+        m = s.images
+        w(f"  images: warm TTFT p50 {fmt(m['ttft_new_p50'], 's')} with a new "
+          f"image (n={m['n_new']}) vs {fmt(m['ttft_without_p50'], 's')} "
+          f"without (n={m['n_without']}); cached share of an image turn's "
+          f"prompt {_pct(m['cached_share_new_p50'])}")
 
 
 def _shared_block(w, sh: dict) -> None:

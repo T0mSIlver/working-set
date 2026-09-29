@@ -126,6 +126,11 @@ class RequestTrace:
     n_chunks: int = 0
     gaps_ms: list = field(default_factory=list, repr=False)
     covariates: dict | None = None    # metrics snapshot at SEND time
+    # images carried (history included), and how many were new this turn.
+    # Left out of the record when zero, so a text-only run's record keeps its
+    # bytes; `cached_tokens` above counts image tokens the server had cached.
+    n_images: int = 0
+    n_images_new: int = 0
 
     def to_dict(self, gaps: bool = False) -> dict:
         d = asdict(self)
@@ -133,6 +138,9 @@ class RequestTrace:
         d["stall_at"] = list(self.stall_at)
         if not gaps:
             d.pop("gaps_ms")
+        if not self.n_images:
+            d.pop("n_images")
+            d.pop("n_images_new")
         return d
 
     @classmethod
@@ -362,7 +370,26 @@ def make_client(max_connections: int = 4096, max_keepalive: int = 256):
         max_keepalive_connections=max_keepalive))
 
 
-def _payload(ep: EndpointSpec, opts, prompt: str, max_tokens: int) -> tuple[str, dict]:
+def _content(prompt: str, images) -> str | list:
+    """The user message's content: the prompt itself, or, with images, text
+    parts cut at each image's offset and `image_url` parts in between. Text
+    parts are rendered back to back, so the tokens around an image are the
+    same bytes a text-only turn would send and the prefix stays cacheable."""
+    if not images:
+        return prompt
+    parts, at = [], 0
+    for off, uri in sorted(images, key=lambda x: x[0]):
+        if off > at:
+            parts.append({"type": "text", "text": prompt[at:off]})
+            at = off
+        parts.append({"type": "image_url", "image_url": {"url": uri}})
+    if at < len(prompt):
+        parts.append({"type": "text", "text": prompt[at:]})
+    return parts
+
+
+def _payload(ep: EndpointSpec, opts, prompt: str, max_tokens: int,
+             images=()) -> tuple[str, dict]:
     body = {"model": ep.model, "max_tokens": max_tokens, "temperature": 0.7,
             "stream": True}
     if ep.use_stream_options:
@@ -374,7 +401,11 @@ def _payload(ep: EndpointSpec, opts, prompt: str, max_tokens: int) -> tuple[str,
         body["ignore_eos"] = True
     if ep.api == "chat":
         return f"{ep.base_url}/chat/completions", {
-            **body, "messages": [{"role": "user", "content": prompt}]}
+            **body, "messages": [{"role": "user",
+                                  "content": _content(prompt, images)}]}
+    if images:
+        # `ws test` refuses this combination before sending anything
+        raise ValueError("images need api='chat': /completions takes text only")
     return f"{ep.base_url}/completions", {**body, "prompt": prompt}
 
 
@@ -425,11 +456,12 @@ def _delta_text(obj: dict) -> str:
 
 async def send_request(client, ep: EndpointSpec, opts, prompt: str,
                        trace: RequestTrace, max_tokens: int,
-                       metrics=None, _retries_left: int = 1) -> str:
+                       metrics=None, _retries_left: int = 1,
+                       images=()) -> str:
     """Stream one completion; fills `trace` in place, returns the response
     text (appended to the session so the next warm turn extends the cached
-    run)."""
-    url, payload = _payload(ep, opts, prompt, max_tokens)
+    run). `images` is `Session.turn_images`: (offset into prompt, data URI)."""
+    url, payload = _payload(ep, opts, prompt, max_tokens, images)
     headers = {"Authorization": f"Bearer {ep.api_key}"} if ep.api_key else {}
 
     t0 = time.monotonic()
@@ -460,7 +492,7 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
                     ep.disable_stream_options()
                     return await send_request(client, ep, opts, prompt, trace,
                                               max_tokens, metrics,
-                                              _retries_left - 1)
+                                              _retries_left - 1, images)
                 trace.error = f"HTTP {r.status_code}: {body[:180]}"
                 return ""
             async for data in _sse_events(r):

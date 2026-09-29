@@ -135,8 +135,19 @@ class WorkloadCfg:
     # ladder (probe/ladder.build_ladder) and the burst's standing load
     # (hypotheses/context.RunContext._burst_pop).
     users: float | None = M.REF_USERS
+    # Image requests, for load-testing a vision deployment (`ws test` only;
+    # the model does not price images yet). `image_share` of the warm turns
+    # attach `images_per_request` fresh PNGs of image_width x image_height,
+    # which then stay in the session history. 0 = text only, and the four
+    # keys are left out of every file and record so a text-only config
+    # writes the bytes it always did.
+    image_share: float = 0.0
+    images_per_request: int = 1
+    image_width: int = 1280
+    image_height: int = 800
 
 
+_IMAGE_KEYS = ("image_share", "images_per_request", "image_width", "image_height")
 TTFT_STATISTICS = ("percentile", "miss_mean")
 
 
@@ -288,6 +299,13 @@ class RunConfig:
                 raise ValueError("workload.peak_active_share and "
                                  "workload.sessions_per_active_user need "
                                  "workload.headcount; without it they price nothing")
+        if not 0 <= w.image_share <= 1:
+            raise ValueError("workload.image_share must be in [0, 1]")
+        if w.images_per_request < 1:
+            raise ValueError("workload.images_per_request must be >= 1")
+        if not (1 <= w.image_width <= 8192 and 1 <= w.image_height <= 8192):
+            raise ValueError("workload.image_width and image_height must be "
+                             "in [1, 8192] pixels")
         if self.deployment.ram_gib < 0:
             raise ValueError("deployment.ram_gib must be >= 0")
         mns = self.deployment.max_num_seqs
@@ -325,7 +343,11 @@ class RunConfig:
 
     # ---- (de)serialisation --------------------------------------------
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        if not self.workload.image_share:
+            for k in _IMAGE_KEYS:
+                d["workload"].pop(k)
+        return d
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "RunConfig":

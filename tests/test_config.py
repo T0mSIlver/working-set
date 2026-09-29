@@ -196,6 +196,9 @@ def test_explorer_toml_names_every_field():
         want -= {"decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens"}
         if block == "workload":
             want -= {"headcount", "peak_active_share", "sessions_per_active_user"}
+            # `ws test` only, written when image_share > 0: the page prices text
+            want -= {"image_share", "images_per_request", "image_width",
+                     "image_height"}
         assert want == set(raw[block]), f"{block}: {want ^ set(raw[block])}"
 
 

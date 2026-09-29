@@ -149,7 +149,7 @@ def eval_burst(n: int, standing_users: int, burst_traces: list,
     # turns that completed before that did.)
     r.ptok_ratio = pct([t.ptok_achieved / t.ptok_intended
                         for t in list(burst_traces) + list(standing_traces)
-                        if t.ptok_achieved and t.ptok_intended], 50)
+                        if t.ptok_achieved and t.ptok_intended and not t.n_images], 50)
     # the same spike statistic the ladder and the sample report, over both
     # legs: the burst's own misses are the cold prefills, the standing load
     # supplies the decoders

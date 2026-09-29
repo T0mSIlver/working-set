@@ -79,6 +79,11 @@ reads from it. `--burst N` adds the correlated-flush probe (B*).
 `--tokenizer Qwen/Qwen3.8-27B` sizes the synthetic prompts with the model's
 real tokenizer (via [toklen](https://pypi.org/project/toklen/); add
 `--with toklen` to the `uvx` line) instead of the chars-per-token guess.
+For a vision model, set `image_share` in `[workload]` (with
+`images_per_request`, `image_width` and `image_height`) and pass `--api chat`:
+that share of warm turns then attaches generated PNGs, which stay in the
+session history, and the report splits warm-turn TTFT by whether the turn
+sent a new image. The model does not price images yet.
 
 ## Contents
 
