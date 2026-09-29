@@ -148,6 +148,7 @@ class WorkloadCfg:
 
 
 _IMAGE_KEYS = ("image_share", "images_per_request", "image_width", "image_height")
+_SLO_LIMIT_KEYS = ("slowed_share_max", "cold_wait_budget_s")
 TTFT_STATISTICS = ("percentile", "miss_mean")
 
 
@@ -362,6 +363,12 @@ class RunConfig:
         if not self.workload.image_share:
             for k in _IMAGE_KEYS:
                 d["workload"].pop(k)
+        # the two latency limits are left out at their defaults, like the
+        # image keys, so a file written here still loads in a release that
+        # predates them
+        for k in _SLO_LIMIT_KEYS:
+            if d["slo"][k] == getattr(SLO(), k):
+                d["slo"].pop(k)
         return d
 
     @classmethod
