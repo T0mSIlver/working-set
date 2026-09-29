@@ -25,8 +25,8 @@ from .config import Endpoint, RunConfig
 DEFAULT_BASE = "https://workingset.tomvaucourt.com/"
 
 # interactive/src/state.js fixes the subagent prefix; everything else in
-# [workload] and [slo] has a control. The TTFT statistic offers these
-# percentiles (prefill.js TTFT_PCTS, besides 'mean')
+# [workload] and [slo] has a control, except the TTFT budget (no longer in
+# the verdict). The cold request wait statistic offers these percentiles (prefill.js TTFT_PCTS, besides 'mean')
 EXPLORER_SUB_PREFIX = 3000
 TTFT_PCTS = (90, 95, 99)
 CHUNKS = (2048, 4096, 8192, 16384, 32768, 65536)
@@ -123,7 +123,10 @@ KNOBS: tuple[Knob, ...] = (
          100, 8000, True),
     Knob("sub_shares_prefix", W + "sub_shares_prefix",
          lambda c: c.workload.sub_shares_prefix, False),
-    Knob("sla", S + "ttft_budget_s", lambda c: c.slo.ttft_budget_s, 10, 1, 60, True, " s"),
+    Knob("cold_wait", S + "cold_wait_budget_s", lambda c: c.slo.cold_wait_budget_s, 5, 1,
+         60, True, " s"),
+    Knob("slowed_pct", S + "slowed_share_max", lambda c: c.slo.slowed_share_max * 100, 5,
+         1, 50, True, "%"),
     Knob("decode_floor", S + "itl_floor_tok_s", lambda c: c.slo.itl_floor_tok_s, 40,
          5, 100, True, " tok/s"),
     Knob("mfu", C + "mfu", lambda c: c.calibration.mfu, 0.45, 0.10, 1.00),
@@ -178,6 +181,9 @@ def _unmapped(cfg: RunConfig) -> list[str]:
     if w.image_share:
         out.append(f"workload.image_share = {w.image_share:g}: the explorer "
                    "prices text only; images reach `ws test`, not the link")
+    if s.ttft_budget_s != 10:
+        out.append(f"slo.ttft_budget_s = {s.ttft_budget_s:g}: the explorer has no control "
+                   "for it (it no longer decides the verdict) and writes 10")
     if s.ttft_statistic == "percentile" and s.percentile not in TTFT_PCTS:
         near = min(TTFT_PCTS, key=lambda p: abs(p - s.percentile))
         out.append(f"slo.percentile = {s.percentile}: the explorer offers p90, p95 and p99; "

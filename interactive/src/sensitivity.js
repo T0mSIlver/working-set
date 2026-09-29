@@ -106,13 +106,15 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
         decodeSlotUsers(op.slotPu * vs, op.mns, think_, state.out, subR)).n;
   // the slowed-generation step lengths at the current settings; the axes
   // that move them (MFU, decode floor, the context draw) pass their own.
-  // sla_ no longer moves the verdict: the TTFT ceiling left it (issue #94)
+  // wait_ is the cold request wait limit and slowedPct_ the slowed share
+  // limit, so the two limits can be swept like any other assumption
   const steps0 = slowedSteps(model, topo, cs, prefillChunk());
-  const evalAt = (mo_, f_, sla_, think_, cacheU, decodeU, vs = 1, steps = steps0) => {
+  const evalAt = (mo_, f_, wait_, think_, cacheU, decodeU, vs = 1, steps = steps0,
+                  slowedPct_ = state.slowed_pct) => {
     const c = { cache: cacheU, decode: capD(decodeU, think_, vs),
-      cold_wait: reps * maxUsersColdWait(mo_, f_, state.cold_wait, think_, subR,
+      cold_wait: reps * maxUsersColdWait(mo_, f_, wait_, think_, subR,
                                          state.ttft_pct),
-      slowed: reps * maxUsersSlowed(mo_, steps, f_, state.slowed_pct/100,
+      slowed: reps * maxUsersSlowed(mo_, steps, f_, slowedPct_/100,
                                     think_, subR),
       saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };
     let bind = 'cache';
@@ -129,7 +131,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
 
   // a decode-speed axis at the current load and budgets
   const vRatio = decU => decodeNow > 0 ? decU / decodeNow : 1;
-  const speedAt = decU => evalAt(mo, f0, state.sla, state.think, cacheNow, decU, vRatio(decU));
+  const speedAt = decU => evalAt(mo, f0, state.cold_wait, state.think, cacheNow, decU, vRatio(decU));
   const axes = [];
   const sweep = (K, lo, hi, at, cur) => {
     const vs = [];
@@ -153,17 +155,22 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   axes.push({ label: 'Cache-miss rate', cur: f0, lo: 0, hi: fMax,
     fmt: v => fmt(v * 100, v > 0 && v < 0.02 ? 1 : 0) + '%', approx: false,
     pts: sweep(Math.round(80*fMax) + 1, 0, fMax, v =>
-      evalAt(mo, v, state.sla, state.think, warmFn(v) * reps, decodeNow), f0) });
+      evalAt(mo, v, state.cold_wait, state.think, warmFn(v) * reps, decodeNow), f0) });
   // 2 · think time — enters every rate linearly, closed form
   axes.push({ label: 'Think time', cur: state.think, lo: 5, hi: 180,
     fmt: v => fmt(v, 0) + ' s', approx: false,
     pts: sweep(36, 5, 180, v =>
-      evalAt(mo, f0, state.sla, v, cacheNow, decodeNow), state.think) });
-  // 3 · TTFT budget — moves the latency ceiling only, closed form
-  axes.push({ label: 'TTFT budget', cur: state.sla, lo: 1, hi: 60,
+      evalAt(mo, f0, state.cold_wait, v, cacheNow, decodeNow), state.think) });
+  // 3 · the two latency limits — each moves its own ceiling only, closed form
+  axes.push({ label: 'Cold request wait limit', cur: state.cold_wait, lo: 1, hi: 60,
     fmt: v => fmt(v, 0) + ' s', approx: false,
     pts: sweep(40, 1, 60, v =>
-      evalAt(mo, f0, v, state.think, cacheNow, decodeNow), state.sla) });
+      evalAt(mo, f0, v, state.think, cacheNow, decodeNow), state.cold_wait) });
+  axes.push({ label: 'Slowed generation limit', cur: state.slowed_pct, lo: 1, hi: 50,
+    fmt: v => fmt(v, 0) + '%', approx: false,
+    pts: sweep(40, 1, 50, v =>
+      evalAt(mo, f0, state.cold_wait, state.think, cacheNow, decodeNow, 1, steps0, v),
+      state.slowed_pct) });
   // 4 · warm turn size — re-prices the hit leg of the service moments; the
   //     moments read the liveTurn mirror, so swap it per point and restore
   {
@@ -175,7 +182,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
       pts = sweep(17, 250, 16000, v => {
         setLiveTurn(v);
         const mo2 = prefillServiceMoments(model, topo, wl, cs, prefillChunk());
-        return evalAt(mo2, f0, state.sla, state.think, cacheNow, decodeNow);
+        return evalAt(mo2, f0, state.cold_wait, state.think, cacheNow, decodeNow);
       }, state.turn);
     } finally { setLiveTurn(saved); }
     axes.push({ label: 'Warm turn size', cur: state.turn, lo: 250, hi: 16000,
@@ -196,7 +203,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
         ? decodeUsersApprox({ ...model, decode_lat: { ...model.decode_lat, mfu: v } },
                             topo, cs.samples) * calD * reps
         : decodeNow;
-      return evalAt(mo2, f0, state.sla, state.think, cacheNow, decU, vRatio(decU),
+      return evalAt(mo2, f0, state.cold_wait, state.think, cacheNow, decU, vRatio(decU),
                     slowedSteps(model, topo, cs, prefillChunk(), undefined, v));
     }, mfuCur) });
   // 6 · speculative-decode speedup — decode speed is exactly linear in it,
@@ -223,13 +230,13 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     axes.push({ label: 'Decode floor', cur: state.decode_floor, lo: 5, hi: 100,
       fmt: v => fmt(v, 0) + ' tok/s', approx: true,
       pts: sweep(20, 5, 100, v =>
-        evalAt(mo, f0, state.sla, state.think, cacheNow,
+        evalAt(mo, f0, state.cold_wait, state.think, cacheNow,
                decodeUsersApprox(model, topo, cs.samples, v) * calD * reps, 1,
                slowedSteps(model, topo, cs, prefillChunk(), v)),
         state.decode_floor) });
   // 7 & 8 · the prompt-length distribution — median and shape. Both re-draw
   //     the context stats (4k samples: flip resolution, not tile precision)
-  //     and move ALL FOUR ceilings through them.
+  //     and move ALL FIVE ceilings through them.
   const wlAxis = (label, key, lo, hi, cur, fmtFn) => {
     // seeds are keyed by VALUE, not sweep index: inserting the current value
     // into the grid must not shift every later point onto different draws
@@ -256,7 +263,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
     axes.push({ label, cur, lo, hi, fmt: fmtFn, approx: true,
       pts: sweep(13, lo, hi, v => {
         const q = at(v);
-        return evalAt(q.mo2, f0, state.sla, state.think,
+        return evalAt(q.mo2, f0, state.cold_wait, state.think,
                       q.warm * cC * reps, q.dec * cD * reps, vRatio(q.dec * cD * reps),
                       q.steps);
       }, cur) });

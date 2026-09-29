@@ -1,7 +1,7 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO } from './config.js';
-import { PREFILL_CHUNK, coldRequestSeconds, decodeFloor, prefillChunk, prefillSeconds } from './prefill.js';
+import { PREFILL_CHUNK, SPIKE_SLA_S, coldRequestSeconds, decodeFloor, prefillChunk, prefillSeconds } from './prefill.js';
 import { p_sub } from './workload.js';
-import { ramPerCache, state } from './state.js';
+import { STATE_DEFAULTS, ramPerCache, state } from './state.js';
 import { esc, fmt } from './svg.js';
 import { lastCS, lastSteady, lastWarmCur } from './render.js';
 import { encodeStateURL } from './main.js';
@@ -115,12 +115,18 @@ export function workingsetConfig(state, model, topo, wl){
       ...populationRows,
     ]],
     ['slo', [
-      ['ttft_budget_s', flt(state.sla)],
+      ['ttft_budget_s', flt(SPIKE_SLA_S)],
       ['itl_floor_tok_s', flt(decodeFloor())],
       // the percentile the probe measures; a mean page still measures p95,
       // and ttft_statistic makes `ws predict` check what the page checked
       ['percentile', state.ttft_pct === 'mean' ? 95 : parseInt(state.ttft_pct, 10)],
       ['ttft_statistic', state.ttft_pct === 'mean' ? 'miss_mean' : 'percentile'],
+      // the two limits the verdict uses, written only off their defaults (as
+      // RunConfig.to_dict does) so a file still loads in an older release
+      ...(state.slowed_pct !== STATE_DEFAULTS.slowed_pct
+        ? [['slowed_share_max', flt(state.slowed_pct / 100)]] : []),
+      ...(state.cold_wait !== STATE_DEFAULTS.cold_wait
+        ? [['cold_wait_budget_s', flt(state.cold_wait)]] : []),
     ]],
     ['endpoint', [
       ['base_url', 'http://localhost:8000/v1'],
@@ -219,7 +225,7 @@ function harnessHypotheses(P, model, topo, wl, reps){
         + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
     `H-latency: ${state.ttft_pct === 'mean' ? "a cache miss's mean TTFT"
         : `the p${state.ttft_pct} TTFT over all requests (model proxy: mean wait `
-          + `+ the p${state.ttft_pct} of the hit/miss service mixture)`} reaches the ${fmt(state.sla, 0)} s budget `
+          + `+ the p${state.ttft_pct} of the hit/miss service mixture)`} reaches the ${fmt(SPIKE_SLA_S, 0)} s budget `
       + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
     `H-saturation: prefill duty reaches 100% near ~${fmt(P.saturation_ceiling_users, 0)} `
       + `users${grp}; above it the queue has no steady state.`,

@@ -27,13 +27,13 @@ function hypothesis(){
     `<b>${esc(name)}</b> (${esc(String(state.wdt).toUpperCase())}) on <b>${state.ngpu}×${esc(state.gpu)}</b>, ${split}`
     + (chunk ? `, chunk ${n0(chunk / 1024)}k` : '')
     + `, serves ${who} with `
-    + (state.ttft_pct === 'mean' ? `a cache miss's mean time to first token under <b>${state.sla} s</b> `
-                                 : `a p${state.ttft_pct} time to first token under <b>${state.sla} s</b> `)
+    + `cold requests waiting under <b>${state.cold_wait} s</b> (${state.ttft_pct === 'mean' ? 'mean' : 'p' + state.ttft_pct}), `
+    + `generation slowed under <b>${state.slowed_pct}%</b> of the time, `
     + `and every user decoding at <b>${state.decode_floor} tok/s</b> or faster.`;
 }
 
 // "H-binding: the binding constraint is 'cache' — …" -> the row id it names
-const BIND = { cache: 'H-cache', decode: 'H-decode', latency: 'H-latency', saturation: 'H-saturation' };
+const BIND = { cache: 'H-cache', decode: 'H-decode', cold_wait: 'H-cold-wait', slowed: 'H-slowed', saturation: 'H-saturation' };
 function predictions(){
   const lis = [...document.querySelectorAll('#testBody details li')].map(li => li.textContent);
   const tb = document.querySelector('#predTable tbody');
@@ -46,7 +46,7 @@ function predictions(){
     return { id: t.slice(0, i).trim(), text: t.slice(i + 1).trim() };
   });
   const bindRow = rows.find(r => r.id === 'H-binding');
-  const bm = bindRow && bindRow.text.match(/'([a-z]+)'/);
+  const bm = bindRow && bindRow.text.match(/'([a-z_]+)'/);
   const binds = bm && BIND[bm[1]];
   tb.innerHTML = rows.map(r => {
     const decides = r.id === 'H-binding' || r.id === binds;

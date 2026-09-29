@@ -9,7 +9,7 @@ import { CEILING_KEYS, PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
    columns only (score on the active benchmark, the verdict at YOUR load, max
    users, what binds, €/seat); the rest are opt-in from the column picker.
    Clicking a header sorts by it; sort and optional columns are view state
-   and re-render from the cached rows. The four ceilings ride state.showCeil
+   and re-render from the cached rows. The five ceilings ride state.showCeil
    so old share links that set it still open with them. */
 export let lastFrontierRows = null, lastFrontierCurKey = null;
 const OPTIONAL = { otherBench: false, headroom: false, bstar: false, eur: false };
@@ -44,7 +44,7 @@ function frontierColumns(){
     sort:r => viable(r) ? r.op.limit : NaN,
     cell:r => {
       if (!viable(r)){
-        const why = r.op.binding === 'latency' ? 'cannot meet the TTFT budget at any load'
+        const why = r.op.binding === 'cold_wait' ? 'cold request wait exceeds its limit at any load'
           : r.op.binding === 'saturation' ? 'prefill saturates before one user'
           : `${PLANNER_LABEL[r.op.binding]} allows under one user`;
         return `<td class="num" style="color:${muted}">not viable<br><span style="font-size:10.5px">${esc(why)}</span></td>`;
@@ -94,7 +94,7 @@ export function renderFrontierTable(rows, curKey){
   }).map(([r]) => r) : rows;
   const other = Object.entries(CONFIG.BENCHES).find(([k]) => k !== state.bench);
   const picks = [['otherBench', other ? other[1].label : 'other benchmark'], ['headroom', 'headroom'],
-                 ['ceil', 'the four ceilings'], ['bstar', 'B*'], ['eur', '€/mo']];
+                 ['ceil', 'the five ceilings'], ['bstar', 'B*'], ['eur', '€/mo']];
   const picker = `<div class="colpick"><span class="lbl">columns</span>`
     + picks.map(([k, l]) => `<button type="button" data-col="${k}" aria-pressed="${k === 'ceil' ? state.showCeil : OPTIONAL[k]}">${esc(l)}</button>`).join('')
     + `</div>`;

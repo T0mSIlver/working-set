@@ -754,7 +754,7 @@ function renderChartE4(model, topo, mean, stepS){
       g+=`<text class="axtick" x="${(blocks[0].x0+blocks[blocks.length-1].x1)/2}" y="${yl}" text-anchor="middle">${blocks.length} gaps of ≈ ${fmt(meanMs,0)} ms</text>`;
     }
     g+=`<text class="axtick" x="${mL+pw+7}" y="${y+8}" text-anchor="start">worst ${fmt(Math.max(...r.ts)+stepS,2)} s</text>`;
-    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+19}" text-anchor="start" fill="${muted}">Σ frozen ${fmt(r.stall,2)} s</text>`;
+    g+=`<text class="axtick" x="${mL+pw+7}" y="${y+19}" text-anchor="start" fill="${muted}">Σ slowed ${fmt(r.stall,2)} s</text>`;
     // the miss's own side of the trade: its first token arrives when its LAST
     // chunk clears — later at small chunks, one interleaved decode step per
     // extra pass
