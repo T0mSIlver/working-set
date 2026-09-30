@@ -238,7 +238,9 @@ function harnessHypotheses(P, model, topo, wl, reps){
       + `(limit ${fmt(state.slowed_pct, 1)}%), and one cold request of the `
       + `p${stretchPct(state.ttft_pct)} prompt length keeps them slowed `
       + `~${P.slowed_stretch_s} s. H-itl-spike measures the size of one spike; `
-      + `this measures how much of the time streams spend slowed.`,
+      + `this measures how much of the time streams spend slowed. The measurement `
+      + `counts only gaps above the slow threshold, so a short final chunk escapes `
+      + `it and the measured share can sit a little under the prediction.`,
     `H-cold-wait: the ${state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`} wait `
       + `before a cold request's own prefill starts is `
       + `${P.cold_wait_s == null ? 'unbounded (past saturation)' : `~${P.cold_wait_s} s`} `
