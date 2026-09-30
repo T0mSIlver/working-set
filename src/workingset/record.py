@@ -153,7 +153,8 @@ def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
     else:
         notes.append(
             "No ladder was run: every capacity ceiling (cache, decode, "
-            "latency, saturation, and the binding one) is untested here.")
+            "cold wait, slowed generation, saturation, and the binding one) is "
+            "untested here.")
 
     # --- what the cheap probe did or did not establish -------------------
     if sample is not None and not sample_ok:
@@ -202,6 +203,11 @@ def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
         "Think time is exponential around a fixed mean; real agentic cadence "
         "is burstier (lognormal sigma 2.43 in the measured trace), which "
         "moves the latency ceiling down, not up.")
+    if any(r.get("slowed") for r in ok_rungs):
+        notes.append(
+            "Slowed speed counts each slow gap as the stream's mean tokens "
+            "per SSE event (completion tokens over events), since a gap "
+            "carries no token count of its own; MTP makes that an average.")
     if ok_rungs:
         notes.append(
             "One seed, one window per rung: no variance estimate. Steady "

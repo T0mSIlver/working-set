@@ -42,6 +42,7 @@ def print_report(rec, out=None) -> None:
     if rungs:
         _rung_table(w, rungs, p)
         _gap_table(w, rungs, thr, pred)
+        _latency_table(w, rungs, p, pred, slo)
         _image_table(w, rungs, p)
         ratios = [r.ptok_ratio for r in rungs if math.isfinite(r.ptok_ratio)]
         if ratios:
@@ -56,7 +57,8 @@ def print_report(rec, out=None) -> None:
     if rec.burst:
         _burst_block(w, rec.burst)
 
-    _capacity(w, rec, slo, p)
+    _capacity(w, rec, slo, p, latency=any(r.slowed or r.cold_wait
+                                          for r in rungs))
     _hypothesis_table(w, rec)
 
     w("\nWHAT THIS RUN DOES NOT ESTABLISH")
@@ -78,6 +80,38 @@ def _rung_table(w, rungs, p) -> None:
           f"{fmt(r.ttft_miss_p50, '', 2):>8}/{fmt(r.ttft_miss_pX, 's', 2):<9} "
           f"{fmt(r.decode_p50, '', 1):>8} {fmt(r.achieved_rps, '', 2):>6} "
           f"{verdict}")
+
+
+def _latency_table(w, rungs, p, pred, slo) -> None:
+    """The two latency limits per rung. Left out for a record that predates
+    them, which then reports exactly as it did."""
+    if not any(r.slowed or r.cold_wait for r in rungs):
+        return
+    src = next((r.cold_wait["idle_source"] for r in rungs if r.cold_wait), "?")
+    thr = next((r.slowed["threshold_ms"] for r in rungs if r.slowed), None)
+    w(f"\nLATENCY LIMITS — slowed = a gap >= {fmt(thr, ' ms', 0)} (half the "
+      "predicted mixed step unless --freeze-threshold-ms overrode it); cold "
+      f"wait = client TTFT minus the idle prefill time (from the {src})")
+    w(f"{'users':>6} {'slowed share':>13} {'slowed tok/s':>13} "
+      f"{'longest run':>12} {f'p{p} run':>9} {f'cold wait p{p}':>15} "
+      f"{'(mean)':>8} {'n cold':>7} {'server queue':>13}")
+    for r in rungs:
+        s, c, q = r.slowed, r.cold_wait, r.queue_time
+        w(f"{r.pop:>6} {_pct(s.get('share')):>13} "
+          f"{fmt(s.get('speed_tok_s'), '', 1):>13} "
+          f"{fmt(s.get('longest_run_s'), 's', 1):>12} "
+          f"{fmt(s.get('run_pX_s'), 's', 1):>9} "
+          f"{fmt(c.get('pX_s'), 's', 2):>15} {fmt(c.get('mean_s'), 's', 2):>8} "
+          f"{c.get('n', 0):>7} {fmt(q.get('mean_s'), 's', 2):>13}")
+    w(f"  predicted at the ~{pred.get('operating_point_users', 0):g}-user "
+      f"operating point: slowed {_pct(pred.get('slowed_share'))} of the time "
+      f"at {pred.get('slowed_speed_tok_s', 0):g} tok/s, one p{p}-length cold "
+      f"request slows streams for {pred.get('slowed_stretch_s', 0):g} s, "
+      f"cold wait p{p} {fmt(pred.get('cold_wait_s'), 's', 2)}")
+    w("  server queue = mean of vLLM's request_queue_time_seconds over the "
+      "window; it stops at the first scheduling of a request, which is not "
+      "the start of its prefill when prefills share a step, so it is shown "
+      "beside the client wait and not forced to agree with it")
 
 
 def _image_table(w, rungs, p) -> None:
@@ -255,6 +289,7 @@ def _shared_block(w, sh: dict) -> None:
         if r.get("available") and r.get("upward_bias"):
             w(f"  {'':<10}    NOTE {r['upward_bias']}")
         _hit_cross_check(w, name, f, r, sh)
+    _idle_cold_table(w, sh.get("idle_cold"))
     lad = sh.get("natural_ladder") or []
     if lad:
         modelled = any(b.get("model") for b in lad)
@@ -288,6 +323,36 @@ def _shared_block(w, sh: dict) -> None:
               "that batch (bisected on the model's own steady decode point). "
               "The bins are observations, not a load the run set.")
     _cross_block(w, sh.get("cross_check"))
+
+
+def _idle_cold_table(w, t: dict | None) -> None:
+    if not t or not t.get("rows"):
+        return
+    w("\n  COLD REQUEST, IDLE SERVER — a property of the deployment, not a "
+      "limit. TTFT of the sweep's forced misses at each swept length; `fit` "
+      "is the forced-miss fit read at running = waiting = 0")
+    w(f"  {'prompt':>9} {'n':>3} {'quiet':>5} {'best':>8} {'p50':>8} "
+      f"{'fit':>8} {'model':>8}")
+    for r in t["rows"]:
+        w(f"  {r['tokens'] / 1e3:>8.1f}k {r['n']:>3} {r['n_quiet']:>5} "
+          f"{fmt(r['ttft_min_s'], 's'):>8} {fmt(r['ttft_p50_s'], 's'):>8} "
+          f"{fmt(r.get('fit_s'), 's'):>8} {fmt(r.get('model_s'), 's'):>8}")
+    cap = t.get("max_model_len") or {}
+    how = ("extrapolated beyond the longest swept length"
+           if cap.get("extrapolated") else "inside the swept range")
+    w(f"  {cap.get('tokens', 0) / 1e3:>8.1f}k {'':>3} {'':>5} {'':>8} {'':>8} "
+      f"{fmt(cap.get('fit_s'), 's'):>8} {fmt(cap.get('model_s'), 's'):>8}"
+      f"   max_model_len, fit {how}")
+    if t.get("fit_refused"):
+        w(f"  no fit column: {t['fit_refused']}")
+    held = {c: v for c, v in (t.get("fit_pinned") or {}).items() if v}
+    if held:
+        w("  the fit held " + ", ".join(f"{c}@{v:g}" for c, v in held.items())
+          + " in every observation, so it is read at that load, not at an "
+            "idle server")
+    w("  `quiet` = misses whose own covariates showed nothing else running "
+      "or waiting; `best` is the fastest one, the nearest thing to an idle "
+      "reading a shared server gives")
 
 
 def _hit_cross_check(w, name: str, f: dict, r: dict, sh: dict) -> None:
@@ -380,6 +445,19 @@ def _burst_block(w, b: dict) -> None:
     if extra > 0:
         w(f"  note: {extra} standing turn(s) were still waiting for a first "
           "token at the fire; their prefill is part of the drain above")
+    sl, cw = b.get("slowed") or {}, b.get("cold_wait") or {}
+    if sl:
+        w(f"  slowed generation: standing streams in flight at the fire were "
+          f"slowed {_pct(sl.get('share'))} of their time at "
+          f"{fmt(sl.get('speed_tok_s'), ' tok/s', 1)}, longest run "
+          f"{fmt(sl.get('longest_run_s'), 's', 1)}")
+    if cw:
+        q = b.get("queue_time") or {}
+        w(f"  cold wait of the fired misses: "
+          f"{fmt(cw.get('pX_s'), 's', 2)} at the configured percentile, mean "
+          f"{fmt(cw.get('mean_s'), 's', 2)}"
+          f" over {cw.get('n', 0)} (server queue mean "
+          f"{fmt(q.get('mean_s'), 's', 2)})")
     if b.get("standing_n"):
         w(f"  standing load hit by it: {b['standing_n']} responses in flight "
           f"| normal gap {fmt(b.get('standing_itl_p50_ms'), ' ms', 1)} | "
@@ -393,11 +471,18 @@ def _burst_block(w, b: dict) -> None:
                          for e in lad))
 
 
-def _capacity(w, rec, slo, p) -> None:
+def _capacity(w, rec, slo, p, latency: bool = False) -> None:
     lo, hi = (rec.measured_capacity_bracket + [None, None])[:2]
-    w("\nMEASURED SLO CAPACITY "
-      f"(p{p} TTFT <= {slo.get('ttft_budget_s', 10):g}s AND per-user p50 "
-      f"decode >= {slo.get('itl_floor_tok_s', 40):g} tok/s):")
+    floor = f"per-user p50 decode >= {slo.get('itl_floor_tok_s', 40):g} tok/s"
+    if latency:
+        what = ("mean" if slo.get("ttft_statistic") == "miss_mean"
+                else f"p{p}")
+        rule = (f"slowed <= {slo.get('slowed_share_max', 0.05):.1%} of the "
+                f"time AND {what} cold wait <= "
+                f"{slo.get('cold_wait_budget_s', 5.0):g}s AND {floor}")
+    else:
+        rule = (f"p{p} TTFT <= {slo.get('ttft_budget_s', 10):g}s AND {floor}")
+    w(f"\nMEASURED SLO CAPACITY ({rule}):")
     if lo is not None and hi is not None:
         w(f"  in ({lo}, {hi}] — largest passing population {lo} users")
     elif lo is not None:

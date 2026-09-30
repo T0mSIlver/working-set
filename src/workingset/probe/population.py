@@ -33,6 +33,8 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 
+from .latency import (COLD_KINDS, cold_wait_stats, model_idle_prefill,
+                      queue_time, slow_threshold_ms, slowed_stats)
 from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_ready,
                       sampler_window, send_request)
 from .session import Prefixes, make_session
@@ -88,12 +90,21 @@ class Rung:
     spike: dict = field(default_factory=dict)   # see probe.spike_evidence
     server: dict | None = None         # metrics window delta, opaque
     images: dict | None = None         # see image_split; None = text only
+    # the two latency limits, each empty when the window held nothing to
+    # measure them on (and then left out of the record, so an older record
+    # re-reports unchanged): see probe.latency
+    slowed: dict = field(default_factory=dict)       # share, speed, run
+    cold_wait: dict = field(default_factory=dict)    # p-th client wait
+    queue_time: dict = field(default_factory=dict)   # vLLM's own histogram
     traces: list = field(default_factory=list, repr=False)
 
     def to_dict(self, traces: bool = True) -> dict:
         d = {k: v for k, v in asdict(self).items() if k != "traces"}
         if d["images"] is None:
             d.pop("images")
+        for k in ("slowed", "cold_wait", "queue_time"):
+            if not d[k]:
+                d.pop(k)
         d["traces"] = [t.to_dict() for t in self.traces] if traces else []
         return d
 
@@ -307,8 +318,25 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     res.ptok_ratio = pct(ratios, 50)
     res.images = image_split(hit, p)
 
-    # SLO verdict for this rung
-    budget, floor = slo.ttft_budget_s, slo.itl_floor_tok_s
+    # the two latency limits. Slowed generation is read over the measured
+    # streams; cold wait over every cold request that started inside the
+    # window, establishing turns included (each is a cold prefill).
+    thr_ms, _ = slow_threshold_ms(cfg, opts)
+    res.slowed = slowed_stats(ok, thr_ms, p)
+    cold = [t for t in traces if t.t_send >= measure_start
+            and t.kind in COLD_KINDS]
+    res.cold_wait = cold_wait_stats(
+        cold, model_idle_prefill(cfg), p,
+        mean=slo.ttft_statistic == "miss_mean", source="model")
+    res.queue_time = queue_time(server)
+
+    # SLO verdict for this rung: the two latency limits, the decode floor and
+    # the error rate
+    max_share, budget = slo.slowed_share_max, slo.cold_wait_budget_s
+    floor = slo.itl_floor_tok_s
+    share = res.slowed.get("share", float("nan"))
+    wait = res.cold_wait.get("value_s", float("nan"))
+    what = "mean" if slo.ttft_statistic == "miss_mean" else f"p{p}"
     err_frac = res.n_err / max(len(measured), 1)
     if not ok:
         res.reasons.append("no successful turns in the measure window")
@@ -316,11 +344,15 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     else:
         if err_frac > 0.05:
             res.reasons.append(f"error rate {err_frac:.0%}")
-        if res.ttft_all_pX > budget:
-            res.reasons.append(f"p{p} TTFT {res.ttft_all_pX:.2f}s > {budget:g}s")
+        if math.isfinite(share) and share > max_share:
+            res.reasons.append(f"slowed {share:.1%} of the time > "
+                               f"{max_share:.1%}")
+        if math.isfinite(wait) and wait > budget:
+            res.reasons.append(f"{what} cold wait {wait:.2f}s > {budget:g}s")
         if math.isfinite(res.decode_p50) and res.decode_p50 < floor:
             res.reasons.append(f"decode p50 {res.decode_p50:.1f} < {floor:g} tok/s")
-        res.blown = (res.ttft_all_pX > 2 * budget
+        res.blown = ((math.isfinite(wait) and wait > 2 * budget)
+                     or (math.isfinite(share) and share > min(1.0, 2 * max_share))
                      or (math.isfinite(res.decode_p50)
                          and res.decode_p50 < 0.5 * floor)
                      or err_frac > 0.20)

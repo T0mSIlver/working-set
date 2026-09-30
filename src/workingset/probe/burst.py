@@ -19,6 +19,8 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 
+from .latency import (cold_wait_stats, model_idle_prefill, queue_time,
+                      slow_threshold_ms, slowed_stats)
 from .population import spike_evidence, user_loop
 from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_ready,
                       sampler_window, send_request)
@@ -97,11 +99,20 @@ class BurstResult:
     standing_freeze_per_ktok: float | None = None
     standing_freeze_ladder: list | None = None
     spike: dict = field(default_factory=dict)   # see probe.spike_evidence
+    # the two latency limits, read from the same probe: the standing streams
+    # in flight at the fire give the slowed share, the fired misses give the
+    # cold wait. Empty (and left out of the record) when not computed.
+    slowed: dict = field(default_factory=dict)
+    cold_wait: dict = field(default_factory=dict)
+    queue_time: dict = field(default_factory=dict)
     server: dict | None = None
     traces: list = field(default_factory=list, repr=False)
 
     def to_dict(self, traces: bool = True) -> dict:
         d = {k: v for k, v in asdict(self).items() if k != "traces"}
+        for k in ("slowed", "cold_wait", "queue_time"):
+            if not d[k]:
+                d.pop(k)
         d["traces"] = [t.to_dict() for t in self.traces] if traces else []
         return d
 
@@ -126,7 +137,7 @@ def burst_prompt_tokens(traces: list) -> list[int]:
 def eval_burst(n: int, standing_users: int, burst_traces: list,
                standing_traces: list, t_fire: float,
                server: dict | None = None,
-               cap_tokens: float = 0.0) -> BurstResult:
+               cap_tokens: float = 0.0, cfg=None, opts=None) -> BurstResult:
     """Pure: the burst's drain and the standing load's gap distribution.
 
     `last_ttft_s` and `drain_s` are the max over the requests that ANSWERED.
@@ -179,6 +190,14 @@ def eval_burst(n: int, standing_users: int, burst_traces: list,
                 {"threshold_ms": thr,
                  "per_ktok": 1e3 * sum(t.n_freeze_at[i] for t in v_tok) / ctoks}
                 for i, thr in enumerate(FREEZE_LADDER_MS)]
+    if cfg is not None and opts is not None:
+        p = cfg.slo.percentile
+        thr_ms, _ = slow_threshold_ms(cfg, opts)
+        r.slowed = slowed_stats(victims, thr_ms, p)
+        r.cold_wait = cold_wait_stats(
+            burst_traces, model_idle_prefill(cfg), p,
+            mean=cfg.slo.ttft_statistic == "miss_mean", source="model")
+        r.queue_time = queue_time(server)
     r.traces = list(burst_traces)
     return r
 
@@ -249,7 +268,7 @@ async def run_burst(client, ep: EndpointSpec, cfg, opts, n: int,
 
     server = await sampler_window(metrics, w_start, sampler_now(metrics))
     res = eval_burst(n, pop, burst_traces, traces, t_fire, server,
-                     cap_tokens=opts.context_cap_tokens)
+                     cap_tokens=opts.context_cap_tokens, cfg=cfg, opts=opts)
     res.establish_wait_s, res.n_establishing_at_fire = wait_s, n_pending
     res.n_standing_prefilling_at_fire = n_prefilling
     return res

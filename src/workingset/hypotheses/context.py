@@ -55,16 +55,8 @@ class LadderView:
                    default=None)
 
     @property
-    def ttft_fails(self) -> list[int]:
-        return self._fails_on("TTFT")
-
-    @property
     def decode_fails(self) -> list[int]:
         return self._fails_on("decode")
-
-    @property
-    def latency_lo(self) -> int | None:
-        return self._lo_for("TTFT")
 
     @property
     def decode_lo(self) -> int | None:
