@@ -124,7 +124,9 @@ class HSlowed(Hypothesis):
             f"of the p{slo.percentile} prompt length keeps them slowed "
             f"~{p.slowed_stretch_s:g} s. H-itl-spike measures the size of "
             "one spike; this measures how much of the time streams spend "
-            "slowed.")
+            "slowed. The measurement counts only gaps above the slow "
+            "threshold, so a short final chunk escapes it and the measured "
+            "share can sit a little under the prediction.")
 
     def predict(self, cfg, p) -> Prediction:
         return _ceiling_prediction(p.slowed_ceiling_users)
