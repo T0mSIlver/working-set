@@ -158,6 +158,7 @@ input[type=range]:disabled{opacity:.38}
 @media (max-width:900px){ .tiles{grid-template-columns:repeat(2,1fr)} }
 @media (max-width:620px){ .tiles{grid-template-columns:1fr} .tile.hero{grid-column:span 1} }
 .tile.wide{grid-column:span 2}
+.tile.full{grid-column:1/-1}
 @media (max-width:760px){ .tiles{grid-template-columns:repeat(2,1fr)} }
 .tile{background:var(--tile); border:1px solid var(--border); border-radius:11px; padding:13px 15px; box-shadow:var(--shadow);}
 .tile .k{font-size:11.5px; color:var(--muted); font-weight:560; letter-spacing:.01em}
@@ -203,6 +204,7 @@ svg.chart{width:100%; height:auto; display:block; overflow:visible}
    readers who cannot separate the hues */
 .legend .sw.dash7{background-image:repeating-linear-gradient(90deg,transparent 0 3px,var(--surface) 3px 5px)}
 .legend .sw.dash2{background-image:repeating-linear-gradient(90deg,transparent 0 2px,var(--surface) 2px 4px)}
+.legend .sw.dash5{background-image:repeating-linear-gradient(90deg,transparent 0 5px,var(--surface) 5px 7px,transparent 7px 8px,var(--surface) 8px 10px)}
 .legend .sw.dash11{background-image:repeating-linear-gradient(90deg,transparent 0 6px,var(--surface) 6px 8px)}
 
 /* tooltip */
@@ -532,15 +534,19 @@ details.more .more-body{padding:0 0 16px}
           <input class="population" type="number" id="i-headcount" min="0" step="1" inputmode="numeric" placeholder="people with access">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Time to first token the SLO allows, at the statistic picked below it. p90, p95 and p99 are over all requests, hits and misses, as the load test measures them; the model checks mean queue wait plus the percentile of the hit/miss service mix, not the true percentile. mean is the older reading, a cache miss's mean TTFT. Sets the latency ceiling. B*, the burst drain and f_sla still use a miss's mean.">TTFT budget</span> <span class="val"><span id="v-sla-stat">p95 all req.</span> ≤ <span id="v-sla">10</span> s</span></label>
-          <input type="range" id="s-sla" min="1" max="60" step="1" value="10">
-          <div class="seg" id="seg-ttft_pct" data-key="ttft_pct" role="group" aria-label="TTFT statistic">
+          <label class="flabel"><span class="tip" data-tip="How long a cold request (a cache miss or a compaction) may wait before its own prefill starts, queued behind the prefills already waiting. The percentile picked below it is of that wait; the model reads it off an exponential tail with the queue's mean wait. Sets the cold wait ceiling.">Cold request waits at most</span> <span class="val"><span id="v-wait-stat">p95</span> ≤ <span id="v-cold_wait">5</span> s</span></label>
+          <input type="range" id="s-cold_wait" min="1" max="60" step="1" value="5">
+          <div class="seg" id="seg-ttft_pct" data-key="ttft_pct" role="group" aria-label="Cold request wait statistic">
             <button data-v="mean" aria-pressed="false">mean</button>
             <button data-v="90" aria-pressed="false">p90</button>
             <button data-v="95" aria-pressed="true">p95</button>
             <button data-v="99" aria-pressed="false">p99</button>
           </div>
-      </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="The most wall time streams may spend slowed by a cold prompt being prefilled. While one is, every GPU step carries a chunk of it on top of the running decodes, so each stream drops to a few tokens per second. Sets the slowed generation ceiling.">Generation slowed at most</span> <span class="val"><span id="v-slowed_pct">5</span>% of the time</span></label>
+          <input type="range" id="s-slowed_pct" min="1" max="50" step="1" value="5">
+        </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Decode speed each session must keep when every warm session decodes at once. The decode ceiling is solved against it. The study uses 40 tok/s; the comfortable mark is 1.25× the floor. Agents want 40 or more; a person reading chat reads 5 to 8 tok/s. Halving the floor roughly doubles the decode ceiling.">Per-user decode floor</span> <span class="val"><span id="v-decode_floor">40</span> tok/s</span></label>
           <input type="range" id="s-decode_floor" min="5" max="100" step="1" value="40">
@@ -671,7 +677,7 @@ details.more .more-body{padding:0 0 16px}
         </div>
       </div>
       <div class="ctl-group">
-        <div class="ctl-sec">Latency budget &amp; cold traffic</div>
+        <div class="ctl-sec">Cold traffic</div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Share of requests that match no cached KV (edited prefix, changed tools, a per-tenant salt), drawn independently per request. 10% is the adverse planning case. At 100% nothing matches, not even the shared prefix. A correlated flush is worse than any value here; the cold burst size covers it.">Cache-miss (invalidation) rate</span> <span class="val"><span id="v-inval">1.0</span>%</span></label>
           <input type="range" id="s-inval" min="0" max="100" step="0.5" value="1">
@@ -775,7 +781,8 @@ details.more .more-body{padding:0 0 16px}
       <div class="legend">
         <span class="li"><span class="sw dot" style="background:var(--s1)"></span>binds on cache</span>
         <span class="li"><span class="sw dot" style="background:var(--s4)"></span>decode</span>
-        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>latency</span>
+        <span class="li"><span class="sw dot" style="background:var(--s2)"></span>cold wait</span>
+        <span class="li"><span class="sw dot" style="background:var(--s3)"></span>slowed generation</span>
         <span class="li"><span class="sw dot" style="background:var(--muted)"></span>saturation</span>
         <span class="li"><span class="sw" style="background:var(--muted)"></span>efficient set</span>
         <span class="li"><span class="sw dot" style="background:var(--muted); opacity:.35"></span>dominated</span>
@@ -862,6 +869,24 @@ details.more .more-body{padding:0 0 16px}
 
   <div class="charts">
     <div class="panel card">
+      <p class="ct">I · Slowed generation against load</p>
+      <div class="chartbox"><div id="chartI1"></div></div>
+    </div>
+
+    <div class="panel card">
+      <p class="ct">J · Cold request wait against load</p>
+      <div class="chartbox"><div id="chartI2"></div></div>
+    </div>
+  </div>
+
+  <div class="panel card" style="margin-bottom:14px">
+    <p class="ct">Cold request, idle server</p>
+    <p class="sub2" style="margin:0 0 6px">Prefill time of one cold prompt with nothing else running. A property of the deployment, not a limit.</p>
+    <div class="ftable-wrap"><table class="ftable" style="min-width:0;width:100%"><thead><tr><th>Prompt</th><th class="num">Prefill time</th></tr></thead><tbody id="idleTtftBody"></tbody></table></div>
+  </div>
+
+  <div class="charts">
+    <div class="panel card">
       <p class="ct">E2 · Anatomy of one pass — the toll and the math</p>
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--muted)"></span>weight-stream toll (fixed)</span>
@@ -884,7 +909,7 @@ details.more .more-body{padding:0 0 16px}
     <div class="panel card">
       <p class="ct">E4 · What a decoder feels — the token stream itself</p>
       <div class="legend">
-        <span class="li"><span class="sw" style="background:var(--s3)"></span>stream frozen behind a chunk</span>
+        <span class="li"><span class="sw" style="background:var(--s3)"></span>stream slowed behind a chunk</span>
         <span class="li"><span class="sw" style="background:var(--axis); width:2px; height:10px"></span>a token arrives</span>
         <span class="li"><span class="sw" style="background:var(--s2); width:9px; height:9px; clip-path:polygon(50% 0,0 100%,100% 100%)"></span>the miss's first token</span>
       </div>
@@ -892,7 +917,7 @@ details.more .more-body{padding:0 0 16px}
     </div>
   </div>
 </div></details>
-<details class="hood" id="ceilings"><summary><span class="lbl">All four ceilings</span></summary>
+<details class="hood" id="ceilings"><summary><span class="lbl">All five ceilings</span></summary>
 <div class="hood-body">
   <div class="panel card" id="ceilingCard" style="margin-bottom:14px">
     <p class="ct">Max users under each constraint</p>
@@ -904,7 +929,8 @@ details.more .more-body{padding:0 0 16px}
       <div class="legend">
         <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
         <span class="li"><span class="sw dash7" style="background:var(--s4)"></span>decode</span>
-        <span class="li"><span class="sw dash2" style="background:var(--s2)"></span>latency</span>
+        <span class="li"><span class="sw dash2" style="background:var(--s2)"></span>cold wait</span>
+        <span class="li"><span class="sw dash5" style="background:var(--s3)"></span>slowed generation</span>
         <span class="li"><span class="sw dash11" style="background:var(--muted)"></span>saturation</span>
         <span class="li"><span class="sw dot" style="background:var(--text)"></span>your load (red if over)</span>
       </div>

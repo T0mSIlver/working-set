@@ -194,8 +194,8 @@ def test_explorer_toml_names_every_field():
         # opt-in decode pricing: written only when selected, as dumps() does
         # (explorer_decode_latency_mns.toml carries all four)
         want -= {"decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens"}
-        # the page has no control for these two yet, so it can only mean the
-        # defaults, which is what a file without them reads as
+        # like the image keys, written only off their defaults (the page has
+        # controls; explorer_every_knob.toml carries both)
         want -= {"slowed_share_max", "cold_wait_budget_s"}
         if block == "workload":
             want -= {"headcount", "peak_active_share", "sessions_per_active_user"}

@@ -268,7 +268,8 @@ const sliderMap=[
   ['s-active','active',v=>parseFloat(v)],
   ['s-spu','spu',v=>parseFloat(v)],
   ['s-think','think',v=>parseInt(v,10)],
-  ['s-sla','sla',v=>parseInt(v,10)],
+  ['s-cold_wait','cold_wait',v=>parseInt(v,10)],
+  ['s-slowed_pct','slowed_pct',v=>parseInt(v,10)],
   ['s-decode_floor','decode_floor',v=>parseInt(v,10)],
   ['s-turn','turn',v=>parseInt(v,10)],
   ['s-out','out',v=>parseInt(v,10)],
@@ -412,8 +413,9 @@ function syncLabels(){
     document.getElementById('v-pop-sessions').textContent = 'optional';
   }
   document.getElementById('v-think').textContent=fmt(state.think,0);
-  document.getElementById('v-sla').textContent=fmt(state.sla,0);
-  document.getElementById('v-sla-stat').textContent=ttftStatLabel();
+  document.getElementById('v-cold_wait').textContent=fmt(state.cold_wait,0);
+  document.getElementById('v-slowed_pct').textContent=fmt(state.slowed_pct,0);
+  document.getElementById('v-wait-stat').textContent=waitStatLabel();
   document.getElementById('v-decode_floor').textContent=fmt(state.decode_floor,0);
   document.getElementById('v-turn').textContent=fmt(state.turn,0);
   document.getElementById('v-out').textContent=fmt(state.out,0);
@@ -486,8 +488,8 @@ function syncLabels(){
   document.getElementById('v-gpuh').textContent=state.gpuh.toFixed(2);
 }
 
-// the statistic the TTFT budget is checked at, as the budget label prints it
-function ttftStatLabel(){ return state.ttft_pct === 'mean' ? 'miss mean' : `p${state.ttft_pct} all req.`; }
+// the statistic the cold request wait limit is checked at, as its label prints it
+function waitStatLabel(){ return state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`; }
 
 /* ---- share link: the whole configuration in the URL fragment ------------
    Encodes only the DIFFS from STATE_DEFAULTS, so a default page shares as a

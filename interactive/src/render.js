@@ -4,7 +4,7 @@ import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
          decodeFloor, capDecodeUsers, decodePowerUsers, decodeSlotMean, decodeSlotUsers, effectiveMns, maxUsersDecode, p50AtCap, recommendedMns, missContextSeconds, operatingPoint, prefillChunk,
          prefillContextSeconds, prefillSeconds, prefillServiceMoments, serverRate,
          setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint, steadyResident,
-         ttftMoments } from './prefill.js';
+         SPIKE_SLA_S, slowedShare, slowedStretch, coldWait, stretchPct, ttftMoments } from './prefill.js';
 import { samplingSig, seedFor } from './mathlib.js';
 import { p_sub } from './workload.js';
 import { decodeCurves, decodeLatency, decodeMbu, decodePlan, warmCapacity } from './capacity.js';
@@ -12,7 +12,7 @@ import { currentTopo, currentWL, ramPerCache, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartEData, clearChartGeomCD, interpAt, renderChartA, renderChartB,
          renderChartC, renderChartD, renderChartE, renderChartECompanions, renderNoFit } from './charts.js';
-import { bStar, fAxisMax, plannerData, renderBindingChart, renderCeilingBars,
+import { bStar, fAxisMax, plannerData, renderBindingChart, renderCeilingBars, renderLatencyCharts,
          renderSpikeChart, renderSpikeTiles, warmUsersCurve, warmUsersNow } from './planner.js';
 import { renderTestCard } from './harness.js';
 import { energyCost, renderCostCard } from './cost.js';
@@ -219,7 +219,7 @@ export let pendingLoadTiles = [];   // act-2 tiles from renderTiles, painted by 
 function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode){
   if (noFit){
     renderSpikeTiles(null, null, model, topo, wl, cs, true, fitHintFor(model, topo));
-    renderBindingChart(null); renderSpikeChart(null); renderCeilingBars(null);
+    renderBindingChart(null); renderLatencyCharts(null); renderSpikeChart(null); renderCeilingBars(null);
     renderDeployCard(null); renderTestCard(null); renderCostCard(null);
     renderFlipPanel(null); setLastFlipAxes(null);
     // The frontier enumerates every configuration and does not depend on the
@@ -309,9 +309,9 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   const dm = itlSpikeRatio(model, topo, wl, cs);
   const ttft = ttftMoments(mo, f, rate, sp.rho);
   Object.assign(op, {
-    bstar:   bStar(mo,   f, state.sla, rate),
-    bstarLo: bStar(moLo, f, state.sla, rate),
-    bstarHi: bStar(moHi, f, state.sla, rate),
+    bstar:   bStar(mo,   f, SPIKE_SLA_S, rate),
+    bstarLo: bStar(moLo, f, SPIKE_SLA_S, rate),
+    bstarHi: bStar(moHi, f, SPIKE_SLA_S, rate),
     fstar:   breakevenMissRate(model, topo, wl, rate, cs, prefillChunk()),
     fsla:    sp.fsla, duty: sp.rho,
     burstDrain: sp.rho >= 1 ? Infinity : drain,
@@ -320,6 +320,12 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     ttftMiss:    ttft.miss,
     ttftHitFcfs: ttft.hitFcfs,
     ttftHitPs:   ttft.hitPs,
+    // the two limits users feel, at this load (per group, like the ceilings)
+    slowedNow:    slowedShare(mo, op.steps, f, rate),
+    stretchNow:   slowedStretch(model, topo, cs, prefillChunk(), op.steps,
+                                stretchPct(state.ttft_pct)),
+    coldWaitNow:  coldWait(mo, f, rate, state.ttft_pct),
+    coldWaitMean: coldWait(mo, f, rate, 'mean'),
   });
   renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
   renderCeilingBars(op);
@@ -329,6 +335,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   // ceiling x floor, or under a max_num_seqs cap the aggregate at the cap
   renderCostCard(op, model, topo, wl, mo, decodePower);
   renderBindingChart(d, op);
+  renderLatencyCharts(op, model, topo, wl, mo);
 
   // context lines on the spike chart: the same model at other widths that fit
   const others = [];
@@ -340,7 +347,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     if (kv_pool_tokens(model, t2) <= 0) continue;
     const m2 = prefillServiceMoments(model, t2, wl, cs, prefillChunk());
     const r2 = serverRate(state.users, state.think, wl.sub_ratio);
-    others.push({ fs: d.fs, b: d.fs.map(x => bStar(m2, x, state.sla, r2)) });
+    others.push({ fs: d.fs, b: d.fs.map(x => bStar(m2, x, SPIKE_SLA_S, r2)) });
   }
   renderSpikeChart(d, others);
   renderFrontierSection(wl, cs, draft, q, deferFrontierDecode);
@@ -586,7 +593,7 @@ function assembleFrontier(wl, cs){
                mo: mo2, reps: r.reps,
                warmUsers: r.warmUsers, decodeUsers: r.decodeUsers });
     return { ...r, op,
-             bstar: bStar(mo2, f, state.sla, r2),
+             bstar: bStar(mo2, f, SPIKE_SLA_S, r2),
              // the whole bill at YOUR load — hardware plus energy
              // (research/power.md) — comparable across rows because every
              // row is priced at the same demand and the same €/GPU-hour
@@ -813,6 +820,6 @@ export function paintTiles(id, tiles, colMap){
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
     const badge = t.cls? `<span class="badge" style="color:${colMap[t.cls]};border-color:${colMap[t.cls]}">${CLS_WORD[t.cls]}</span>`:'';
     const kk = t.tip? `<span class="tip" tabindex="0" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
-    return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}"><div class="k">${kk}${badge}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
+    return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}${t.full?' full':''}"><div class="k">${kk}${badge}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
   }).join('');
 }

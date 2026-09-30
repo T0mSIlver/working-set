@@ -1,7 +1,7 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO } from './config.js';
-import { PREFILL_CHUNK, coldRequestSeconds, decodeFloor, prefillChunk, prefillSeconds } from './prefill.js';
+import { PREFILL_CHUNK, SPIKE_SLA_S, coldRequestSeconds, decodeFloor, prefillChunk, prefillSeconds, stretchPct } from './prefill.js';
 import { p_sub } from './workload.js';
-import { ramPerCache, state } from './state.js';
+import { STATE_DEFAULTS, ramPerCache, state } from './state.js';
 import { esc, fmt } from './svg.js';
 import { lastCS, lastSteady, lastWarmCur } from './render.js';
 import { encodeStateURL } from './main.js';
@@ -115,12 +115,18 @@ export function workingsetConfig(state, model, topo, wl){
       ...populationRows,
     ]],
     ['slo', [
-      ['ttft_budget_s', flt(state.sla)],
+      ['ttft_budget_s', flt(SPIKE_SLA_S)],
       ['itl_floor_tok_s', flt(decodeFloor())],
       // the percentile the probe measures; a mean page still measures p95,
       // and ttft_statistic makes `ws predict` check what the page checked
       ['percentile', state.ttft_pct === 'mean' ? 95 : parseInt(state.ttft_pct, 10)],
       ['ttft_statistic', state.ttft_pct === 'mean' ? 'miss_mean' : 'percentile'],
+      // the two limits the verdict uses, written only off their defaults (as
+      // RunConfig.to_dict does) so a file still loads in an older release
+      ...(state.slowed_pct !== STATE_DEFAULTS.slowed_pct
+        ? [['slowed_share_max', flt(state.slowed_pct / 100)]] : []),
+      ...(state.cold_wait !== STATE_DEFAULTS.cold_wait
+        ? [['cold_wait_budget_s', flt(state.cold_wait)]] : []),
     ]],
     ['endpoint', [
       ['base_url', 'http://localhost:8000/v1'],
@@ -180,6 +186,11 @@ function harnessPredictions(op, model, wl, topo){
     operating_point_users: op.users / reps,
     ttft_miss_s: Math.round(op.ttftMiss * 10) / 10,
     bstar_misses: Math.round(op.bstar * 10) / 10,
+    // the two latency limits at this load (predict.py's field names)
+    slowed_speed_tok_s: Math.round(op.steps.speed * 100) / 100,
+    slowed_share: Math.round(op.slowedNow * 1e4) / 1e4,
+    slowed_stretch_s: Math.round(op.stretchNow * 100) / 100,
+    cold_wait_s: isFinite(op.coldWaitNow) ? Math.round(op.coldWaitNow * 100) / 100 : null,
   };
   if (op.decodeCapped) P.decode_capped_by_max_num_seqs = true;
   if (op.decodeCapBelowBw) P.decode_cap_below_bandwidth = true;
@@ -217,10 +228,25 @@ function harnessHypotheses(P, model, topo, wl, reps){
         + `row cannot be bracketed.`
       : `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
         + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
-    `H-latency: ${state.ttft_pct === 'mean' ? "a cache miss's mean TTFT"
-        : `the p${state.ttft_pct} TTFT over all requests (model proxy: mean wait `
-          + `+ the p${state.ttft_pct} of the hit/miss service mixture)`} reaches the ${fmt(state.sla, 0)} s budget `
-      + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
+    // mirrors hypotheses/latency.py HSlowed / HColdWait statements
+    `H-slowed: while a cold prompt is prefilled each step carries one `
+      + `${fmt(prefillChunk(), 0)}-token chunk, so every stream slows to `
+      + `~${P.slowed_speed_tok_s} tok/s. At the ~${opU(P.operating_point_users)}-user `
+      + `operating point streams are slowed ${fmt(100 * P.slowed_share, 1)}% of the time; `
+      + `the slowed share ${P.slowed_ceiling_users >= 999999 ? 'never reaches it'
+          : `reaches it near ~${fmt(P.slowed_ceiling_users, 0)} users${grp}`} `
+      + `(limit ${fmt(state.slowed_pct, 1)}%), and one cold request of the `
+      + `p${stretchPct(state.ttft_pct)} prompt length keeps them slowed `
+      + `~${P.slowed_stretch_s} s. H-itl-spike measures the size of one spike; `
+      + `this measures how much of the time streams spend slowed.`,
+    `H-cold-wait: the ${state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`} wait `
+      + `before a cold request's own prefill starts is `
+      + `${P.cold_wait_s == null ? 'unbounded (past saturation)' : `~${P.cold_wait_s} s`} `
+      + `at the ~${opU(P.operating_point_users)}-user operating point and `
+      + `${P.cold_wait_ceiling_users >= 999999 ? 'never reaches it'
+          : `reaches it near ~${fmt(P.cold_wait_ceiling_users, 0)} users${grp}`} `
+      + `(budget ${fmt(state.cold_wait, 1)} s). Measured as client TTFT minus the `
+      + `idle prefill time of that prompt length, from the model at the configured MFU.`,
     `H-saturation: prefill duty reaches 100% near ~${fmt(P.saturation_ceiling_users, 0)} `
       + `users${grp}; above it the queue has no steady state.`,
     `H-binding: the binding constraint is '${P.binding_constraint}' — measured SLO `
@@ -294,7 +320,7 @@ export function renderTestCard(op, model, topo, wl){
   // line still says how many hypotheses there are and names the binding one
   box.innerHTML =
     `<details class="assump" style="margin:0 0 10px">`
-    + `<summary>The ${hyp.length} hypotheses it will test — headline: ${esc(hyp[4])}</summary>`
+    + `<summary>The ${hyp.length} hypotheses it will test — headline: ${esc(hyp.find(h => h.startsWith('H-binding')) || '')}</summary>`
     + `<div class="body"><ul style="margin:6px 0 4px;padding-left:18px;font-size:12.5px;color:var(--text-2)">`
     + hyp.map(h => `<li style="margin:3px 0">${esc(h)}</li>`).join('') + `</ul></div></details>`
     + `<div class="preset"><button type="button" id="dlHarness">⬇ download workingset.toml</button>`

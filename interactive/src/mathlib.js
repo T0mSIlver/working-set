@@ -13,8 +13,8 @@ let _spare = null;
    seeds; this brings the page into line.
 
    mulberry32, seeded per PURPOSE from a hash of only those state fields that
-   change the sampling. Load and latency knobs are excluded, so dragging the
-   TTFT budget or the user count leaves every capacity figure rock steady.
+   change the sampling. Load and latency knobs are excluded, so dragging a limit
+   or the user count leaves every capacity figure rock steady.
    -------------------------------------------------------------------------- */
 let _rngState = 1;
 export function rnd(){
@@ -29,7 +29,7 @@ function _hash(str){
   return h >>> 0;
 }
 // the fields that change what gets sampled — deliberately NOT users/think/
-// sla/turn/burst, none of which touch the workload or the pool
+// the two latency limits/turn/burst, none of which touch the workload or the pool
 export function samplingSig(){
   // kvshard joins the signature only off its default: the seed string is
   // what every golden vector's JS draw was measured under, and a new field

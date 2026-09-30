@@ -1,6 +1,7 @@
 import { PREFILL_MFU_HI, PREFILL_MFU_LO } from './config.js';
-import { decodeFloor, maxUsersColdWait, maxUsersSaturation, maxUsersSlowed, prefillChunk,
-         prefillServiceMoments, serverRate, slowedSteps, ttftOwn, ttftStatName } from './prefill.js';
+import { SPIKE_SLA_S, decodeFloor, maxUsersColdWait, maxUsersSaturation, maxUsersSlowed, prefillChunk,
+         prefillServiceMoments, serverRate, slowedShare, slowedSteps, stretchPct, coldWait,
+         idleColdTtftTable } from './prefill.js';
 import { clip } from './mathlib.js';
 import { p_sub } from './workload.js';
 import { warmCapacity } from './capacity.js';
@@ -81,7 +82,7 @@ export function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
   // 1-point-per-percent grid out to the current axis end — renderSpikeChart
   // reads its marker back as fs[Math.round(f*100)], so the step must stay 0.01
   for (let i=0;i<=Math.round(fAxisMax()*100);i++) fs.push(i/100);
-  const think = state.think, sla = state.sla, reps = topo.replicas || 1;
+  const think = state.think, sla = SPIKE_SLA_S, reps = topo.replicas || 1;
   // the ceilings are per replica GROUP, so the load one group sees is the
   // system population divided by the replica count
   const perGroup = u => u * reps;
@@ -130,6 +131,7 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
   }
   const C = PLANNER_COLORS();
   const bind = op.binding, reps = topo.replicas || 1;
+  const waitStat = state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`;
   const drain = op.burstDrain, lastTTFT = drain;
   const good=cssv('--good'), warn=cssv('--warn'), crit=cssv('--crit');
   const headClass = op.headroom >= 1 ? crit : (op.headroom >= 0.8 ? warn : good);
@@ -148,38 +150,44 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
             + ` — ${fmt(op.headroom*100,0)}% of the limit`
           : `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`)
           + ` · next: ${others}`
-        : `the ${fmt(state.sla,0)} s budget is below the own prefill behind `
-          + `${ttftStatName(state.ttft_pct)} `
-          + `(${fmt(ttftOwn(sp.mo, wl.invalidation, state.ttft_pct),1)} s) — unachievable at any load`
+        : `${PLANNER_LABEL[bind]} is over its limit even for one user — unachievable at any load`
           + ` · next: ${others}`,
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
      tip:hasHeadcount()
-       ? `All four ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. cache = the warm p5 population that fits the pool; decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where ${ttftStatName(state.ttft_pct)} hits the budget${state.ttft_pct === 'mean' ? '' : ' (proxy: mean queue wait + that percentile\'s own prefill)'}; saturation = where prefill duty hits 100%.`
-       : `All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; latency = where ${ttftStatName(state.ttft_pct)} hits the budget${state.ttft_pct === 'mean' ? '' : ' (proxy: mean queue wait + that percentile\'s own prefill)'}; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
+       ? `All five ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. cache = the warm p5 population that fits the pool; decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%.`
+       : `All five ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
      sub:`MFU 30–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
-        + ` · latency ceiling f_sla ${op.fsla>=1?'never binds':fmt(op.fsla*100,0)+'%'}`,
+        + ` · a miss's mean first token reaches ${fmt(SPIKE_SLA_S,0)} s at f ${op.fsla>=1?'never':fmt(op.fsla*100,0)+'%'}`,
      cls: op.bstar<1?'crit':(op.bstar<5?'warn':'good'),
-     tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside the TTFT budget — linear in that budget. The band is the MFU [30–55%] bracket; B* reaches zero exactly at f*, and f_sla (mean TTFT = budget) binds earlier still."},
-    {k:`A burst of ${fmt(state.burst,0)} at once`,
+     tip:"The largest burst of SIMULTANEOUS misses whose last request still gets a first token inside a fixed 10 s time to first token — linear in that figure. It is a burst measure and does not enter the verdict. The band is the MFU [30–55%] bracket; B* reaches zero exactly at f*."},
+    {k:'Slowed generation',
+     v: fmt(op.slowedNow*100, op.slowedNow < 0.1 ? 1 : 0), u:'% of generation time',
+     sub: `each stream drops to ${fmt(op.steps.speed,1)} tok/s while a chunk rides · limit ${fmt(state.slowed_pct,0)}%`,
+     cls: op.slowedNow*100>state.slowed_pct?'crit':(op.slowedNow*100>state.slowed_pct*0.8?'warn':'good'),
+     tip:"The share of wall time in which a cold prompt is being prefilled. Every GPU step of that prefill carries one chunk on top of the running decodes, so each stream runs at the tok/s shown instead of its normal speed. Warm-turn prefills are left out."},
+    {k:'One long cold request',
+     v: isFinite(op.stretchNow) ? fmt(op.stretchNow, op.stretchNow < 10 ? 1 : 0) : '∞', u:'s slowed',
+     sub: `a p${stretchPct(state.ttft_pct)}-length cold prompt keeps every stream at ${fmt(op.steps.speed,1)} tok/s`,
+     cls: 'good',
+     tip:"How long one cold prompt of the p-th percentile length keeps every stream on the group slowed: its decode steps plus its chunked prefill, at the speed shown."},
+    {k:'Cold request wait',
+     v: isFinite(op.coldWaitNow) ? fmt(op.coldWaitNow,2) : '∞', u: isFinite(op.coldWaitNow) ? `s (${waitStat})` : 'queue unbounded',
+     sub: sp.rho >= 1
+        ? `prefill duty ${fmt(op.duty*100,0)}% — the queue is unbounded at this load`
+        : `mean ${fmt(op.coldWaitMean,2)} s · limit ${fmt(state.cold_wait,0)} s · duty ${fmt(op.duty*100,0)}%`,
+     cls: op.coldWaitNow>state.cold_wait?'crit':(op.coldWaitNow>state.cold_wait*0.8?'warn':'good'),
+     tip:"How long a cold request queues behind the prefills already waiting before its own starts, at the current load. The percentile reads an exponential tail off the queue's mean wait; an approximation."},
+    {full:true, k:`A burst of ${fmt(state.burst,0)} at once`,
      v: !isFinite(drain) ? 'never' : (drain>=90? fmt(drain/60,1) : fmt(drain,1)),
      u: !isFinite(drain) ? 'clears at this load' : (drain>=90?'min to clear':'s to clear'),
      sub: !isFinite(drain)
         ? `the standing load already saturates prefill, so a burst on top of it never drains`
         : `last request waits ${lastTTFT>=90?fmt(lastTTFT/60,1)+' min':fmt(lastTTFT,1)+' s'}`
-          + ` (budget ${fmt(state.sla,0)} s) · every warm user loses ~${fmt(op.tokensLost,0)} output tokens`,
-     cls: drain>state.sla?'crit':'good',
+          + ` (reference ${fmt(SPIKE_SLA_S,0)} s) · every warm user loses ~${fmt(op.tokensLost,0)} output tokens`,
+     cls: drain>SPIKE_SLA_S?'crit':'good',
      tip:"What a correlated invalidation event costs. The backlog drains at (1 − duty) seconds of work per second — standing traffic keeps arriving — so the last request's TTFT IS the drain time; meanwhile the ITL spike is the steady state, and the tokens-lost figure integrates what the warm users stop receiving over the drain."},
-    {k:'TTFT now (miss / hit)',
-     v: isFinite(op.ttftMiss) ? fmt(op.ttftMiss,2) : '∞', u: isFinite(op.ttftMiss) ? 's for a miss' : 'queue unbounded',
-     sub: op.duty >= 1
-        ? `prefill duty ${fmt(op.duty*100,0)}% — the queue is unbounded at this load, `
-          + `so there is no steady-state TTFT to quote`
-        : `a HIT waits ${fmt(op.ttftHitFcfs*1000,0)} ms FCFS | ${fmt(op.ttftHitPs*1000,0)} ms sharing`
-          + ` · duty ${fmt(op.duty*100,0)}%`,
-     cls: op.ttftMiss>state.sla?'crit':(op.ttftMiss>state.sla/2?'warn':'good'),
-     tip:"Mean TTFT at the current load, from the M/G/1 queue. The HIT column is the sharpest thing on this page: under FCFS a warm hit waits behind whatever misses are in front of it, so the miss rate is a latency parameter for the hitting users too; processor sharing is the bracket's other end. Solved against the MEAN — a p95 budget binds sooner."},
   ];
   const colMap = {good, warn, crit};
   // the binding constraint IS the decision, so it heads act 3 alone; the cold-
@@ -192,7 +200,7 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
   paintTiles('tilesLoad', [...bstar, ...pendingLoadTiles, ...rest], colMap);
 }
 
-/* ---- The binding-constraint chart (act 3, rendered as 'G'): the four
+/* ---- The binding-constraint chart (act 3, rendered as 'G'): the five
    ceilings, in users, vs the miss rate ---- */
 let bindingGeom = null;
 export function renderBindingChart(d, op){
@@ -250,7 +258,7 @@ export function renderBindingChart(d, op){
       const X=sx(d.fs[i]);
       g+=`<line x1="${X}" y1="${mT}" x2="${X}" y2="${mT+ph}" stroke="${muted}" stroke-width="1.2" stroke-dasharray="3 3"/>`;
       g+=`<text class="dlabel" x="${X+5}" y="${mT+12}" text-anchor="start" fill="${muted}">`
-        +`${esc(d.binding[i-1])} → ${esc(d.binding[i])} at ${fmt(d.fs[i]*100,0)}%</text>`;
+        +`${esc(PLANNER_LABEL[d.binding[i-1]])} → ${esc(PLANNER_LABEL[d.binding[i]])} at ${fmt(d.fs[i]*100,0)}%</text>`;
       break;
     }
   }
@@ -268,7 +276,7 @@ export function renderBindingChart(d, op){
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">cache-miss rate f</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent ${hasHeadcount()?'sessions':'users'} (log)</text>`;
   document.getElementById('chartG').innerHTML =
-    svgEl(g,W,H,`The four ceilings in max concurrent ${hasHeadcount()?'sessions':'users'} versus the cache-miss rate`);
+    svgEl(g,W,H,`The five ceilings in max concurrent ${hasHeadcount()?'sessions':'users'} versus the cache-miss rate`);
   bindingGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
@@ -324,7 +332,7 @@ export function renderSpikeChart(d, others){
   spikeGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
-/* ---- The four ceilings, side by side -------------------------------------
+/* ---- The five ceilings, side by side -------------------------------------
    Act 3's thesis is "every constraint in one unit, so the binding one is
    simply the smallest". Rendering that as a comma-separated sub-line asked the
    reader to do the comparison in their head; a shared linear axis does it for
@@ -359,11 +367,79 @@ export function renderCeilingBars(op){
       +`${bind?' font-weight="700"':''}>${isFinite(v)?ceilingText(v):'—'}`
       +`${k==='decode'&&op.decodeCapped?` (max_num_seqs ${fmt(op.mns,0)} at p99)`:''}${bind?' ← binds':''}</text>`;
   });
-  // the load you asked for, across all four
+  // the load you asked for, across all five
   const X = sx(Math.min(op.users, top));
   g+=`<line x1="${X}" y1="${mT-4}" x2="${X}" y2="${mT+rowH*keys.length+2}" stroke="${op.fits?text:crit}" stroke-width="2" stroke-dasharray="4 3"/>`;
   g+=`<text class="dlabel" x="${X+6}" y="${mT+rowH*keys.length+14}" text-anchor="start" fill="${op.fits?text:crit}">your load ${fmt(op.users,0)}${op.fits?'':' — over'}</text>`;
   box.innerHTML = svgEl(g, W, H, hasHeadcount()
-    ? 'The four concurrent-session ceilings with people equivalents and the current load marked'
-    : 'The four ceilings compared in max concurrent users, with the current load marked');
+    ? 'The five concurrent-session ceilings with people equivalents and the current load marked'
+    : 'The five ceilings compared in max concurrent users, with the current load marked');
+}
+
+/* ---- Slowed generation and cold request wait against load (act 2, 'I'):
+   the two limits users feel, each with its limit as a horizontal line and
+   the current load as a vertical marker. Two panels rather than two y-axes:
+   the units (% of time, seconds) share nothing. Per replica group at
+   rate = serverRate(users)/reps, as the ceilings are. ---- */
+function latencyPanel(divId, label, ylab, ys, yMax, limit, users, xMax, color, fmtY, fmtNow){
+  const W=560, H=300, mL=52, mR=16, mT=14, mB=42;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
+  const surface=cssv('--surface'), crit=cssv('--crit');
+  const sx=linScale(0,xMax,mL,mL+pw), sy=linScale(0,yMax,mT+ph,mT);
+  let g='';
+  for (const t of niceTicks(yMax,4)){
+    const Y=sy(t);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${grid}" stroke-width="1"/>`;
+    g+=`<text class="axtick" x="${mL-8}" y="${Y+3}" text-anchor="end">${fmtY(t)}</text>`;
+  }
+  for (const t of niceTicks(xMax,5)){
+    g+=`<text class="axtick" x="${sx(t)}" y="${mT+ph+16}" text-anchor="middle">${fmt(t,0)}</text>`;
+  }
+  const pts = ys.map(([u,y]) => `${sx(u)} ${sy(clip(y,0,yMax))}`);
+  g+=`<path d="M ${pts.join(' L ')}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linejoin="round"/>`;
+  // the limit
+  if (limit <= yMax){
+    const Y=sy(limit);
+    g+=`<line x1="${mL}" y1="${Y}" x2="${mL+pw}" y2="${Y}" stroke="${crit}" stroke-width="1.4" stroke-dasharray="4 3"/>`;
+    g+=`<text class="dlabel" x="${mL+pw-4}" y="${Y-6}" text-anchor="end" fill="${crit}">limit ${fmtY(limit)}</text>`;
+  }
+  // the current load
+  const X0=sx(clip(users,0,xMax));
+  g+=`<line x1="${X0}" y1="${mT}" x2="${X0}" y2="${mT+ph}" stroke="${muted}" stroke-width="1.2" stroke-dasharray="3 3"/>`;
+  const flip = X0 > mL + pw*0.7;
+  g+=`<text class="dlabel" x="${X0+(flip?-5:5)}" y="${mT+12}" text-anchor="${flip?'end':'start'}" fill="${muted}">now ${fmt(users,0)} · ${fmtNow}</text>`;
+  g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">concurrent ${hasHeadcount()?'sessions':'users'}</text>`;
+  g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">${esc(ylab)}</text>`;
+  document.getElementById(divId).innerHTML = svgEl(g,W,H,label);
+}
+
+export function renderLatencyCharts(op, model, topo, wl, mo){
+  const tbl = document.getElementById('idleTtftBody');
+  if (!op){
+    renderNoFit('chartI1','slowed generation'); renderNoFit('chartI2','cold request wait');
+    tbl.innerHTML = '<tr><td colspan="2">the model does not fit</td></tr>';
+    return;
+  }
+  const reps = topo.replicas || 1, f = wl.invalidation;
+  const fin = [op.ceilings.slowed, op.ceilings.cold_wait].filter(v => isFinite(v) && v > 0);
+  const xMax = Math.max(8, op.users*1.3, fin.length ? Math.max(...fin)*1.5 : 0);
+  const N = 60, us = Array.from({length:N+1}, (_,i) => xMax*i/N);
+  const rateAt = u => serverRate(u, state.think, wl.sub_ratio)/reps;
+  const waitStat = state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`;
+  const C = PLANNER_COLORS();
+  const sPct = us.map(u => [u, 100*slowedShare(mo, op.steps, f, rateAt(u))]);
+  latencyPanel('chartI1', 'Share of generation time slowed versus concurrent users, with its limit and the current load',
+    'generation slowed, % of time', sPct, Math.min(100, Math.max(state.slowed_pct*2.5, op.slowedNow*130, 10)),
+    state.slowed_pct, op.users, xMax, C.slowed, v => `${fmt(v,0)}%`, `${fmt(op.slowedNow*100,1)}%`);
+  const wMax = Math.max(state.cold_wait*2.5, 10);
+  const wS = us.map(u => [u, coldWait(mo, f, rateAt(u), state.ttft_pct)]);
+  latencyPanel('chartI2', 'Cold request wait versus concurrent users, with its limit and the current load',
+    `cold request wait (${waitStat}), s`, wS, wMax, state.cold_wait, op.users, xMax, C.cold_wait,
+    v => `${fmt(v,0)} s`, isFinite(op.coldWaitNow) ? `${fmt(op.coldWaitNow,1)} s` : '∞');
+  const rows = idleColdTtftTable(model, topo, prefillChunk(), wl.cap);
+  tbl.innerHTML = rows.map(([L,sec]) =>
+    `<tr><td>${fmt(L/1000,0)}k tokens${L === Math.trunc(wl.cap) ? ' (max_model_len)' : ''}</td>`
+    + `<td class="num">${fmt(sec, sec < 10 ? 1 : 0)} s</td></tr>`).join('');
 }

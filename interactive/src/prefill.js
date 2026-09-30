@@ -263,8 +263,8 @@ export function prefillServiceMoments(m, topo, wl, cs, chunk, mfuAnchor){
            hitAt:  L => w0 + wSlope*L };
 }
 
-// The TTFT percentiles the latency ceiling can be read at (the segmented
-// control next to the TTFT budget). 'mean' is the pre-percentile behaviour.
+// The percentiles the cold request wait limit can be read at (the segmented
+// control under it). 'mean' is the pre-percentile behaviour.
 export const TTFT_PCTS = ['mean', '90', '95', '99'];
 // numpy's linear percentile (q in [0, 1]) of a per-draw cost that is
 // monotone in L: its order statistics are the cost of L's order statistics,
@@ -377,7 +377,7 @@ export function spikeMetrics(m, topo, wl, cs, rate, chunk){
         arrival rate carries (1 + r) — the same mixture the service moments
         already price. (The Python model also offers a CLOSED conversion,
         operating_point(closed=True); the explorer stays open-loop.)
-   Under those, all four ceilings become MAX CONCURRENT SESSIONS and the binding
+   Under those, all five ceilings become MAX CONCURRENT SESSIONS and the binding
    one is simply the smallest. Mirrors operating_point() in scenario_model.py.
    -------------------------------------------------------------------------- */
 // DECODE_FLOOR_TOKS, DECODE_COMFORT_RATIO and AVG_OUT_TOK live with the study
@@ -739,7 +739,7 @@ export function stretchPct(pct){ return pctOf(pct) ?? 95; }
 // because the caller has already paid for the Monte-Carlo warm fill.
 export function operatingPoint(model, topo, wl, cs, opts){
   const o = opts || {};
-  const sla = o.sla ?? state.sla, think = o.think ?? state.think;
+  const sla = o.sla ?? SPIKE_SLA_S, think = o.think ?? state.think;
   const mo = o.mo || prefillServiceMoments(model, topo, wl, cs, o.chunk);
   const f = wl.invalidation;
   // UNITS: every ceiling here is SYSTEM-wide concurrent users, because that is
