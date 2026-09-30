@@ -170,7 +170,7 @@ class SLO:
     ttft_statistic: str = "percentile"
     # the most wall time decoding streams may spend in steps that carry a
     # cold-prefill chunk (model.slowed_share)
-    slowed_share_max: float = 0.05
+    slowed_share_max: float = 0.15
     # the longest a cold request may wait before its prefill starts, at
     # `percentile` (the mean under ttft_statistic "miss_mean")
     cold_wait_budget_s: float = 5.0

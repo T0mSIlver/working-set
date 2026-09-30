@@ -125,7 +125,7 @@ KNOBS: tuple[Knob, ...] = (
          lambda c: c.workload.sub_shares_prefix, False),
     Knob("cold_wait", S + "cold_wait_budget_s", lambda c: c.slo.cold_wait_budget_s, 5, 1,
          60, True, " s"),
-    Knob("slowed_pct", S + "slowed_share_max", lambda c: c.slo.slowed_share_max * 100, 5,
+    Knob("slowed_pct", S + "slowed_share_max", lambda c: c.slo.slowed_share_max * 100, 15,
          1, 50, True, "%"),
     Knob("decode_floor", S + "itl_floor_tok_s", lambda c: c.slo.itl_floor_tok_s, 40,
          5, 100, True, " tok/s"),

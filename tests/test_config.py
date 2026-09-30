@@ -423,20 +423,20 @@ def test_predict_reference_row():
     """27B / 4xH200 TP4 / chunk 4096 at the measured workload: the explorer's
     reference example (the harness template's predictions block) — cache 403,
     TTFT 500 (all-request p95; 499 for a miss's mean), cold wait 456, slowed
-    generation 81, saturation 509, miss TTFT 0.92 s, B* 9.8. These are the
+    generation 242, saturation 509, miss TTFT 0.92 s, B* 9.8. These are the
     explorer's per-pass-overhead convention; pinned so a convention drift
     (roofline vs explorer) fails here, not in a user's report."""
     cfg = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
                                               "tensor_parallel": 4,
                                               "max_num_batched_tokens": 4096}})
     p = predict(cfg, n_iter=300)
-    # was "decode": the TTFT ceiling left the verdict and the 5% slowed
+    # was "decode": the TTFT ceiling left the verdict and the 15% slowed
     # share binds first (issue #94)
     assert p.binding_constraint == "slowed"
     assert 395 <= p.warm_capacity_p5 <= 411        # 403, Monte Carlo
     assert p.latency_ceiling_users == 500
     assert p.cold_wait_ceiling_users == 456
-    assert p.slowed_ceiling_users == 81
+    assert p.slowed_ceiling_users == 242
     assert p.saturation_ceiling_users == 509
     assert abs(p.ttft_miss_s - 0.916) < 0.005
     assert abs(p.bstar_misses - 9.82) < 0.02
