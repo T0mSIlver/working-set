@@ -1,5 +1,5 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO } from './config.js';
-import { PREFILL_CHUNK, SPIKE_SLA_S, coldRequestSeconds, decodeFloor, prefillChunk, prefillSeconds } from './prefill.js';
+import { PREFILL_CHUNK, SPIKE_SLA_S, coldRequestSeconds, decodeFloor, prefillChunk, prefillSeconds, stretchPct } from './prefill.js';
 import { p_sub } from './workload.js';
 import { STATE_DEFAULTS, ramPerCache, state } from './state.js';
 import { esc, fmt } from './svg.js';
@@ -186,6 +186,11 @@ function harnessPredictions(op, model, wl, topo){
     operating_point_users: op.users / reps,
     ttft_miss_s: Math.round(op.ttftMiss * 10) / 10,
     bstar_misses: Math.round(op.bstar * 10) / 10,
+    // the two latency limits at this load (predict.py's field names)
+    slowed_speed_tok_s: Math.round(op.steps.speed * 100) / 100,
+    slowed_share: Math.round(op.slowedNow * 1e4) / 1e4,
+    slowed_stretch_s: Math.round(op.stretchNow * 100) / 100,
+    cold_wait_s: isFinite(op.coldWaitNow) ? Math.round(op.coldWaitNow * 100) / 100 : null,
   };
   if (op.decodeCapped) P.decode_capped_by_max_num_seqs = true;
   if (op.decodeCapBelowBw) P.decode_cap_below_bandwidth = true;
@@ -223,10 +228,25 @@ function harnessHypotheses(P, model, topo, wl, reps){
         + `row cannot be bracketed.`
       : `H-decode: per-user p50 decode holds >= ${fmt(decodeFloor(), 0)} tok/s up to `
         + `~${fmt(P.decode_ceiling_users, 0)} concurrent users${grp}.`,
-    `H-latency: ${state.ttft_pct === 'mean' ? "a cache miss's mean TTFT"
-        : `the p${state.ttft_pct} TTFT over all requests (model proxy: mean wait `
-          + `+ the p${state.ttft_pct} of the hit/miss service mixture)`} reaches the ${fmt(SPIKE_SLA_S, 0)} s budget `
-      + `near ~${fmt(P.latency_ceiling_users, 0)} users${grp}.`,
+    // mirrors hypotheses/latency.py HSlowed / HColdWait statements
+    `H-slowed: while a cold prompt is prefilled each step carries one `
+      + `${fmt(prefillChunk(), 0)}-token chunk, so every stream slows to `
+      + `~${P.slowed_speed_tok_s} tok/s. At the ~${opU(P.operating_point_users)}-user `
+      + `operating point streams are slowed ${fmt(100 * P.slowed_share, 1)}% of the time; `
+      + `the slowed share ${P.slowed_ceiling_users >= 999999 ? 'never reaches it'
+          : `reaches it near ~${fmt(P.slowed_ceiling_users, 0)} users${grp}`} `
+      + `(limit ${fmt(state.slowed_pct, 1)}%), and one cold request of the `
+      + `p${stretchPct(state.ttft_pct)} prompt length keeps them slowed `
+      + `~${P.slowed_stretch_s} s. H-itl-spike measures the size of one spike; `
+      + `this measures how much of the time streams spend slowed.`,
+    `H-cold-wait: the ${state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`} wait `
+      + `before a cold request's own prefill starts is `
+      + `${P.cold_wait_s == null ? 'unbounded (past saturation)' : `~${P.cold_wait_s} s`} `
+      + `at the ~${opU(P.operating_point_users)}-user operating point and `
+      + `${P.cold_wait_ceiling_users >= 999999 ? 'never reaches it'
+          : `reaches it near ~${fmt(P.cold_wait_ceiling_users, 0)} users${grp}`} `
+      + `(budget ${fmt(state.cold_wait, 1)} s). Measured as client TTFT minus the `
+      + `idle prefill time of that prompt length, from the model at the configured MFU.`,
     `H-saturation: prefill duty reaches 100% near ~${fmt(P.saturation_ceiling_users, 0)} `
       + `users${grp}; above it the queue has no steady state.`,
     `H-binding: the binding constraint is '${P.binding_constraint}' — measured SLO `
