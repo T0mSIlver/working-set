@@ -264,7 +264,8 @@ class HTtftMiss(Hypothesis):
     def statement(self, cfg, p) -> str:
         return (f"H-ttft-miss: a forced miss's mean TTFT at the "
                 f"~{p.operating_point_users:g}-user operating point is "
-                f"~{p.ttft_miss_s:g} s.")
+                f"~{p.ttft_miss_s:g} s. A supporting row, not a limit: the "
+                "verdict rests on H-slowed and H-cold-wait.")
 
     def statement_for(self, cfg, p, probes) -> str:
         """The harness reads this at a ladder rung. Say so only when there is

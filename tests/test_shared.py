@@ -2268,3 +2268,28 @@ def test_sampler_ready_is_bounded_and_duck_typed():
                 await sampler_ready(Broken()))
 
     assert asyncio.run(go()) == (True, True, False, False)
+
+
+def test_idle_cold_table_buckets_by_designed_length_and_flags_extrapolation():
+    from workingset.shared import idle_cold_table
+
+    cfg = RunConfig()
+    lengths = [20_000, 60_000]
+    rows = [{"kind": "miss", "ptok": 20_300, "ttft": 2.5, "running": 0,
+             "waiting": 0, "L_ktok": 20.3, "L_ktok2": 412.1},
+            {"kind": "miss", "ptok": 19_800, "ttft": 3.5, "running": 4,
+             "waiting": 0, "L_ktok": 19.8, "L_ktok2": 392.0},
+            {"kind": "miss", "ptok": 59_000, "ttft": 9.0, "running": 0,
+             "waiting": 0, "L_ktok": 59.0, "L_ktok2": 3481.0},
+            {"kind": "hit", "ptok": 20_000, "ttft": 0.1, "running": 0,
+             "waiting": 0}]
+    t = idle_cold_table(rows, {}, lengths, cfg)
+    short, long_ = t["rows"]
+    assert (short["tokens"], short["n"], short["n_quiet"]) == (20_000, 2, 1)
+    assert short["ttft_min_s"] == 2.5 and short["ttft_p50_s"] == 3.0
+    assert (long_["tokens"], long_["n"]) == (60_000, 1)
+    assert t["max_model_len"]["tokens"] == cfg.deployment.max_model_len
+    assert t["max_model_len"]["extrapolated"] is True
+    # no fit was given: the column is empty and says why
+    assert short["fit_s"] is None and "no fit" in t["fit_refused"]
+    assert idle_cold_table([], {}, lengths, cfg) == {}

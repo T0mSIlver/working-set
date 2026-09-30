@@ -304,7 +304,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--freeze-threshold-ms", type=float, metavar="MS",
                    help="a gap at or above this counts as a FREEZE "
                         "(default 100). Keep it BELOW the smaller predicted "
-                        "freeze; the freeze ladder is threshold-free.")
+                        "freeze; the freeze ladder is threshold-free. Also "
+                        "the threshold for a SLOWED gap in H-slowed, which "
+                        "otherwise is half the predicted mixed step.")
     # --- shared-endpoint safety rails ------------------------------------
     # These bind WITHOUT --exclusive, where the endpoint belongs to somebody
     # else; --exclusive takes them all off. Every "(default X)" below is

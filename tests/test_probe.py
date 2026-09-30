@@ -12,6 +12,7 @@ from dataclasses import replace
 import httpx
 import pytest
 
+from workingset import model as M
 from workingset.config import RunConfig, WorkloadCfg
 from workingset.probe import (ProbeOptions, RequestTrace, build_ladder,
                               build_prefixes, draw_session_tokens, eval_burst,
@@ -19,8 +20,13 @@ from workingset.probe import (ProbeOptions, RequestTrace, build_ladder,
                               pct, run_population, run_sample,
                               sampler_selfcheck, spike_evidence,
                               sub_prefix_floor)
+from workingset.probe import Rung
 from workingset.probe.burst import run_burst
+from workingset.probe.latency import (cold_wait_stats, cold_waits,
+                                      fit_idle_prefill, model_idle_prefill,
+                                      slow_threshold_ms, slowed_stats)
 from workingset.probe.request import EndpointSpec, send_request
+from workingset.shared import TTFT_COLUMNS, fit_covariates
 
 
 # ============================================================================
@@ -372,18 +378,32 @@ def test_eval_rung_percentiles_and_per_user_decode():
 
 def test_eval_rung_slo_verdict_and_blown():
     cfg = small_cfg()
-    slo = replace(cfg.slo, ttft_budget_s=1.0, itl_floor_tok_s=40, percentile=95)
+    slo = replace(cfg.slo, cold_wait_budget_s=1.0, slowed_share_max=0.05,
+                  itl_floor_tok_s=40, percentile=95)
     cfg = replace(cfg, slo=slo)
-    opts = small_opts(measure_s=1.0)
+    opts = small_opts(measure_s=1.0, slow_threshold_ms=100.0)
+    calm = [10.0] * 40                                  # ms
+    idle = model_idle_prefill(cfg)(1000)
 
-    ok = [trace(1, "hit", 1.0, 0.5, tps=100, ctok=10)]
+    ok = [trace(1, "hit", 1.0, 0.5, tps=100, ctok=10, gaps_ms=calm)]
     assert eval_rung(1, 0, ok, 0.0, cfg, opts).passed
 
-    slow = [trace(1, "hit", 1.0, 1.5, tps=100, ctok=10)]
-    r = eval_rung(1, 0, slow, 0.0, cfg, opts)
-    assert not r.passed and "TTFT" in r.reasons[0] and not r.blown
+    # 400 ms of slow gaps in a 800 ms stream: half the time slowed
+    stalled = [trace(1, "hit", 1.0, 0.5, tps=100, ctok=10,
+                     gaps_ms=[10.0] * 20 + [400.0])]
+    r = eval_rung(1, 0, stalled, 0.0, cfg, opts)
+    assert not r.passed and "slowed" in r.reasons[0] and r.blown
 
-    dead = [trace(1, "hit", 1.0, 2.5, tps=100, ctok=10)]
+    # a cold request that waited 1.5 s past its idle prefill
+    waited = [trace(1, "hit", 1.0, 0.5, tps=100, ctok=10, gaps_ms=calm),
+              trace(2, "miss", 1.0, idle + 1.5, tps=100, ctok=10,
+                    ptok=1000, intended=1000)]
+    r = eval_rung(1, 0, waited, 0.0, cfg, opts)
+    assert not r.passed and "cold wait" in r.reasons[0] and not r.blown
+    assert r.cold_wait["value_s"] == pytest.approx(1.5)
+
+    dead = [trace(1, "miss", 1.0, idle + 2.5, tps=100, ctok=10,
+                  ptok=1000, intended=1000)]
     assert eval_rung(1, 0, dead, 0.0, cfg, opts).blown
 
     starved = [trace(1, "hit", 1.0, 0.5, tps=10, ctok=10)]
@@ -393,6 +413,71 @@ def test_eval_rung_slo_verdict_and_blown():
     errs = [trace(i, "hit", 1.0, None, err="boom") for i in range(4)]
     r = eval_rung(4, 0, errs, 0.0, cfg, opts)
     assert not r.passed and r.blown and r.n_err == 4
+
+
+def test_slowed_stats_count_tokens_per_event_not_events():
+    # 100 tokens over 5 events (20 per event, as MTP delivers them): two of
+    # the four gaps are slow, and they are adjacent
+    t = trace(1, "hit", 0.0, 0.1, ctok=100, gaps_ms=[10.0, 500.0, 500.0, 10.0])
+    t.n_chunks = 5
+    st = slowed_stats([t], threshold_ms=250.0)
+    assert st["share"] == pytest.approx(1.0 / 1.02)
+    assert st["speed_tok_s"] == pytest.approx(2 * 20 / 1.0)
+    assert st["longest_run_s"] == pytest.approx(1.0)
+    # a run broken by a normal gap is two runs; the longest is one gap
+    t.gaps_ms = [500.0, 10.0, 500.0]
+    assert slowed_stats([t], 250.0)["longest_run_s"] == pytest.approx(0.5)
+    # no stream with gaps: nothing to report
+    assert slowed_stats([trace(1, "hit", 0.0, 0.1)], 250.0) == {}
+
+
+def test_default_slow_threshold_is_half_the_mixed_step_and_the_flag_wins():
+    cfg = small_cfg()
+    m, t = cfg.to_model(), cfg.to_topology()
+    st = M.slowed_steps(m, t, cfg.to_workload(),
+                        cfg.deployment.max_num_batched_tokens,
+                        cfg.slo.itl_floor_tok_s, cfg.calibration.mfu)
+    assert slow_threshold_ms(cfg, ProbeOptions()) == (
+        pytest.approx(500 * st["mixed_s"]), "half the predicted mixed step")
+    assert slow_threshold_ms(cfg, ProbeOptions(slow_threshold_ms=80.0)) == (
+        80.0, "--freeze-threshold-ms")
+
+
+def test_cold_wait_is_ttft_minus_the_idle_prefill_of_that_prompt():
+    tr = [trace(1, "miss", 0.0, 5.0, ptok=10_000),
+          trace(2, "first", 0.0, 3.0, ptok=20_000),
+          trace(3, "hit", 0.0, 9.0, ptok=10_000),          # not cold
+          trace(4, "miss", 0.0, None, err="boom"),         # no answer
+          trace(5, "miss", 0.0, 0.1, ptok=10_000)]         # faster than idle
+    model_idle = lambda n: n / 10_000.0                   # 1 s per 10k tokens
+    assert cold_waits(tr, model_idle) == pytest.approx([4.0, 1.0, 0.0])
+    st = cold_wait_stats(tr, model_idle, 50, source="model")
+    assert st["value_s"] == pytest.approx(1.0) and st["idle_source"] == "model"
+    assert cold_wait_stats(tr, model_idle, 50, mean=True)["value_s"] \
+        == pytest.approx(5.0 / 3)
+
+    # the same requests against a sweep fit: TTFT = 0.5 + 0.1 L_ktok at idle
+    fit = fit_covariates(
+        [{"L_ktok": k, "L_ktok2": k * k, "running": r, "waiting": 0.0,
+          "y": 0.5 + 0.1 * k + 0.02 * r}
+         for k in (10, 20, 40, 80) for r in (0, 1, 2, 3)],
+        TTFT_COLUMNS, target="forced-miss TTFT", unit="s")
+    idle_fit = fit_idle_prefill(fit)
+    assert idle_fit(10_000) == pytest.approx(1.5, abs=1e-6)
+    assert cold_waits(tr[:2], idle_fit) == pytest.approx([3.5, 0.5], abs=1e-6)
+    # a refused fit gives no idle time, so the caller falls back to the model
+    assert fit_idle_prefill(None) is None
+
+
+def test_records_without_the_latency_fields_still_load_and_stay_unchanged():
+    r = Rung(pop=8, n_turns=3)
+    d = r.to_dict()
+    assert not {"slowed", "cold_wait", "queue_time"} & set(d)
+    old = {k: v for k, v in d.items()}
+    back = Rung.from_dict(old)
+    assert back.slowed == {} and back.cold_wait == {} and back.queue_time == {}
+    r.slowed = {"share": 0.1}
+    assert Rung.from_dict(r.to_dict()).slowed == {"share": 0.1}
 
 
 def test_eval_rung_gap_statistics_are_per_event_and_per_token():
