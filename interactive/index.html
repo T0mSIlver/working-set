@@ -544,8 +544,8 @@ details.more .more-body{padding:0 0 16px}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="The most wall time streams may spend slowed by a cold prompt being prefilled. While one is, every GPU step carries a chunk of it on top of the running decodes, so each stream drops to a few tokens per second. Sets the slowed generation ceiling.">Generation slowed at most</span> <span class="val"><span id="v-slowed_pct">5</span>% of the time</span></label>
-          <input type="range" id="s-slowed_pct" min="1" max="50" step="1" value="5">
+          <label class="flabel"><span class="tip" data-tip="The most wall time streams may spend slowed by a cold prompt being prefilled. While one is, every GPU step carries a chunk of it on top of the running decodes, so each stream drops to a few tokens per second. Sets the slowed generation ceiling.">Generation slowed at most</span> <span class="val"><span id="v-slowed_pct">15</span>% of the time</span></label>
+          <input type="range" id="s-slowed_pct" min="1" max="50" step="1" value="15">
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Decode speed each session must keep when every warm session decodes at once. The decode ceiling is solved against it. The study uses 40 tok/s; the comfortable mark is 1.25× the floor. Agents want 40 or more; a person reading chat reads 5 to 8 tok/s. Halving the floor roughly doubles the decode ceiling.">Per-user decode floor</span> <span class="val"><span id="v-decode_floor">40</span> tok/s</span></label>

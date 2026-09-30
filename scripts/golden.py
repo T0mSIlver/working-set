@@ -108,7 +108,7 @@ DEFAULT_STATE = {
     "user_median": 31, "user_sigma": 0.81, "sub_median": 8, "sub_sigma": 0.90,
     "sub_ratio": 0.10, "sub_shares_prefix": False, "sys": 15, "inval": 1.0,
     "users": 64, "think": 30, "sla": 10, "ttft_pct": "95", "turn": 2000,
-    "slowed_pct": 5, "cold_wait": 5,
+    "slowed_pct": 15, "cold_wait": 5,
     "burst": 32,
     "out": M.AVG_OUT_TOK, "decode_floor": M.DECODE_FLOOR_TOKS,
     "ekwh": 0.19, "pue": "1.5", "gpuh": M.GPUS["H200"].eur_gpu_h,

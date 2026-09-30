@@ -3188,7 +3188,7 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                     out_tokens: float = OUT_TOKENS_DEFAULT,
                     n_iter: int = 400, seed: int = 0,
                     ttft_percentile: float | None = None,
-                    slowed_share_max: float = 0.05,
+                    slowed_share_max: float = 0.15,
                     cold_wait_budget_s: float = 5.0) -> dict:
     """The ceilings in ONE unit — max concurrent users — plus which binds.
 
