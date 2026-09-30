@@ -320,7 +320,7 @@ export function renderTestCard(op, model, topo, wl){
   // line still says how many hypotheses there are and names the binding one
   box.innerHTML =
     `<details class="assump" style="margin:0 0 10px">`
-    + `<summary>The ${hyp.length} hypotheses it will test — headline: ${esc(hyp[4])}</summary>`
+    + `<summary>The ${hyp.length} hypotheses it will test — headline: ${esc(hyp.find(h => h.startsWith('H-binding')) || '')}</summary>`
     + `<div class="body"><ul style="margin:6px 0 4px;padding-left:18px;font-size:12.5px;color:var(--text-2)">`
     + hyp.map(h => `<li style="margin:3px 0">${esc(h)}</li>`).join('') + `</ul></div></details>`
     + `<div class="preset"><button type="button" id="dlHarness">⬇ download workingset.toml</button>`
