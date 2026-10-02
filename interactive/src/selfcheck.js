@@ -87,6 +87,8 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["GLM52"],"B300")===3 &&
                  minTpFor(CONFIG.MODELS["DSV4F"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1 &&
+                 minTpFor(CONFIG.MODELS["DSV4FV"],"H200")===2 &&
+                 minTpFor(CONFIG.MODELS["DSV4FV"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["DSV41F"],"H200")===5 &&
                  minTpFor(CONFIG.MODELS["DSV41F"],"B300")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"H200")===2 &&
@@ -95,7 +97,7 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2, "min TP per model/part");
   // (GLM-5.3-Flash prices as its BF16-KV arm on any H200 topology — the fp8
   // arm THROWS there, asserted below with the rest of its identities)
-  for (const mk of ["MM35","GLM52","DSV4F","DSV41F","Q38FN","GLM53F"])
+  for (const mk of ["MM35","GLM52","DSV4F","DSV4FV","DSV41F","Q38FN","GLM53F"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(
           mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk],
@@ -105,12 +107,12 @@ export function unitChecks(){
     "MM35 DP4xTP2 on H200 must hold a real pool");
   console.assert(kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(2,4,"B300")) > 0,
     "GLM-5.3 DP2xTP4 on B300 must hold a real pool");
-  const DEEPSEEK_FLASH = ["DSV4F", "DSV41F"];   // fixed window + compressor state
+  const DEEPSEEK_FLASH = ["DSV4F", "DSV4FV", "DSV41F"];   // fixed window + compressor state
   // KV sharding under TP (research/kv_tp_sharding.md; mirror _selfcheck):
   // every default ("dcp") topology at a TP the KV heads divide stores ONE
   // copy; "replicate" pays tp/kv_heads copies past the heads, and the
   // single-latent models pay it at every tp > 1
-  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV4F",1],["DSV41F",1],["Q38FN",2],["GLM53F",1]]){
+  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV4F",1],["DSV4FV",1],["DSV41F",1],["Q38FN",2],["GLM53F",1]]){
     const m = CONFIG.MODELS[mk];
     console.assert(m.kv_heads === heads, mk+" kv_heads");
     for (const tp of [1,2,4,8]){
@@ -184,10 +186,12 @@ export function unitChecks(){
   // every model but GLM-5.3 (nvidia's 5.2 recipe kept as a projection there)
   // has a measured NVFP4 checkpoint as of 2026-09-06 (DSv4-Flash-0731's is
   // NVIDIA's, heavier than native) — except DSv4.1-Flash,
-  // which has no official one at all (2026-09-10) and is deliberately unpriced
+  // which has no official one at all (2026-09-10), and DSv4-Flash-Vision
+  // (community repacks only, 2026-10-02): both deliberately unpriced
+  const NO_NVFP4 = ["DSV4FV", "DSV41F"];
   for (const mk of Object.keys(CONFIG.MODELS))
-    console.assert(mk === "DSV41F" ? CONFIG.MODELS[mk].nvfp4_w === null : !!CONFIG.MODELS[mk].nvfp4_w,
-      mk === "DSV41F" ? "DSV41F must have NO NVFP4 arm" : mk+" must be NVFP4-selectable");
+    console.assert(NO_NVFP4.includes(mk) ? CONFIG.MODELS[mk].nvfp4_w === null : !!CONFIG.MODELS[mk].nvfp4_w,
+      NO_NVFP4.includes(mk) ? mk+" must have NO NVFP4 arm" : mk+" must be NVFP4-selectable");
   let gateThrew = false;
   try { kv_pool_tokens({...CONFIG.MODELS["27B"], weight_dtype:"nvfp4"}, makeTopo("tp",1,"H200")); }
   catch(e){ gateThrew = true; }
@@ -272,6 +276,15 @@ export function unitChecks(){
     "DSV4F NVFP4 is heavier on experts and unchanged on the fixed read");
   console.assert(Math.abs((ds4.nvfp4_w[0] - ds4.w_resident) - (ds4.nvfp4_w[3] - ds4.w_route_total)) < 1e7,
     "DSV4F NVFP4 resident delta is the expert delta alone");
+  // DSv4-Flash-Vision-Exp (research/model_dsv4flash_vision.md; mirror
+  // _selfcheck): 0731's text backbone, so every field but the name, the
+  // resident bytes and the NVFP4 arm is DSV4F's
+  const ds4v = CONFIG.MODELS["DSV4FV"], SAME_V = ["name", "w_resident", "nvfp4_w"];
+  console.assert(Object.keys(ds4).every(k => SAME_V.includes(k) || ds4v[k] === ds4[k])
+                 && Object.keys(ds4v).every(k => k in ds4),
+    "DSV4FV = DSV4F but for the name, the resident bytes and the NVFP4 arm");
+  console.assert(ds4v.w_resident === 166878536440 + (823685120 + 109068288 + 32768 + 46*256*4 + 3*256*4),
+    "DSV4FV resident = 0731's measured total + ViT + aligner + image embeddings + fp32 gate biases");
   // DSv4.1-Flash identities (research/model_dsv41flash.md; mirror _selfcheck)
   const dsf = CONFIG.MODELS["DSV41F"];
   console.assert(dsf.kv_bpt === 3*(288+68)/2 + (288+68),

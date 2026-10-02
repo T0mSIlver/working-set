@@ -34,7 +34,7 @@ two in sync.
 from __future__ import annotations
 import math
 import numpy as np
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 KIB, MIB, GIB = 1024, 1024**2, 1024**3
 
@@ -359,7 +359,7 @@ class Model:
     # mis-pricing becomes a crash, not a wrong number.
     kv_fp8_blackwell_only: bool = False
     # False when deltanet_state is NOT a bf16 recurrent state the fp32 toggle
-    # can meaningfully double (both DeepSeek Flash models reuse the field for
+    # can meaningfully double (the DeepSeek Flash models reuse the field for
     # their fixed per-session window + fp32 compressor buffers, already
     # mixed-precision).
     # Python charges deltanet_state as-is either way; the flag exists for
@@ -638,6 +638,40 @@ MODELS = {
         # out — prefill priced cheaper, biased AGAINST the thrash hypothesis
         # (research/model_dsv4flash.md #6).
         params_prefill=12.70e9, attn_layers=41, attn_d=26_624 / 41,
+        kv_heads=1, state_heads=1,       # MQA latent caches AND the latent windows replicate under plain TP
+    ),
+    # DeepSeek-V4-Flash-0731's text backbone + a 0.47B BF16 vision tower
+    # (32-layer ViT + aligner), continued-trained (2026-08-31, MIT). The text
+    # config, compress_ratios and inference/model.py cache code are those of
+    # DSV4F unchanged (diffed 2026-10-02): image tokens only add a per-expert
+    # gate bias and widen the window mask inside an image span. Every cache,
+    # decode and prefill constant is therefore DSV4F's; only the resident
+    # bytes move, by the vision tower (932,786,176 B) plus 50,176 B of fp32
+    # gate biases — the safetensors total, header-verified on all 48 shards.
+    # The tower runs on image prefill only, so it is resident but never in a
+    # decode read, and the text workload never prices it. No NVIDIA or
+    # RedHatAI NVFP4 checkpoint (community repacks only, 2026-10-02).
+    # research/model_dsv4flash_vision.md.
+    "DSV4FV": Model(
+        name="DeepSeek-V4-Flash-Vision-Exp (MoE 284B-A13B, CSA, vision)",
+        kv_bpt=3_450,                    # = DSV4F: identical caches (text config byte-identical)
+        deltanet_state=15_597_568,       # = DSV4F: 46 x 128 x 576 windows + fp32 compressor state
+        state_step_bytes=1_048_768,      # = DSV4F (research/model_dsv4flash.md #3)
+        state_fp32_ok=False,             # already fp32/fp8-mixed; doubling models nothing
+        w_resident=167_811_372_792,      # measured safetensors total: DSV4F + 932,836,352 B
+                                         # (ViT 823.7e6 + aligner 109.1e6 + gate biases)
+        w_decode_shared=7.66e9,          # = DSV4F: the tower is never read by a text decode step
+        w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
+        w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+        mtp=1.7,                         # DSpark (the README serves 3 drafts); transplanted fit
+        nvfp4_w=None,                    # no official NVFP4 checkpoint; the experts are already 4-bit
+        kv_decode_bpt=426,               # = DSV4F: fp4 indexer scan + dense HCA
+        kv_decode_const=9_363_456,       # = DSV4F: top-k reads + windows
+        kv_decode_topk=2_048,            # 512 compressed entries x ratio 4, in token space
+        kv_fp16_ok=False,                # same V4 path: vLLM asserts fp8 main KV (the README
+                                         # and the vision image both pass --kv-cache-dtype fp8)
+        max_ctx=1_048_576,               # native 1M (YaRN x16 over 65,536 baked into the config)
+        params_prefill=12.70e9, attn_layers=41, attn_d=26_624 / 41,   # = DSV4F, text prefill
         kv_heads=1, state_heads=1,       # MQA latent caches AND the latent windows replicate under plain TP
     ),
     # MoE 552B backbone + 196B Engram tables (510.3 GB on disk incl. 3 DSpark
@@ -3539,7 +3573,7 @@ def _selfcheck():
         pass
 
     # ---- the grid is what makes DP expressible for the 2026-07+ models ------
-    # MM35, GLM-5.3, both DeepSeek Flash models, Qwen3.8-Flash-Next and GLM-5.3-Flash fit no
+    # MM35, GLM-5.3, the DeepSeek Flash models, Qwen3.8-Flash-Next and GLM-5.3-Flash fit no
     # single H200, so pure DP is a 0 pool at every N -- the study's existing
     # "does not fit" sentinel, and it stands.
     # (GLM-5.3-Flash appears as its BF16-KV arm wherever an H200 topology is
@@ -3549,8 +3583,8 @@ def _selfcheck():
         m_ = MODELS[mk]
         return (with_kv_dtype(m_, "fp16")
                 if m_.kv_fp8_blackwell_only and gk == "H200" else m_)
-    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"], MODELS["DSV41F"],
-                MODELS["Q38FN"], _arm("GLM53F", "H200")):
+    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"], MODELS["DSV4FV"],
+                MODELS["DSV41F"], MODELS["Q38FN"], _arm("GLM53F", "H200")):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
     # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
@@ -3560,6 +3594,9 @@ def _selfcheck():
     assert min_tp_for(MODELS["GLM52"], "B300") == 3
     assert min_tp_for(MODELS["DSV4F"], "H200") == 2
     assert min_tp_for(MODELS["DSV4F"], "B300") == 1
+    # the vision tower's 0.93 GB moves neither boundary
+    assert min_tp_for(MODELS["DSV4FV"], "H200") == 2
+    assert min_tp_for(MODELS["DSV4FV"], "B300") == 1
     # DSv4.1-Flash: 510.3 GB resident (the 203 GB Engram tables live in HBM
     # under vLLM) — 5 x 121.7 GB usable H200, 2 x 259.3 GB usable B300
     assert min_tp_for(MODELS["DSV41F"], "H200") == 5
@@ -3574,6 +3611,7 @@ def _selfcheck():
     for mk, gk in (("MM35", "H200"), ("MM35", "B300"),
                    ("GLM52", "H200"), ("GLM52", "B300"),
                    ("DSV4F", "H200"), ("DSV4F", "B300"),
+                   ("DSV4FV", "H200"), ("DSV4FV", "B300"),
                    ("DSV41F", "H200"), ("DSV41F", "B300"),
                    ("Q38FN", "H200"), ("Q38FN", "B300"),
                    ("GLM53F", "H200"), ("GLM53F", "B300")):
@@ -3588,6 +3626,8 @@ def _selfcheck():
                          ("GLM52", "B300", [(2, 4), (1, 8)]),
                          ("DSV4F", "H200", [(4, 2), (2, 4), (1, 8)]),
                          ("DSV4F", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
+                         ("DSV4FV", "H200", [(4, 2), (2, 4), (1, 8)]),
+                         ("DSV4FV", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
                          ("DSV41F", "H200", [(1, 8)]),
                          ("DSV41F", "B300", [(4, 2), (2, 4), (1, 8)]),
                          ("Q38FN", "H200", [(4, 2), (2, 4), (1, 8)]),
@@ -3756,9 +3796,24 @@ def _selfcheck():
     assert abs((ds4_4.w_resident - ds4.w_resident)
                - (155_827_046_400 - 147_169_738_752)) < 1e7
 
+    # DSv4-Flash-Vision-Exp (research/model_dsv4flash_vision.md): the 0731
+    # text backbone + a vision tower. Every field but the name, the resident
+    # bytes and the (absent) NVFP4 arm IS DSV4F's — the text config and the
+    # cache code are unchanged, so a drift here is a copy error
+    ds4v = MODELS["DSV4FV"]
+    _same = ("name", "w_resident", "nvfp4_w")
+    assert all(getattr(ds4v, f.name) == getattr(ds4, f.name)
+               for f in fields(Model) if f.name not in _same)
+    # resident delta = ViT 823,685,120 + aligner 109,068,288 + 4 image
+    # embeddings 32,768 (BF16) + fp32 gate biases: 46 bias_vl x 256 x 4 and
+    # the 3 hash layers' own bias 3 x 256 x 4 (shard headers, 2026-10-02)
+    assert ds4v.w_resident == 166_878_536_440 + (823_685_120 + 109_068_288 + 32_768
+                                                 + 46 * 256 * 4 + 3 * 256 * 4)
+    assert ds4v.nvfp4_w is None
+
     # DSv4.1-Flash identities (research/model_dsv41flash.md): four shared
     # compressed caches (CSA2), FP4 main KV, CED prefill
-    DEEPSEEK_FLASH = ("DSV4F", "DSV41F")   # fixed window + compressor state
+    DEEPSEEK_FLASH = ("DSV4F", "DSV4FV", "DSV41F")   # fixed window + compressor state
     dsf = MODELS["DSV41F"]
     assert dsf.kv_bpt == 3 * (288 + 68) / 2 + (288 + 68)           # 890 B, the paper's figure
     assert dsf.deltanet_state == 43 * 128 * 528 + 3 * 2 * 2 * 512 * 4  # windows + fp32 state
@@ -3793,7 +3848,8 @@ def _selfcheck():
     # published number is untouched; the "replicate" arm pays tp/kv_heads
     # copies past the heads, and the single-latent models pay it at every tp > 1
     for mk, heads in (("27B", 4), ("35BA3B", 2), ("MM35", 8), ("GLM52", 1),
-                      ("DSV4F", 1), ("DSV41F", 1), ("Q38FN", 2), ("GLM53F", 1)):
+                      ("DSV4F", 1), ("DSV4FV", 1), ("DSV41F", 1), ("Q38FN", 2),
+                      ("GLM53F", 1)):
         assert MODELS[mk].kv_heads == heads, mk
         for tp_ in (1, 2, 4, 8):
             assert kv_replication(MODELS[mk], topology_grid(1, tp_, "B300")) == (1.0, 1.0)
@@ -3917,7 +3973,7 @@ def _selfcheck():
     # Flash models' CSA / CSA2 paths must refuse FP16 (all serve only with a
     # quantized main KV)
     assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
-    for quant_only in (glm, ds4, dsf):
+    for quant_only in (glm, ds4, ds4v, dsf):
         try:
             with_kv_dtype(quant_only, "fp16")
             raise AssertionError("expected ValueError")
@@ -3926,8 +3982,9 @@ def _selfcheck():
 
     # context caps (owner decision 2026-07): Qwens + GLM allow up to 1M
     # (Qwen native 262k, 1M via YaRN); Mistral's hard model max is 262,144;
-    # both DeepSeek Flash models are natively 1M (YaRN x16 baked into the config)
-    assert (m27.max_ctx == m35.max_ctx == glm.max_ctx == ds4.max_ctx == dsf.max_ctx
+    # the DeepSeek Flash models are natively 1M (YaRN x16 baked into the config)
+    assert (m27.max_ctx == m35.max_ctx == glm.max_ctx == ds4.max_ctx == ds4v.max_ctx
+            == dsf.max_ctx
             == q38.max_ctx == g53.max_ctx == 1_048_576)
     assert mm.max_ctx == 262_144
     wl_1m = replace(wl, cap=1_048_576)

@@ -11,6 +11,11 @@
 > found on V4.1 that applies here unchanged; the TP layout fields
 > (`kv_heads = state_heads = 1`, `research/kv_tp_sharding.md`) postdate this
 > note and follow from § 1's single-latent MQA.
+>
+> **Sibling (2026-10-02):** DeepSeek-V4-Flash-Vision-Exp (`MODELS["DSV4FV"]`,
+> `research/model_dsv4flash_vision.md`) is this text backbone plus a vision
+> tower; it inherits every constant below but the resident bytes. A
+> correction here must land there too — the self-check asserts the two agree.
 
 **Purpose:** defensible KV-cache / decode-bandwidth constants for
 **DeepSeek-V4-Flash-0731** (`deepseek-ai/DeepSeek-V4-Flash-0731`, MIT weights,

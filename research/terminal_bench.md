@@ -81,6 +81,7 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` and
 | `GLM52` | `glm-5-3` | GLM-5.3 (max) | **83.9%** | 224 | **41.9%** | 83 | 2026-08-18 |
 | — | `glm-5-2` | GLM-5.2 (max) — the model `GLM52` was until 2026-09-06 | 77.9% | 208 | — | — | 2026-06-16 |
 | `DSV4F` | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) — out of the study 2026-09-10 → 09-16, figures unchanged | **78.7%** | 210 | **12.1%** | 24 | 2026-07-31 |
+| `DSV4FV` | `deepseek-v4-flash-vision` | DeepSeek V4 Flash Vision (Max) — **read 2026-10-02**, when the model joined the study. Its card's own 2.1 figure is 83.9 (DeepSeek Harness), above 0731's 82.7; AA has it *below* 0731 | **74.2%** | 198 | **12.1%** | 24 | 2026-08-21 |
 | `DSV41F` | — | DeepSeek V4.1 Flash — **vendor figures, not AA runs** (§ 1 exception): the model card's pass@1 on the **DeepSeek Harness, Minimal mode, max reasoning effort, 1M context**. Source: `https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash` (README, read 2026-09-10). **No AA run of either version as of 2026-09-10**; replace when it publishes. | **90.6%** (vendor) | — | **31.2%** (vendor) | — | 2026-09-10 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | **25.3%** | 50 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | **32.8%** | 65 | 2026-08-26 |
@@ -129,7 +130,7 @@ is not noise:
 
 | | 2.1 | 4.0 |
 |---|---|---|
-| spread over the eight study models | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
+| spread over the nine study models | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
 | spread over the **top four** | 6.7 pts (83.9–90.6) | 16.7 pts (25.3–41.9) |
 | best AA-measured model | Qwen3.8-Flash-Next 86.1 | GLM-5.3 41.9 |
 | GLM-5.3 vs Qwen3.8-Flash-Next | −2.2 | **+16.7** |

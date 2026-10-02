@@ -34,6 +34,7 @@ hardened" — the two caveats the explorer's tooltip carries.
 | `MM35` | Mistral-Medium-3.5 | GQA 96/8 on 88 layers | 8 | — | — |
 | `GLM52` | GLM-5.3 | MLA, one 576-B latent | **1** | — | — |
 | `DSV4F` | DeepSeek-V4-Flash-0731 | MQA, one 512-dim latent (CSA + HCA) | **1** | latent windows + compressor state | **1** (replicates with the cache) |
+| `DSV4FV` | DeepSeek-V4-Flash-Vision-Exp | as `DSV4F` (same text backbone) | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `DSV41F` | DeepSeek-V4.1-Flash | MQA, one 512-dim latent per cache | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `Q38FN` | Qwen3.8-Flash-Next | GQA 24/2 on 12 QSA layers | 2 | DeltaNet, 48 v-heads | shards |
 | `GLM53F` | GLM-5.3-Flash | NoPE sparse-MLA, one latent | **1** | KDA, 64 heads | shards |
