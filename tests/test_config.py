@@ -339,9 +339,9 @@ def test_knob_gates_are_refusals_not_no_ops():
     with pytest.raises(ValueError, match="calibration.mtp must be"):
         RunConfig.from_dict({"deployment": {"model": "27B"},
                              "calibration": {"mtp": 0}}).validate()
-    # both DeepSeek Flash models' state is a fixed mixed-precision buffer,
+    # the DeepSeek Flash models' state is a fixed mixed-precision buffer,
     # not a bf16 one
-    for mk, tp in (("DSV4F", 2), ("DSV41F", 8)):
+    for mk, tp in (("DSV4F", 2), ("DSV4FV", 2), ("DSV41F", 8)):
         assert M.MODELS[mk].state_fp32_ok is False
         with pytest.raises(ValueError, match="no bf16 recurrent state"):
             RunConfig.from_dict({"deployment": {"model": mk, "gpu": "H200",

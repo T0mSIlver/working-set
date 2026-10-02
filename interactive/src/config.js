@@ -243,6 +243,30 @@ export const CONFIG = {
       attn_layers: 41, attn_d: 26624/41,  // 21 QK-only indexers @1024-equiv + 20 dense HCA @256-equiv
       max_ctx: 1048576,            // native 1M (YaRN x16 baked into the config)
     },
+    "DSV4FV": {                    // research/model_dsv4flash_vision.md
+      // DSV4F's text backbone + a 0.47B BF16 vision tower, continued-trained:
+      // text config and cache code unchanged, so every constant but the
+      // resident bytes (and the absent NVFP4 arm) is DSV4F's
+      name: "DeepSeek-V4-Flash-Vision-Exp (MoE 284B-A13B, CSA, vision)",
+      kv_bpt: 3450,                // = DSV4F
+      deltanet_state: 15597568,    // = DSV4F: windows + fp32 compressor state
+      state_step_bytes: 1048768,   // = DSV4F
+      state_fp32_ok: false,        // fixed mixed-precision state — the fp32 toggle models nothing
+      w_resident: 167811372792,    // measured safetensors total: DSV4F + 932,836,352 B (ViT + aligner + gate biases)
+      w_decode_shared: 7.66e9,     // = DSV4F: the vision tower is never in a text decode read
+      w_route_pertok: 3449290752,  // 6 experts x 13,369,344 B (FP4 packed + E8M0 scales) x 43
+      w_route_total: 147169738752, // 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+      mtp: 1.7,                    // DSpark (the model card serves 3 drafts); transplanted fit, unmeasured
+      nvfp4_w: null,               // no official NVFP4 checkpoint (community repacks only, 2026-10-02)
+      kv_decode_bpt: 426,          // = DSV4F
+      kv_decode_const: 9363456,    // = DSV4F
+      kv_decode_topk: 2048,        // = DSV4F
+      kv_fp16_ok: false,           // same V4 path: fp8 main KV asserted
+      kv_heads: 1, state_heads: 1, // MQA latent caches AND the latent windows replicate under plain TP
+      params_prefill: 12.70e9,     // = DSV4F (text prefill; image encoding not priced)
+      attn_layers: 41, attn_d: 26624/41,
+      max_ctx: 1048576,            // native 1M
+    },
     "DSV41F": {                    // research/model_dsv41flash.md
       name: "DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
       kv_bpt: 890,                 // 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1: FP4 main KV + FP4 indexer K
@@ -346,7 +370,7 @@ export const CONFIG = {
   //
   // 2.1 is AA's LEGACY agentic-coding eval and 4.0 the one carrying the
   // Intelligence Index v4.3; they disagree about the top of this frontier.
-  // Among the AA-MEASURED seven, 2.1 ranks Q38FN first and GLM52 third while
+  // Among the AA-MEASURED eight, 2.1 ranks Q38FN first and GLM52 third while
   // 4.0 reverses them: GLM52 leads Q38FN by 16.7 points there and trails it
   // by 2.2 on 2.1. (DSV41F's vendor pair tops 2.1 outright and sits second
   // on 4.0, but it is not measured like the others — § source.) That is why
@@ -367,6 +391,7 @@ export const CONFIG = {
     "MM35":   { tb21: 135/267, tb40:   0/198, aa: "mistral-medium-3-5" },  // likewise
     "GLM52":  { tb21: 224/267, tb40:  83/198, aa: "glm-5-3" },   // max effort (the index run); 5.2 was 208/267, no 4.0 run
     "DSV4F":  { tb21: 210/267, tb40:  24/198, aa: "deepseek-v4-flash" },   // 0731, max effort
+    "DSV4FV": { tb21: 198/267, tb40:  24/198, aa: "deepseek-v4-flash-vision" },   // max effort, read 2026-10-02
     "DSV41F": { tb21: 0.906,   tb40: 0.312,   aa: null,   // vendor figures, not AA runs (see above)
                 source: "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — no Artificial Analysis run of any Terminal-Bench version as of 2026-09-10" },
     "Q38FN":  { tb21: 230/267, tb40:  50/198, aa: "qwen3-8-flash-next" },

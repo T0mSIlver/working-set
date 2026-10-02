@@ -7,10 +7,10 @@ same thing — a change to one could sit unmirrored in the other indefinitely,
 and the explorer would publish numbers the package would not.
 
 **`vectors.json` is what the Python model says.** Every deployment the explorer
-can reach — 8 models x 2 GPU parts x 1-8 GPUs x every DP/TP split of those that
-holds the weights x the servable weight/KV dtype arms, **610 of them, each
+can reach — 9 models x 2 GPU parts x 1-8 GPUs x every DP/TP split of those that
+holds the weights x the servable weight/KV dtype arms, **642 of them, each
 priced at least once** — plus a one-knob-at-a-time sweep on four anchors, the
-all-defaults reference of each model/part, and the 26 spread-probe states. Each state is priced by
+all-defaults reference of each model/part, and the 27 spread-probe states. Each state is priced by
 `workingset.model` and written out with its inputs, its outputs, a `cond` block
 of conditioning diagnostics, and the tolerance class of each output.
 
@@ -42,8 +42,8 @@ regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
 the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
-(906 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
-plus a 26-state named spread probe at three seeds and two sampling scales). The JS
+(954 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
+plus a 27-state named spread probe at three seeds and two sampling scales). The JS
 side is ~80 s. That is the price of pricing every legal deployment rather than
 a sample of them.
 
@@ -97,7 +97,7 @@ edited once, a dropped term, a different rounding convention.
 mulberry32 with Box-Muller normals. The two will never agree exactly, and the
 band has to say how close is close enough.
 
-The bands are measured, not guessed. `scripts/golden.py` runs the 26 states
+The bands are measured, not guessed. `scripts/golden.py` runs the 27 states
 named in `SPREAD_PROBE` at three seeds and two sampling scales, and records
 both the probe (each entry a deployment plus the knobs that differ from the
 defaults) and the p50 / p90 / max relative spread of every sampled quantity in
@@ -327,7 +327,8 @@ same two field edits `modelFor()` makes (`deltanet_state` x2,
 They remain unsampled by this fixture, but the spread probe no longer blocks
 adding them. `SPREAD_PROBE` started as the 25 states the old positional probe
 happened to select (the switch moved no band; a 26th, DSV4F's, was added on
-its return), so adding a sweep axis or a
+its return and a 27th, DSV4FV's — the logged 2×B300 TP2 deployment — on
+2026-10-02, tightening a few bands by ≤ 0.002), so adding a sweep axis or a
 state key no longer changes which states derive every `mc` band. What the
 coverage rule guarantees is a floor, not a cross-product: every model and GPU
 appears at least once, and a new model is represented only by the entry
