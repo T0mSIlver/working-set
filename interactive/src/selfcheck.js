@@ -180,14 +180,13 @@ export function unitChecks(){
   const b1 = makeTopo("tp",1,"B300");
   console.assert(kv_pool_tokens(CONFIG.MODELS["27B"], b1) > p1, "B300 pool > H200 pool");
   console.assert(Math.abs(glm.nvfp4_w[0]/465e9 - 1) < 0.005,
-    "GLM-5.2 NVFP4 resident must match the vLLM recipe's ~465 GB");
-  // every model but GLM-5.3 (nvidia's 5.2 recipe kept as a projection there)
-  // has a measured NVFP4 checkpoint as of 2026-09-06 (DSv4-Flash-0731's is
-  // NVIDIA's, heavier than native) — except DSv4.1-Flash,
-  // which has no official one at all (2026-09-10) and is deliberately unpriced
+    "GLM-5.3 NVFP4 resident must stay near the vLLM recipe's ~465 GB");
+  console.assert(glm.nvfp4_w[3] === 256*21233688*75 &&
+                 glm.nvfp4_w[1] === glm.w_decode_shared + 15891309576,
+    "GLM-5.3 NVFP4: measured expert bytes; always-active = FP8 + BF16-upcast delta");
+  // every model has a measured NVFP4 checkpoint (research/nvfp4_2026-10.md)
   for (const mk of Object.keys(CONFIG.MODELS))
-    console.assert(mk === "DSV41F" ? CONFIG.MODELS[mk].nvfp4_w === null : !!CONFIG.MODELS[mk].nvfp4_w,
-      mk === "DSV41F" ? "DSV41F must have NO NVFP4 arm" : mk+" must be NVFP4-selectable");
+    console.assert(!!CONFIG.MODELS[mk].nvfp4_w, mk+" must be NVFP4-selectable");
   let gateThrew = false;
   try { kv_pool_tokens({...CONFIG.MODELS["27B"], weight_dtype:"nvfp4"}, makeTopo("tp",1,"H200")); }
   catch(e){ gateThrew = true; }
@@ -294,7 +293,10 @@ export function unitChecks(){
     "DSV41F prefill quadratic term = three QK-only encoder indexers over the ratio-2 axis");
   console.assert(dsf.params_prefill > 7.5e9 && dsf.params_prefill < 8.5e9,
     "DSV41F CED prefill activates ~8B (the encoder half of decode's 16B)");
-  console.assert(dsf.nvfp4_w === null, "DSV41F has no NVFP4 arm (no official checkpoint)");
+  console.assert(dsf.nvfp4_w[2] === 6*19906584*40 && dsf.nvfp4_w[3] === 384*19906584*40 &&
+                 dsf.nvfp4_w[1] === dsf.w_decode_shared &&
+                 dsf.nvfp4_w[0] - dsf.w_resident === dsf.nvfp4_w[3] - dsf.w_route_total,
+    "DSV41F NVFP4: only the routed experts move, repacked heavier (E4M3 block-16 scales)");
   // Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md; mirror _selfcheck)
   const q38 = CONFIG.MODELS["Q38FN"];
   console.assert(q38.kv_bpt === 12*2*256*2 + 12*128/4,

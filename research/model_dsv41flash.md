@@ -208,14 +208,14 @@ from 3×H200 / 2×B300 — but that path exists in no open stack, so it is not
 modelled (§ 6). The ViT (0.97 GB) is charged although `--language-model-only`
 drops it (0.2%, same convention as Qwen3.8-Flash-Next's tower).
 
-### NVFP4 — none (`nvfp4_w = None`)
+### NVFP4 — `nvidia/DeepSeek-V4.1-Flash-NVFP4`, 3.3% heavier
 
-No official NVFP4 checkpoint exists on release day (three community repacks
-were created 2026-09-10). The routed experts already ship 4-bit with E8M0
-block-32 scales; NVIDIA's repack of the 0731 predecessor to E4M3 block-16
-scales came out **5.2% heavier** (`research/nvfp4_2026-09.md`), and nothing in
-this checkpoint changes that arithmetic. The explorer greys the option out
-rather than project a heavier arm.
+No official NVFP4 checkpoint existed on release day, so the arm was greyed
+out until `nvidia/DeepSeek-V4.1-Flash-NVFP4` (2026-09-16) was measured on
+2026-10-02 (`research/nvfp4_2026-10.md`). As predicted from NVIDIA's 0731
+repack, only the routed experts change: E8M0 block-32 scales become E4M3
+block-16 scales, 18,800,640 → 19,906,584 B/expert (+5.9%). The checkpoint
+weighs 527.27 GB against 510.29 GB native.
 
 ## 5. Serving notes
 
@@ -490,7 +490,8 @@ Primary (read directly, exact bytes, 2026-09-10):
   setup, reasoning effort 1–100, recommended sampling parameters incl.
   `max_tokens` ≥ 256K, prompt encoding / `deepseek-recipe`, MIT license)
 - https://huggingface.co/api/models?search=DeepSeek-V4.1-Flash (no `nvidia/`
-  NVFP4 repo; three community repacks created 2026-09-10)
+  NVFP4 repo on 2026-09-10; `nvidia/DeepSeek-V4.1-Flash-NVFP4` created
+  2026-09-16)
 
 Secondary:
 - vLLM recipe: https://github.com/vllm-project/recipes/blob/main/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml

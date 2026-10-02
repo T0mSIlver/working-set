@@ -191,7 +191,7 @@ export const CONFIG = {
       // hold the same 118,629 tensors with identical dtypes, shapes and
       // bytes (755,632,050,320 B). Only the values differ. Two things are
       // not carried by architecture and are flagged below: the MTP fit and
-      // the NVFP4 bytes. License changed: MIT -> "GLM-5.3 License" (MIT plus
+      // the NVFP4 bytes (now measured on 5.3's own checkpoint). License changed: MIT -> "GLM-5.3 License" (MIT plus
       // a security-review clause for >$10B-revenue Model-as-a-Service).
       name: "GLM-5.3 (MoE 744B-A40B, MLA+DSA)",
       kv_bpt: 48408,               // 79 x 576 MLA latent + 22 x 132 indexer keys (fp8)
@@ -201,10 +201,12 @@ export const CONFIG = {
       w_route_pertok: 22649241600, // 8 experts x (3x6144x2048) x 75 MoE layers, FP8
       w_route_total: 724775731200, // 256 experts (saturates at n=32)
       mtp: 1.7,                    // MTP module (5 drafts, same in the 5.3 recipe); transplanted fit, unmeasured
-      // PROJECTION: nvidia/GLM-5.2-NVFP4 (ONLY routed experts NVFP4, ~465 GB
-      // recipe) applied to tensor-identical weights. No NVIDIA NVFP4 of
-      // GLM-5.3 exists (2026-09-06).
-      nvfp4_w: [464.8e9, 35.30e9, 12740198400, 407686348800],
+      // nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header
+      // (research/nvfp4_2026-10.md): routed experts of the 75 main MoE
+      // layers NVFP4 (21,233,688 B/expert); attention, indexers, shared
+      // experts and the MTP layer BF16, dense MLPs FP8. Always-active read =
+      // FP8 constant + the measured delta on the same tensors (+15.89e9).
+      nvfp4_w: [464115789896, 34811309576, 12740212800, 407686809600],
       kv_decode_bpt: 2772,         // DSA: 21 indexer layers x 132 B per context token
       kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
       kv_decode_topk: 2048,        // ...scaled by min(len, topk)/topk per sequence
@@ -254,11 +256,13 @@ export const CONFIG = {
       w_route_pertok: 4512153600,  // 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
       w_route_total: 288777830400, // 384 experts (kink at n = 384/6 = 64)
       mtp: 1.7,                    // DSpark drafts 5 tokens; transplanted fit, unmeasured
-      // No official NVFP4 checkpoint (2026-09-10; same-day community repacks
-      // only). The experts already ship 4-bit with E8M0 block-32 scales, so
-      // an NVFP4 repack (E4M3 block-16) would again be HEAVIER, as NVIDIA's
-      // 0731 repack was (research/nvfp4_2026-09.md). Not priced.
-      nvfp4_w: null,
+      // nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
+      // shard header (research/nvfp4_2026-10.md). Only the 40 main layers'
+      // routed experts change: native MXFP4 with E8M0 block-32 scales
+      // (18,800,640 B/expert) repacked with E4M3 block-16 scales (19,906,584
+      // B/expert, +5.9%), as NVIDIA's 0731 repack was. Everything else
+      // byte-identical, so the arm is 3.3% HEAVIER than native.
+      nvfp4_w: [527273322840, 8522921408, 4777580160, 305765130240],
       kv_decode_bpt: 170,          // 3 x 68/2 + 68: full-axis fp4 indexer scans at layers 2/8/14/20
       kv_decode_const: 12763136,   // 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool + 40 x 128 x 528 windows
       kv_decode_topk: 1024,        // 512 compressed entries x ratio 2, in token space

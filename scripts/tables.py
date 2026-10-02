@@ -308,8 +308,7 @@ def main():
             row = []
             for wd in M.WEIGHT_DTYPES:
                 if wd == "nvfp4" and MODELS[mk].nvfp4_w is None:
-                    row.append("nvfp4: n/a (native FP4 experts)" if mk == "DSV41F"
-                               else "nvfp4: n/a (no official NVFP4 ckpt)")
+                    row.append("nvfp4: n/a (no official NVFP4 ckpt)")
                     continue
                 mdl = M.with_weight_dtype(MODELS[mk], wd)
                 pool = M.kv_pool_tokens(mdl, t)

@@ -30,10 +30,11 @@ Architecture-determined constants that carry over untouched: `kv_bpt`
 - **Weights.** Different values, hence the score.
 - **MTP (`mtp: 1.7`).** Was already a transplanted fit on 5.2 (unmeasured);
   the 5.3 recipe drafts 5 tokens as before. Stays unmeasured.
-- **NVFP4.** `nvidia/GLM-5.2-NVFP4` (routed experts only, ~465 GB) was the
-  measured recipe. No `nvidia/GLM-5.3-NVFP4` exists as of 2026-09-06. The
-  explorer keeps the 5.2 bytes as a **projection** onto tensor-identical
-  weights.
+- **NVFP4.** `nvidia/GLM-5.3-NVFP4` (2026-09-14) is measured in
+  `research/nvfp4_2026-10.md`: 464.12 GB resident, close to the 464.8 GB
+  that the 5.2 recipe projected, but the dense MLPs now stay FP8, so the
+  always-active read is 34.81 GB, not 35.30 GB. Until 2026-10-02 the
+  explorer priced the 5.2 bytes as a projection.
 - **License.** GLM-5.2 was MIT. GLM-5.3 ships its own "GLM-5.3 License":
   MIT's grant and notice clause, plus one condition — a licensee (with
   affiliates) that operates a *Model-as-a-Service* business with aggregate

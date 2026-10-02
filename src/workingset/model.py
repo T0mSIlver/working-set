@@ -563,12 +563,15 @@ MODELS = {
         w_route_pertok=22_649_241_600,   # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
         w_route_total=724_775_731_200,   # 256 experts (saturates at n=32, like 35BA3B)
         mtp=1.7,                         # MTP module (5 drafts); transplanted fit, unmeasured
-        # nvidia/GLM-5.2-NVFP4: ONLY routed experts NVFP4; attn/shared/dense/
-        # embeddings/lm_head/MTP stay BF16. Derived 464.8e9 B matches the vLLM
-        # recipe's "~465 GB" within 0.05% (research/model_glm52.md #4).
-        nvfp4_w=(464.8e9, 35.30e9,
-                 12_740_198_400,          # 22_649_241_600 x 0.5625
-                 407_686_348_800),        # 724_775_731_200 x 0.5625 (kink n=32)
+        # nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header:
+        # routed experts of the 75 main MoE layers NVFP4 (21,233,688 B/expert);
+        # attention, indexers, shared experts and the MTP layer BF16, dense
+        # MLPs FP8. The always-active read is the FP8 constant plus the
+        # measured delta on the same tensors (+15,891,309,576 B, the BF16
+        # upcast). research/nvfp4_2026-10.md.
+        nvfp4_w=(464_115_789_896, 34_811_309_576,
+                 12_740_212_800,          # 8 x 21,233,688 x 75
+                 407_686_809_600),        # 256 x 21,233,688 x 75 (kink n=32)
         kv_decode_bpt=2_772,             # 21 indexer layers x 132 B per context token
         kv_decode_const=92.0e6,          # 78 layers x top-2048 x 576 B per active seq
         kv_decode_topk=2_048,            # ...scaled down for sequences < 2,048 tokens
@@ -654,7 +657,7 @@ MODELS = {
     # entry) indexer reads and the windows (12.8 MB/seq). The 384 routed
     # experts are native MXFP4 (kink at n = 384/6 = 64); vLLM keeps the
     # Engram tables in HBM ("plan capacity for them" — recipe), so the fit
-    # starts at 5xH200 / 2xB300. No official NVFP4 checkpoint (2026-09-10).
+    # starts at 5xH200 / 2xB300. NVIDIA's NVFP4 repack is 3.3% heavier.
     # research/model_dsv41flash.md.
     "DSV41F": Model(
         name="DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
@@ -669,11 +672,15 @@ MODELS = {
         w_route_pertok=4_512_153_600,    # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
         w_route_total=288_777_830_400,   # 384 experts (kink at n = 384/6 = 64)
         mtp=1.7,                         # DSpark drafts 5 tokens; transplanted fit, unmeasured
-        # No official NVFP4 checkpoint exists (2026-09-10; only same-day community
-        # repacks). The routed experts already ship 4-bit with E8M0 block-32
-        # scales, so an NVFP4 repack (E4M3 block-16) would again be HEAVIER, as
-        # NVIDIA's 0731 repack was (research/nvfp4_2026-09.md). Left unpriced.
-        nvfp4_w=None,
+        # nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
+        # shard header. Only the 40 main layers' routed experts change: native
+        # MXFP4 with E8M0 block-32 scales (18,800,640 B/expert) repacked with
+        # E4M3 block-16 scales (19,906,584 B/expert, +5.9%), as NVIDIA's 0731
+        # repack was. Everything else byte-identical, so the arm is 3.3%
+        # HEAVIER than native. research/nvfp4_2026-10.md.
+        nvfp4_w=(527_273_322_840, 8_522_921_408,
+                 4_777_580_160,           # 6 x 19,906,584 x 40
+                 305_765_130_240),        # 384 x 19,906,584 x 40
         kv_decode_bpt=170,               # 3 x 68/2 + 68: full-axis fp4 indexer scans (layers 2/8/14/20)
         kv_decode_const=12_763_136,      # 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool
                                          # + 40 x 128 x 528 windows
@@ -3689,10 +3696,12 @@ def _selfcheck():
     assert m35_4.w_decode_shared > m35.w_decode_shared          # ...but BF16 exclusions
     glm_4 = with_weight_dtype(glm, "nvfp4")                     #    weigh on shared reads
     assert abs(glm_4.w_resident / 465e9 - 1) < 0.005, \
-        "GLM-5.2 NVFP4 resident must match the vLLM recipe's ~465 GB"
+        "GLM-5.3 NVFP4 resident must stay near the vLLM recipe's ~465 GB"
+    assert glm_4.w_route_total == 256 * 21_233_688 * 75
     assert abs(glm_4.w_route_total / glm_4.w_route_pertok - 32) < 1e-9
-    # both Qwen models must be NVFP4-selectable (checkpoints exist for both)
-    for mk in ("27B", "35BA3B"):
+    assert glm_4.w_decode_shared == glm.w_decode_shared + 15_891_309_576
+    # every model has an official NVFP4 checkpoint (research/nvfp4_2026-10.md)
+    for mk in MODELS:
         assert MODELS[mk].nvfp4_w is not None
 
     # published-config KV identities for the new models
@@ -3781,12 +3790,14 @@ def _selfcheck():
     # tables are 40% of the resident bytes — the fit is set by them
     assert 7.5e9 < dsf.params_prefill < 8.5e9
     assert dsf.w_resident > 2 * (dsf.w_route_total + dsf.w_decode_shared) * 0.8
-    # no NVFP4 arm: the experts are already 4-bit and no official repack exists
-    assert dsf.nvfp4_w is None
-    try:
-        with_weight_dtype(dsf, "nvfp4"); raise AssertionError("expected ValueError")
-    except ValueError:
-        pass
+    # NVIDIA's NVFP4 repacks the natively-4-bit experts with denser scales,
+    # as on 0731: heavier everywhere but the fixed read, and only experts move
+    dsf_4 = with_weight_dtype(dsf, "nvfp4")
+    assert dsf_4.w_route_total == 384 * 19_906_584 * 40
+    assert dsf_4.w_route_pertok == 6 * 19_906_584 * 40
+    assert dsf_4.w_decode_shared == dsf.w_decode_shared
+    assert (dsf_4.w_resident - dsf.w_resident
+            == dsf_4.w_route_total - dsf.w_route_total)
 
     # KV sharding under TP (research/kv_tp_sharding.md): every default
     # ("dcp") topology at a TP the KV heads divide stores ONE copy, so every
@@ -4611,7 +4622,7 @@ def _selfcheck():
             pools = []
             for wd in WEIGHT_DTYPES:
                 if wd == "nvfp4" and MODELS[mk].nvfp4_w is None:
-                    pools.append("   n/a")   # DSv4.1-Flash: no NVFP4 variant exists
+                    pools.append("   n/a")
                     continue
                 mdl = with_weight_dtype(MODELS[mk], wd)
                 pools.append(f"{kv_pool_tokens(mdl, t) / 1e6:6.2f}")
