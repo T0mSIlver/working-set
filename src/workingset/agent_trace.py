@@ -125,7 +125,10 @@ def extract_pi_session(lines) -> tuple[TraceRequest, ...]:
         line = line.strip()
         if not line:
             continue
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue           # a torn append (pi crashed mid-write)
         if row.get("type") != "message":
             continue
         msg = row["message"]
@@ -162,8 +165,11 @@ def extract_pi(paths) -> AgentTrace:
         files += sorted(p.rglob("*.jsonl")) if p.is_dir() else [p]
     sessions = []
     for f in files:
-        with f.open() as fh:
-            reqs = extract_pi_session(fh)
+        try:
+            with f.open() as fh:
+                reqs = extract_pi_session(fh)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            raise ValueError(f"{f}: {type(e).__name__}: {e}") from e
         if reqs:
             sessions.append(reqs)
     if not sessions:

@@ -166,3 +166,19 @@ def test_a_replayed_rung_sends_the_recorded_sizes(tmp_path):
     # each prompt is within a few tokens of the recorded size it replays
     assert all(abs(len(b["prompt"]) / 4 - by_out[b["max_tokens"]]) < 10
                for b in seen)
+
+
+def test_a_torn_last_line_does_not_lose_the_session(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text("\n".join(_pi_lines()) + '\n{"type": "mess')
+    assert extract_pi([tmp_path]).n_requests == 4
+
+
+def test_the_gap_cap_reaches_the_predicted_workload(tmp_path):
+    from workingset.test_cmd import apply_replay
+    s = tuple(TraceRequest(1_000, 10, g, "user") for g in (None,) + (2.0,) * 9
+              + (7_200.0,))
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps(AgentTrace("pi", (s,)).to_dict()))
+    cfg, err = apply_replay(small_cfg(), str(path), 300.0)
+    assert err is None and cfg.workload.think_time_s == round((18 + 300) / 10, 1)

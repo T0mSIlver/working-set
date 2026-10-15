@@ -12,6 +12,7 @@ from dataclasses import replace
 from . import __version__
 from .hypotheses import (NOT_ESTABLISHED, REGISTRY, Measurement, RunContext,
                          Verdict, plan as make_plan)
+from .agent_trace import PARK_S
 from .probe.burst import ESTABLISH_FRAC, ESTABLISH_WAIT_MAX_S
 from .probe.options import ProbeOptions
 from .probe.population import eval_rung
@@ -77,7 +78,7 @@ def _calibrated_cpt(model: str) -> float:
         raise SystemExit(f"--tokenizer {model}: {type(e).__name__}: {e}")
 
 
-def apply_replay(cfg, path: str):
+def apply_replay(cfg, path: str, max_gap_s: float):
     """The config with its workload replaced by the trace's averages (see
     `agent_trace.equivalent_workload`), so the predictions price a smooth
     arrival of the same load the replay sends in bursts. Returns (cfg, error).
@@ -89,7 +90,8 @@ def apply_replay(cfg, path: str):
     except (OSError, ValueError, KeyError) as e:
         return cfg, f"{type(e).__name__}: {e}"
     return replace(cfg, workload=replace(cfg.workload,
-                                         **equivalent_workload(trace))), None
+                                         **equivalent_workload(
+                                             trace, park_s=max_gap_s))), None
 
 
 def build_budget(args) -> ProbeBudget:
@@ -523,7 +525,15 @@ def cmd_test(args) -> int:
         cfg = replace(cfg, endpoint=replace(cfg.endpoint,
                                             metrics_url=metrics_url))
     if getattr(args, "replay", None):
-        cfg, err = apply_replay(cfg, args.replay)
+        if not args.exclusive:
+            # only the ladder and the burst's standing load replay; the
+            # shared-mode probes would send the synthetic load instead
+            print("ws test: error: --replay needs --exclusive (only the load "
+                  "ladder and the burst replay recorded sessions)",
+                  file=sys.stderr)
+            return 2
+        cfg, err = apply_replay(cfg, args.replay,
+                                args.replay_max_gap_s or PARK_S)
         if err:
             print(f"ws test: error: --replay {args.replay}: {err}",
                   file=sys.stderr)
