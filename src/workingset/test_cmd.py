@@ -40,6 +40,8 @@ def build_options(args, cfg) -> ProbeOptions:
                         ("api", "api"),
                         ("freeze_threshold_ms", "freeze_threshold_ms"),
                         ("seed", "seed"),
+                        ("replay", "replay"),
+                        ("replay_max_gap_s", "replay_max_gap_s"),
                         # absent = the per-process random one ProbeOptions
                         # draws for itself; given = that run's bytes again
                         ("run_nonce", "run_nonce")):
@@ -73,6 +75,21 @@ def _calibrated_cpt(model: str) -> float:
         return calibrate_chars_per_token(lambda t: count(model, t))
     except Exception as e:                       # ToklenError, network, ...
         raise SystemExit(f"--tokenizer {model}: {type(e).__name__}: {e}")
+
+
+def apply_replay(cfg, path: str):
+    """The config with its workload replaced by the trace's averages (see
+    `agent_trace.equivalent_workload`), so the predictions price a smooth
+    arrival of the same load the replay sends in bursts. Returns (cfg, error).
+    """
+    from .agent_trace import equivalent_workload
+    from .probe.replay import load_trace
+    try:
+        trace = load_trace(path)
+    except (OSError, ValueError, KeyError) as e:
+        return cfg, f"{type(e).__name__}: {e}"
+    return replace(cfg, workload=replace(cfg.workload,
+                                         **equivalent_workload(trace))), None
 
 
 def build_budget(args) -> ProbeBudget:
@@ -215,6 +232,19 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
       + " — mixed into every miss salt and session context so a re-run at "
         "--seed " + f"{opts.seed} is never answered from the last run's "
         "prefix cache; the shared prefix stays byte-stable on purpose")
+
+    if opts.replay:
+        from .probe.replay import load_trace
+        tr = load_trace(opts.replay)
+        w(f"replay   : {opts.replay}: {len(tr.sessions)} recorded {tr.source} "
+          f"sessions, {tr.n_requests} requests. Each simulated session plays "
+          "one from a random request on: recorded prompt and reply sizes, "
+          "recorded waits (capped at "
+          f"{opts.replay_max_gap_s:g} s), no forced miss. Predictions price "
+          f"the same averages as a smooth load: prompt median "
+          f"{wl.user_prompt_median_tokens:,} (sigma {wl.user_prompt_sigma:g}), "
+          f"think {wl.think_time_s:g} s, turn {wl.warm_turn_tokens:,}, "
+          f"output {wl.max_output_tokens:,} tokens")
 
     if wl.image_share:
         w(f"images   : {wl.image_share:.0%} of warm turns attach "
@@ -492,6 +522,12 @@ def cmd_test(args) -> int:
     if metrics_url != cfg.endpoint.metrics_url:
         cfg = replace(cfg, endpoint=replace(cfg.endpoint,
                                             metrics_url=metrics_url))
+    if getattr(args, "replay", None):
+        cfg, err = apply_replay(cfg, args.replay)
+        if err:
+            print(f"ws test: error: --replay {args.replay}: {err}",
+                  file=sys.stderr)
+            return 2
     if cfg.workload.image_share and (args.api or "completions") != "chat":
         # refused here, with the arguments, not by the first image request
         print("ws test: error: workload.image_share > 0 sends images, which "

@@ -85,6 +85,26 @@ that share of warm turns then attaches generated PNGs, which stay in the
 session history, and the report splits warm-turn TTFT by whether the turn
 sent a new image. The model does not price images yet.
 
+The synthetic sessions send a request every `think_time_s` on average, spread
+evenly. A real coding agent works in bursts instead: a request every second or
+so while it runs tools, then a long pause while the person reads. To load an
+endpoint that way, record real sessions and replay them:
+
+```bash
+uv run ws trace pi -o trace.json          # ~/.pi/agent/sessions -> sizes and waits, no text
+uv run ws test workingset.toml --replay trace.json --exclusive --out run.json
+```
+
+`ws trace pi` keeps, for each request, the prompt and reply token counts, the
+wait before it and what it waited on (which tool, or the person), and nothing
+of the text, so other people can export their sessions and hand the file over.
+`--replay` plays one recorded session per simulated session, from a random
+request on: prompts grow to the recorded sizes on top of the server's own
+replies, replies have the recorded length, and each wait is the recorded one,
+capped by `--replay-max-gap-s` (default 1800). The config's `[workload]` is
+replaced by the trace's averages, so the predictions price the same load
+arriving smoothly and the gap to the measurement is what the bursts cost.
+
 ## Contents
 
 - [docs/writeup.md](docs/writeup.md) — baseline study: KV-cache capacity and
