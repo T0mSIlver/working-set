@@ -11,6 +11,8 @@
     ws metrics probe|tail|window ...           sample a live /metrics endpoint
     ws workload --prometheus URL --range 7d    measure the real workload and
                                                emit the config's [workload]
+    ws trace pi [PATH ...] -o trace.json       agent sessions' timing and sizes,
+                                               for `ws test --replay`
 """
 from __future__ import annotations
 
@@ -420,6 +422,15 @@ def build_parser() -> argparse.ArgumentParser:
                         "while the operating point is per replica group, and "
                         "KV occupancy cannot be combined at all")
     p.add_argument("--seed", type=int, help="probe RNG seed")
+    p.add_argument("--replay", metavar="TRACE",
+                   help="replay recorded agent sessions (a `ws trace` file) "
+                        "instead of the config's synthetic workload: recorded "
+                        "prompt and reply sizes and recorded waits, the "
+                        "config's [workload] replaced by the trace's averages "
+                        "for the predictions")
+    p.add_argument("--replay-max-gap-s", type=float, metavar="S",
+                   help="cap on a recorded wait; a longer one is a person who "
+                        "left (default 1800)")
     p.add_argument("--run-nonce", metavar="HEX",
                    help="mixed into every miss salt and session context so a "
                         "re-run at the same --seed cannot be answered from the "
@@ -454,6 +465,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_metrics(sub)
     from .workload import add_subparser as _add_workload
     _add_workload(sub)
+    from .agent_trace import add_subparser as _add_trace
+    _add_trace(sub)
     return ap
 
 

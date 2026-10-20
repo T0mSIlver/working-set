@@ -228,6 +228,13 @@ class Session:
     def intended_prompt_tokens(self, prompt: str) -> int:
         return int(len(prompt) / self.cpt)
 
+    def think_s(self, wl) -> float:
+        """Exponential think time around the workload's mean."""
+        return self.rng.expovariate(1.0 / wl.think_time_s)
+
+    def output_tokens(self, wl) -> int:
+        return wl.max_output_tokens
+
 
 def make_session(wl, opts, prefixes: Prefixes, uid: int, is_sub: bool,
                  seed: int | None = None) -> Session:

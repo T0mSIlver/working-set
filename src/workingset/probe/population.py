@@ -37,6 +37,7 @@ from .latency import (COLD_KINDS, cold_wait_stats, model_idle_prefill,
                       queue_time, slow_threshold_ms, slowed_stats)
 from .request import (EndpointSpec, RequestTrace, sampler_now, sampler_ready,
                       sampler_window, send_request)
+from .replay import make_replay_session
 from .session import Prefixes, make_session
 from .stats import FREEZE_LADDER_MS, pct, restore_nans
 
@@ -372,16 +373,19 @@ async def user_loop(client, ep: EndpointSpec, cfg, opts, uid: int, is_sub: bool,
                     prefixes: Prefixes, traces: list, stop: asyncio.Event,
                     stagger_s: float, metrics=None, seed: int | None = None):
     wl = cfg.workload
-    session = make_session(wl, opts, prefixes, uid, is_sub, seed=seed)
+    if opts.replay:
+        session = make_replay_session(wl, opts, prefixes, uid, seed=seed)
+    else:
+        session = make_session(wl, opts, prefixes, uid, is_sub, seed=seed)
     cap = opts.turns_per_user or math.inf
 
     await asyncio.sleep(stagger_s)     # spread session establishment over the ramp
     while not stop.is_set() and session.n_turn < cap:
         if session.n_turn:
-            # exponential think time; wake early if the rung ends
+            # think time (drawn, or the recorded wait); wake early if the
+            # rung ends
             try:
-                await asyncio.wait_for(
-                    stop.wait(), session.rng.expovariate(1.0 / wl.think_time_s))
+                await asyncio.wait_for(stop.wait(), session.think_s(wl))
                 break
             except asyncio.TimeoutError:
                 pass
@@ -393,7 +397,7 @@ async def user_loop(client, ep: EndpointSpec, cfg, opts, uid: int, is_sub: bool,
                           n_images_new=session.n_new_images)
         traces.append(tr)
         reply = await send_request(client, ep, opts, prompt, tr,
-                                   wl.max_output_tokens, metrics,
+                                   session.output_tokens(wl), metrics,
                                    images=session.turn_images)
         session.commit(reply)
 

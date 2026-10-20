@@ -8,6 +8,7 @@ from __future__ import annotations
 import secrets
 from dataclasses import asdict, dataclass, field
 
+from ..agent_trace import PARK_S
 from .stats import DEFAULT_RUNGS
 
 # ONE nonce per process, drawn at import. Every prompt the probe builds is
@@ -44,6 +45,9 @@ class ProbeOptions:
     request_timeout_s: float = 300.0    # keep well above the TTFT budget
     ignore_eos: bool = True             # vLLM extension: fixed-length decode
     api: str = "completions"            # "completions" | "chat"
+    # --- replay (`ws test --replay`) --------------------------------------
+    replay: str | None = None           # agent trace file; None = synthetic
+    replay_max_gap_s: float = PARK_S    # longest recorded wait kept
     # --- gap accounting ---------------------------------------------------
     freeze_threshold_ms: float = 100.0  # a gap >= this counts as a FREEZE
     # a gap >= this counts as SLOWED (H-slowed). None = half the predicted
@@ -70,4 +74,4 @@ class ProbeOptions:
                 self.context_cap_tokens, self.request_timeout_s,
                 self.ignore_eos, self.api, self.freeze_threshold_ms,
                 self.slow_threshold_ms, self.seed,
-                self.run_nonce)
+                self.run_nonce, self.replay, self.replay_max_gap_s)
