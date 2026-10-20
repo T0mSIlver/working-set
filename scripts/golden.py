@@ -795,6 +795,20 @@ KNOB_COMBOS = [
     (3, {"dprice": "latency", "mns": 8, "users": 400}),
 ]
 
+# Whole configurations someone reported, priced as stated rather than as a
+# knob off an anchor. Each is (deployment, knobs).
+# Issue #105: Qwen3.8-27B on 4xH200 TP4, a long-context low-miss agentic
+# load under latency decode pricing, the region no sweep state sat in (the
+# latency states all ran chunk 32,768, cap 180, miss 1%). Its slowed and
+# cold-wait figures read 1-3% apart on the page and in `ws predict`; that was
+# the explorer's 20,000-draw context sample, inside the `mc` bands.
+NAMED_STATES = [
+    (dict(model="27B", gpu="H200", wdt="fp8", kv="fp8", ngpu=4, tp=4),
+     {"chunk": "16384", "cap": 262, "user_median": 68, "user_sigma": 0.69,
+      "inval": 2.5, "think": 46, "out": 807, "decode_floor": 50, "mfu": 0.33,
+      "mns": 96, "dprice": "latency", "users": 48}),
+]
+
 
 def build_states() -> list[dict]:
     states, seen = [], set()
@@ -828,6 +842,12 @@ def build_states() -> list[dict]:
     # 2b. the named knob combinations
     for idx, knobs in KNOB_COMBOS:
         st = base_state(SWEEP_ANCHORS[idx])
+        st.update(knobs)
+        add(st)
+
+    # 2c. the named whole configurations
+    for dep, knobs in NAMED_STATES:
+        st = base_state(dep)
         st.update(knobs)
         add(st)
 
