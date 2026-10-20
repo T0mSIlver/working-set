@@ -429,8 +429,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "config's [workload] replaced by the trace's averages "
                         "for the predictions")
     p.add_argument("--replay-max-gap-s", type=float, metavar="S",
-                   help="cap on a recorded wait; a longer one is a person who "
-                        "left (default 1800)")
+                   help="cap on any recorded wait (default 1800)")
+    p.add_argument("--replay-gap-policy", choices=("sample", "cap", "drop"),
+                   help="what replaces a gap where the recorded session sat "
+                        "unused (a retry after a failed request, a restart, a "
+                        "session left open past 30 min): a think gap drawn "
+                        "from the trace (sample, the default), the recorded "
+                        "wait capped at --replay-max-gap-s (cap), or none "
+                        "(drop)")
     p.add_argument("--run-nonce", metavar="HEX",
                    help="mixed into every miss salt and session context so a "
                         "re-run at the same --seed cannot be answered from the "

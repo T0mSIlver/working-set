@@ -5,6 +5,8 @@ import asyncio
 import json
 import random
 
+import pytest
+
 from workingset.agent_trace import (AgentTrace, TraceRequest,
                                     equivalent_workload, extract_pi,
                                     extract_pi_session)
@@ -182,3 +184,139 @@ def test_the_gap_cap_reaches_the_predicted_workload(tmp_path):
     path.write_text(json.dumps(AgentTrace("pi", (s,)).to_dict()))
     cfg, err = apply_replay(small_cfg(), str(path), 300.0)
     assert err is None and cfg.workload.think_time_s == round((18 + 300) / 10, 1)
+
+
+# ============================================================================
+# gap kinds and the gap policy
+# ============================================================================
+def _tree_session():
+    """One pi session that meets every gap kind, in this order: tool,
+    permission, ask, think, abort, error, resume, branch, compaction, idle.
+    Entries chain by id/parentId as pi writes them."""
+    from datetime import datetime, timezone
+    rows, last = [], [None]
+    t = [1_800_000_000.0]
+
+    def iso(s):
+        return (datetime.fromtimestamp(s, timezone.utc).isoformat()
+                .replace("+00:00", "Z"))
+
+    def add(row, dt=0.0, parent=...):
+        t[0] += dt
+        row = {"id": f"e{len(rows)}", "parentId": last[0] if parent is ...
+               else parent, "timestamp": iso(t[0]), **row}
+        rows.append(json.dumps(row))
+        last[0] = row["id"]
+        return row["id"]
+
+    def asst(tools=(), dur=2.0, usage=True, stop=None):
+        start = t[0]
+        msg = {"role": "assistant", "timestamp": int(start * 1000),
+               "content": [{"type": "toolCall", "id": f"c{len(rows)}{i}",
+                            "name": n, "arguments": {}}
+                           for i, n in enumerate(tools)],
+               "usage": ({"input": 1_000 + 10 * len(rows), "cacheRead": 0,
+                          "cacheWrite": 0, "output": 50} if usage else {})}
+        if stop:
+            msg["stopReason"] = stop
+        add({"type": "message", "message": msg}, dt=dur)
+        return msg["content"]
+
+    def tool(name, dt, text="ok"):
+        add({"type": "message", "message": {
+            "role": "toolResult", "toolName": name,
+            "content": [{"type": "text", "text": text}]}}, dt=dt)
+
+    def user(dt):
+        return add({"type": "message", "message": {
+            "role": "user", "content": [{"type": "text", "text": "x"}]}},
+            dt=dt)
+
+    add({"type": "session", "cwd": "/w"}, parent=None)
+    add({"type": "custom", "customType": "ext", "data": {}})
+    user(1.0)
+    calls = asst(["bash"])                       # 1 start
+    tool("bash", 0.5)
+    calls = asst(["bash"])                       # 2 tool
+    tool("bash", 30.0)
+    perm_id = calls[0]["id"]
+    asst(["ask_user_question"])                  # 3 permission (25 s of it)
+    tool("ask_user_question", 40.0)
+    asst()                                       # 4 ask
+    user(12.0)
+    asst()                                       # 5 think
+    user(1.0)
+    asst(usage=False, stop="aborted", dur=3.0)   # dropped; restarts the clock
+    user(9.0)
+    asst()                                       # 6 abort
+    user(2.0)
+    asst(usage=False, stop="error", dur=1.0)     # dropped; an outage
+    user(5.0)
+    asst()                                       # 7 error
+    add({"type": "custom", "customType": "ext", "data": {}}, dt=600.0)
+    user(4.0)
+    asst()                                       # 8 resume
+    fork_at = last[0]
+    user(3.0)
+    asst()                                       # 9 think
+    add({"type": "message", "message": {"role": "user", "content": []}},
+        dt=7.0, parent=fork_at)                  # back up the tree
+    asst()                                       # 10 branch
+    add({"type": "compaction", "summary": "s"}, dt=20.0)
+    user(3.0)
+    asst()                                       # 11 compaction
+    user(7_200.0)
+    asst()                                       # 12 idle
+    return rows, {perm_id: 25.0}
+
+
+def test_each_gap_is_classified_from_the_session_events():
+    rows, waits = _tree_session()
+    counts = {}
+    reqs = extract_pi_session(rows, waits=waits, counts=counts)
+    assert [r.kind for r in reqs] == [
+        "start", "tool", "permission", "ask", "think", "abort", "error",
+        "resume", "think", "branch", "compaction", "idle"]
+    perm = reqs[2]
+    assert perm.human_s == 25.0 and perm.gap_s == pytest.approx(30.0, abs=0.01)
+    # the abort's wait runs from the interruption, not from the last reply
+    assert reqs[5].gap_s == pytest.approx(9.0, abs=0.01)
+    assert counts["dropped_aborted"] == 1 and counts["dropped_error"] == 1
+
+
+def test_a_denied_prompt_marks_the_gap_without_the_log():
+    rows, _ = _tree_session()
+    rows = [r.replace('"text": "ok"',
+                      '"text": "[pi-permission-system] User denied it"', 1)
+            for r in rows]
+    reqs = extract_pi_session(rows)
+    assert reqs[1].kind == "permission"
+
+
+def test_the_gap_policy_applies_to_inactive_gaps_only():
+    from workingset.agent_trace import mean_gap, replay_gap
+    think = TraceRequest(1_000, 10, 20.0, "user")
+    idle = TraceRequest(1_000, 10, 90_000.0, "user", kind="idle")
+    tool = TraceRequest(1_000, 10, 4_000.0, "tool")
+    rng, pool = random.Random(0), [20.0]
+    assert replay_gap(idle, "sample", 1800.0, rng, pool) == 20.0
+    assert replay_gap(idle, "cap", 1800.0, rng, pool) == 1800.0
+    assert replay_gap(idle, "drop", 1800.0, rng, pool) == 0.0
+    # an active gap is the recording's, whatever the policy, under the cap
+    assert replay_gap(tool, "drop", 1800.0, rng, pool) == 1800.0
+    assert replay_gap(think, "sample", 1800.0, rng, pool) == 20.0
+    tr = AgentTrace("pi", ((think, think, idle),))
+    assert mean_gap(tr, "sample") == pytest.approx(20.0)
+    assert mean_gap(tr, "drop") == pytest.approx(40.0 / 3)
+    assert mean_gap(tr, "cap") == pytest.approx((20.0 + 20.0 + 1800.0) / 3)
+
+
+def test_a_version_1_trace_still_loads():
+    d = {"format": "workingset-agent-trace", "version": 1, "source": "pi",
+         "sessions": [{"requests": [
+             {"prompt_tokens": 9, "output_tokens": 1, "gap_s": None,
+              "after": "start"},
+             {"prompt_tokens": 12, "output_tokens": 1, "gap_s": 3.0,
+              "after": "user"}]}]}
+    tr = AgentTrace.from_dict(d)
+    assert [r.kind for r in tr.sessions[0]] == ["start", "think"]

@@ -17,7 +17,10 @@ What is replayed, request by request:
   * the reply length: `max_tokens` is the recorded output, and `ignore_eos`
     (on by default) makes the server generate all of it.
   * the wait before each request: the recorded tool time or human pause,
-    capped at `replay_max_gap_s` (a longer one is a person who left).
+    capped at `replay_max_gap_s`. A gap where the session sat unused (a
+    retry after a failed request, a restart, a session left open: see
+    `agent_trace.INACTIVE`) follows `replay_gap_policy` instead; by default
+    it is replaced by a think gap drawn from the trace.
 
 What is not: the generation time, which is whatever the server takes now
 (the loop is closed, as it is for a real agent), and forced misses, since a
@@ -31,7 +34,8 @@ from __future__ import annotations
 import functools
 import random
 
-from ..agent_trace import AgentTrace, load
+from ..agent_trace import (DEFAULT_GAP_POLICY, AgentTrace, load,
+                           replay_gap, think_pool)
 from .session import make_text, nonce_bits
 
 
@@ -40,15 +44,27 @@ def load_trace(path: str) -> AgentTrace:
     return load(path)
 
 
+_POOLS: dict[int, list[float]] = {}
+
+
+def _pool(trace: AgentTrace) -> list[float]:
+    key = id(trace)
+    if key not in _POOLS:
+        _POOLS[key] = think_pool(trace)
+    return _POOLS[key]
+
+
 class ReplaySession:
     def __init__(self, trace: AgentTrace, uid: int, prefix_text: str,
                  prefix_tokens: int, cpt: float, cap_tokens: int,
                  max_gap_s: float, rng: random.Random,
-                 text_rng: random.Random):
+                 text_rng: random.Random,
+                 gap_policy: str = DEFAULT_GAP_POLICY):
         self.trace, self.uid, self.is_sub = trace, uid, False
         self.prefix_text, self.prefix_tokens = prefix_text, prefix_tokens
         self.cpt, self.cap, self.max_gap_s = cpt, cap_tokens, max_gap_s
         self.rng, self.text_rng = rng, text_rng
+        self.gap_policy, self.pool = gap_policy, _pool(trace)
         self.n_turn = 0
         self.turn_images: list = []
         self.n_new_images = 0
@@ -98,11 +114,14 @@ class ReplaySession:
             self._pos, self._prev, self._fresh = 0, None, True
 
     def think_s(self, wl) -> float:
-        gap = self._req.gap_s
+        gap = replay_gap(self._req, self.gap_policy, self.max_gap_s,
+                         self.rng, self.pool)
         if gap is None:
             # a new recording starts: the pause before it was not recorded,
-            # so draw one around the workload's mean
-            gap = self.rng.expovariate(1.0 / wl.think_time_s)
+            # so draw a think gap of the trace (around the workload's mean
+            # when it holds none)
+            gap = (self.pool[self.rng.randrange(len(self.pool))] if self.pool
+                   else self.rng.expovariate(1.0 / wl.think_time_s))
         return min(gap, self.max_gap_s)
 
     def output_tokens(self, wl) -> int:
@@ -123,4 +142,5 @@ def make_replay_session(wl, opts, prefixes, uid: int,
         prefix_tokens=wl.system_prefix_tokens, cpt=opts.chars_per_token,
         cap_tokens=opts.context_cap_tokens, max_gap_s=opts.replay_max_gap_s,
         rng=random.Random(f"replay {seed} {uid}"),
+        gap_policy=getattr(opts, "replay_gap_policy", DEFAULT_GAP_POLICY),
         text_rng=random.Random(f"replay-text {seed} {uid} {bits:016x}"))

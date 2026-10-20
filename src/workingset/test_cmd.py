@@ -12,7 +12,7 @@ from dataclasses import replace
 from . import __version__
 from .hypotheses import (NOT_ESTABLISHED, REGISTRY, Measurement, RunContext,
                          Verdict, plan as make_plan)
-from .agent_trace import PARK_S
+from .agent_trace import PARK_S, offered_load
 from .probe.burst import ESTABLISH_FRAC, ESTABLISH_WAIT_MAX_S
 from .probe.options import ProbeOptions
 from .probe.population import eval_rung
@@ -43,6 +43,7 @@ def build_options(args, cfg) -> ProbeOptions:
                         ("seed", "seed"),
                         ("replay", "replay"),
                         ("replay_max_gap_s", "replay_max_gap_s"),
+                        ("replay_gap_policy", "replay_gap_policy"),
                         # absent = the per-process random one ProbeOptions
                         # draws for itself; given = that run's bytes again
                         ("run_nonce", "run_nonce")):
@@ -78,12 +79,13 @@ def _calibrated_cpt(model: str) -> float:
         raise SystemExit(f"--tokenizer {model}: {type(e).__name__}: {e}")
 
 
-def apply_replay(cfg, path: str, max_gap_s: float):
+def apply_replay(cfg, path: str, max_gap_s: float,
+                 policy: str | None = None):
     """The config with its workload replaced by the trace's averages (see
     `agent_trace.equivalent_workload`), so the predictions price a smooth
     arrival of the same load the replay sends in bursts. Returns (cfg, error).
     """
-    from .agent_trace import equivalent_workload
+    from .agent_trace import DEFAULT_GAP_POLICY, equivalent_workload
     from .probe.replay import load_trace
     try:
         trace = load_trace(path)
@@ -91,7 +93,9 @@ def apply_replay(cfg, path: str, max_gap_s: float):
         return cfg, f"{type(e).__name__}: {e}"
     return replace(cfg, workload=replace(cfg.workload,
                                          **equivalent_workload(
-                                             trace, park_s=max_gap_s))), None
+                                             trace, park_s=max_gap_s,
+                                             policy=policy
+                                             or DEFAULT_GAP_POLICY))), None
 
 
 def build_budget(args) -> ProbeBudget:
@@ -202,6 +206,17 @@ def _finish(rec, out: str | None) -> None:
 # ============================================================================
 # dry run
 # ============================================================================
+def _replay_gap_line(tr, policy: str) -> str:
+    from .agent_trace import INACTIVE, gaps_by_kind
+    g = gaps_by_kind(tr)
+    n = {k: g[k]["n"] for k in sorted(INACTIVE) if g.get(k, {}).get("n")}
+    what = {"sample": "replaced by a think gap drawn from the trace",
+            "cap": "the recorded wait, capped",
+            "drop": "no wait"}[policy]
+    return (", ".join(f"{v} {k}" for k, v in n.items()) or "none"
+            ) + f", {what} (--replay-gap-policy {policy})"
+
+
 def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
     from .hypotheses.base import SHARED
     from .shared import plan_lines
@@ -242,7 +257,10 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
           f"sessions, {tr.n_requests} requests. Each simulated session plays "
           "one from a random request on: recorded prompt and reply sizes, "
           "recorded waits (capped at "
-          f"{opts.replay_max_gap_s:g} s), no forced miss. Predictions price "
+          f"{opts.replay_max_gap_s:g} s), no forced miss. Gaps where the "
+          "session sat unused: "
+          + _replay_gap_line(tr, opts.replay_gap_policy)
+          + ". Predictions price "
           f"the same averages as a smooth load: prompt median "
           f"{wl.user_prompt_median_tokens:,} (sigma {wl.user_prompt_sigma:g}), "
           f"think {wl.think_time_s:g} s, turn {wl.warm_turn_tokens:,}, "
@@ -287,11 +305,31 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
                               opts.max_users, preds.operating_point_users)
         w("\nLOAD LADDER (users; each rung: "
           f"ramp {opts.ramp_s:g}s + measure {opts.measure_s:g}s)")
-        w(f"{'users':>8} {'+sub':>6} {'offered req/s':>14}")
-        for pop in ladder:
-            n_sub = round(pop * wl.subagent_ratio)
-            w(f"{pop:>8} {n_sub:>6} "
-              f"{(pop + n_sub) / wl.think_time_s:>14.2f}")
+        tr = None
+        if opts.replay:
+            from .probe.replay import load_trace
+            tr = load_trace(opts.replay)
+        if tr is not None and offered_load(tr, 1, opts.replay_gap_policy,
+                                           opts.replay_max_gap_s):
+            # a replay's sessions loop request -> wait, so what they offer
+            # depends on how fast the server answers: shown at the recorded
+            # server's speed
+            w("offered load at the recorded server's speed (one request "
+              "per mean service + mean wait):")
+            w(f"{'users':>8} {'req/s':>8} {'out tok/s':>10} "
+              f"{'generating':>11}")
+            for pop in ladder:
+                o = offered_load(tr, pop, opts.replay_gap_policy,
+                                 opts.replay_max_gap_s)
+                w(f"{pop:>8} {o['requests_per_s']:>8.2f} "
+                  f"{o['output_tok_per_s']:>10,.0f} "
+                  f"{o['generating_share']:>10.0%}")
+        else:
+            w(f"{'users':>8} {'+sub':>6} {'offered req/s':>14}")
+            for pop in ladder:
+                n_sub = round(pop * wl.subagent_ratio)
+                w(f"{pop:>8} {n_sub:>6} "
+                  f"{(pop + n_sub) / wl.think_time_s:>14.2f}")
         est = len(ladder) * (opts.ramp_s + opts.measure_s)
         w(f"full-ladder wall clock (no early stop): ~{est / 60:.0f} min")
     if "sample" in pl.probes:
@@ -533,7 +571,8 @@ def cmd_test(args) -> int:
                   file=sys.stderr)
             return 2
         cfg, err = apply_replay(cfg, args.replay,
-                                args.replay_max_gap_s or PARK_S)
+                                args.replay_max_gap_s or PARK_S,
+                                getattr(args, "replay_gap_policy", None))
         if err:
             print(f"ws test: error: --replay {args.replay}: {err}",
                   file=sys.stderr)

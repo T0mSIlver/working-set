@@ -96,14 +96,37 @@ uv run ws test workingset.toml --replay trace.json --exclusive --out run.json
 ```
 
 `ws trace pi` keeps, for each request, the prompt and reply token counts, the
-wait before it and what it waited on (which tool, or the person), and nothing
-of the text, so other people can export their sessions and hand the file over.
+wait before it and what it waited on, and nothing of the text, so other people
+can export their sessions and hand the file over. On a machine without
+workingset, the module runs alone:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/T0mSIlver/working-set/main/src/workingset/agent_trace.py
+python3 agent_trace.py pi -o trace.json
+```
+
+Each wait gets a kind read from the session's events: a tool, a permission
+prompt (timed from pi-permission-system's log when it is there), the agent's
+question to the person, think time after an answer, a retry after an
+interruption, a move in the session tree, a compaction, a failed request, a
+restart of pi, or a session left open (a person's wait past 30 minutes with
+no restart). `ws trace` prints the count of each.
+
 `--replay` plays one recorded session per simulated session, from a random
-request on: prompts grow to the recorded sizes on top of the server's own
-replies, replies have the recorded length, and each wait is the recorded one,
-capped by `--replay-max-gap-s` (default 1800). The config's `[workload]` is
-replaced by the trace's averages, so the predictions price the same load
-arriving smoothly and the gap to the measurement is what the bursts cost.
+request on, and a session that ends moves on to another recording, so a
+ladder rung of any size draws from a small corpus. Prompts are synthetic text
+of the recorded sizes that grows on top of the server's own replies, so the
+prefix cache sees what it saw then without a byte of the real prompts.
+Replies have the recorded length (`max_tokens` plus `ignore_eos`). Waits
+are the recorded ones, except where the session sat unused (a failed request,
+a restart, a session left open): `--replay-gap-policy` replaces those with a
+think gap drawn from the trace (`sample`, the default), caps them at
+`--replay-max-gap-s` (`cap`), or drops them (`drop`). The config's
+`[workload]` is replaced by the trace's averages, so the predictions price the
+same load arriving smoothly and the gap to the measurement is what the bursts
+cost. `--dry-run` shows what each rung would offer at the recorded server's
+speed. [research/replay_gaps.md](research/replay_gaps.md) has the gap counts
+of the study's own sessions.
 
 ## Contents
 
