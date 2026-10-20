@@ -80,7 +80,8 @@ class Rung:
     chunk_tok_ratio: float = float("nan")   # tokens per SSE event (1.0 = per-token)
     achieved_rps: float = float("nan")
     offered_rps: float = float("nan")
-    evict_frac: float = float("nan")   # hit-intended turns that look cold (heuristic)
+    evict_frac: float = float("nan")   # hit-intended turns that look cold
+    evict_source: str = ""             # "server histogram" | "ttft heuristic"
     cached_frac: float = float("nan")  # hit turns the SERVER reported cached for
     ptok_ratio: float = float("nan")   # achieved / intended prompt tokens, median
     percentile: int = 95
@@ -241,6 +242,31 @@ def spike_evidence(traces: list, cap_tokens: float,
 # ============================================================================
 # rung statistics — pure, testable on synthetic traces
 # ============================================================================
+def histogram_evict_frac(server: dict | None, hit: list, miss: list,
+                         cold: list) -> float:
+    """Share of hit turns that recomputed most of their prompt, read off the
+    window delta of `request_prefill_kv_computed_tokens`. The histogram counts
+    every request, so the cold ones (forced misses, establishing turns) that
+    computed over the threshold are subtracted before dividing by the hits.
+    The threshold is half the shortest forced miss's prompt; the bucket
+    holding it counts as below, so a bucket edge never invents an eviction.
+    nan when the histogram or the calibrating miss is missing."""
+    h = ((server or {}).get("histograms") or {}).get(
+        "prefill_kv_computed_tokens_hist")
+    ptoks = [t.ptok_achieved or t.ptok_intended for t in miss]
+    ptoks = [x for x in ptoks if x]
+    if not h or not h.get("count") or not h.get("buckets") or not ptoks:
+        return float("nan")
+    thresh = 0.5 * min(ptoks)
+    bounds = sorted((float("inf") if b == "+Inf" else float(b), v)
+                    for b, v in h["buckets"].items())
+    below = next((v for b, v in bounds if b >= thresh), 0.0)
+    above = h["count"] - below
+    cold_above = sum(1 for t in cold
+                     if (t.ptok_achieved or t.ptok_intended or 0) >= thresh)
+    return max(0.0, above - cold_above) / len(hit)
+
+
 def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
               cfg, opts, server: dict | None = None) -> Rung:
     slo, wl = cfg.slo, cfg.workload
@@ -303,15 +329,25 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     res.achieved_rps = len(measured) / opts.measure_s if opts.measure_s else float("nan")
     res.offered_rps = (pop + n_sub) / wl.think_time_s
 
-    # eviction heuristic (the baseline's warm/cold classifier)
-    if hit and miss and math.isfinite(res.ttft_miss_p50):
-        thresh = 0.4 * res.ttft_miss_p50
-        res.evict_frac = sum(1 for t in hit if t.ttft >= thresh) / len(hit)
     # the server's own answer, where it gives one
     cached = [t for t in hit if t.cached_tokens is not None and t.ptok_achieved]
     if cached:
         res.cached_frac = sum(1 for t in cached
                               if t.cached_tokens > 0.5 * t.ptok_achieved) / len(cached)
+    # eviction. Without `cached_tokens` the server's prefill histogram says
+    # how many tokens each request computed; failing that, the baseline's
+    # TTFT classifier (queueing alone can push a warm hit over its threshold).
+    cold = [t for t in traces if t.t_send >= measure_start
+            and t.kind in COLD_KINDS]
+    if hit and not cached:
+        res.evict_frac = histogram_evict_frac(server, hit, miss, cold)
+        if math.isfinite(res.evict_frac):
+            res.evict_source = "server histogram"
+    if hit and miss and not math.isfinite(res.evict_frac) \
+            and math.isfinite(res.ttft_miss_p50):
+        thresh = 0.4 * res.ttft_miss_p50
+        res.evict_frac = sum(1 for t in hit if t.ttft >= thresh) / len(hit)
+        res.evict_source = "ttft heuristic"
 
     # text-only turns: an image's tokens are not in chars / chars_per_token
     ratios = [t.ptok_achieved / t.ptok_intended for t in ok
@@ -324,8 +360,6 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     # window, establishing turns included (each is a cold prefill).
     thr_ms, _ = slow_threshold_ms(cfg, opts)
     res.slowed = slowed_stats(ok, thr_ms, p)
-    cold = [t for t in traces if t.t_send >= measure_start
-            and t.kind in COLD_KINDS]
     res.cold_wait = cold_wait_stats(
         cold, model_idle_prefill(cfg), p,
         mean=slo.ttft_statistic == "miss_mean", source="model")
