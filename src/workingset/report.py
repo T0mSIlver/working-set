@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import sys
 
+from .config import SLO
 from .hypotheses.base import GLYPH
 from .probe.population import Rung, Sample
 from .probe.stats import FREEZE_LADDER_MS, fmt, pct
@@ -477,9 +478,12 @@ def _capacity(w, rec, slo, p, latency: bool = False) -> None:
     if latency:
         what = ("mean" if slo.get("ttft_statistic") == "miss_mean"
                 else f"p{p}")
-        rule = (f"slowed <= {slo.get('slowed_share_max', 0.05):.1%} of the "
-                f"time AND {what} cold wait <= "
-                f"{slo.get('cold_wait_budget_s', 5.0):g}s AND {floor}")
+        # a run record leaves both limits out at their defaults (to_dict)
+        d = SLO()
+        share = slo.get("slowed_share_max", d.slowed_share_max)
+        budget = slo.get("cold_wait_budget_s", d.cold_wait_budget_s)
+        rule = (f"slowed <= {share:.1%} of the time AND {what} cold wait <= "
+                f"{budget:g}s AND {floor}")
     else:
         rule = (f"p{p} TTFT <= {slo.get('ttft_budget_s', 10):g}s AND {floor}")
     w(f"\nMEASURED SLO CAPACITY ({rule}):")

@@ -1090,6 +1090,15 @@ def test_report_prints_the_tables_and_the_trailer(capsys):
     assert "skipped" in out
 
 
+def test_capacity_rule_reads_default_limits_a_record_left_out(capsys):
+    # RunConfig.to_dict drops both latency limits at their defaults (#108)
+    from workingset.report import _capacity
+    slo = RunConfig().to_dict()["slo"]
+    assert "slowed_share_max" not in slo
+    _capacity(print, make_record(), slo, 95, latency=True)
+    assert "slowed <= 15.0% of the time" in capsys.readouterr().out
+
+
 def test_ws_report_reads_a_record(tmp_path, capsys):
     p = make_record().save(tmp_path / "run.json")
     assert cli.main(["report", str(p)]) == 0
@@ -1209,4 +1218,4 @@ def test_report_prints_the_latency_table_only_for_records_that_have_it(capsys):
     print_report(rec)
     new = capsys.readouterr().out
     assert "LATENCY LIMITS" in new and "7%" in new and "2.50s" in new
-    assert "slowed <= 5.0% of the time" in new and "p95 TTFT <=" not in new
+    assert "slowed <= 15.0% of the time" in new and "p95 TTFT <=" not in new
