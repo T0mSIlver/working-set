@@ -58,8 +58,8 @@ What this changes:
   `sample` (default) replaces them with a think gap drawn from the same trace,
   `cap` keeps them capped, `drop` makes them 0 s. `sample` keeps the seat an
   active user. A capped 30-minute wait would keep a seat silent for a whole
-  2-minute rung, and a dropped one would add a burst no person makes. The
-  choice is on Tom's card `d_random-torch-crop`.
+  2-minute rung, and a dropped one would add a burst no person makes. Tom chose
+  `sample` on 2026-10-20.
 - **Request shape:** synthetic text of the recorded token counts. Each request
   is the previous prompt, the server's own reply and fresh text up to the
   recorded size, so the prefix cache hits and misses where it did. A prompt
