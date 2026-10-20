@@ -481,7 +481,8 @@ class WindowDelta:
             "gauges": {k: g.to_dict() for k, g in self.gauges.items() if g.n},
             "histograms": {k: {"count": h.observations, "mean": h.mean(),
                                "p50": h.quantile(0.5), "p95": h.quantile(0.95),
-                               "p99": h.quantile(0.99)}
+                               "p99": h.quantile(0.99),
+                               "buckets": h.to_dict()["buckets"]}
                            for k, h in self.histograms.items()
                            if h is not None and h.observations},
             "derived": {"output_tok_s": self.output_tok_s,
