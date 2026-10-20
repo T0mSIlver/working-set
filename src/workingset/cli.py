@@ -72,7 +72,7 @@ def cmd_predict(args) -> int:
               "opt-in, one deployment's constants")
     users = cfg.users_per_group()
     print(f"operating point: {users:g} users/group, think {w.think_time_s} s, "
-          f"miss {w.miss_rate:.0%}, {'closed' if args.closed else 'open'} loop")
+          f"miss {w.miss_rate:.1%}, {'closed' if args.closed else 'open'} loop")
     if w.headcount is not None:
         sessions = M.sessions_from_headcount(
             w.headcount, w.peak_active_share, w.sessions_per_active_user)
