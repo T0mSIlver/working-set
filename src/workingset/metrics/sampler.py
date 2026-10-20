@@ -517,7 +517,11 @@ def _detect_invalid(snaps: Sequence[Snapshot], adapter) -> dict[str, str]:
     bad: dict[str, str] = {}
     prev_c = prev_h = None
     for s in snaps:
-        cur_c = _bulk(adapter, "all_series", s, "counter")
+        # gauges (running, waiting, KV usage) fall as often as they rise; only
+        # a counter going down says the engine restarted
+        cur_c = {k: v for k, v in
+                 _bulk(adapter, "all_series", s, "counter").items()
+                 if KEY_KIND.get(k) != "gauge"}
         cur_h = _bulk(adapter, "all_histogram_series", s, "histogram")
         if prev_c is not None:
             for key, sa in prev_c.items():
@@ -761,6 +765,7 @@ class MetricsSampler:
         self.timeout = timeout
         self.keep = tuple(keep) if keep else None
         self.max_snapshots = max_snapshots
+        self._n_recorded = 0
         self.engine = engine
         self.snapshots: list[Snapshot] = []
         self.adapter = None
@@ -862,12 +867,14 @@ class MetricsSampler:
 
         is what turns a `WindowNotCovered` into a measurement.
         """
-        target = len(self.snapshots) + 1
+        # counted, not len(self.snapshots): a full ring buffer stays the same
+        # length while it records
+        target = self._n_recorded + 1
         deadline = (timeout if timeout is not None
                     else self.interval * 2 + self.timeout + 1)
         try:
             async with asyncio.timeout(deadline):
-                while len(self.snapshots) < target:
+                while self._n_recorded < target:
                     if self.error is not None:
                         raise SamplerStopped(self.error)
                     await asyncio.sleep(min(0.01, self.interval / 4))
@@ -971,6 +978,7 @@ class MetricsSampler:
         if snap.ok and math.isfinite(snap.rtt):
             self._max_rtt = max(self._max_rtt, snap.rtt)
         self.snapshots.append(snap)
+        self._n_recorded += 1
         if self.max_snapshots and len(self.snapshots) > self.max_snapshots:
             del self.snapshots[: len(self.snapshots) - self.max_snapshots]
         if self._out is not None:
