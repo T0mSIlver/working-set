@@ -13,6 +13,8 @@
                                                emit the config's [workload]
     ws trace pi [PATH ...] -o trace.json       agent sessions' timing and sizes,
                                                for `ws test --replay`
+    ws agentx compact|predict ...              SemiAnalysis' public AgentX traces
+                                               against a finite prefix cache
 """
 from __future__ import annotations
 
@@ -473,6 +475,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workload(sub)
     from .agent_trace import add_subparser as _add_trace
     _add_trace(sub)
+    from .agentx_sim import add_subparser as _add_agentx
+    _add_agentx(sub)
     return ap
 
 
