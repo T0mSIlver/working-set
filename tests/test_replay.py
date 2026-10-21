@@ -170,6 +170,43 @@ def test_a_replayed_rung_sends_the_recorded_sizes(tmp_path):
                for b in seen)
 
 
+def test_the_trace_reads_and_writes_utf8_under_a_windows_locale(
+        tmp_path, monkeypatch):
+    """Windows opens text as cp1252 when no encoding is named, and pi writes
+    UTF-8: a curly quote (E2 80 9D) in a session made `ws trace` fail with
+    'charmap' can't decode byte 0x9d. Every open names UTF-8."""
+    import io
+    from workingset import agent_trace
+    real_open = io.open
+
+    def cp1252_open(file, mode="r", buffering=-1, encoding=None, *a, **k):
+        # pathlib passes "locale" for an unnamed encoding (io.text_encoding)
+        if "b" not in mode and encoding in (None, "locale"):
+            encoding = "cp1252"
+        return real_open(file, mode, buffering, encoding, *a, **k)
+
+    monkeypatch.setattr(io, "open", cp1252_open)
+    # pathlib resolves an unnamed encoding here first, to "utf-8" under
+    # UTF-8 mode, so this is where the Windows default goes in
+    monkeypatch.setattr(io, "text_encoding",
+                        lambda encoding, stacklevel=2: encoding or "cp1252")
+    monkeypatch.setattr("builtins.open", cp1252_open)
+    lines = [line.replace(SECRET, "it\u201ds \u00e9t\u00e9") if i else line
+             for i, line in enumerate(_pi_lines())]
+    lines = [json.loads(line) for line in lines]
+    (tmp_path / "s.jsonl").write_bytes(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in lines)
+        .encode("utf-8") + b"\n")
+    log = tmp_path / "review.jsonl"
+    log.write_bytes('{"event": "shown", "note": "d\u00e9j\u00e0 \u201d"}\n'
+                    .encode("utf-8"))
+    out = tmp_path / "trace.json"
+    assert agent_trace.main(["pi", str(tmp_path / "s.jsonl"),
+                             "--permission-log", str(log),
+                             "-o", str(out)]) == 0
+    assert agent_trace.load(out).n_requests == 4
+
+
 def test_a_torn_last_line_does_not_lose_the_session(tmp_path):
     f = tmp_path / "s.jsonl"
     f.write_text("\n".join(_pi_lines()) + '\n{"type": "mess')

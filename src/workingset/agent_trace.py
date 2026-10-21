@@ -157,7 +157,8 @@ class AgentTrace:
 
 
 def load(path: str | Path) -> AgentTrace:
-    return AgentTrace.from_dict(json.loads(Path(path).read_text()))
+    return AgentTrace.from_dict(
+        json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def _iso_s(s: str) -> float:
@@ -175,7 +176,7 @@ def permission_waits(path: str | Path | None = None) -> dict[str, float]:
     shown: dict[str, float] = {}
     waits: dict[str, float] = {}
     try:
-        fh = p.open()
+        fh = p.open(encoding="utf-8")
     except OSError:
         return waits
     with fh:
@@ -350,7 +351,7 @@ def extract_pi(paths, permission_log: str | None = None,
     sessions = []
     for f in files:
         try:
-            with f.open() as fh:
+            with f.open(encoding="utf-8") as fh:
                 reqs = extract_pi_session(fh, waits=waits, counts=counts)
         except (OSError, ValueError, KeyError, TypeError) as e:
             raise ValueError(f"{f}: {type(e).__name__}: {e}") from e
@@ -542,7 +543,7 @@ def cmd_trace(args) -> int:
     if args.output == "-":
         print(out)
     else:
-        Path(args.output).write_text(out + "\n")
+        Path(args.output).write_text(out + "\n", encoding="utf-8")
     s = summarize(trace)
     say = (lambda m: print(m, file=sys.stderr)) if args.output == "-" else print
     say(f"{s['requests']:,} requests in {s['sessions']} sessions"
