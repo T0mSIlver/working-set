@@ -228,3 +228,17 @@ def test_block_size_comes_from_the_trace():
     b = simulate(session(64, 8), srv, rp).to_dict()
     assert a["ceiling_hit_rate"] == b["ceiling_hit_rate"] > 0.5
     assert a["hbm_hit_rate"] == b["hbm_hit_rate"]
+
+
+
+def test_planner_fills_to_the_ceiling_with_room_and_empties_without():
+    from workingset.agentx_sim import planner
+    traces = _growing_traces()
+    big = planner(traces, Server(hbm_tokens=1e12), Replay(concurrency=8))
+    assert big["hbm_hit_rate"] == pytest.approx(big["ceiling_hit_rate"])
+    assert big["t_star_s"] == float("inf")
+    none = planner(traces, Server(hbm_tokens=1.0), Replay(concurrency=8))
+    assert none["hbm_hit_rate"] == 0.0
+    caps = [planner(traces, Server(hbm_tokens=c, ranks=4), Replay(concurrency=32))["hbm_hit_rate"]
+            for c in (2e6, 8e6, 32e6, 1e9)]
+    assert caps == sorted(caps)

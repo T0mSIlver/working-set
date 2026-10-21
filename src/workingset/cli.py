@@ -15,6 +15,8 @@
                                                for `ws test --replay`
     ws agentx compact|predict ...              SemiAnalysis' public AgentX traces
                                                against a finite prefix cache
+    ws traces mooncake|bailian|tracelab PATH   public prefix-cache traces: exact
+                                               LRU vs the planner and fill rule
 """
 from __future__ import annotations
 
@@ -477,6 +479,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_trace(sub)
     from .agentx_sim import add_subparser as _add_agentx
     _add_agentx(sub)
+    from .traces import add_subparser as _add_traces
+    _add_traces(sub)
     return ap
 
 
