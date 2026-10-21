@@ -39,8 +39,9 @@ blog's dashboard links), `configs/nvidia-master.yaml` and
 - `VLLM_PREFIX_CACHE_RETENTION_INTERVAL=32768`: sliding-window prefix tails
   kept sparsely (vllm #43447). Not modelled yet; see open questions.
 
-Client (agentx-harness 1.0.12 on PyPI, scenario `agentx`): one hour, each
-lane starts mid-session at 25-75% of the session, primes the cache with each
+Client (agentx-harness 1.0.12 on PyPI, scenario `agentx`; but see the
+evening's correction below: the recipe runs `inferencex-agentx-mvp`):
+one hour, each lane starts mid-session at 25-75% of the session, primes the cache with each
 live stream's last request before that instant, then replays; idle gaps
 capped at 300 s; first-turn prefix cache-busted (no sharing across sessions);
 a lane whose session tree drained starts a fresh session. Concurrency counts
@@ -173,7 +174,8 @@ vllm #43447 states ~14.5M tokens of KV on TP8 8xB300 at 0.90 utilization,
 where every rank holds the full cache. With the weights known (108.1 GB per
 GPU under TP8) that fixes vLLM's cost per token: (288.4 x 0.90 - 108.1 - R)
 / 14.5M = 9.8 kB at a reserve R of 10 GB, about twice the 4.94 kB of the
-layout. The same bytes give the DEP8 capacities with no further fitting:
+layout. The same bytes give the DEP8 capacities with no further fitting
+(the reserve R is the one free input, swept below):
 B300 99.8M tokens (12.5M per rank), B200 24.2M. DRAM at the same bytes per
 token: 292M and 195M.
 
@@ -181,8 +183,8 @@ token: 292M and 195M.
 
 | point | measured HBM / DRAM | predicted HBM / DRAM | range over the sweep |
 |---|---|---|---|
-| B300, 384 | 91.0% / 1.4% | **90.7% / 2.1%** | 89.7-91.3% (service x0.5-x2, R 5-15 GB, 4 seeds) |
-| B200, 196 | 73.0% / 20.0% | **47.8% / 44.2%** | 31-69% |
+| B300, 384 | 91.0% / 1.4% | **90.7% / 2.1%** | 89.7-91.3% (service x0.5-x2, R 5-15 GB, 4 seeds; not the published-working-set-as-HBM row, 43%) |
+| B200, 196 | 73.0% / 20.0% | **47.8% / 44.2%** | 31-69% (superseded below: seed 42 was the luckiest of ten) |
 
 B300 is predicted to within half a point and the answer barely moves with
 any assumption: the cache holds about twice what the lanes pin, so hits sit
@@ -200,3 +202,65 @@ by tens of points, and the published 73% is one draw from that.
 
 What the 43M and 22M are remains open: neither matches these capacities
 (B300 43/99.8 = 0.43, B200 22/24.2 = 0.91).
+
+## 2026-10-21 evening — the refuter's corrections, and the recipe's scenario
+
+A fresh reviewer at e126cb6 returned NOT VERIFIED. What it found, and what
+changed:
+
+- **The recipe runs `inferencex-agentx-mvp`, not `agentx`.**
+  `benchmark_lib.sh` (49ac5c0) calls `aiperf profile --scenario
+  inferencex-agentx-mvp` with 10 warmup requests per lane: t* anywhere in
+  the session (0-100%), the primers, then 10 more requests per lane with
+  idle gaps removed, and only then the measured hour, each held-back turn
+  keeping its recorded delay. The scenario's 10 s idle cap is whole-system
+  (it fires only when nothing at all is in flight), so it never fires at
+  these concurrencies. `Replay` now defaults to the recipe; `AGENTX` is the
+  harness's own scenario, kept as a sweep row.
+- **The B200 number was a lucky seed.** Seed 42 gave 47.8%; ten seeds give
+  a mean of 41%. The miss is about 32 points, not 25.
+- **73% needs ~34M tokens, not ~30M.** Capacity curve, B200, recipe
+  scenario, mean of five seeds: 24.2M 41%, 28M 55%, 32M 67%, 36M 77%,
+  40M 83%, 48M 90%. 73% sits at ~34M, 1.4 times the 24.2M the bytes give:
+  about 12 GB per GPU of room this model does not find.
+- **"Holds under every sweep" was too broad for B300.** It holds under
+  every input that comes from the recipe or the bytes. Feeding the
+  published 43M working set in as capacity gives 36%; that row is the
+  failed hypothesis of the afternoon, not a sensitivity.
+- **Queueing versus preemption.** vLLM admits a request chunk by chunk and
+  preempts the newest when a running one cannot grow; this model waits
+  until the whole request fits. `greedy_admission` makes the head of the
+  queue evict every idle prefix it would need at once, the most destructive
+  reading of vLLM's order. It changes nothing (42.1% either way; 0.1% more
+  tokens evicted): by the time a request waits, the idle prefixes are
+  already gone and running contexts fill the cache. So admission order is
+  not where the 32 points are. Recompute after preemption could count a
+  request's own blocks as hits again if vLLM's `prompt_tokens_by_source`
+  counts each scheduling; not checked.
+- Also fixed: the block size is read from the trace, not assumed to be 64;
+  idle streams freed at the same instant (all the primers) are evicted in
+  insertion order, not by key; tests for warmup, recycling, spawn and join,
+  the capacity bound and block size. The module docstring now lists the
+  simplifications with the direction each errs in: all three under-count
+  hits.
+
+Results, `ws agentx predict --sweep`, recipe scenario, one hour:
+
+| point | measured HBM / DRAM | predicted HBM / DRAM (seed 42) | HBM over seeds 42-51 |
+|---|---|---|---|
+| B300, 384 | 91.0% / 1.36% | **91.7% / 1.4%** | mean 91.4%, 90.5-92.2% |
+| B200, 196 | 73.0% / ~20% | **42.1% / 50.1%** | mean 41.2%, 27.7-48.4% |
+
+Inputs from the recipe and the bytes keep B300 in 90.5-92.2% (service
+x0.5-x2, R 5-15 GB, DRAM 1.5x, no DRAM, either admission, either
+scenario). It is a weak test, though: the cache holds about twice what the
+lanes pin, so almost any model that reuses a stream's own prefix lands on
+the ceiling.
+
+B200 overall (HBM + DRAM) is 92% predicted against ~93% measured; the split
+is wrong, with three times too many prefixes served from DRAM. Inputs that
+would close it, any one of them worth ~12 GB per GPU: the B200's visible
+VRAM (192.3e9 assumed), a reserve under 5 GB, the weights a DEP rank
+actually holds, or a vLLM cost per token on B200 below what the TP8 B300
+anchor implies. The B200 run's server log (its `GPU KV cache size` line)
+would settle it. That is the question for InferenceX.
