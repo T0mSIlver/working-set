@@ -459,37 +459,64 @@ def _blocked_on_child(lane, t_next: float) -> bool:
 # research/agentx_kv_hits.md has every constant's source.
 
 DSV4_PRO = {
-    "kv_bpt": 4_939.5,               # 30 x 576/4 + 31 x 576/128 + 30 x 64/4 (fp8 latent, fp4 indexer)
-    "w_per_gpu_dep8": 133.6e9,       # 29.2 GB non-expert on every rank + 835.5 GB experts / 8
+    "kv_bpt_layout": 4_939.5,        # 30 x 576/4 + 31 x 576/128 + 30 x 64/4 (fp8 latent, fp4 indexer)
+    "w_total": 864.7e9,              # 835.5 GB routed experts (FP4 + E8M0) + 29.2 GB the rest
+    "w_per_gpu_dep8": 133.6e9,       # the 29.2 GB on every rank + 835.5 GB experts / 8
 }
 
-# Measured by SemiAnalysis (blog of 2026-08-25). `hbm_tokens` is their
-# "HBM KV cache working set", taken as the capacity input (see the log's
-# capacity puzzle). DRAM: CPU bytes per rank over GPU KV bytes per rank
-# (VRAM x utilization - weights - a 10 GB reserve), times the HBM tokens:
-# the offload stores the same pages. B200's node DRAM is assumed (DGX B200,
-# 2 TB). Service rates are guesses, so `sweep` varies them.
-POINTS = {
-    "b300-384": {
-        "server": Server(ranks=8, hbm_tokens=43e6,
-                         dram_tokens=43e6 * 356e9 / (288.4e9 * 0.92 - 133.6e9 - 10e9),
-                         prefill_tps=20_000.0, decode_tps=60.0, max_seqs=96),
-        "replay": Replay(concurrency=384),
-        "measured": {"hbm_hit_rate": 0.91, "dram_hit_rate": 0.0136},
-    },
-    "b200-196": {
-        "server": Server(ranks=8, hbm_tokens=22e6,
-                         dram_tokens=22e6 * 237.5e9 / (192.3e9 * 0.90 - 133.6e9 - 10e9),
-                         prefill_tps=12_000.0, decode_tps=45.0, max_seqs=49),
-        "replay": Replay(concurrency=196),
-        "measured": {"hbm_hit_rate": 0.73, "dram_hit_rate": 0.20},
-    },
-}
+# vLLM's DSV4 pages cost more per token than the cache layout (sliding-window
+# pages, hybrid-group padding). One public anchor fixes the figure: vllm
+# #43447 reports ~14.5M tokens of KV on TP8 8xB300 at the default 0.90
+# utilization, a cache replicated on every rank (single-latent MQA).
+RESERVE = 10e9                       # activations + workspace per GPU (swept: 5-15 GB)
+
+
+def kv_bytes_per_token(reserve: float = RESERVE) -> float:
+    return (288.4e9 * 0.90 - DSV4_PRO["w_total"] / 8 - reserve) / 14.5e6
+
+
+def dep8_tokens(vram: float, util: float, reserve: float = RESERVE) -> float:
+    """KV capacity of a DEP8 deployment (all eight ranks), in tokens."""
+    return 8 * (vram * util - DSV4_PRO["w_per_gpu_dep8"] - reserve) / kv_bytes_per_token(reserve)
+
+
+def _points(reserve: float = RESERVE) -> dict:
+    """The two published points, priced from bytes (research/agentx_kv_hits.md).
+
+    HBM: VRAM x the recipe's --gpu-memory-utilization, minus the weights each
+    rank holds and the reserve, at vLLM's bytes per token. DRAM: the recipe's
+    CPU bytes per rank at the same bytes per token (the offload stores the
+    same pages). B200's VRAM (192.3e9 B visible) and node DRAM (DGX B200,
+    2 TB at the recipe's 0.95) are assumptions. Service rates are guesses;
+    `--sweep` varies them.
+    """
+    b = kv_bytes_per_token(reserve)
+    return {
+        "b300-384": {
+            "server": Server(ranks=8, hbm_tokens=dep8_tokens(288.4e9, 0.92, reserve),
+                             dram_tokens=8 * 356e9 / b,
+                             prefill_tps=20_000.0, decode_tps=60.0, max_seqs=96),
+            "replay": Replay(concurrency=384),
+            "measured": {"hbm_hit_rate": 0.91, "dram_hit_rate": 0.0136,
+                         "working_set_tokens": 43e6},
+        },
+        "b200-196": {
+            "server": Server(ranks=8, hbm_tokens=dep8_tokens(192.3e9, 0.90, reserve),
+                             dram_tokens=8 * 237.5e9 / b,
+                             prefill_tps=12_000.0, decode_tps=45.0, max_seqs=49),
+            "replay": Replay(concurrency=196),
+            "measured": {"hbm_hit_rate": 0.73, "dram_hit_rate": 0.20,
+                         "working_set_tokens": 22e6},
+        },
+    }
+
+
+POINTS = _points()
 
 
 def _fmt_row(label: str, d: dict) -> str:
     return (f"{label:<34} HBM {d['hbm_hit_rate']:6.1%}  DRAM {d['dram_hit_rate']:6.1%}  "
-            f"ceiling {d['ceiling_hit_rate']:6.1%}  requests {d['requests']:>6,}  "
+            f"ceiling {d['ceiling_retained_rate']:6.1%}  requests {d['requests']:>6,}  "
             f"waited {d['requests_waited']:>5,}")
 
 
@@ -513,9 +540,11 @@ def cmd_agentx(args) -> int:
             for f in (0.5, 2.0):
                 rows[f"service x{f:g}"] = simulate(traces, replace(
                     srv, prefill_tps=srv.prefill_tps * f, decode_tps=srv.decode_tps * f), rp).to_dict()
-            for f in (0.75, 1.25):
-                rows[f"hbm x{f:g}"] = simulate(traces, replace(
-                    srv, hbm_tokens=srv.hbm_tokens * f, dram_tokens=srv.dram_tokens), rp).to_dict()
+            for r in (5e9, 15e9):
+                rows[f"reserve {r / 1e9:g} GB"] = simulate(
+                    traces, _points(r)[name]["server"], rp).to_dict()
+            rows["published working set as HBM"] = simulate(traces, replace(
+                srv, hbm_tokens=pt["measured"]["working_set_tokens"]), rp).to_dict()
             rows["dram 1.5x hbm"] = simulate(traces, replace(
                 srv, dram_tokens=srv.hbm_tokens * 1.5), rp).to_dict()
             rows["no dram"] = simulate(traces, replace(srv, dram_tokens=0.0), rp).to_dict()
@@ -525,7 +554,8 @@ def cmd_agentx(args) -> int:
         out[name] = {"measured": pt["measured"], "predicted": rows}
         if not args.json:
             m = pt["measured"]
-            print(f"{name}: measured HBM {m['hbm_hit_rate']:.1%}, DRAM {m['dram_hit_rate']:.1%}")
+            print(f"{name}: measured HBM {m['hbm_hit_rate']:.1%}, DRAM {m['dram_hit_rate']:.1%}; "
+                  f"modelled HBM {srv.hbm_tokens / 1e6:.1f}M tokens, DRAM {srv.dram_tokens / 1e6:.0f}M")
             for label, d in rows.items():
                 print("  " + _fmt_row(label, d))
     if args.json:
