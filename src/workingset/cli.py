@@ -17,6 +17,8 @@
                                                against a finite prefix cache
     ws traces mooncake|bailian|tracelab PATH   public prefix-cache traces: exact
                                                LRU vs the planner and fill rule
+    ws aa stats|predict ...                    Artificial Analysis' AgentPerf-Local
+                                               traces at N concurrent agents
 """
 from __future__ import annotations
 
@@ -481,6 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_agentx(sub)
     from .traces import add_subparser as _add_traces
     _add_traces(sub)
+    from .aa_local import add_subparser as _add_aa
+    _add_aa(sub)
     return ap
 
 
