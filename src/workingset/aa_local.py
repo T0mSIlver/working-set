@@ -54,6 +54,7 @@ class Turn:
     out: int             # target output tokens (exact policy)
     tool_s: float        # recorded tool delay after the turn
     lcp: int             # tokens shared with the lane's previous request
+    user_at: int = 0     # where the last user message starts, in tokens
 
 
 def _ser(messages) -> str:
@@ -96,9 +97,14 @@ def load(replay_dir: str | Path, manifest: str = "manifest-x86_64.json",
             lcp = 0
             if prev_ser is not None:
                 lcp = int(prev_prompt * _lcp_chars(prev_ser, s) / max(1, len(prev_ser)))
+            msgs = r["messages"]
+            last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
+            head = _ser({"tools": r.get("tools", []), "messages": msgs[:last_user]})
+            user_at = int(int(r["recorded_prompt_tokens"]) * len(head) / max(1, len(s)))
             turns.append(Turn(tid, int(r["recorded_prompt_tokens"]),
                               int(r.get("target_output_tokens") or r["recorded_completion_tokens"]),
-                              float(r.get("simulated_tool_delay_ms_after", 0.0)) / 1000, lcp))
+                              float(r.get("simulated_tool_delay_ms_after", 0.0)) / 1000, lcp,
+                              user_at))
             prev_ser, prev_prompt = s, int(r["recorded_prompt_tokens"])
     return turns
 
@@ -142,7 +148,9 @@ class Box:
     n_ubatch: int = 512
     fixed_s: float = 0.0      # per-batch launch overhead
     restore: str = "lcp"      # "lcp" or "checkpoint" (hybrid models)
-    checkpoints: int = 8      # llama-server --ctx-checkpoints
+    cache_idle_slots: bool = True   # llama-server --cache-idle-slots (master default)
+    pcie_bw: float = 12e9     # host-RAM prompt cache restore, bytes/s
+    checkpoints: int = 32     # llama-server --ctx-checkpoints (master default)
     combine: str = "max"      # roofline "max", or "sum" (no overlap)
 
     def bw_eff(self) -> float:
@@ -165,12 +173,21 @@ class Box:
 BOXES = {
     "qwen38-27b-q4km-3090": Box(
         name="Qwen3.8-27B Q4_K_M, f16 KV, RTX 3090",
-        weights_bytes=16.5e9, kv_bpt=16 * 4 * 256 * 2 * 2,
+        weights_bytes=16_464_440_224, kv_bpt=16 * 4 * 256 * 2 * 2,
         state_bytes=48 * 48 * 128 * 128 * 4 + 48 * 10_240 * 4 * 4,
         bw=936e9, decode_tps1=35.0, prefill_tps1=1_100.0,
         attn_ratio=4 * 16 * 24 * 256 / (2 * 24.5e9),
-        pool_tokens=131_072, restore="checkpoint"),
+        pool_tokens=110_000, ram_tokens=8192 * MiB // (16 * 4 * 256 * 2 * 2),
+        restore="checkpoint"),
 }
+# The same with q8_0 K and V (flash attention on): 34 bytes per 32 values, so
+# 16 x 4 x 256 x 2 x 34/32 = 34,816 B/token. Pool: 24 GiB less the weights,
+# ~1.3 GB of compute buffers, ~0.3 GB CUDA context and eight 151 MB recurrent
+# states leaves ~6.5 GB, ~186k tokens; -c 180224 keeps a margin.
+_Q8 = 16 * 4 * 256 * 2 * 34 // 32
+BOXES["qwen38-27b-q4km-3090-q8kv"] = replace(
+    BOXES["qwen38-27b-q4km-3090"], name="Qwen3.8-27B Q4_K_M, q8_0 KV, RTX 3090",
+    kv_bpt=_Q8, pool_tokens=180_224, ram_tokens=8192 * MiB // _Q8)
 
 
 @dataclass
@@ -188,6 +205,13 @@ class _Lane:
     rows: list[dict] = field(default_factory=list)
 
 
+def _checkpoints(t: Turn, box: Box) -> list[int]:
+    """Where llama-server saves a hybrid model's state while prefilling `t`
+    (master 0a1ef309c, server-context.cpp): at the start of the last user
+    message, and 4 + n_ubatch and 4 tokens before the prompt's end."""
+    return sorted({p for p in (t.user_at, t.prompt - 4 - box.n_ubatch, t.prompt - 4) if p > 0})
+
+
 def _hit(lane: _Lane, t: Turn, box: Box) -> int:
     lcp = min(t.lcp, lane.cached, t.prompt - 1)
     if lcp <= 0:
@@ -200,46 +224,56 @@ def _hit(lane: _Lane, t: Turn, box: Box) -> int:
 
 def simulate(box: Box, lanes: list[list[Turn]], max_time: float = 36_000.0,
              tool_delays: bool = False) -> dict:
+    """Step the engine until every lane has replayed its turns.
+
+    llama-server master 0a1ef309c, unified KV (`-kvu`), as phase 1 read it:
+    - `--cache-idle-slots` (on): when a request starts, every idle slot is
+      saved to the host-RAM prompt cache and cleared from VRAM; a lane's next
+      request restores its slot from RAM, blocking the loop for the copy.
+    - KV full: clear the first idle slot holding tokens (lowest index, not
+      LRU) and retry; with none left every active request fails with
+      "Context size has been exceeded" and its slot is cleared. The lane
+      moves on to its next recorded turn."""
     L = [_Lane(turns=ts) for ts in lanes]
     now = 0.0
-    ram: dict[int, int] = {}          # lane -> tokens kept in host RAM
-    evictions = overflows = 0
+    ram: dict[int, tuple[int, list[int]]] = {}   # lane -> (tokens, checkpoints)
+    evictions = restores = 0
+    failed: list[dict] = []
     peak = 0
 
     def used() -> int:
         return sum(l.ctx if l.phase in ("prefill", "decode") else l.cached for l in L)
 
-    def make_room(need: int, me: int) -> None:
-        nonlocal evictions
-        while used() + need > box.pool_tokens:
-            idle = [(l.last_used, k) for k, l in enumerate(L)
-                    if k != me and l.phase in ("idle", "done") and l.cached > 0]
-            if not idle:
-                return
-            _, k = min(idle)
-            if box.ram_tokens:
-                ram[k] = L[k].cached
-            L[k].cached, L[k].marks = 0, []
-            evictions += 1
+    def to_ram(k: int) -> None:
+        if box.ram_tokens and L[k].cached:
+            ram[k] = (L[k].cached, L[k].marks)
+            while sum(v[0] for v in ram.values()) > box.ram_tokens:
+                ram.pop(next(iter(ram)))
+        L[k].cached, L[k].marks = 0, []
+
+    def restore_s(tokens: int) -> float:
+        return (tokens * box.kv_bpt + box.state_bytes * len(L[0].marks or [1])) / box.pcie_bw
 
     while now < max_time:
-        # admit lanes whose next request is due
         for k, l in enumerate(L):
-            if l.phase == "idle" and l.ready_at <= now:
-                if l.i >= len(l.turns):
-                    l.phase = "done"
-                    continue
-                t = l.turns[l.i]
-                if l.cached == 0 and k in ram and box.ram_tokens:
-                    l.cached = ram.pop(k)
-                    l.marks = [l.cached]
-                hit = _hit(l, t, box)
-                make_room(t.prompt + t.out - l.cached, k)
-                if used() + t.prompt + t.out - l.cached > box.pool_tokens:
-                    overflows += 1
-                l.ctx, l.left, l.phase = hit, t.prompt - hit, "prefill"
-                l.rows.append({"task": t.task, "prompt": t.prompt, "out": t.out,
-                               "cached": hit, "t0": now})
+            if l.phase != "idle" or l.ready_at > now:
+                continue
+            if l.i >= len(l.turns):
+                l.phase = "done"
+                continue
+            t = l.turns[l.i]
+            if box.cache_idle_slots:
+                for j, o in enumerate(L):
+                    if j != k and o.phase in ("idle", "done") and o.cached:
+                        to_ram(j)
+            if l.cached == 0 and k in ram:
+                l.cached, l.marks = ram.pop(k)
+                now += restore_s(l.cached)
+                restores += 1
+            hit = _hit(l, t, box)
+            l.ctx, l.left, l.phase = hit, t.prompt - hit, "prefill"
+            l.rows.append({"task": t.task, "prompt": t.prompt, "out": t.out,
+                           "cached": hit, "t0": now})
         active = [l for l in L if l.phase in ("prefill", "decode")]
         if not active:
             pending = [l.ready_at for l in L if l.phase == "idle"]
@@ -247,7 +281,6 @@ def simulate(box: Box, lanes: list[list[Turn]], max_time: float = 36_000.0,
                 break
             now = max(now, min(pending))
             continue
-        peak = max(peak, used())
         # one batch: decode tokens first, then prompt tokens up to n_batch
         dec = [l for l in active if l.phase == "decode"]
         budget = box.n_batch - len(dec)
@@ -258,13 +291,27 @@ def simulate(box: Box, lanes: list[list[Turn]], max_time: float = 36_000.0,
                 fills.append((l, n))
                 budget -= n
         ntok = len(dec) + sum(n for _, n in fills)
+        # KV full: clear idle slots first, lowest index first, then fail everyone
+        while used() + ntok > box.pool_tokens:
+            idle = [k for k, o in enumerate(L) if o.phase in ("idle", "done") and o.cached]
+            if not idle:
+                break
+            to_ram(idle[0])
+            evictions += 1
+        if used() + ntok > box.pool_tokens:
+            for l in active:
+                r = l.rows.pop()
+                failed.append(r)
+                l.ctx, l.cached, l.marks, l.phase = 0, 0, [], "idle"
+                l.ready_at, l.i = now, l.i + 1
+            continue
+        peak = max(peak, used() + ntok)
         mem = (math.ceil(ntok / box.n_ubatch) * box.weights_bytes
                + sum(l.ctx for l in active) * box.kv_bpt
                + len(active) * box.state_bytes) / (box.bw * box.bw_eff())
         comp = sum(box.tok_compute_s(l.ctx) for l in dec) + \
             sum(n * box.tok_compute_s(l.ctx + n / 2) for l, n in fills)
-        dt = box.fixed_s + (max(mem, comp) if box.combine == "max" else mem + comp)
-        now += dt
+        now += box.fixed_s + (max(mem, comp) if box.combine == "max" else mem + comp)
         for l in dec:
             l.ctx += 1
             l.left -= 1
@@ -276,7 +323,7 @@ def simulate(box: Box, lanes: list[list[Turn]], max_time: float = 36_000.0,
                 # the slot keeps the prompt; the generated tail never matches
                 l.cached = t.prompt
                 if box.restore == "checkpoint":
-                    l.marks = (l.marks + [t.prompt])[-box.checkpoints:]
+                    l.marks = (l.marks + _checkpoints(t, box))[-box.checkpoints:]
                 l.ctx, l.phase, l.last_used = 0, "idle", now
                 l.ready_at = now + (t.tool_s if tool_delays else 0.0)
                 l.i += 1
@@ -285,17 +332,14 @@ def simulate(box: Box, lanes: list[list[Turn]], max_time: float = 36_000.0,
             l.left -= n
             if l.left <= 0:
                 t = l.turns[l.i]
-                l.phase, l.left = "decode", t.out
                 l.rows[-1]["t_first"] = now
-                # the first output token comes out of the prompt's last batch
+                # the prompt's last batch yields the first output token
                 l.ctx += 1
-                l.left -= 1
-                if l.left <= 0:
-                    l.left = 1
+                l.phase, l.left = "decode", max(1, t.out - 1)
     rows = [r for l in L for r in l.rows if "t1" in r]
-    return summarize(rows, [l.rows for l in L], extra={"evictions": evictions,
-                                                       "overflows": overflows,
-                                                       "peak_kv_tokens": peak})
+    return summarize(rows, [l.rows for l in L], extra={
+        "evictions": evictions, "ram_restores": restores, "failed_turns": len(failed),
+        "peak_kv_tokens": peak})
 
 
 def summarize(rows: list[dict], per_lane: list[list[dict]], extra: dict | None = None) -> dict:
@@ -303,6 +347,9 @@ def summarize(rows: list[dict], per_lane: list[list[dict]], extra: dict | None =
     def q(xs, p):
         xs = sorted(xs)
         return xs[min(len(xs) - 1, int(p * (len(xs) - 1) + 0.5))] if xs else float("nan")
+    if not rows:
+        return {"lanes": len(per_lane), "turns": 0, **(extra or {})}
+    per_lane = [[r for r in lr if "t1" in r] for lr in per_lane]
     walls = [max(r["t1"] for r in lr) - min(r["t0"] for r in lr) for lr in per_lane if lr]
     span = max(r["t1"] for r in rows) - min(r["t0"] for r in rows)
     out_tok = sum(r["out"] for r in rows)
@@ -381,7 +428,8 @@ def _fmt(d: dict) -> str:
     return (f"wall {d['wall_s']:7.0f} s  agg {d['agg_out_tps']:6.1f} tok/s  "
             f"per-stream {d['gen_tps_mean']:5.1f} tok/s  TTFT p50 {d['ttft_p50_s']:5.2f} s "
             f"p95 {d['ttft_p95_s']:6.2f} s  hits {d['hit_rate']:6.1%}"
-            + (f"  peak KV {d['peak_kv_tokens']:,}  evictions {d['evictions']}  overflows {d['overflows']}"
+            + (f"  peak KV {d['peak_kv_tokens']:,}  evictions {d['evictions']}  "
+               f"RAM restores {d['ram_restores']}  failed {d['failed_turns']}"
                if "peak_kv_tokens" in d else ""))
 
 
