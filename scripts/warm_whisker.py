@@ -1,5 +1,5 @@
 """Warm capacity as labeled dot-and-whisker (p5 / p50 / p95) from real data + fitted log-normal."""
-import os
+import glob, os
 import pandas as pd, numpy as np, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from scipy import stats
@@ -16,8 +16,8 @@ RAM_BUFFERS=[0,200,600]; CAP=180_000; MIN_TOKENS=1000; N_ITER,MAX_DRAW=4000,1600
 RNG=np.random.default_rng(0)
 
 U=DATA_DIR+os.sep
-combined=np.concatenate([pd.read_csv(U+f"prompt_tokens_by_response_uid_{p}.csv")['prompt_tokens'].values
-                         for p in ("igp","watsonx")])
+combined=np.concatenate([pd.read_csv(f)['prompt_tokens'].values
+                         for f in sorted(glob.glob(U+"prompt_tokens*.csv"))])
 combined=combined[combined>=MIN_TOKENS]
 shape,_,scale=stats.lognorm.fit(combined,floc=0)
 to_unique=lambda L: np.maximum(np.clip(L,0,CAP)-SHARED_PREFIX,0)

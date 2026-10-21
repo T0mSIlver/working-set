@@ -1,12 +1,8 @@
 # data/
 
 The real-workload scripts (`real_capacity.py`, `real_mns.py`, `warm_whisker.py`)
-read two CSV files of observed prompt lengths from this directory:
-
-| File                                       | Column          | Source                          |
-| ------------------------------------------ | --------------- | ------------------------------- |
-| `prompt_tokens_by_response_uid_igp.csv`    | `prompt_tokens` | IGP coding-agent responses      |
-| `prompt_tokens_by_response_uid_watsonx.csv`| `prompt_tokens` | watsonX coding-agent responses  |
+read every `prompt_tokens*.csv` in this directory, in name order, as one set
+of observed prompt lengths each (labelled set A, set B, … in the figures).
 
 Each file is one row per response, with a `prompt_tokens` integer column
 (the prompt length in tokens). Prompts shorter than `MIN_TOKENS` (1000) are
