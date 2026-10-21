@@ -146,7 +146,7 @@ On B300 at concurrency 384 it predicts 91.4% HBM hits (90.5-92.2% over ten
 seeds) against a measured 91%, and 1.4% DRAM hits against 1.36%. On B200
 at 196 it predicts 41% (28-48%) against 73%: a miss of about 32 points, at
 a point on the knee of the curve, where 73% needs ~34M tokens of KV and the
-bytes give 24M. Method, sources and the misses:
+bytes, priced from one vLLM anchor, give 24M. Method, sources and the misses:
 [research/agentx_kv_hits.md](research/agentx_kv_hits.md).
 
 ## Contents

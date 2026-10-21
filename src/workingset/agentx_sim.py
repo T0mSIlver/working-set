@@ -592,7 +592,22 @@ POINTS = _points()
 def _fmt_row(label: str, d: dict) -> str:
     return (f"{label:<34} HBM {d['hbm_hit_rate']:6.1%}  DRAM {d['dram_hit_rate']:6.1%}  "
             f"ceiling {d['ceiling_retained_rate']:6.1%}  requests {d['requests']:>6,}  "
-            f"waited {d['requests_waited']:>5,}")
+            f"waited {d['requests_waited']:>5,}  window opens {d['window_open_s']:5.0f} s")
+
+
+def _curve(traces, args) -> int:
+    """HBM hit rate against HBM capacity at each point, over several seeds."""
+    from dataclasses import replace
+    for name in args.point or list(POINTS):
+        pt = POINTS[name]
+        print(f"{name}: measured HBM {pt['measured']['hbm_hit_rate']:.1%}")
+        for m in (float(x) for x in args.curve.split(",")):
+            rates = [simulate(traces, replace(pt["server"], hbm_tokens=m * 1e6),
+                              replace(pt["replay"], seed=args.seed + k)).to_dict()["hbm_hit_rate"]
+                     for k in range(args.seeds)]
+            print(f"  {m:6.1f}M tokens  HBM mean {sum(rates) / len(rates):6.1%}  "
+                  f"{min(rates):6.1%}-{max(rates):6.1%}")
+    return 0
 
 
 def cmd_agentx(args) -> int:
@@ -604,6 +619,8 @@ def cmd_agentx(args) -> int:
         print(json.dumps(A.compact_jsonl(args.src, args.out)))
         return 0
     traces = A.load(args.traces)
+    if args.curve:
+        return _curve(traces, args)
     out = {}
     for name in args.point or list(POINTS):
         pt = POINTS[name]
@@ -669,4 +686,7 @@ def add_subparser(sub) -> None:
                    help="also vary service rates, capacity, DRAM, admission, "
                         "scenario and ten seeds")
     q.add_argument("--json", action="store_true")
+    q.add_argument("--curve", help="instead: HBM capacities in millions of tokens, "
+                                   "comma-separated, e.g. 24.2,28,32,36")
+    q.add_argument("--seeds", type=int, default=5, help="seeds per capacity for --curve")
     q.set_defaults(fn=cmd_agentx)

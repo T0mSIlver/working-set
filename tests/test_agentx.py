@@ -140,26 +140,61 @@ def test_lanes_recycle_when_their_session_drains():
     assert d["hbm_hit_rate"] < d["ceiling_hit_rate"] + 1e-12
 
 
+def _spawn_join_trace():
+    """Root turns at 0 and 10; a slow sub-agent spawned after the second,
+    recorded at 6.2 (so an ungated spawn would run before root turn 1); a
+    root turn at 12 recorded after the sub-agent ended, which must wait."""
+    return {"id": "sj", "models": ["m"], "block_size": 64, "hash_id_scope": "local",
+            "requests": [
+                _req(0, [1, 2], out=0, api=1.0), _req(10, [1, 2, 3], out=0, api=1.0),
+                {"t": 6.2, "type": "subagent", "agent_id": "agent_001",
+                 "subagent_type": "Explore", "status": "completed", "models": ["m"],
+                 "requests": [_req(6.2, [1, 9], out=1000, api=0.5)]},
+                _req(12, [1, 2, 3, 4], out=0, api=1.0)]}
+
+
 def test_sub_agent_spawns_on_its_turn_and_parent_joins_it(monkeypatch):
     from workingset import agentx_sim as S
-    order = []
+    seen = []
     real_pin = S._Cache.pin
 
     def pin(self, s, keep, total):
-        order.append(s.rsplit(":", 1)[-1])
+        others = sorted(k.rsplit(":", 1)[-1] for k in self.pinned)
+        seen.append((s.rsplit(":", 1)[-1], others))
         return real_pin(self, s, keep, total)
 
     monkeypatch.setattr(S._Cache, "pin", pin)
-    tr = A.from_compact(A.compact_trace(_trace()))
-    simulate([tr], Server(ranks=1, hbm_tokens=1e9, dram_tokens=0.0),
-             _one_lane(warmup_requests_per_lane=0, duration_s=12.0))
-    # root turns 0-1, then the sub-agent (spawned after turn 2 was sent),
-    # and the root turn recorded after the sub-agent ended waits for it
-    first = order[:6]
-    assert first[:2] == ["root", "root"]
-    assert first.index("agent_001") < first.index("root", 2)
-    sa_last = max(i for i, k in enumerate(first) if k == "agent_001")
-    assert first.count("agent_001") == 2 and sa_last < 4
+    tr = A.from_compact(A.compact_trace(_spawn_join_trace()))
+    # decode at 10 tok/s: the sub-agent runs for 100 s
+    simulate([tr], Server(ranks=1, hbm_tokens=1e9, prefill_tps=1e9, decode_tps=10.0),
+             _one_lane(warmup_requests_per_lane=0, duration_s=150.0))
+    names = [n for n, _ in seen[:4]]
+    # spawned only once root turn 1 was sent, not on its recorded time
+    assert names == ["root", "root", "agent_001", "root"]
+    # root turn 2 started after the sub-agent had finished
+    assert seen[3][1] == []
+
+
+def test_primers_warm_the_cache_before_t_star():
+    srv = Server(ranks=1, hbm_tokens=1e9, block=64, retention=None,
+                 prefill_tps=1e9, decode_tps=1e9)
+    d = simulate(_session(n=10), srv, Replay(
+        concurrency=1, start_min=0.5, start_max=0.5, warmup_requests_per_lane=0,
+        duration_s=25.0)).to_dict()
+    # the first replayed turn resumes from the primed prefix: no cold miss
+    assert d["requests"] >= 2
+    assert d["ceiling_hit_rate"] > 0
+    assert d["hbm_hit_rate"] == pytest.approx(d["ceiling_hit_rate"])
+
+
+def test_idle_streams_freed_together_evict_in_insertion_order():
+    from workingset.agentx_sim import _Cache
+    c = _Cache(300.0)
+    for s in ("b", "a", "c"):          # not alphabetical
+        c.pin(s, 0.0, 100.0)
+        c.unpin(s, 100.0, 0.0)          # all freed at t = 0
+    c.pin("d", 0.0, 100.0)
+    assert "b" not in c.resident and c.resident["a"] == c.resident["c"] == 100.0
 
 
 def test_cache_never_holds_more_than_its_capacity(monkeypatch):
