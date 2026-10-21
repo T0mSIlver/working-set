@@ -63,7 +63,7 @@ def test_more_lanes_more_throughput_slower_streams():
     four = A.simulate(_box(restore="lcp"), [_lane() for _ in range(4)])
     assert four["agg_out_tps"] > one["agg_out_tps"]
     assert four["gen_tps_mean"] < one["gen_tps_mean"]
-    assert one["overflows"] == 0 and one["evictions"] == 0
+    assert one["failed_turns"] == 0 and one["evictions"] == 0
 
 
 def test_hits_never_exceed_the_common_prefix():
@@ -79,7 +79,24 @@ def test_hits_never_exceed_the_common_prefix():
 def test_a_small_pool_evicts_idle_slots():
     # tool waits of different lengths leave some slots idle while others run
     lanes = [_lane(tool_s=1.0 + 3 * k) for k in range(3)]
-    d = A.simulate(_box(restore="lcp", pool_tokens=6000), lanes, tool_delays=True)
+    small = _box(restore="lcp", pool_tokens=9000, cache_idle_slots=False, ram_tokens=0)
+    d = A.simulate(small, lanes, tool_delays=True)
     assert d["evictions"] > 0
-    big = A.simulate(_box(restore="lcp", pool_tokens=10 ** 7), lanes, tool_delays=True)
+    big = A.simulate(replace(small, pool_tokens=10 ** 7), lanes, tool_delays=True)
     assert big["evictions"] == 0 and big["hit_rate"] >= d["hit_rate"]
+
+
+def test_kv_exhaustion_fails_the_active_requests():
+    lanes = [_lane() for _ in range(3)]          # in step: never an idle slot to clear
+    d = A.simulate(_box(restore="lcp", pool_tokens=9000), lanes)
+    assert d["failed_turns"] > 0
+    ok = A.simulate(_box(restore="lcp", pool_tokens=10 ** 7), lanes)
+    assert ok["failed_turns"] == 0 and ok["turns"] == 18
+
+
+def test_idle_slots_come_back_from_ram():
+    lanes = [_lane(tool_s=1.0 + 3 * k) for k in range(2)]
+    d = A.simulate(_box(restore="lcp"), lanes, tool_delays=True)
+    assert d["ram_restores"] > 0
+    off = A.simulate(_box(restore="lcp", cache_idle_slots=False), lanes, tool_delays=True)
+    assert off["ram_restores"] == 0 and off["hit_rate"] == d["hit_rate"]
