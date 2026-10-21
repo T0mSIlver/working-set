@@ -53,8 +53,10 @@ share (same direction, at most a few points: research/agentx_kv_hits.md).
 """
 from __future__ import annotations
 
+import bisect
 import hashlib
 import heapq
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -530,6 +532,79 @@ def _blocked_on_child(lane, t_next: float) -> bool:
     return False
 
 
+def planner(traces: list[Trace], server: Server, replay: Replay | None = None) -> dict:
+    """The characteristic-time estimate (traces.planner_curve) at a fixed
+    concurrency, no event loop: what a planner can compute from the trace's
+    sizes and recorded timings alone.
+
+    Per rank, `concurrency / ranks` sessions cycle through request (the
+    recorded api_time) and gap (capped at idle_gap_cap_s). Running requests
+    pin prompt + output; what is left holds idle prefixes, each until its
+    session's next request or T*, whichever comes first. A request reuses its
+    stream's previous prompt if the gap was under T*. DRAM extends the same
+    rule to HBM + DRAM capacity. Hit rates are over every request of the
+    traces, not a replay window.
+    """
+    replay = replay or Replay()
+    cap = replay.idle_gap_cap_s
+    occ: list[tuple[float, float]] = []      # (gap to next, prompt tokens)
+    reuse: list[tuple[float, float]] = []    # (gap since previous, reusable tokens)
+    prompt = cycle = pinned = 0.0
+    for tr in traces:
+        for s in tr.streams:
+            rq = s.requests
+            for i, r in enumerate(rq):
+                svc = r.api_time or 0.0
+                g = (min(max(rq[i + 1].t - (r.t + svc), 0.0), cap)
+                     if i + 1 < len(rq) else cap)
+                occ.append((g, r.tokens_in))
+                prompt += r.tokens_in
+                cycle += svc + g
+                pinned += (r.tokens_in + r.tokens_out) * svc
+                if i:
+                    p = rq[i - 1]
+                    gp = min(max(r.t - (p.t + (p.api_time or 0.0)), 0.0), cap)
+                    reuse.append((gp, min(r.lcp_prev * tr.block_size, r.tokens_in)))
+    occ.sort()
+    reuse.sort()
+    gs = [g for g, _ in occ]
+    cgp, cp = [0.0], [0.0]
+    for g, p in occ:
+        cgp.append(cgp[-1] + g * p)
+        cp.append(cp[-1] + p)
+    rg = [g for g, _ in reuse]
+    cu = [0.0]
+    for _, u in reuse:
+        cu.append(cu[-1] + u)
+    live = replay.concurrency / server.ranks
+    held = live * pinned / cycle             # tokens pinned by running requests, per rank
+
+    def hit(tokens_per_rank: float) -> tuple[float, float]:
+        room = tokens_per_rank - held
+        if room <= 0:
+            return 0.0, 0.0
+
+        def size(T: float) -> float:
+            i = bisect.bisect_left(gs, T)
+            return live * (cgp[i] + (cp[-1] - cp[i]) * T) / cycle
+
+        if size(cap) <= room:
+            T = math.inf
+        else:
+            lo, hi = 0.0, cap
+            for _ in range(60):
+                mid = (lo + hi) / 2
+                lo, hi = (mid, hi) if size(mid) < room else (lo, mid)
+            T = lo
+        return cu[bisect.bisect_left(rg, T)] / prompt, T
+
+    h, t_h = hit(server.hbm_tokens / server.ranks)
+    o, _ = hit((server.hbm_tokens + server.dram_tokens) / server.ranks)
+    return {"hbm_hit_rate": h, "dram_hit_rate": max(o - h, 0.0), "overall_hit_rate": max(o, h),
+            "ceiling_hit_rate": cu[-1] / prompt, "t_star_s": t_h,
+            "pinned_tokens_per_rank": held}
+
+
 # --- DeepSeek V4 Pro on the two published AgentX points ---------------------
 # research/agentx_kv_hits.md has every constant's source.
 
@@ -648,7 +723,8 @@ def cmd_agentx(args) -> int:
             for k in range(1, 10):
                 rows[f"seed {args.seed + k}"] = simulate(
                     traces, srv, replace(rp, seed=args.seed + k)).to_dict()
-        out[name] = {"measured": pt["measured"], "predicted": rows}
+        out[name] = {"measured": pt["measured"], "predicted": rows,
+                     "planner": planner(traces, srv, rp)}
         seeds = [d["hbm_hit_rate"] for k, d in rows.items()
                  if k == "central" or k.startswith("seed ")]
         if len(seeds) > 1:
@@ -664,6 +740,10 @@ def cmd_agentx(args) -> int:
                 sd = out[name]["seeds"]
                 print(f"  HBM over {sd['n']} seeds: mean {sd['mean']:.1%}, "
                       f"{sd['min']:.1%}-{sd['max']:.1%}")
+            pl = out[name]["planner"]
+            print(f"  planner (recorded service times, no event loop): HBM "
+                  f"{pl['hbm_hit_rate']:.1%}, DRAM {pl['dram_hit_rate']:.1%}, "
+                  f"T* {pl['t_star_s']:.0f} s")
     if args.json:
         print(json.dumps(out, indent=2))
     return 0

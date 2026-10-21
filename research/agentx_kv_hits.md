@@ -278,3 +278,24 @@ VRAM (192.3e9 assumed), a reserve under 5 GB, the weights a DEP rank
 actually holds, or a vLLM cost per token on B200 below what the TP8 B300
 anchor implies. The B200 run's server log (its `GPU KV cache size` line)
 would settle it. That is the question for InferenceX.
+
+## 2026-10-21, job 36 — the reserve sweep over seeds, and the planner
+
+The "5 GB moves B200 by about 12 points" figure came from the seed-42 sweep
+above; here it is over five seeds (42-46), recipe scenario, one hour, B200
+conc 196:
+
+| reserve per GPU | HBM per seed | mean | planner |
+|---|---|---|---|
+| 5 GB | 0.534 0.380 0.566 0.511 0.631 | 52.5% | 76.9% |
+| 10 GB (default) | 0.421 0.277 0.429 0.428 0.462 | 40.3% | 72.9% |
+| 15 GB | 0.295 0.197 0.284 0.290 0.290 | 27.1% | 41.8% |
+
+So 12 to 13 points per 5 GB in the event simulator. The planner
+(`agentx_sim.planner`, research/public_traces.md) uses the trace's recorded
+service times instead of the priced ones and lands on both published points
+(B300 91.1%, B200 72.9%). Speeding the simulator's service up moves B200 the
+same way (three seeds: x2 0.57/0.50/0.63, x3 0.67/0.64/0.73, x4
+0.73/0.72/0.76). The 32-point miss therefore has two candidate causes,
+~12 GB per GPU more KV than the bytes give or service 3-4x faster than
+priced; the B200 server log would separate them.
