@@ -148,8 +148,17 @@ its own stream's previous prompt, 98.3% if it can reuse anything earlier in
 the trace (sub-agents forking the parent's prefix). Inside the replay window
 and under the 32k retention rule the same-stream ceiling is 92-93%. The
 measured overall rates (HBM + DRAM) are 92.4% on B300 and ~93% on B200: both
-runs sit on that ceiling, which says the replay reaches no cross-stream
-reuse and that retention costs ~3 points.
+runs sit on that ceiling, which says the replay reaches little cross-stream
+reuse. Retention itself costs little: 93.1% without it against 92.8% with it
+(B300 window). The rest of the gap to 95.7% is the replay window: recycled
+lanes start sessions from turn 0, cold.
+
+Where the cross-stream reuse is: root requests could reuse 97.5% of their
+prompt tokens from their own previous request and 98.8% from anything
+earlier; sub-agent requests 87.5% against 96.1%. The sub-agent gap is the
+parent's prefix, and consistent-hash routing on the sub-agent's own session
+id sends it to another rank 7 times in 8. The simulator counts no
+cross-stream hits at all, so it under-counts by the 1-in-8 case.
 
 ## 2026-10-21 — first prediction: 43M as capacity fails
 
