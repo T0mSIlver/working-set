@@ -132,3 +132,62 @@ blocks).
    DeepSeek tokenizer; assumed 1:1 here.
 4. Live replies are not reused (the next prompt carries the recorded reply);
    assumed from `weka_synth_buf.advance_turn`.
+
+## 2026-10-21 — the traces, read
+
+Compact file from the sandbox (`data/agentx-062126` branch, SHA 3e48d96,
+2.2 MB; source sha256 matches Hugging Face's etag): 393 traces, 98,827
+requests, 1,697 sub-agents, 21.6B input tokens. Median prompt 142k, p90 550k;
+mean output 1,077. Recorded gaps between a root request's end and the next
+start: median 4.9 s, p90 132 s, p99 54 min (capped at 300 s by the replay).
+No request carries `stop`, so that column is empty; `think_time` is missing
+on the first request of each trace (unused here).
+
+Infinite-cache ceilings over all requests: 95.7% if a request can only reuse
+its own stream's previous prompt, 98.3% if it can reuse anything earlier in
+the trace (sub-agents forking the parent's prefix). Inside the replay window
+and under the 32k retention rule the same-stream ceiling is 92-93%. The
+measured overall rates (HBM + DRAM) are 92.4% on B300 and ~93% on B200: both
+runs sit on that ceiling, which says the replay reaches no cross-stream
+reuse and that retention costs ~3 points.
+
+## 2026-10-21 — first prediction: 43M as capacity fails
+
+Taking the published 43M / 22M as HBM capacity predicts 43% and 39% HBM
+hits, with thousands of requests queueing for KV space. The contexts are too
+large: 48 sessions per rank at a 142k median prompt pin more than 5.4M
+tokens. So the working set is not the capacity the cache runs on.
+
+## 2026-10-21 — capacity from bytes, one public anchor
+
+vllm #43447 states ~14.5M tokens of KV on TP8 8xB300 at 0.90 utilization,
+where every rank holds the full cache. With the weights known (108.1 GB per
+GPU under TP8) that fixes vLLM's cost per token: (288.4 x 0.90 - 108.1 - R)
+/ 14.5M = 9.8 kB at a reserve R of 10 GB, about twice the 4.94 kB of the
+layout. The same bytes give the DEP8 capacities with no further fitting:
+B300 99.8M tokens (12.5M per rank), B200 24.2M. DRAM at the same bytes per
+token: 292M and 195M.
+
+`ws agentx predict --sweep`, one hour, seed 42:
+
+| point | measured HBM / DRAM | predicted HBM / DRAM | range over the sweep |
+|---|---|---|---|
+| B300, 384 | 91.0% / 1.4% | **90.7% / 2.1%** | 89.7-91.3% (service x0.5-x2, R 5-15 GB, 4 seeds) |
+| B200, 196 | 73.0% / 20.0% | **47.8% / 44.2%** | 31-69% |
+
+B300 is predicted to within half a point and the answer barely moves with
+any assumption: the cache holds about twice what the lanes pin, so hits sit
+on the ceiling and DRAM hardly matters (91.9% with no DRAM at all).
+
+B200 misses by 25 points and the sweep says why: it sits on the knee. Its
+KV room is ~30 GB per GPU after 133.6 GB of weights, so 5 GB of reserve
+moves the prediction from 59% to 34%, and which 196 sessions land in the
+lanes moves it from 31% to 48%. The capacity sweep puts 73% at about 30M
+tokens; the bytes give 21-27M. Something worth ~6 GB per GPU is wrong in the
+B200 inputs (visible VRAM, the reserve, or the weights a DEP rank holds), or
+vLLM preempts and recomputes where this model queues. Either way, a 196-lane
+point on a 24M-30M-token cache is one where small changes swing the hit rate
+by tens of points, and the published 73% is one draw from that.
+
+What the 43M and 22M are remains open: neither matches these capacities
+(B300 43/99.8 = 0.43, B200 22/24.2 = 0.91).

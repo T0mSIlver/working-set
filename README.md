@@ -128,6 +128,25 @@ cost. `--dry-run` shows what each rung would offer at the recorded server's
 speed. [research/replay_gaps.md](research/replay_gaps.md) has the gap counts
 of the study's own sessions.
 
+## Predicting AgentX's prefix-cache hit rates
+
+SemiAnalysis published the Claude Code sessions behind AgentX
+([`semianalysisai/cc-traces-weka-062126`](https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126),
+Apache-2.0) and the hit rates DeepSeek V4 Pro reached on them. `ws agentx`
+replays those sessions against a model of the server's caches, per DP rank:
+an HBM tier evicted the way vLLM does, a write-through DRAM tier, and
+sliding-window retention points.
+
+```bash
+uv run ws agentx compact traces.jsonl agentx.json.gz   # 1.8 GB -> 2 MB, prefix structure only
+uv run ws agentx predict agentx.json.gz --sweep       # both published points, with the sensitivity runs
+```
+
+On B300 at concurrency 384 it predicts 90.7% HBM hits against a measured
+91%; on B200 at 196 it predicts 48% against 73%, a point that sits on the
+knee of the curve. Method, sources and the misses:
+[research/agentx_kv_hits.md](research/agentx_kv_hits.md).
+
 ## Contents
 
 - [docs/writeup.md](docs/writeup.md) — baseline study: KV-cache capacity and
