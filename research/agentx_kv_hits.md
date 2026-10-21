@@ -37,7 +37,8 @@ blog's dashboard links), `configs/nvidia-master.yaml` and
   own comment. B200 (cluster:b200-dgxc): node DRAM not stated in the repo;
   a DGX B200 has 2 TB, which would give ~237 GB per rank (assumption).
 - `VLLM_PREFIX_CACHE_RETENTION_INTERVAL=32768`: sliding-window prefix tails
-  kept sparsely (vllm #43447). Not modelled yet; see open questions.
+  kept sparsely (vllm #43447). Modelled since the afternoon; see
+  "sliding-window retention" below.
 
 Client (agentx-harness 1.0.12 on PyPI, scenario `agentx`; but see the
 evening's correction below: the recipe runs `inferencex-agentx-mvp`):
@@ -99,7 +100,8 @@ is not vLLM's "GPU KV cache size" sum, or vLLM's DSV4 accounting (hybrid
 groups, page padding, sliding-window pages) costs far more per token than the
 cache layout, and differently per GPU. Until a server log settles it, the
 predictions below take the published 43M and 22M as the capacity input and
-say so. This is a question for the InferenceX note.
+say so. This is a question for the InferenceX note. (Later the same day: that
+first prediction failed, and capacity now comes from bytes; see below.)
 
 Not added to `MODELS`: an explorer model needs its JS mirror, which is a
 deploy (AGENTS.md). The constants live in `agentx_sim.DSV4_PRO` for now.
@@ -161,7 +163,7 @@ parent's prefix, and consistent-hash routing on the sub-agent's own session
 id sends it to another rank 7 times in 8. The simulator counts no
 cross-stream hits at all, so it under-counts by the 1-in-8 case.
 
-## 2026-10-21 — first prediction: 43M as capacity fails
+## 2026-10-21 — first prediction: 43M as capacity fails (superseded)
 
 Taking the published 43M / 22M as HBM capacity predicts 43% and 39% HBM
 hits, with thousands of requests queueing for KV space. The contexts are too
@@ -174,12 +176,15 @@ vllm #43447 states ~14.5M tokens of KV on TP8 8xB300 at 0.90 utilization,
 where every rank holds the full cache. With the weights known (108.1 GB per
 GPU under TP8) that fixes vLLM's cost per token: (288.4 x 0.90 - 108.1 - R)
 / 14.5M = 9.8 kB at a reserve R of 10 GB, about twice the 4.94 kB of the
-layout. The same bytes give the DEP8 capacities with no further fitting
-(the reserve R is the one free input, swept below):
+layout. That bytes-per-token figure is itself fitted to this one anchor, and
+the reserve R stays a free input (swept below). With it fixed, the same
+bytes give the DEP8 capacities:
 B300 99.8M tokens (12.5M per rank), B200 24.2M. DRAM at the same bytes per
 token: 292M and 195M.
 
-`ws agentx predict --sweep`, one hour, seed 42:
+`ws agentx predict --sweep`, one hour, seed 42, `agentx` scenario
+(superseded by the evening section, which runs the recipe's scenario over
+ten seeds):
 
 | point | measured HBM / DRAM | predicted HBM / DRAM | range over the sweep |
 |---|---|---|---|
@@ -221,7 +226,8 @@ changed:
   a mean of 41%. The miss is about 32 points, not 25.
 - **73% needs ~34M tokens, not ~30M.** Capacity curve, B200, recipe
   scenario, mean of five seeds: 24.2M 41%, 28M 55%, 32M 67%, 36M 77%,
-  40M 83%, 48M 90%. 73% sits at ~34M, 1.4 times the 24.2M the bytes give:
+  40M 83%, 48M 90% (`ws agentx predict --point b200-196 --curve
+  24.2,28,32,34,36,40,48`; 34M gives 72.6%). 73% sits at ~34M, 1.4 times the 24.2M the bytes give:
   about 12 GB per GPU of room this model does not find.
 - **"Holds under every sweep" was too broad for B300.** It holds under
   every input that comes from the recipe or the bytes. Feeding the
@@ -231,18 +237,26 @@ changed:
   preempts the newest when a running one cannot grow; this model waits
   until the whole request fits. `greedy_admission` makes the head of the
   queue evict every idle prefix it would need at once, the most destructive
-  reading of vLLM's order. It changes nothing (42.1% either way; 0.1% more
-  tokens evicted): by the time a request waits, the idle prefixes are
+  reading of vLLM's order. It changes nothing (42.1% either way): by the
+  time a request waits, the idle prefixes are
   already gone and running contexts fill the cache. So admission order is
   not where the 32 points are. Recompute after preemption could count a
   request's own blocks as hits again if vLLM's `prompt_tokens_by_source`
   counts each scheduling; not checked.
 - Also fixed: the block size is read from the trace, not assumed to be 64;
   idle streams freed at the same instant (all the primers) are evicted in
-  insertion order, not by key; tests for warmup, recycling, spawn and join,
-  the capacity bound and block size. The module docstring now lists the
+  insertion order, not by key. Tests now cover warmup, primers, recycling,
+  spawn and join, the eviction tie-break, the capacity bound and block
+  size; a second reviewer's mutations (join removed, spawn gate removed,
+  primers dropped, tie-break reversed) each fail one. The module docstring now lists the
   simplifications with the direction each errs in: all three under-count
   hits.
+
+The warmup is long: with idle gaps removed, 10 requests per lane plus the
+drain take 21 minutes of simulated time on B300 and 29 on B200 before the
+measured hour opens (`window opens` in the output), mostly cold recycled
+sessions and decode at 45-60 tokens/s. The real run's warmup length is not
+published, so this is unchecked.
 
 Results, `ws agentx predict --sweep`, recipe scenario, one hour:
 
