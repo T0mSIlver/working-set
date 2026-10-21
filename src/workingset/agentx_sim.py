@@ -27,6 +27,10 @@ or the InferenceX recipe it names:
 - DRAM. vLLM's SimpleCPUOffloadConnector with eager (write-through) offload:
   every prompt block is also written to a per-rank CPU cache of
   `dram_tokens`, LRU. A prefix the HBM lost but the CPU kept is a DRAM hit.
+- Sliding-window retention (vllm #43447, `VLLM_PREFIX_CACHE_RETENTION_INTERVAL`
+  = 32768 in both recipes). A prefix resumes only at the previous prompt's
+  end, if that is still whole, or at a multiple of 32,768 tokens. A pull-back
+  or a trimmed tail therefore loses up to 32k tokens of hits.
 - Service time. Prefill of the missed tokens on a per-rank FIFO at
   `prefill_tps`, DRAM hits loaded at `dram_load_tps`, decode at
   `decode_tps` per sequence (MTP folded in). These only move the hit rate by
@@ -56,6 +60,11 @@ class Server:
     decode_tps: float = 50.0        # output tokens per second per sequence
     dram_load_tps: float = 2e6      # DRAM-hit tokens loaded per second, per rank
     max_seqs: int | None = None     # --max-num-seqs per rank (None = unlimited)
+    # VLLM_PREFIX_CACHE_RETENTION_INTERVAL (vllm #43447): a hybrid model with
+    # sliding-window layers keeps window tails only every `retention` tokens
+    # plus at the latest prompt boundary, so a prefix can be resumed there and
+    # nowhere else. None = every block boundary (non-hybrid behaviour).
+    retention: int | None = 32_768
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,7 @@ class Result:
     hbm_hit: int = 0
     dram_hit: int = 0
     ceiling_hit: int = 0            # infinite cache, same stream (what a cache could reuse)
+    ceiling_retained: int = 0       # infinite cache, but only at retained resume points
     requests: int = 0
     waits: int = 0                  # requests that queued for KV space
     wait_s: float = 0.0
@@ -89,6 +99,7 @@ class Result:
                 "dram_hit_rate": self.rate(self.dram_hit),
                 "overall_hit_rate": self.rate(self.hbm_hit + self.dram_hit),
                 "ceiling_hit_rate": self.rate(self.ceiling_hit),
+                "ceiling_retained_rate": self.rate(self.ceiling_retained),
                 "requests": self.requests, "prompt_tokens": self.prompt_tokens,
                 "requests_waited": self.waits, "mean_wait_s":
                 self.wait_s / self.requests if self.requests else 0.0,
@@ -115,6 +126,7 @@ class _Cache:
         self.stamp: dict[str, float] = {}         # stream -> last free time (idle only)
         self.heap: list[tuple[float, str]] = []   # (stamp, stream), lazy deletion
         self.pinned: dict[str, float] = {}        # stream -> tokens pinned while running
+        self.boundary: dict[str, float] = {}      # stream -> end of its last cached prompt
 
     def idle_tokens(self) -> float:
         return self.used - sum(self.pinned.values())
@@ -168,6 +180,7 @@ class _Cache:
         """`s` finished: keep `keep` tokens cached, free the rest."""
         total = self.pinned.pop(s)
         self.used -= total - keep
+        self.boundary[s] = keep
         if keep > 0:
             self.resident[s] = keep
             self.stamp[s] = now
@@ -183,6 +196,7 @@ class _Cache:
             self._evict(tokens - free, keep=s)
         self.used += tokens
         self.resident[s] = tokens
+        self.boundary[s] = tokens
         self.stamp[s] = now
         heapq.heappush(self.heap, (now, s))
 
@@ -209,6 +223,18 @@ class _Ev:
 
 def _floor(x: float, b: int) -> float:
     return (int(x) // b) * b
+
+
+def _usable(lcp: float, resident: float, boundary: float, retention: int | None) -> float:
+    """Tokens a request can resume from a cached prefix of `resident` tokens
+    whose last prompt ended at `boundary`, sharing `lcp` tokens with it."""
+    if resident <= 0:
+        return 0.0
+    if retention is None:
+        return min(lcp, resident)
+    if resident >= boundary and lcp >= boundary:
+        return boundary
+    return _floor(min(lcp, resident), retention)
 
 
 def _stream_end(s: Stream) -> float:
@@ -312,7 +338,8 @@ def simulate(traces: list[Trace], server: Server, replay: Replay = Replay()) -> 
             if server.max_seqs is not None and running_count[rk] >= server.max_seqs:
                 return
             lcp = _floor(min(r.lcp_prev * 64, max(r.tokens_in - 1, 0)), b)
-            hit = min(lcp, _floor(hbm[rk].lookup(st.key), b))
+            hit = _floor(_usable(lcp, hbm[rk].lookup(st.key),
+                                 hbm[rk].boundary.get(st.key, 0.0), server.retention), b)
             total = r.tokens_in + r.tokens_out
             if not hbm[rk].can_fit(st.key, hit, total):
                 return
@@ -323,9 +350,13 @@ def simulate(traces: list[Trace], server: Server, replay: Replay = Replay()) -> 
             run(st, r, rk, hit, lcp, now)
 
     def run(st: _StreamState, r, rk: int, hit: float, lcp: float, now: float) -> None:
+        prev_boundary = (_floor(st.stream.requests[st.idx - 1].tokens_in, b)
+                         if st.idx > 0 else 0.0)
         dhit = 0.0
         if server.dram_tokens:
-            dhit = max(min(lcp, _floor(dram[rk].lookup(st.key), b)) - hit, 0.0)
+            dhit = max(_floor(_usable(lcp, dram[rk].lookup(st.key),
+                                      dram[rk].boundary.get(st.key, 0.0), server.retention), b)
+                       - hit, 0.0)
         hbm[rk].pin(st.key, hit, r.tokens_in + r.tokens_out)
         if server.dram_tokens:
             dram[rk].store(st.key, _floor(r.tokens_in, b), now)
@@ -336,6 +367,8 @@ def simulate(traces: list[Trace], server: Server, replay: Replay = Replay()) -> 
             res.hbm_hit += int(hit)
             res.dram_hit += int(dhit)
             res.ceiling_hit += int(lcp)
+            res.ceiling_retained += int(_floor(_usable(lcp, float("inf"), prev_boundary,
+                                                       server.retention), b))
         miss = r.tokens_in - hit - dhit
         start = max(now, prefill_free_at[rk])
         done_prefill = start + miss / server.prefill_tps + dhit / server.dram_load_tps

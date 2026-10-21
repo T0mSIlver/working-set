@@ -103,12 +103,31 @@ say so. This is a question for the InferenceX note.
 Not added to `MODELS`: an explorer model needs its JS mirror, which is a
 deploy (AGENTS.md). The constants live in `agentx_sim.DSV4_PRO` for now.
 
+## 2026-10-21 — sliding-window retention, now modelled
+
+vllm #43447 (closed, merged into the image these runs used, per the B200
+script's comment): DeepSeek V4's sliding-window blocks, freed as each window
+moves, used to flush other requests' prefixes out of the free queue. The fix
+puts uncached blocks at the front of the queue, and
+`VLLM_PREFIX_CACHE_RETENTION_INTERVAL` keeps window tails only at the
+latest prompt boundary and every N tokens. With N = 32768 a request resumes
+at the previous prompt's end if it is still whole, else at the last 32k
+multiple below the shared prefix. The simulator applies that rule to both
+tiers and reports a second ceiling (`ceiling_retained_rate`): what an
+infinite cache could reuse under the rule.
+
+Two numbers from that PR worth keeping: on TP8 8xB300, the reported KV
+capacity was ~14.5x concurrency for 1M-token requests (~14.5M tokens), and
+an AgentX-style replay at concurrency 16 went from 0% to 74.3% hits with the
+fix. Related, open: vllm #47922 (a native CPU-only KV-cache simulator inside
+vLLM, no MLA/DSV4 support yet) and #55403 (opportunistic hits on masked
+blocks).
+
 ## Open questions
 
 1. What exactly is the 43M / 22M figure (sum of `GPU KV cache size` lines?).
-2. The sliding-window retention interval: does a prefix hit need a retained
-   window tail, so hits round down to 32k-token points except at a request's
-   own end?
+2. Retention interval: does SimpleCPUOffload store only reachable blocks, as
+   Mooncake does after vllm #44774? Assumed yes.
 3. Server tokens vs trace tokens: AIPerf re-tokenizes synthetic text with the
    DeepSeek tokenizer; assumed 1:1 here.
 4. Live replies are not reused (the next prompt carries the recorded reply);
