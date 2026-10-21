@@ -14,7 +14,11 @@ Three ways to price a capacity C (tokens), from most to least information:
   exact     `lru_curve`: one global LRU over prefix pages, a request's pages
             touched tail first (vLLM frees a request's blocks tail first, so
             its prefix is the last to go). A page hits at C if its stack
-            distance is under C/page and so is every earlier page's. One pass
+            distance is under C/page and so is every earlier page's. The
+            distance is taken when the page is touched, so it counts the
+            request's own tail pages touched just before: at a capacity
+            near one request's length a long prompt can push out its own
+            prefix (on the real traces, under 0.1 point). One pass
             gives the whole curve (Mattson), as KVSET does.
   denning   `denning_curve`: Denning's working set on the same pages. A page
             reused within T hits; T is where the mean number of distinct

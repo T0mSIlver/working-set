@@ -44,7 +44,9 @@ and InferenceX's server logs. A sandbox session was fetching them to branch
 ## Mooncake: the exact replay reproduces the paper
 
 Page 512 tokens (one Mooncake block). Fig 9's "% of the maximum hit rate at
-3M tokens":
+3M tokens" (only the tool-agent row was rerun with `ws traces` at review;
+the others and the arxiv comparison come from the same replay code run
+from a scratch script before the CLI existed):
 
 | trace | paper | exact LRU here |
 |---|---|---|
@@ -91,7 +93,11 @@ case for a benchmark that sends prompts round-robin, not what a live
 workload sees.
 
 **Fix**: the planner (characteristic time over the real gap distribution)
-stays within 4 points of exact at every capacity on all four traces. The
+stays within about 4 points of exact from 1M tokens up on all four traces
+(worst: B at 1M, 0.451 against 0.410). It is weaker at small capacity on a
+trace whose same-session reuse is small: on B at 0.3M it still reads the
+ceiling (0.451) where exact gives 0.358, because B's hits are mostly
+cross-session prefixes, which the planner counts as always resident. The
 proportional rule, which needs only the mean gap, fixes the collapse
 (coder 3M: 0.535 against 0.509) but overshoots by up to 9 points (A at 1M)
 because it treats every gap as exponential.
@@ -100,7 +106,9 @@ because it treats every gap as exponential.
 
 No block ids, so the planner alone, with reuse = the previous round's
 prompt when the new one is no shorter (a shorter one is a compaction).
-Capacity is not the limit at a provider; the cache TTL is:
+Capacity is not the limit at a provider; the cache TTL is. 16 of 4,265
+sessions repeat a round index and 12 rounds start before the round
+before them; their negative gaps count as hits (negligible here):
 
 | provider | rounds | measured | planner, 5 min TTL | 1 h TTL | no TTL |
 |---|---|---|---|---|---|
@@ -108,8 +116,8 @@ Capacity is not the limit at a provider; the cache TTL is:
 | Codex | 216,823 | 95.67% | 92.99% | 95.23% | 95.46% |
 
 **Codex: hit.** No TTL predicts 95.46% against 95.67% measured. Of the
-rounds after a gap over an hour, 29% of the reusable tokens still came back
-as cached.
+reusable tokens in rounds after a gap over an hour (gap between rounds'
+first timing events, compactions excluded), 17% still came back as cached.
 
 **Claude Code: between the two TTLs.** 5 min under-predicts by 3 points,
 1 h over-predicts by 2. Rounds after a 5 min to 1 h gap got 60% of their
@@ -117,7 +125,7 @@ reusable tokens from cache, consistent with a mix of 5-minute and 1-hour
 cache writes. The planner brackets it; it cannot say which writes used
 which TTL without the request headers, which TraceLab does not carry.
 
-## AgentX: the planner hits both published points
+## AgentX: the planner lands on both published points, at the chosen reserve
 
 `agentx_sim.planner`: per rank, `concurrency / ranks` sessions cycle through
 request (the trace's recorded `api_time`) and gap; running requests pin
@@ -127,6 +135,11 @@ prompt + output, idle prefixes hold the rest until T*.
 |---|---|---|---|---|
 | B300, conc 384 | 91.0% | **91.1%** | 230 s | 91.4% (90.5-92.2) |
 | B200, conc 196 | 73.0% | **72.9%** | 15 s | 41.2% (27.7-48.4) |
+
+The B200 match is at the 10 GB reserve per GPU used throughout; the
+reserve is not independently known and the planner moves with it (5 GB:
+76.9%, 15 GB: 41.8%), so B200 is one matching point on a knife edge, not a
+confirmation. B300 does not move (91.1%, 91.0%).
 
 The planner and the event simulator differ in one input: the planner
 pins tokens for the trace's recorded service times; the simulator pins them
