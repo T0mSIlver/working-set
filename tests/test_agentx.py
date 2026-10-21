@@ -92,3 +92,15 @@ def test_dram_tier_recovers_what_hbm_evicts():
     assert yes["dram_hit_rate"] > 0
     assert yes["overall_hit_rate"] > no["overall_hit_rate"]
     assert yes["overall_hit_rate"] <= yes["ceiling_hit_rate"] + 1e-12
+
+
+def test_retention_resumes_only_at_kept_points():
+    from workingset.agentx_sim import _usable
+    # append-only turn, prefix intact: resume at the previous prompt's end
+    assert _usable(100_000, 100_000, 100_000, 32_768) == 100_000
+    # pull-back to 90k: only the 65,536 checkpoint is kept
+    assert _usable(90_000, 100_000, 100_000, 32_768) == 65_536
+    # tail trimmed to 80k by eviction: the end is gone, back to 65,536
+    assert _usable(100_000, 80_000, 100_000, 32_768) == 65_536
+    # no retention policy: every block counts
+    assert _usable(90_000, 100_000, 100_000, None) == 90_000
