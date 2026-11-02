@@ -460,7 +460,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_test)
 
     p = sub.add_parser("report", help="re-print a run record's report")
-    p.add_argument("record", help="run.json written by `ws test --out`")
+    p.add_argument("record", help="run.json written by `ws test --out` "
+                                  "or `ws replay --out`")
     p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("hypotheses", help="list the H-* and what they need")
@@ -485,6 +486,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_traces(sub)
     from .aa_local import add_subparser as _add_aa
     _add_aa(sub)
+    from .bench import add_subparser as _add_replay
+    _add_replay(sub)
     return ap
 
 

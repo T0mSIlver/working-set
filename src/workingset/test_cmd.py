@@ -636,6 +636,13 @@ def cmd_test(args) -> int:
 
 
 def cmd_report(args) -> int:
+    import json
+    from pathlib import Path
+    from . import bench
+    d = json.loads(Path(args.record).read_text(encoding="utf-8"))
+    if bench.is_record(d):
+        bench.print_report(d)
+        return 0
     print_report(RunRecord.load(args.record))
     return 0
 
