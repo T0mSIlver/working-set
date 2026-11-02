@@ -735,8 +735,53 @@ export function maxUsersColdWait(mo, f, budget, think, subR, pct){
 // percentile, 95 under 'mean' (Python's [slo] percentile).
 export function stretchPct(pct){ return pctOf(pct) ?? 95; }
 
-// The ceilings in one unit, plus which binds. `warmUsers` is passed in
-// because the caller has already paid for the Monte-Carlo warm fill.
+/* ---- THE HIT RATE AT THE CONFIGURED USERS (model.py, issue #117) ----------
+   W, the user sessions one cache keeps warm, is not a ceiling. LRU keeps the
+   sessions that come back soonest (its characteristic time); with only a
+   think time known the gaps are taken as exponential, so with U live
+   sessions a share min(1, W'/U) of them comes back warm (W' = W/(1 - f0) the
+   sessions held, since W counts the reusable ones). The share of requests
+   that miss is then f(U) = max(f0, 1 - W/U): the configured rate up to the
+   knee W/(1 - f0), the users the cache cannot hold past it. Those misses are
+   cold requests like any other, so they reach the verdict through the cold
+   wait, the slowed share and saturation. The cyclic cliff (a round-robin
+   benchmark misses everything past W, docs/writeup.md) is the stated worst
+   case, not a limit.
+   Per replica GROUP: users and W both per group.
+   -------------------------------------------------------------------------- */
+// Twin of model.miss_share_at.
+export function missShareAt(users, warmUsers, f0){
+  if (!(users > 0) || warmUsers == null || !isFinite(warmUsers)) return f0;
+  return Math.max(f0, 1 - Math.max(warmUsers, 0)/users);
+}
+// Twin of model._capacity_limit: `atShare(f)` is a limit in users at a FIXED
+// miss share (the closed forms above); past the knee the limit is the root
+// of U = atShare(1 - W/U), found by bisection on the sign of atShare(f(U)) - U
+// (the metric at U users is inside its budget exactly while that is > 0).
+export function capacityLimit(atShare, warmUsers, f0){
+  const u0 = atShare(f0);
+  if (warmUsers == null || !isFinite(warmUsers) || f0 >= 1) return u0;
+  const w = Math.max(warmUsers, 0);
+  if (w <= 0) return atShare(1);          // nothing stays warm: all miss
+  const knee = w/(1 - f0);
+  if (u0 <= knee) return u0;
+  const g = u => atShare(1 - w/u);
+  let lo = knee, hi = isFinite(u0) ? u0 : 2*knee, bracketed = false;
+  for (let i = 0; i < 64; i++){           // past the knee the limit is finite
+    if (g(hi) <= hi){ bracketed = true; break; }   // unless no share reaches it
+    lo = hi; hi = 2*hi;
+  }
+  if (!bracketed) return Infinity;
+  for (let i = 0; i < 100; i++){          // 100 halvings, as Python
+    const mid = 0.5*(lo + hi);
+    if (g(mid) > mid) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
+// The ceilings in one unit, plus which binds. `warmUsers` (W, system-wide)
+// is passed in because the caller has already paid for the Monte-Carlo warm
+// fill; it is not a ceiling (above), it moves the other four.
 export function operatingPoint(model, topo, wl, cs, opts){
   const o = opts || {};
   const sla = o.sla ?? SPIKE_SLA_S, think = o.think ?? state.think;
@@ -754,25 +799,35 @@ export function operatingPoint(model, topo, wl, cs, opts){
   const pct = o.ttftPct ?? state.ttft_pct;
   const steps = o.steps || slowedSteps(model, topo, cs || contextStats(wl),
                                        o.chunk ?? prefillChunk(), o.floor);
-  // the five that decide (model.operating_point); the TTFT ceiling is
+  // W per group: the capacity misses are priced where they happen
+  const wG = o.warmUsers === undefined ? undefined : o.warmUsers / reps;
+  const coldWaitB = o.coldWait ?? state.cold_wait;
+  const slowedMax = (o.slowedPct ?? state.slowed_pct)/100;
+  // the four that decide (model.operating_point); the TTFT ceiling is
   // reported beside them as ttftCeiling and no longer binds
   const ceilings = {
-    cache:      o.warmUsers,
     decode:     o.decodeUsers,
-    cold_wait:  reps * maxUsersColdWait(mo, f, o.coldWait ?? state.cold_wait,
-                                        think, wl.sub_ratio, pct),
-    slowed:     reps * maxUsersSlowed(mo, steps, f,
-                                      (o.slowedPct ?? state.slowed_pct)/100,
-                                      think, wl.sub_ratio),
-    saturation: reps * maxUsersSaturation(mo, f, think, wl.sub_ratio),
+    cold_wait:  reps * capacityLimit(x => maxUsersColdWait(mo, x, coldWaitB,
+                                        think, wl.sub_ratio, pct), wG, f),
+    slowed:     reps * capacityLimit(x => maxUsersSlowed(mo, steps, x, slowedMax,
+                                        think, wl.sub_ratio), wG, f),
+    saturation: reps * capacityLimit(x => maxUsersSaturation(mo, x, think,
+                                        wl.sub_ratio), wG, f),
   };
-  const ttftCeiling = reps * maxUsersLatency(mo, f, sla, think, o.discipline,
-                                             wl.sub_ratio, pct);
-  let binding = 'cache';
+  let binding = 'decode';
   for (const k in ceilings) if (ceilings[k] < ceilings[binding]) binding = k;
   const limit = ceilings[binding];
   const users = o.users ?? state.users;
-  return { ceilings, ttftCeiling, steps, binding, limit, users,
+  const missShare = missShareAt(users/reps, wG, f);
+  let ttft;     // read by the harness only, and dear at a percentile: lazily
+  return { ceilings, steps, binding, limit, users,
+           get ttftCeiling(){
+             if (ttft === undefined)
+               ttft = reps * capacityLimit(x => maxUsersLatency(mo, x, sla, think,
+                                o.discipline, wl.sub_ratio, pct), wG, f);
+             return ttft;
+           },
+           warmUsers: o.warmUsers, missShare, hitRate: 1 - missShare,
            reqRate: requestRate(users, think),
            headroom: limit > 0 ? users/limit : Infinity,
            fits: users <= limit };

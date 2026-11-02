@@ -171,6 +171,9 @@ function harnessPredictions(op, model, wl, topo){
   const reps = topo.replicas || 1, perG = x => Math.round(x / reps);
   const P = {
     warm_capacity_p5: Math.round(lastWarmCur.p5 * (1 - p_sub(wl))),
+    // the share of requests that hit at the operating point (predict.py's
+    // cache_hit_rate): the cache is a hit rate now, not a ceiling
+    cache_hit_rate: Math.round(op.hitRate * 1e4) / 1e4,
     decode_ceiling_users: perG(op.ceilings.decode),
     // the TTFT ceiling, reported beside the verdict (prefill.js operatingPoint)
     latency_ceiling_users: perG(op.ttftCeiling),
@@ -216,7 +219,9 @@ function harnessHypotheses(P, model, topo, wl, reps){
   // on a single group, a fraction where DP splits an odd load across groups
   const opU = n => n % 1 ? fmt(n, 1) : fmt(n, 0);
   const out = [
-    `H-cache: >= ${fmt(P.warm_capacity_p5, 0)} user sessions stay warm (p5)${grp}. `
+    `H-cache: >= ${fmt(P.warm_capacity_p5, 0)} user sessions stay warm (p5)${grp}; `
+      + `past them the hit rate falls as ${fmt(P.warm_capacity_p5, 0)} / users, not to zero `
+      + `(a round-robin order is the worst case: every request misses). `
       + `A run bounds this below unless load reaches eviction.`,
     // capped: a different claim, not a smaller number (mirrors HDecode)
     P.decode_capped_by_max_num_seqs && P.decode_cap_below_bandwidth

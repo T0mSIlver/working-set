@@ -1,10 +1,10 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
          dcpSize, effective_bw, kvReplication, kv_pool_tokens, makeGrid, makeTopo, minTpFor,
          servableKv, state_traffic, tpEff, withKvDtype } from './config.js';
-import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, coldRequestSeconds,
-         contextStats, liveThink, liveTurn, maxUsersLatency, maxUsersSaturation, mfuEff,
-         missContextSeconds, prefillContextSeconds, prefillSeconds,
-         prefillServiceMoments, requestRate, serverRate, spikeMetrics,
+import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, capacityLimit, coldRequestSeconds,
+         contextStats, liveThink, liveTurn, maxUsersColdWait, maxUsersLatency, maxUsersSaturation,
+         maxUsersSlowed, mfuEff, missContextSeconds, missShareAt, prefillContextSeconds, prefillSeconds,
+         prefillServiceMoments, requestRate, serverRate, slowedSteps, spikeMetrics,
          steadyDecodePoint } from './prefill.js';
 import { seedRng } from './mathlib.js';
 import { decodeCurves, warmCapacity } from './capacity.js';
@@ -515,6 +515,37 @@ export function prefillSampledChecks(){
       "the latency ceiling carries the same (1+r) as saturation");
     console.assert(approx(serverRate(64, 30, 0.10), REF_REQ_RATE*1.10, 0.01),
       "serverRate must be the (1+r)-scaled main-agent rate");
+  }
+  // ---- the hit rate at the configured users (model.py, issue #117) ----
+  // f(U) = max(f0, 1 - W/U): the configured rate up to W/(1 - f0), the users
+  // the cache cannot keep warm past it; no W is the unbounded cache
+  console.assert(missShareAt(100, 400, 0.01) === 0.01
+                 && Math.abs(missShareAt(800, 400, 0.01) - 0.5) < 1e-12
+                 && missShareAt(800, undefined, 0.01) === 0.01
+                 && missShareAt(5, 0, 0.01) === 1,
+    "miss share past the warm pool must be max(f0, 1 - W/U)");
+  {
+    const f0 = wlRef.invalidation;
+    const mo = prefillServiceMoments(CONFIG.MODELS["27B"], tp2H, wlRef, csRef);
+    const steps = slowedSteps(CONFIG.MODELS["27B"], tp2H, csRef, PREFILL_CHUNK, 40);
+    const W = 150, knee = W/(1 - f0);
+    const lims = [x => maxUsersColdWait(mo, x, 5, 30, 0.10, '95'),
+                  x => maxUsersSlowed(mo, steps, x, 0.15, 30, 0.10),
+                  x => maxUsersSaturation(mo, x, 30, 0.10)];
+    for (const at of lims){
+      const free = at(f0), u = capacityLimit(at, W, f0);
+      console.assert(u <= free && (u === free) === (free <= knee) && u >= knee - 1e-9,
+        "a limit moves only when it sat past the knee, and lands past it");
+      if (u < free)
+        console.assert(Math.abs(at(missShareAt(u, W, f0))/u - 1) < 1e-9,
+          "past the knee a limit is the fixed point U = at(f(U))");
+      console.assert(capacityLimit(at, Infinity, f0) === free,
+        "an unbounded cache leaves every limit at its configured-share value");
+    }
+    // slowed generation's closed form past the knee: W + K, K/f0 the old one
+    const K = lims[1](f0)*f0, uS = capacityLimit(lims[1], W, f0);
+    console.assert(Math.abs(uS - Math.min(K/f0, W + K)) < 1e-6*uS,
+      "slowed limit past the knee must be W + K");
   }
   // The planner's two SAMPLED ceilings (cache, decode) are pinned against
   // section 7's published table in scenario_model.py's self-checks, not here:

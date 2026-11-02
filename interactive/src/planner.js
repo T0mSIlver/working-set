@@ -1,7 +1,7 @@
 import { PREFILL_MFU_HI, PREFILL_MFU_LO } from './config.js';
-import { SPIKE_SLA_S, decodeFloor, maxUsersColdWait, maxUsersSaturation, maxUsersSlowed, prefillChunk,
-         prefillServiceMoments, serverRate, slowedShare, slowedSteps, stretchPct, coldWait,
-         idleColdTtftTable } from './prefill.js';
+import { SPIKE_SLA_S, capacityLimit, decodeFloor, maxUsersColdWait, maxUsersSaturation, maxUsersSlowed,
+         missShareAt, prefillChunk, prefillServiceMoments, serverRate, slowedShare, slowedSteps,
+         stretchPct, coldWait, idleColdTtftTable } from './prefill.js';
 import { clip } from './mathlib.js';
 import { p_sub } from './workload.js';
 import { warmCapacity } from './capacity.js';
@@ -17,16 +17,18 @@ import { paintTiles, pendingLoadTiles } from './render.js';
 // orange and red all collapse to the same olive under deuteranopia, so the
 // ramp is blue / orange / purple / grey, and every line also carries its own
 // DASH pattern — hue is never the only channel that distinguishes them.
+// `cache` keeps its blue for the hit-rate readouts: it is no longer a ceiling
+// (issue #117), its misses move the other four.
 export const PLANNER_COLORS = () => ({
   cache: cssv('--s1'), decode: cssv('--s4'),
   cold_wait: cssv('--s2'), slowed: cssv('--s3'), saturation: cssv('--muted'),
 });
-const PLANNER_DASH = { cache:'', decode:'7 3', cold_wait:'2 3', slowed:'5 2 1 2',
+const PLANNER_DASH = { decode:'7 3', cold_wait:'2 3', slowed:'5 2 1 2',
                        saturation:'11 4' };
 export const PLANNER_LABEL = { cache:'cache', decode:'decode', cold_wait:'cold wait',
                         slowed:'slowed generation', saturation:'saturation' };
 // the ceilings in the verdict (prefill.js operatingPoint), in display order
-export const CEILING_KEYS = ['cache', 'decode', 'cold_wait', 'slowed', 'saturation'];
+export const CEILING_KEYS = ['decode', 'cold_wait', 'slowed', 'saturation'];
 const ceilingText = value => hasHeadcount()
   ? `${fmt(value,0)} sessions ≈ ${fmt(peopleFromSessions(value),0)} people`
   : fmt(value,0);
@@ -76,7 +78,10 @@ export function warmUsersCurve(model, topo, ram, iter, budget, wl0, fNow, warmNo
   };
 }
 
-// Everything charts F and G draw, for the CURRENT configuration.
+// Everything charts F and G draw, for the CURRENT configuration. At each
+// configured miss rate f the warm pool W = warmFn(f) prices the capacity
+// misses past it (prefill.js capacityLimit), so the latency ceilings bend
+// down to W where the pool is what runs out.
 export function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
   const fs = [];
   // 1-point-per-percent grid out to the current axis end — renderSpikeChart
@@ -86,24 +91,29 @@ export function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
   // the ceilings are per replica GROUP, so the load one group sees is the
   // system population divided by the replica count
   const perGroup = u => u * reps;
-  const series = { cache:[], decode:[], cold_wait:[], slowed:[], saturation:[], env:[], binding:[] };
+  // `warm` rides along as a reference, not a ceiling: the round-robin worst
+  // case, where every request past W misses (docs/writeup.md)
+  const series = { decode:[], cold_wait:[], slowed:[], saturation:[], env:[], binding:[],
+                   warm:[] };
   const steps = slowedSteps(model, topo, cs, prefillChunk());
   const spike = { mid:[], lo:[], hi:[] };
   const moLo = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), PREFILL_MFU_LO);
   const moHi = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), PREFILL_MFU_HI);
   for (const f of fs){
+    const w = warmFn(f);                  // per group
     const c = {
-      cache: warmFn(f) * reps,
       decode: decodeUsers * reps,
-      cold_wait: perGroup(maxUsersColdWait(mo, f, state.cold_wait, think,
-                                           wl.sub_ratio, state.ttft_pct)),
-      slowed: perGroup(maxUsersSlowed(mo, steps, f, state.slowed_pct/100, think,
-                                      wl.sub_ratio)),
-      saturation: perGroup(maxUsersSaturation(mo, f, think, wl.sub_ratio)),
+      cold_wait: perGroup(capacityLimit(x => maxUsersColdWait(mo, x, state.cold_wait, think,
+                                           wl.sub_ratio, state.ttft_pct), w, f)),
+      slowed: perGroup(capacityLimit(x => maxUsersSlowed(mo, steps, x, state.slowed_pct/100,
+                                        think, wl.sub_ratio), w, f)),
+      saturation: perGroup(capacityLimit(x => maxUsersSaturation(mo, x, think, wl.sub_ratio),
+                                         w, f)),
     };
-    let bind='cache'; for (const k in c) if (c[k] < c[bind]) bind = k;
+    let bind='decode'; for (const k in c) if (c[k] < c[bind]) bind = k;
     for (const k in c) series[k].push(c[k]);
-    series.env.push(c[bind]); series.binding.push(bind);
+    series.env.push(c[bind]); series.binding.push(bind); series.warm.push(w * reps);
+    // chart F's x is the share that MISSES, whatever makes it miss
     const rate = serverRate(state.users, think, wl.sub_ratio)/reps;
     spike.mid.push(bStar(mo,   f, sla, rate));
     spike.lo .push(bStar(moLo, f, sla, rate));
@@ -150,12 +160,13 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
             + ` — ${fmt(op.headroom*100,0)}% of the limit`
           : `you are running ${fmt(op.users,0)} — ${fmt(op.headroom*100,0)}% of the limit`)
           + ` · next: ${others}`
+          + ` · cache hit rate ${fmt(op.hitRate*100, op.hitRate > 0.995 ? 1 : 0)}% at this load`
         : `${PLANNER_LABEL[bind]} is over its limit even for one user — unachievable at any load`
           + ` · next: ${others}`,
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
      tip:hasHeadcount()
-       ? `All five ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. cache = the warm p5 population that fits the pool; decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%.`
-       : `All five ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. cache = the warm p5 population that fits the pool; decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
+       ? `All four ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%. The cache is not a ceiling: past the warm p5 population the sessions it cannot keep warm miss, and those cold requests count in the other three.`
+       : `All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%. The cache is not a ceiling: past the warm p5 population the users it cannot keep warm miss (the hit rate falls as warm ÷ users, it does not fall off), and those cold requests count in the other three. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},
     {hero:true, k:'Cold-spike tolerance B*', v:fmt(op.bstar,1), u:'misses at once',
      sub:`MFU 30–55% band: ${fmt(op.bstarLo,1)}–${fmt(op.bstarHi,1)}`
         + ` · zero at f* ${op.fstar>10?'> 1,000':fmt(op.fstar*100,0)+'%'}`
@@ -218,7 +229,7 @@ export function renderBindingChart(d, op){
   const grid=cssv('--grid'), axis=cssv('--axis'), muted=cssv('--muted');
   const surface=cssv('--surface'), text=cssv('--text');
   const C = PLANNER_COLORS();
-  const all = [...CEILING_KEYS.flatMap(k => d[k]), op.users]
+  const all = [...CEILING_KEYS.flatMap(k => d[k]), ...d.warm, op.users]
                 .filter(v=>isFinite(v) && v>0);
   const yLo = Math.max(1, Math.min(...all, op.users)*0.6);
   const yHi = Math.max(...all)*1.25;
@@ -242,6 +253,17 @@ export function renderBindingChart(d, op){
   // line it covered whichever series was binding — i.e. always hid the one
   // the reader came for
   g+=`<path d="${path(d.env)}" fill="none" stroke="${text}" stroke-width="7" stroke-linejoin="round" opacity="0.14"/>`;
+  // the warm pool, thin and dotted under the ceilings: not a limit any more
+  // (its misses move the four), but the stated worst case of a benchmark that
+  // sends prompts round-robin, which misses every request past it
+  g+=`<path d="${path(d.warm)}" fill="none" stroke="${C.cache}" stroke-width="1.3" stroke-dasharray="1 3" stroke-linecap="round"/>`;
+  {
+    // direct-labelled at its right terminus, like the ceilings below (the
+    // legend says what it is; a long label here collides with theirs)
+    const v = d.warm[d.warm.length-1];
+    if (isFinite(v) && v > 0)
+      g+=`<text class="dlabel" x="${mL+pw-3}" y="${sy(clip(v,yLo,yHi))-5}" text-anchor="end" fill="${C.cache}">warm p5</text>`;
+  }
   for (const k of CEILING_KEYS)
     g+=`<path d="${path(d[k])}" fill="none" stroke="${C[k]}" stroke-width="2" stroke-linejoin="round"`
       +`${PLANNER_DASH[k]?` stroke-dasharray="${PLANNER_DASH[k]}"`:''}/>`;
@@ -273,10 +295,10 @@ export function renderBindingChart(d, op){
   g+=`<text class="dlabel" x="${X0+(flip?-9:9)}" y="${Y0+4}" text-anchor="${flip?'end':'start'}" fill="${col0}">`
     +`${over?'≥ ':''}${fmt(op.users,0)} ${hasHeadcount()?'sessions':'users'}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">cache-miss rate f</text>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">configured cache-miss rate f</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">max concurrent ${hasHeadcount()?'sessions':'users'} (log)</text>`;
   document.getElementById('chartG').innerHTML =
-    svgEl(g,W,H,`The five ceilings in max concurrent ${hasHeadcount()?'sessions':'users'} versus the cache-miss rate`);
+    svgEl(g,W,H,`The four ceilings in max concurrent ${hasHeadcount()?'sessions':'users'} versus the configured cache-miss rate`);
   bindingGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
@@ -319,11 +341,13 @@ export function renderSpikeChart(d, others){
   const Y1=sy(1);
   g+=`<line x1="${mL}" y1="${Y1}" x2="${mL+pw}" y2="${Y1}" stroke="${crit}" stroke-width="1.4" stroke-dasharray="4 3"/>`;
   g+=`<text class="dlabel" x="${mL+pw-4}" y="${Y1-6}" text-anchor="end" fill="${crit}">cannot absorb a single simultaneous miss</text>`;
-  // your miss rate
-  const f0=clip(state.inval/100,0,fMax), i0=Math.round(f0*100);
-  const X0=sx(f0), Y0=sy(clip(d.spike.mid[i0],yLo,yHi));
+  // the share that misses at your load: the configured rate, or more once
+  // the users outgrow the warm pool (d.fNow / d.bNow, set by the planner)
+  const f0=clip(d.fNow ?? state.inval/100,0,fMax), i0=Math.round(f0*100);
+  const b0 = d.bNow ?? d.spike.mid[i0];
+  const X0=sx(f0), Y0=sy(clip(b0,yLo,yHi));
   g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${s1}" stroke="${surface}" stroke-width="1.5"/>`;
-  g+=`<text class="dlabel" x="${X0+9}" y="${Y0+4}" text-anchor="start" fill="${s1}">B* ${fmt(d.spike.mid[i0],1)}</text>`;
+  g+=`<text class="dlabel" x="${X0+9}" y="${Y0+4}" text-anchor="start" fill="${s1}">B* ${fmt(b0,1)}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">standing cache-miss rate f</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">B* — simultaneous misses (log)</text>`;
@@ -332,7 +356,7 @@ export function renderSpikeChart(d, others){
   spikeGeom = { W,H,mL,mR,mT,pw,ph, d, sx, sy };
 }
 
-/* ---- The five ceilings, side by side -------------------------------------
+/* ---- The four ceilings, side by side -------------------------------------
    Act 3's thesis is "every constraint in one unit, so the binding one is
    simply the smallest". Rendering that as a comma-separated sub-line asked the
    reader to do the comparison in their head; a shared linear axis does it for
@@ -367,13 +391,13 @@ export function renderCeilingBars(op){
       +`${bind?' font-weight="700"':''}>${isFinite(v)?ceilingText(v):'—'}`
       +`${k==='decode'&&op.decodeCapped?` (max_num_seqs ${fmt(op.mns,0)} at p99)`:''}${bind?' ← binds':''}</text>`;
   });
-  // the load you asked for, across all five
+  // the load you asked for, across all four
   const X = sx(Math.min(op.users, top));
   g+=`<line x1="${X}" y1="${mT-4}" x2="${X}" y2="${mT+rowH*keys.length+2}" stroke="${op.fits?text:crit}" stroke-width="2" stroke-dasharray="4 3"/>`;
   g+=`<text class="dlabel" x="${X+6}" y="${mT+rowH*keys.length+14}" text-anchor="start" fill="${op.fits?text:crit}">your load ${fmt(op.users,0)}${op.fits?'':' — over'}</text>`;
   box.innerHTML = svgEl(g, W, H, hasHeadcount()
-    ? 'The five concurrent-session ceilings with people equivalents and the current load marked'
-    : 'The five ceilings compared in max concurrent users, with the current load marked');
+    ? 'The four concurrent-session ceilings with people equivalents and the current load marked'
+    : 'The four ceilings compared in max concurrent users, with the current load marked');
 }
 
 /* ---- Slowed generation and cold request wait against load (act 2, 'I'):
@@ -427,14 +451,18 @@ export function renderLatencyCharts(op, model, topo, wl, mo){
   const xMax = Math.max(8, op.users*1.3, fin.length ? Math.max(...fin)*1.5 : 0);
   const N = 60, us = Array.from({length:N+1}, (_,i) => xMax*i/N);
   const rateAt = u => serverRate(u, state.think, wl.sub_ratio)/reps;
+  // the miss share at each load: past the warm pool the extra users miss,
+  // which is where both curves turn up (prefill.js missShareAt, per group)
+  const wG = op.warmUsers === undefined ? undefined : op.warmUsers/reps;
+  const fAt = u => missShareAt(u/reps, wG, f);
   const waitStat = state.ttft_pct === 'mean' ? 'mean' : `p${state.ttft_pct}`;
   const C = PLANNER_COLORS();
-  const sPct = us.map(u => [u, 100*slowedShare(mo, op.steps, f, rateAt(u))]);
+  const sPct = us.map(u => [u, 100*slowedShare(mo, op.steps, fAt(u), rateAt(u))]);
   latencyPanel('chartI1', 'Share of generation time slowed versus concurrent users, with its limit and the current load',
     'generation slowed, % of time', sPct, Math.min(100, Math.max(state.slowed_pct*2.5, op.slowedNow*130, 10)),
     state.slowed_pct, op.users, xMax, C.slowed, v => `${fmt(v,0)}%`, `${fmt(op.slowedNow*100,1)}%`);
   const wMax = Math.max(state.cold_wait*2.5, 10);
-  const wS = us.map(u => [u, coldWait(mo, f, rateAt(u), state.ttft_pct)]);
+  const wS = us.map(u => [u, coldWait(mo, fAt(u), rateAt(u), state.ttft_pct)]);
   latencyPanel('chartI2', 'Cold request wait versus concurrent users, with its limit and the current load',
     `cold request wait (${waitStat}), s`, wS, wMax, state.cold_wait, op.users, xMax, C.cold_wait,
     v => `${fmt(v,0)} s`, isFinite(op.coldWaitNow) ? `${fmt(op.coldWaitNow,1)} s` : '∞');

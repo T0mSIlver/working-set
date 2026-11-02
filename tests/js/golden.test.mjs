@@ -162,6 +162,12 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
   const missing = new Set();     // quantities the JS driver does not produce
   let compared = 0, declined = 0, censoredLower = 0;
   const WARM_COUNTS = new Set(['warm_p5_all', 'max_users_cache']);
+  // ...and what is priced off that count past the warm pool (issue #117): the
+  // hit rate and the four capacity-aware ceilings rise with W, so a W that is
+  // a lower bound makes each of them one too
+  const WARM_BOUNDED = new Set(['cache_hit_rate', 'max_users_latency',
+                                'max_users_saturation', 'max_users_slowed',
+                                'max_users_cold_wait']);
 
   for (const vec of doc.vectors){
     let js;
@@ -190,8 +196,9 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
       // reference must sit at or above it, within the band. The explorer's
       // cap is a UI cost guard, not a modelling difference, and a count past
       // it (DSv4.1-Flash at 890 B/token holds 10^5 sessions on 8xB300) binds
-      // nothing the page decides — the users slider ends at 1,024.
-      if (js._warm_censored && WARM_COUNTS.has(q)){
+      // nothing the page decides — the users slider ends at 1,024. The same
+      // holds for what WARM_BOUNDED prices off it: past a knee of 10^4+ users.
+      if (js._warm_censored && (WARM_COUNTS.has(q) || WARM_BOUNDED.has(q))){
         censoredLower++;
         rel = py >= jsv * (1 - tol) ? 0 : rel;
       }
@@ -268,8 +275,8 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
     .map((e, i) => [e, i]).filter(([, i]) => !used.has(i));
   if (!QUIET){
     console.log(`\n  ${doc.vectors.length} vectors, ${compared} comparisons, `
-      + `${declined} declined by the fixture, ${censoredLower} censored warm `
-      + `fills compared as lower bounds, ${excused.length} allowlisted, `
+      + `${declined} declined by the fixture, ${censoredLower} comparisons on `
+      + `censored warm fills read as lower bounds, ${excused.length} allowlisted, `
       + `${failures.length} failing`
       + (NO_ALLOWLIST ? '   [GOLDEN_NO_ALLOWLIST=1: allowlist ignored]' : ''));
     if (unused.length && !NO_ALLOWLIST)
