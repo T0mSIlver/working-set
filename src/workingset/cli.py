@@ -85,12 +85,20 @@ def cmd_predict(args) -> int:
         print(f"population: {w.headcount:,} people x {w.peak_active_share:g} active x "
               f"{w.sessions_per_active_user:.1f} sessions = {_fmt_count(sessions)} sessions "
               f"-> {_fmt_count(users)} /group on DP{d.replicas}")
+    # the cache: a hit rate at this load, not a ceiling (issue #117). Past
+    # the knee warm / (1 - miss_rate) the extra users' requests miss, and the
+    # latency limits below price them as cold requests
+    knee = p.warm_capacity_p5 / (1 - w.miss_rate) if w.miss_rate < 1 else 0.0
+    print(f"cache: {_fmt(p.warm_capacity_p5)} users stay warm (p5); at "
+          f"{users:g} users {p.cache_hit_rate:.1%} of requests hit"
+          + (f" (past {knee:,.0f} users the extra requests miss)"
+             if users <= knee else
+             f" ({users - p.warm_capacity_p5:,.0f} users more than stay warm)"))
     print()
     slo = cfg.slo
     stat = ("mean" if slo.ttft_statistic == "miss_mean"
             else f"p{slo.percentile}")
-    rows = [("cache", "cache (warm p5, users)", p.warm_capacity_p5),
-            ("decode", "decode (max_num_seqs at p99)"
+    rows = [("decode", "decode (max_num_seqs at p99)"
              if p.decode_capped_by_max_num_seqs
              else "decode (users at floor)", p.decode_ceiling_users),
             ("cold_wait", f"cold request waits {slo.cold_wait_budget_s:g} s ({stat})",
@@ -110,6 +118,9 @@ def cmd_predict(args) -> int:
         print(f"  (per replica group; x{p.replicas} under balanced routing)")
     print(f"  not in the verdict: {stat} TTFT reaches {slo.ttft_budget_s:g} s "
           f"at {_fmt(p.latency_ceiling_users)} users")
+    print(f"  not in the verdict: a benchmark that sends prompts round-robin "
+          f"misses every request past {_fmt(p.warm_capacity_p5)} users "
+          "(the cyclic worst case, docs/writeup.md)")
     print()
     print(f"  req/s main {p.req_rate_main}  prefill duty {p.prefill_duty:.1%}  "
           f"TTFT miss {_fmt(p.ttft_miss_s)} s  hit {_fmt(p.ttft_hit_s)} s  "

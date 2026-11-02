@@ -10,8 +10,11 @@ Conventions (match the explorer's planner):
   * misses are priced WITH the per-pass overhead (`per_pass_overhead=True`),
     the explorer's convention since 2026-08-02; docs/scenarios.md's tables
     keep the roofline convention (False) and differ in the last digits.
-  * every ceiling is PER REPLICA GROUP; the `system` block multiplies cache
-    and decode by the replica count (balanced routing only).
+  * every ceiling is PER REPLICA GROUP; the `system` block multiplies the
+    warm counts and decode by the replica count (balanced routing only).
+  * the cache is not a ceiling (issue #117): past the warm p5 the extra users'
+    requests miss (model.miss_share_at), and the latency ceilings and every
+    at-load figure below are priced at that miss share.
   * Monte-Carlo ceilings (cache, decode) use a flat `n_iter`, the explorer
     scales its iteration counts per probe: same conventions, different
     sampling, so they agree to sampling noise, not to the last digit.
@@ -27,15 +30,19 @@ from .config import RunConfig
 
 @dataclass(frozen=True)
 class Predictions:
-    # ceilings, users per replica group
-    warm_capacity_p5: int           # user-class warm sessions, p5 = the cache ceiling
+    # the cache, per replica group. Not a ceiling: past warm_capacity_p5 the
+    # hit rate falls as warm / users and the misses feed the latency limits.
+    # warm_capacity_p5 is also the stated worst case of a round-robin
+    # benchmark, whose hit rate collapses past it (docs/writeup.md)
+    warm_capacity_p5: int           # user-class warm sessions, p5
     cache_ceiling_users: int        # every reusable session (users + subagents), p5
+    # ceilings, users per replica group
     decode_ceiling_users: int
     # where the p-th TTFT reaches [slo] ttft_budget_s; reported, not in the
     # verdict (model.operating_point)
     latency_ceiling_users: int
     saturation_ceiling_users: int   # 999999 when never binds at this rate
-    binding_constraint: str
+    binding_constraint: str         # decode, cold_wait, slowed or saturation
     predicted_limit_users: int
     # The operating point, per replica group — the LOAD the queue figures
     # below (req_rate_main, prefill_duty, ttft_*, bstar_misses) were priced at,
@@ -45,6 +52,9 @@ class Predictions:
     # probes round it where they must actually open sessions.
     operating_point_users: float
     req_rate_main: float            # main-agent req/s at the operating point
+    # share of requests served from cache at the operating point: 1 - the
+    # larger of the configured miss rate and 1 - warm / users
+    cache_hit_rate: float
     prefill_duty: float
     ttft_miss_s: float              # mean TTFT of a forced miss (FCFS)
     ttft_hit_s: float
@@ -147,8 +157,8 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
         op["fits"] = users <= op["limit"]
 
-    # op["ceilings"]["cache"] is already the user-class warm p5 (the plan
-    # column); the all-classes count is what the pool physically holds
+    # op["warm_users"] is the user-class warm p5 (the plan column); the
+    # all-classes count is what the pool physically holds
     draw = int(4000 + M.kv_pool_tokens(m, t) / 8000)
     p5_all, _, _ = M.warm_capacity(m, t, wl, ram_gib=ram, n_iter=n_iter,
                                    draw=draw, seed=seed, which="all")
@@ -181,26 +191,29 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 
     rate = op["req_rate"]                       # main-agent req/s
     rate_total = rate * (1.0 + wl.sub_ratio)    # what the prefill server sees
-    duty = M.prefill_duty(m, t, wl, rate_total, chunk, w.warm_turn_tokens,
+    # every at-load figure is priced at the miss share at this load: the
+    # configured rate, or more once the users outgrow the warm pool
+    wl_u = M.workload_at(wl, users, op["warm_users"])
+    duty = M.prefill_duty(m, t, wl_u, rate_total, chunk, w.warm_turn_tokens,
                           cal.mfu, per_pass_overhead=True)
     if duty >= 1.0:
         ttft_miss = ttft_hit = math.inf
     else:
-        ttft_miss = M.prefill_ttft_seconds(m, t, wl, rate_total, chunk,
+        ttft_miss = M.prefill_ttft_seconds(m, t, wl_u, rate_total, chunk,
                                            w.warm_turn_tokens, cal.mfu, "cold",
                                            per_pass_overhead=True)
-        ttft_hit = M.prefill_ttft_seconds(m, t, wl, rate_total, chunk,
+        ttft_hit = M.prefill_ttft_seconds(m, t, wl_u, rate_total, chunk,
                                           w.warm_turn_tokens, cal.mfu, "warm",
                                           per_pass_overhead=True)
-    bstar = M.spike_tolerance(m, t, wl, slo.ttft_budget_s, rate_total, chunk,
+    bstar = M.spike_tolerance(m, t, wl_u, slo.ttft_budget_s, rate_total, chunk,
                               w.warm_turn_tokens, cal.mfu, per_pass_overhead=True)
 
     steps = M.slowed_steps(m, t, wl, chunk, slo.itl_floor_tok_s, cal.mfu)
-    share = M.slowed_share(m, t, wl, rate_total, chunk, slo.itl_floor_tok_s,
+    share = M.slowed_share(m, t, wl_u, rate_total, chunk, slo.itl_floor_tok_s,
                            cal.mfu, per_pass_overhead=True)
     stretch = M.slowed_stretch(m, t, wl, chunk, float(slo.percentile),
                                slo.itl_floor_tok_s, cal.mfu)
-    cold_wait = M.cold_wait_seconds(m, t, wl, rate_total, chunk,
+    cold_wait = M.cold_wait_seconds(m, t, wl_u, rate_total, chunk,
                                     w.warm_turn_tokens, cal.mfu,
                                     per_pass_overhead=True, percentile=pct)
     idle = M.idle_cold_ttft_table(m, t, chunk, dep.max_model_len, cal.mfu)
@@ -219,7 +232,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
                                      else float(resident95)))
 
     return Predictions(
-        warm_capacity_p5=_int(op["ceilings"]["cache"]),
+        warm_capacity_p5=_int(op["warm_users"]),
         cache_ceiling_users=_int(p5_all),
         decode_ceiling_users=_int(op["ceilings"]["decode"]),
         latency_ceiling_users=_int(op["ttft_ceiling"]),
@@ -228,6 +241,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         predicted_limit_users=_int(op["limit"]),
         operating_point_users=float(users),
         req_rate_main=round(rate, 4),
+        cache_hit_rate=round(op["hit_rate"], 4),
         prefill_duty=round(duty, 4),
         ttft_miss_s=round(ttft_miss, 3) if math.isfinite(ttft_miss) else math.inf,
         ttft_hit_s=round(ttft_hit, 3) if math.isfinite(ttft_hit) else math.inf,

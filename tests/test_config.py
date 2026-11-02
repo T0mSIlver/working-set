@@ -422,10 +422,15 @@ def test_optional_float_is_type_checked_too():
 def test_predict_reference_row():
     """27B / 4xH200 TP4 / chunk 4096 at the measured workload: the explorer's
     reference example (the harness template's predictions block) — cache 403,
-    TTFT 500 (all-request p95; 499 for a miss's mean), cold wait 456, slowed
-    generation 242, saturation 509, miss TTFT 0.92 s, B* 9.8. These are the
-    explorer's per-pass-overhead convention; pinned so a convention drift
-    (roofline vs explorer) fails here, not in a user's report."""
+    TTFT 412 (all-request p95), cold wait 409, slowed generation 242,
+    saturation 413, miss TTFT 0.92 s, B* 9.8. These are the explorer's
+    per-pass-overhead convention; pinned so a convention drift (roofline vs
+    explorer) fails here, not in a user's report.
+
+    Issue #117 moved three of them. At the configured 1% they sat past the
+    knee W / (1 - f) = 407 users (TTFT 500, cold wait 456, saturation 509);
+    past it the users the cache cannot keep warm miss, so each now binds
+    just past the knee. Slowed generation sits inside it and did not move."""
     cfg = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
                                               "tensor_parallel": 4,
                                               "max_num_batched_tokens": 4096}})
@@ -434,13 +439,14 @@ def test_predict_reference_row():
     # share binds first (issue #94)
     assert p.binding_constraint == "slowed"
     assert 395 <= p.warm_capacity_p5 <= 411        # 403, Monte Carlo
-    assert p.latency_ceiling_users == 500
-    assert p.cold_wait_ceiling_users == 456
+    assert p.latency_ceiling_users == 412
+    assert p.cold_wait_ceiling_users == 409
     assert p.slowed_ceiling_users == 242
-    assert p.saturation_ceiling_users == 509
+    assert p.saturation_ceiling_users == 413
+    assert p.cache_hit_rate == 0.99                 # 64 users, all inside W
     assert abs(p.ttft_miss_s - 0.916) < 0.005
     assert abs(p.bstar_misses - 9.82) < 0.02
-    assert p.predicted_limit_users == min(p.warm_capacity_p5, p.decode_ceiling_users,
+    assert p.predicted_limit_users == min(p.decode_ceiling_users,
                                           p.cold_wait_ceiling_users,
                                           p.slowed_ceiling_users,
                                           p.saturation_ceiling_users)
@@ -448,6 +454,41 @@ def test_predict_reference_row():
     assert math.isfinite(p.ttft_miss_s) and p.ttft_miss_s > p.ttft_hit_s
     assert p.bstar_misses > 0
     assert p.replicas == 1
+
+
+def test_predict_prices_the_load_past_the_warm_pool():
+    """Issue #117: past the warm p5 the cache is a hit rate, not a cliff. At
+    twice W half the requests miss, and every at-load prefill figure is the
+    configured-rate figure at that miss share; the verdict holds no cache
+    row, and the round-robin worst case is printed beside it."""
+    base = {"deployment": {"model": "27B", "gpu": "H200", "tensor_parallel": 4}}
+    w = predict(RunConfig.from_dict(base), n_iter=200).warm_capacity_p5
+    cfg = RunConfig.from_dict({**base, "workload": {"users": 2 * w}})
+    p = predict(cfg, n_iter=200)
+    assert p.warm_capacity_p5 == w
+    # W is the unrounded p5 inside predict, so half to a session's width
+    assert p.cache_hit_rate == pytest.approx(0.5, abs=2e-3)
+    assert p.binding_constraint in ("decode", "cold_wait", "slowed", "saturation")
+    m, t, wl = cfg.to_model(), cfg.to_topology(), cfg.to_workload()
+    rate = M.request_rate(2 * w, cfg.workload.think_time_s, wl.sub_ratio)
+    wl_half = M.workload_at(wl, 2 * w, w)
+    assert wl_half.invalidation == pytest.approx(0.5)
+    duty = M.prefill_duty(m, t, wl_half, rate, 32768, 2000, 0.45,
+                          per_pass_overhead=True)
+    assert p.prefill_duty == pytest.approx(duty, rel=5e-3)
+    assert duty > M.prefill_duty(m, t, wl, rate, 32768, 2000, 0.45,
+                                 per_pass_overhead=True)
+
+
+def test_predict_prints_the_hit_rate_and_the_cyclic_worst_case(tmp_path, capsys):
+    p = tmp_path / "w.toml"
+    p.write_text(RunConfig.from_dict(
+        {"deployment": {"model": "27B", "gpu": "H200", "tensor_parallel": 4}}
+    ).dumps("toml"))
+    assert cli.main(["predict", str(p), "--n-iter", "40"]) == 0
+    out = capsys.readouterr().out
+    assert "of requests hit" in out and "cache (warm p5" not in out
+    assert "round-robin misses every request past" in out
 
 
 def _bandwidth_ceiling(cfg):
@@ -632,7 +673,7 @@ def test_predict_prints_headcount_conversion_and_people_ceilings(tmp_path, capsy
     assert cli.main(["predict", str(p), "--n-iter", "20"]) == 0
     out = capsys.readouterr().out
     assert "2,000 people x 0.35 active x 2.0 sessions = 1,400 sessions -> 175 /group on DP8" in out
-    assert out.count(" people") == 6       # conversion plus all five ceilings
+    assert out.count(" people") == 5       # conversion plus all four ceilings
 
 
 def test_predict_closed_uses_configured_think():

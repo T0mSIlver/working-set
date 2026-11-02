@@ -132,6 +132,39 @@ def test_latency_ceiling_percentile_is_monotone():
     assert f[1] <= f[0]
 
 
+def test_miss_share_past_the_warm_pool():
+    """f(U) = max(f0, 1 - W/U): the configured rate up to W / (1 - f0), then
+    the users the cache cannot keep warm (issue #117)."""
+    assert M.miss_share_at(100, 400, 0.01) == 0.01
+    assert M.miss_share_at(404, 400, 0.01) == 0.01          # inside the knee
+    assert M.miss_share_at(800, 400, 0.01) == pytest.approx(0.5)
+    assert M.miss_share_at(800, None, 0.01) == 0.01
+    assert M.miss_share_at(0, 400, 0.01) == 0.01
+    assert M.cache_hit_rate(800, 400, 0.0) == pytest.approx(0.5)
+    with pytest.raises(ValueError):
+        M.miss_share_at(-1, 400, 0.01)
+
+
+def test_capacity_limits_are_fixed_points():
+    """Each latency limit with W set is where its metric, priced at the miss
+    share at that load, meets its budget; inside the knee it is untouched."""
+    m, topo, wl = _ref_latency_args()
+    w = 150.0
+    for fn, args in ((M.max_users_cold_wait, (5.0, 2000)),
+                     (M.max_users_saturation, (2000,)),
+                     (M.max_users_slowed, (0.15, 2000)),
+                     (M.max_users_latency, (10.0, 2000))):
+        free = fn(m, topo, wl, 4096, *args, per_pass_overhead=True)
+        u = fn(m, topo, wl, 4096, *args, per_pass_overhead=True, warm_users=w)
+        assert w / (1 - wl.invalidation) <= u < free
+        again = fn(m, topo, M.workload_at(wl, u, w), 4096, *args,
+                   per_pass_overhead=True)
+        assert again == pytest.approx(u, rel=1e-9)
+        # a pool that holds everyone the limit allows changes nothing
+        assert fn(m, topo, wl, 4096, *args, per_pass_overhead=True,
+                  warm_users=2 * free) == free
+
+
 def test_latency_ceiling_mean_is_the_old_behaviour():
     """percentile=None reproduces the mean-TTFT ceiling exactly: the closed
     form with c = E[S | miss], as before the percentile existed."""
@@ -145,7 +178,15 @@ def test_latency_ceiling_mean_is_the_old_behaviour():
                               per_pass_overhead=True)
     assert got == pytest.approx(want, rel=1e-12)
     op = M.operating_point(m, topo, wl, 64, chunk=4096, per_pass_overhead=True)
-    assert op["ttft_ceiling"] == pytest.approx(want, rel=1e-12)
+    # the operating point prices the capacity misses past the warm pool
+    # (issue #117); with an unbounded cache it is the closed form above
+    assert op["ttft_ceiling"] == M.max_users_latency(
+        m, topo, wl, 4096, sla, 2000, think, per_pass_overhead=True,
+        warm_users=op["warm_users"])
+    assert op["ttft_ceiling"] <= want
+    assert M.max_users_latency(m, topo, wl, 4096, sla, 2000, think,
+                               per_pass_overhead=True,
+                               warm_users=float("inf")) == got
 
 
 def test_capped_workload_quantile_sits_at_the_cap():

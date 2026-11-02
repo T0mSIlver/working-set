@@ -243,28 +243,43 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     o["moments_hit"] = float(warm_arr.mean())
     o["moments_hit_sq"] = float((warm_arr ** 2).mean())
 
-    o["prefill_duty"] = M.prefill_duty(m, topo, wl, rate, chunk, turn, mfu,
+    # ---- the cache at the configured users (issue #117) -------------------
+    # W, the group's warm user p5, is no longer a ceiling: past W / (1 - f0)
+    # the users it cannot keep warm miss. Every at-load prefill figure below
+    # is priced on wl_u (the miss share at the state's users per group), and
+    # every latency ceiling is the capacity-aware fixed point at W.
+    draw = M.warm_draw(m, topo)
+    warm = _warm_user(m, topo, wl, ram, draw, seed)
+    users_g = st["users"] / topo.replicas
+    wl_u = M.workload_at(wl, users_g, warm)
+    o["cache_hit_rate"] = M.cache_hit_rate(users_g, warm, wl.invalidation)
+
+    o["prefill_duty"] = M.prefill_duty(m, topo, wl_u, rate, chunk, turn, mfu,
                                        per_pass_overhead=True)
     o["queue_wait_seconds"] = M.queue_wait_seconds(
-        m, topo, wl, rate, chunk, turn, mfu, per_pass_overhead=True)
+        m, topo, wl_u, rate, chunk, turn, mfu, per_pass_overhead=True)
     for req, disc, key in (("cold", "fcfs", "ttft_miss_fcfs"),
                            ("warm", "fcfs", "ttft_hit_fcfs"),
                            ("warm", "ps", "ttft_hit_ps")):
-        o[key] = M.prefill_ttft_seconds(m, topo, wl, rate, chunk, turn, mfu,
+        o[key] = M.prefill_ttft_seconds(m, topo, wl_u, rate, chunk, turn, mfu,
                                         request=req, discipline=disc,
                                         per_pass_overhead=True)
+    # a threshold on the miss share itself, not a figure at it: invariant to
+    # the share the load sits at
     o["breakeven_miss_rate"] = M.breakeven_miss_rate(
         m, topo, wl, rate, chunk, turn, mfu, per_pass_overhead=True)
     o["spike_tolerance"] = M.spike_tolerance(
-        m, topo, wl, st["sla"], rate, chunk, turn, mfu, per_pass_overhead=True)
+        m, topo, wl_u, st["sla"], rate, chunk, turn, mfu,
+        per_pass_overhead=True)
     # ...and at the hard-wired 10 s budget prefill.js's spikeMetrics() uses,
     # so the test can see the two JS entry points apart
     o["spike_tolerance_sla10"] = M.spike_tolerance(
-        m, topo, wl, 10.0, rate, chunk, turn, mfu, per_pass_overhead=True)
+        m, topo, wl_u, 10.0, rate, chunk, turn, mfu, per_pass_overhead=True)
     o["max_users_latency"] = M.max_users_latency(
         m, topo, wl, chunk, st["sla"], turn, st["think"], mfu, "fcfs",
         per_pass_overhead=True,
-        percentile=None if st["ttft_pct"] == "mean" else float(st["ttft_pct"]))
+        percentile=None if st["ttft_pct"] == "mean" else float(st["ttft_pct"]),
+        warm_users=warm)
     # the own-prefill terms the percentile ceiling is built from, at p95:
     # the miss-conditional quantile and the all-request one (hit or miss path
     # by the state's miss share)
@@ -273,7 +288,8 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     o["ttft_service_q95"] = M.ttft_service_quantile(
         m, topo, wl, chunk, 95.0, turn, mfu, per_pass_overhead=True)
     o["max_users_saturation"] = M.max_users_saturation(
-        m, topo, wl, chunk, turn, st["think"], mfu, per_pass_overhead=True)
+        m, topo, wl, chunk, turn, st["think"], mfu, per_pass_overhead=True,
+        warm_users=warm)
 
     # the two latency limits in the verdict, and the at-load figures behind
     # them. The cold wait reads the state's TTFT statistic (the mean under
@@ -283,25 +299,27 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     steps = M.slowed_steps(m, topo, wl, chunk, floor, mfu)
     o["slowed_chunk_seconds"] = steps["chunk_s"]
     o["slowed_speed"] = steps["speed"]
-    o["slowed_share"] = M.slowed_share(m, topo, wl, rate, chunk, floor, mfu,
+    o["slowed_share"] = M.slowed_share(m, topo, wl_u, rate, chunk, floor, mfu,
                                        per_pass_overhead=True)
     o["slowed_stretch"] = M.slowed_stretch(m, topo, wl, chunk,
                                            95.0 if pct is None else pct,
                                            floor, mfu)
     o["cold_wait_seconds"] = M.cold_wait_seconds(
-        m, topo, wl, rate, chunk, turn, mfu, per_pass_overhead=True,
+        m, topo, wl_u, rate, chunk, turn, mfu, per_pass_overhead=True,
         percentile=pct)
     o["max_users_slowed"] = M.max_users_slowed(
         m, topo, wl, chunk, st["slowed_pct"] / 100, turn, st["think"], mfu,
-        per_pass_overhead=True, decode_toks=floor)
+        per_pass_overhead=True, decode_toks=floor, warm_users=warm)
     o["max_users_cold_wait"] = M.max_users_cold_wait(
         m, topo, wl, chunk, float(st["cold_wait"]), turn, st["think"], mfu,
-        per_pass_overhead=True, percentile=pct)
+        per_pass_overhead=True, percentile=pct, warm_users=warm)
     # a cold request of the context cap on an idle group
     o["idle_cold_ttft_cap"] = M.idle_cold_ttft(m, topo, wl.cap, chunk, mfu)
     # at 10 s, not state.sla: spikeMetrics computes fsla against the same
     # hard-wired SPIKE_SLA_S its bstar uses, so 10 is the only budget at which
     # the two sides are answering the same question
+    # a threshold on the miss share, like breakeven_miss_rate: it replaces the
+    # share it bisects over, so it is the same on wl and wl_u
     o["sla_miss_rate_sla10"] = M.sla_miss_rate(
         m, topo, wl, rate, chunk, 10.0, turn, mfu, discipline="fcfs",
         request="cold", per_pass_overhead=True)
@@ -309,12 +327,11 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # sides can be compared at; state.burst reaches the readout only through
     # inline render.js arithmetic (see the README's coverage limitations)
     o["burst_drain_seconds_b32"] = M.burst_drain_seconds(
-        m, topo, wl, SPIKE_BURST, rate, chunk, turn, mfu,
+        m, topo, wl_u, SPIKE_BURST, rate, chunk, turn, mfu,
         per_pass_overhead=True)
 
     # ---- Monte-Carlo: warm fill and decode curves -------------------------
-    draw = M.warm_draw(m, topo)
-    o["max_users_cache"] = _warm_user(m, topo, wl, ram, draw, seed)
+    o["max_users_cache"] = warm
     o["warm_p5_all"] = _warm_all(m, topo, wl, ram, draw, seed, "all")
     # the GPU-resident p95 now CAPS the steady point on both sides (it used
     # to be a diagnostic only), so it runs at the full warm iteration count
@@ -374,7 +391,7 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     dec_power = dec
     if mns <= dec:
         dec_power = mns * p50_cap / st["decode_floor"]
-    e = M.energy_cost(m, topo, wl, rate, dec_power, st["users"], chunk,
+    e = M.energy_cost(m, topo, wl_u, rate, dec_power, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,
                       out_tokens=st["out"], per_pass_overhead=True,
                       eur_gpu_h=st["gpuh"], decode_floor=st["decode_floor"])
@@ -407,6 +424,12 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         "sla10_headroom": 1.0 - o["moments_miss"] / 10.0,
         # counts: one session either way is 33% of three
         "warm_p5": o["warm_p5_all"],
+        # HOW HARD THE MISS SHARE LEANS ON W (issue #117). Past the knee the
+        # at-load share is 1 - W/U, a difference of two near numbers just
+        # past it; each side prices it on its own W. The relative swing of
+        # the share when W moves +-5%: 0 well inside the knee (both price
+        # f0), ~0.1 at twice W, ~10 at the kink under f0 = 1%
+        "miss_share_swing": _miss_share_swing(users_g, warm, wl.invalidation),
         "decode_ceiling": dec,
         # 1 when sla_miss_rate returned its `hi` clamp, i.e. the SLA survives
         # an all-cold stream at this load and the latency constraint is not
@@ -442,6 +465,15 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
             warm_gpu95 if st["mns"] is None else min(warm_gpu95, st["mns"]), seed),
     }
     return o, cond
+
+
+def _miss_share_swing(users: float, warm: float, f0: float) -> float:
+    """(f(U; 0.95 W) - f(U; 1.05 W)) / f(U; W), f = model.miss_share_at."""
+    f = M.miss_share_at(users, warm, f0)
+    if f <= 0:
+        return 0.0
+    return (M.miss_share_at(users, 0.95 * warm, f0)
+            - M.miss_share_at(users, 1.05 * warm, f0)) / f
 
 
 def _chunk_edge(length: float, chunk: float) -> float:
@@ -935,7 +967,8 @@ MC_QUANTITIES = [
     "slowed_chunk_seconds", "slowed_speed", "slowed_share", "slowed_stretch",
     "cold_wait_seconds", "max_users_slowed", "max_users_cold_wait",
     "miss_service_q95", "ttft_service_q95",
-    "max_users_cache", "warm_p5_all", "max_users_decode", "decode_ceiling",
+    "max_users_cache", "cache_hit_rate",
+    "warm_p5_all", "max_users_decode", "decode_ceiling",
     "max_num_seqs", "decode_p50_n1", "decode_p50_n8", "decode_p50_n64",
     "steady_n", "steady_per_user_tok_s",
     "power_d_p", "power_d_d", "power_per_gpu_w", "power_kw",
@@ -1130,7 +1163,9 @@ BAND_GROUPS = [("prefill_duty", "power_d_p"),
                ("queue_wait_seconds", "cold_wait_seconds"),
                ("max_users_decode", "power_d_d"),
                ("warm_p5_all", "max_num_seqs", "decode_ceiling"),
-               ("miss_service_q95", "ttft_service_q95")]
+               ("miss_service_q95", "ttft_service_q95"),
+               # past the knee the hit rate is W / U: W's own relative noise
+               ("max_users_cache", "cache_hit_rate")]
 
 
 def bands_from_spread(spread: dict) -> dict:
@@ -1259,6 +1294,15 @@ MAPPING = [
      "STANDING APPROXIMATION: the explorer scales "
      "the whole warm p5 by the non-subagent share where Python counts "
      "user-class sessions inside each fill"),
+    ("cache_hit_rate", "model.cache_hit_rate(users / replicas, max_users_cache, f0)",
+     "prefill.js missShareAt(users / reps, warmUsersNow(...), f0)", "mc",
+     "1 - max(f0, 1 - W/U) at the state's users per group (issue #117). The "
+     "same miss share prices every at-load figure above (prefill_duty, the "
+     "queue and TTFT figures, B*, the drain, slowed_share, cold_wait_seconds, "
+     "power and energy), and the four latency ceilings are the "
+     "capacity-aware fixed points at W (model._capacity_limit, prefill.js "
+     "capacityLimit). W is max_users_cache on each side, so its standing "
+     "approximation reaches every figure priced past the knee"),
     ("warm_p5_all", "model.warm_capacity(which='all')[0]",
      "capacity.js warmCapacity(...).all[0]", "mc", ""),
     ("max_users_decode", "model.max_users_decode", "prefill.js maxUsersDecode(...).n", "mc", ""),

@@ -367,7 +367,7 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
       "on the wire)")
 
     w("\nPREDICTIONS UNDER TEST")
-    for k in ("warm_capacity_p5", "decode_ceiling_users",
+    for k in ("warm_capacity_p5", "cache_hit_rate", "decode_ceiling_users",
               "latency_ceiling_users", "saturation_ceiling_users",
               "binding_constraint", "predicted_limit_users",
               "operating_point_users", "ttft_miss_s", "bstar_misses",
