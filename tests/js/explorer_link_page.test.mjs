@@ -73,7 +73,8 @@ before(async () => {
   chrome = spawn(CHROME, ['--headless', '--no-sandbox', '--disable-gpu',
     '--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage',
     '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
-    { stdio: ['ignore', 'ignore', 'pipe'] });
+    // its own process group, so teardown can stop the helpers with it
+    { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
   let chromeErr = '';
   chrome.stderr.on('data', d => { chromeErr += d; });
   // Chrome writes the port it picked here once DevTools listens; a cold start
@@ -107,14 +108,17 @@ after(async () => {
   if (skip) return;
   sock?.close(); server?.close();
   // Chrome keeps writing its profile until it has exited, so removing the
-  // directory straight after kill() races it (ENOTEMPTY on CI)
+  // directory straight after kill() races it (ENOTEMPTY on CI). Its helper
+  // processes (renderer, utility, crashpad) outlive the browser's own exit
+  // event and keep writing into Default/, so the whole process group is
+  // stopped, not just the browser.
   if (chrome && chrome.exitCode === null && chrome.signalCode === null){
     const exited = new Promise(r => chrome.once('exit', r));
-    chrome.kill();
+    try { process.kill(-chrome.pid); } catch { chrome.kill(); }
     await Promise.race([exited, sleep(5000)]);
   }
   for (const d of [tmp, profile]) if (d)
-    rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 });
 
 function wsLink(path){
