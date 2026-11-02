@@ -485,7 +485,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>f</i>*</td><td class="d">miss rate at which <i>ρ</i> = 1, the saturation point (<code>breakeven_miss_rate()</code>)</td><td class="tnum">0.232</td><td>—</td></tr>
       <tr><td>E[<i>C</i><sub>cold</sub>], <i>C</i><sub>warm</sub></td><td class="d">miss and hit cost (above)</td><td class="tnum">1.570, 0.0813</td><td>s</td></tr>
     </table></div>
-    <p class="tnote">The thrash ratio is the study's founding number — ≈ 18–19× near-identically across the architectures priced in <code>docs/scenarios.md</code> § 8. In the flat-MFU form both MFU and the GPU part cancel out of it. <i>f</i>* solves <i>ρ</i>(<i>f</i>) = 1, which is linear in <i>f</i>; it is a limit, not an operating point — burst tolerance (§ F.4) reaches zero exactly there.</p>
+    <p class="tnote">The thrash ratio is the study's founding number — ≈ 18–19× near-identically across the architectures priced in <code>docs/scenarios.md</code> § 8, and 17.8–20.0× across all nine models at the reference workload. In the flat-MFU form both MFU and the GPU part cancel out of it. <i>f</i>* solves <i>ρ</i>(<i>f</i>) = 1, which is linear in <i>f</i>; it is a limit, not an operating point — burst tolerance (§ F.4) reaches zero exactly there.</p>
 
     <h3 id="f-queue">F.4 — Queueing &amp; bursts</h3>
     <p><b>Service moments and the M/G/1 queue</b><span class="fn">model.py · prefill_service_moments() / queue_wait_seconds() / prefill_ttft_seconds()</span></p>
@@ -505,7 +505,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td>TTFT<sub>FCFS</sub>, TTFT<sub>PS</sub></td><td class="d">mean time-to-first-token under first-come-first-served / processor sharing (<code>prefill_ttft_seconds()</code>)</td><td class="tnum">cold: 1.66 / 2.03; warm: 0.173 / 0.105</td><td>s</td></tr>
       <tr><td>E[<i>S</i>|class]</td><td class="d">the requesting class's own mean service time: E[<i>S</i>|miss] or E[<i>S</i>|hit]</td><td class="tnum">1.570 (cold)</td><td>s</td></tr>
     </table></div>
-    <p class="tnote">E[<i>W</i>] diverges at <i>ρ</i> ≥ 1. A miss's service time runs as <i>L</i>² on a lognormal <i>L</i>, so the stream's squared coefficient of variation E[<i>S</i>²]/E[<i>S</i>]² − 1 lands at 5.5 in the example (5.5–8.3 across configs) where an exponential server would sit at 1 — E[<i>S</i>²] is exactly what the duty cycle cannot see. FCFS and PS bracket vLLM's chunked-prefill scheduling; neither end is uniformly optimistic, and which is which flips by request class.</p>
+    <p class="tnote">E[<i>W</i>] diverges at <i>ρ</i> ≥ 1. A miss's service time runs as <i>L</i>² on a lognormal <i>L</i>, so the stream's squared coefficient of variation E[<i>S</i>²]/E[<i>S</i>]² − 1 lands at 5.5 in the example (4.7–8.3 across the nine models at the reference workload: DeepSeek-V4.1-Flash lowest, GLM-5.3 highest) where an exponential server would sit at 1 — E[<i>S</i>²] is exactly what the duty cycle cannot see. FCFS and PS bracket vLLM's chunked-prefill scheduling; neither end is uniformly optimistic, and which is which flips by request class.</p>
 
     <p><b>The TTFT ceiling, closed form</b><span class="fn">model.py · max_users_latency() / ttft_service_quantile() / sla_miss_rate()</span></p>
     <div class="eq">FCFS:&nbsp; <i>λ</i><sub>sla</sub> = <i>K</i> / (<i>a</i> + <i>K</i>·<i>b</i>), &nbsp;<i>K</i> = 2·(SLA − <i>c</i>);&nbsp;&nbsp; PS:&nbsp; <i>λ</i><sub>sla</sub> = (1 − <i>c</i>/SLA) / <i>b</i><br>
