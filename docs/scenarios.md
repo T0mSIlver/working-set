@@ -817,18 +817,19 @@ every row and moves no ranking.
 
 | Model / topology | B\* (10 s) | drain of a 32-miss spike | tokens lost per warm user |
 | --- | --- | --- | --- |
-| 27B, 1×H200 | 2.2 | 143 s | 5,459 |
-| 27B, TP2 | 5.1 | 63 s | 4,333 |
-| 35B-A3B, 1×H200 | 19.6 | 16 s | 1,175 |
-| **35B-A3B, TP2** | **36.4** | 8.8 s | 1,140 |
-| Mistral-3.5, TP4 | **0.5** — *cannot absorb one* | 657 s | 17,337 |
-| GLM-5.2, TP8 | 3.7 | 86 s | 3,132 |
-| 35B-A3B, 2×B300 | 84.4 | 3.8 s | 809 |
+| 27B, 1×H200 | 2.2 | 143 s | 3,398 |
+| 27B, TP2 | 5.1 | 63 s | 2,698 |
+| 35B-A3B, 1×H200 | 19.6 | 16 s | 394 |
+| **35B-A3B, TP2** | **36.4** | 8.8 s | 382 |
+| Mistral-3.5, TP4 | **0.5** — *cannot absorb one* | 657 s | 3,706 |
+| GLM-5.2, TP8 | 3.7 | 86 s | 1,108 |
+| 35B-A3B, 2×B300 | 84.4 | 3.8 s | 262 |
 
 The token column is § 8's ITL spike carried through time. One chunk is a blip;
 during a drain the scheduler has a chunk to place in *every* forward pass, so the
-31–122× spike is the **steady state for the whole drain**. A 32-miss spike on the
-27B/TP2 costs each of 64 warm users ~4,300 output tokens across a 63-second
+6–28× spike is the **steady state for the whole drain**, and every pass it delays
+carried the model's MTP accepted length in tokens. A 32-miss spike on the
+27B/TP2 costs each of 64 warm users ~2,700 output tokens across a 63-second
 plateau — the shape a latency dashboard shows, from an event none of those users
 caused.
 

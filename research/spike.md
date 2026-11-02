@@ -185,13 +185,18 @@ drain the scheduler has a chunk to place in *every* pass, so that spike is not a
 blip but the steady state for `T_drain` seconds:
 
 ```
-tokens lost per user = T_drain × (1/ITL_normal − 1/ITL_mixed)
+tokens lost per user = T_drain × m × (1/t_step_normal − 1/t_step_mixed)
 ```
+
+where m is the MTP accepted length: each forward pass hands every decoder m
+tokens, so the reciprocal step times count passes and m turns them into
+tokens.
 
 This is the metric that makes a cold spike legible on a latency dashboard rather
 than in a duty cycle: a 32-miss spike on the 27B/TP2 costs each of 64 warm users
-~4,300 output tokens across a 63-second plateau; the same spike on the 35B-A3B
-TP2 costs ~1,140 tokens across 8.8 seconds.
+~2,700 output tokens across a 63-second plateau; the same spike on the 35B-A3B
+TP2 costs ~380 tokens across 8.8 seconds. (Corrected 2026-11-02: the earlier
+~4,300 and ~1,140 counted passes without m, and predate the MBU calibration.)
 
 ---
 

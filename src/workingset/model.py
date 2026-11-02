@@ -1625,7 +1625,10 @@ def itl_spike(model: Model, topo: Topology, wl, n_decode: int, chunk: float,
     """
     _, p50, _, _ = decode_curves(model, topo, wl, [n_decode], n_iter=n_iter,
                                  seed=seed)
-    decode_s = model.mtp / p50[0]          # seconds per token, per user
+    # one decode STEP: a forward pass that hands each user `mtp` tokens
+    # (p50 is per-user tokens/s, speculation included), and the gap a
+    # stream sees between its server-sent events
+    decode_s = model.mtp / p50[0]
     # the chunk is priced mid-re-prefill (prior = E[L]/2, the average cache
     # it attends over during a full cold re-prefill); the LAST chunk of a
     # mean-length context runs ~prior = E[L], about twice this cross term
@@ -2075,10 +2078,13 @@ def spike_token_debt(model: Model, topo: Topology, wl, burst: float,
     Section 8's ITL spike is one forward pass; during a drain the scheduler
     has a chunk to place in EVERY pass, so the spike is not a blip but the
     steady state for `drain_s` seconds. Each of the `n_decode` warm users
-    generates at 1/ITL_mixed instead of 1/ITL_normal throughout, and the
-    difference is output tokens that never arrive. This is the metric that
-    makes a cold spike legible to someone reading a latency dashboard rather
-    than a duty cycle.
+    gets a step every t_mixed instead of every t_decode throughout, and
+    every step carries `mtp` tokens, so the difference,
+    drain * mtp * (1/t_decode - 1/t_mixed), is output tokens that never
+    arrive. Without the `mtp` factor it counted steps, which undercounts by
+    the accepted length (2.94x on the 27B). This is the metric that makes a
+    cold spike legible to someone reading a latency dashboard rather than a
+    duty cycle.
     """
     drain = burst_drain_seconds(model, topo, wl, burst, req_rate, chunk,
                                 turn_tokens, mfu, per_pass_overhead)
@@ -2086,7 +2092,7 @@ def spike_token_debt(model: Model, topo: Topology, wl, burst: float,
                                   n_iter=n_iter, seed=seed)
     if not np.isfinite(drain):
         return drain, ratio, float("inf"), float("inf")
-    per_user = drain * (1e3 / d_ms - 1e3 / x_ms)
+    per_user = drain * model.mtp * (1e3 / d_ms - 1e3 / x_ms)
     return drain, ratio, per_user, per_user * n_decode
 
 
