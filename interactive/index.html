@@ -206,6 +206,7 @@ svg.chart{width:100%; height:auto; display:block; overflow:visible}
 .legend .sw.dash2{background-image:repeating-linear-gradient(90deg,transparent 0 2px,var(--surface) 2px 4px)}
 .legend .sw.dash5{background-image:repeating-linear-gradient(90deg,transparent 0 5px,var(--surface) 5px 7px,transparent 7px 8px,var(--surface) 8px 10px)}
 .legend .sw.dash11{background-image:repeating-linear-gradient(90deg,transparent 0 6px,var(--surface) 6px 8px)}
+.legend .sw.dash1{background-image:repeating-linear-gradient(90deg,transparent 0 1.5px,var(--surface) 1.5px 4px)}
 
 /* tooltip */
 /* left/top are set in JS in chartbox-relative pixels and clamped inside the
@@ -918,7 +919,7 @@ details.more .more-body{padding:0 0 16px}
     </div>
   </div>
 </div></details>
-<details class="hood" id="ceilings"><summary><span class="lbl">All five ceilings</span></summary>
+<details class="hood" id="ceilings"><summary><span class="lbl">All four ceilings</span></summary>
 <div class="hood-body">
   <div class="panel card" id="ceilingCard" style="margin-bottom:14px">
     <p class="ct">Max users under each constraint</p>
@@ -928,11 +929,11 @@ details.more .more-body{padding:0 0 16px}
     <div class="panel card">
       <p class="ct">G · The binding constraint vs cache-miss rate</p>
       <div class="legend">
-        <span class="li"><span class="sw" style="background:var(--s1)"></span>cache</span>
         <span class="li"><span class="sw dash7" style="background:var(--s4)"></span>decode</span>
         <span class="li"><span class="sw dash2" style="background:var(--s2)"></span>cold wait</span>
         <span class="li"><span class="sw dash5" style="background:var(--s3)"></span>slowed generation</span>
         <span class="li"><span class="sw dash11" style="background:var(--muted)"></span>saturation</span>
+        <span class="li"><span class="sw dash1" style="background:var(--s1)"></span>warm p5 (not a ceiling: the round-robin worst case)</span>
         <span class="li"><span class="sw dot" style="background:var(--text)"></span>your load (red if over)</span>
       </div>
       <div class="chartbox"><div id="chartG"></div><div class="tt" id="ttG"></div></div>

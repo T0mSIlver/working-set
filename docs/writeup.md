@@ -31,7 +31,7 @@
 ## **Results:** 
 ![Result](../figures/prefix_cache_sweep.png)
 
-- At N=10 the working set exceeds the cache and each round cycles through all prompts in order, so LRU evicts each prompt just before its turn comes around again (Bélády's cyclic-access worst case). This collapses the hit rate to ~0% rather than a graceful fraction.
+- At N=10 the working set exceeds the cache and each round cycles through all prompts in order, so LRU evicts each prompt just before its turn comes around again (Bélády's cyclic-access worst case). This collapses the hit rate to ~0% rather than a graceful fraction. (Later note, 2026-11-02: that is the worst case for prompts sent in a fixed order. Live traffic returns after spread-out gaps and degrades gradually instead; `research/public_traces.md`, issue #117. The model keeps this collapse as the stated round-robin worst case.)
 - P sits in [1139k, 1399k] tokens
 - 5.1 * 262144 = 1337k tokens, which sits in the empirical interval. This leads me to think the 5.1 number might be correct.
 - We can hold the full KV of between 4 and 5 full-length sequences.

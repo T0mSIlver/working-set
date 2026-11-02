@@ -1284,6 +1284,16 @@ So for agentic coding on this hardware:
   interfere with active decodes, and the baseline's N=10 cyclic-eviction collapse
   shows the cliff-shaped failure mode. Treat the warm count as the population to
   stay under, not a soft target.
+  *(2026-11-02, issue #117: on the public Bailian and AgentX traces the excess
+  IS graceful for the cache — LRU keeps the sessions that return soonest, and
+  the hit rate past the warm count falls gradually, not to zero;
+  `research/public_traces.md`. With only a think time known the model takes it
+  as warm ÷ users.
+  `ws predict` and the explorer now price the excess as cold requests in the
+  cold-wait, slowed-generation and saturation ceilings instead of a cache
+  ceiling. The N=10 collapse stands as the worst case of prompts sent in a
+  fixed round-robin order. The tables in this document keep the earlier
+  convention.)*
 - **Size the miss rate against `f_sla`, not `f*`** (§ 9). The duty ceiling still
   reads 76–93% at the point where TTFT breaches a 10 s budget, and burst tolerance
   is *zero* at f\*. The second number to carry is **B\***, the simultaneous-miss

@@ -1,7 +1,7 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeTopo,
          minTpFor, servableKv, unionKink, withKvDtype } from './config.js';
 import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
-         decodeFloor, capDecodeUsers, decodePowerUsers, decodeSlotMean, decodeSlotUsers, effectiveMns, maxUsersDecode, p50AtCap, recommendedMns, missContextSeconds, operatingPoint, prefillChunk,
+         decodeFloor, capDecodeUsers, decodePowerUsers, decodeSlotMean, decodeSlotUsers, effectiveMns, maxUsersDecode, p50AtCap, recommendedMns, missContextSeconds, missShareAt, operatingPoint, prefillChunk,
          prefillContextSeconds, prefillSeconds, prefillServiceMoments, serverRate,
          setLiveThink, setLiveTurn, spikeMetrics, steadyDecodePoint, steadyResident,
          SPIKE_SLA_S, slowedShare, slowedStretch, coldWait, stretchPct, ttftMoments } from './prefill.js';
@@ -98,6 +98,18 @@ function modelFor(key){
 
 function syncState(){ setLiveTurn(state.turn); setLiveThink(state.think); }
 
+// The workload as the prefill server sees it at the load: its miss rate is
+// the share that misses with state.users on this pool, the configured rate
+// or more once the users outgrow the warm p5 (prefill.js missShareAt, issue
+// #117). Every at-load figure — duty, queue, TTFT, B*, the drain, the slowed
+// share, the cold wait, the bill — is priced on it; the ceilings price the
+// capacity misses themselves (operatingPoint).
+export function workloadAtLoad(wl, topo, warmP5){
+  const reps = topo.replicas || 1;
+  return { ...wl, invalidation: missShareAt(state.users/reps, warmUsersNow(warmP5, wl),
+                                            wl.invalidation) };
+}
+
 export function computeAndRender(draft, deferFrontierDecode){
   syncState();
   const model=activeModel();
@@ -186,7 +198,7 @@ export function computeAndRender(draft, deferFrontierDecode){
   // the copy-paste artifact, which is the worst place to invent a number.
   // One predicate, so the three cannot disagree again.
   lastSteady.real = !noFit && !lastSteady.saturated
-    && (spikeMetrics(model, topo, wl, lastCS,
+    && (spikeMetrics(model, topo, workloadAtLoad(wl, topo, lastWarmCur.p5), lastCS,
                      serverRate(state.users, state.think, wl.sub_ratio)
                        / (topo.replicas || 1), prefillChunk()).rho < 1);
 
@@ -252,6 +264,9 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   const moHi = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), PREFILL_MFU_HI);
   const f = wl.invalidation;
   const warmUsers = warmUsersNow(lastWarmCur.p5, wl);
+  // the share that misses at this load (per group), and the workload priced
+  // on it: everything quoted AT the load below reads these, not f
+  const wlU = workloadAtLoad(wl, topo, lastWarmCur.p5), fU = wlU.invalidation;
 
   // --- the sampled halves, on settled renders only ---
   // A DRAFT render reuses the last settled results UNCONDITIONALLY (the same
@@ -304,14 +319,14 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   op.decodeRaw = decodeRaw * reps; op.slotPu = slotPu;
   op.mns = mnsP; op.mnsRecommended = state.mns === null;
   // per-group quantities the tiles quote alongside the user ceilings
-  const sp = spikeMetrics(model, topo, wl, cs, rate, prefillChunk());
+  const sp = spikeMetrics(model, topo, wlU, cs, rate, prefillChunk());
   const drain = state.burst * mo.miss / Math.max(1e-9, 1 - sp.rho);
   const dm = itlSpikeRatio(model, topo, wl, cs);
-  const ttft = ttftMoments(mo, f, rate, sp.rho);
+  const ttft = ttftMoments(mo, fU, rate, sp.rho);
   Object.assign(op, {
-    bstar:   bStar(mo,   f, SPIKE_SLA_S, rate),
-    bstarLo: bStar(moLo, f, SPIKE_SLA_S, rate),
-    bstarHi: bStar(moHi, f, SPIKE_SLA_S, rate),
+    bstar:   bStar(mo,   fU, SPIKE_SLA_S, rate),
+    bstarLo: bStar(moLo, fU, SPIKE_SLA_S, rate),
+    bstarHi: bStar(moHi, fU, SPIKE_SLA_S, rate),
     fstar:   breakevenMissRate(model, topo, wl, rate, cs, prefillChunk()),
     fsla:    sp.fsla, duty: sp.rho,
     burstDrain: sp.rho >= 1 ? Infinity : drain,
@@ -323,19 +338,22 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     ttftHitFcfs: ttft.hitFcfs,
     ttftHitPs:   ttft.hitPs,
     // the two limits users feel, at this load (per group, like the ceilings)
-    slowedNow:    slowedShare(mo, op.steps, f, rate),
+    slowedNow:    slowedShare(mo, op.steps, fU, rate),
     stretchNow:   slowedStretch(model, topo, cs, prefillChunk(), op.steps,
                                 stretchPct(state.ttft_pct)),
-    coldWaitNow:  coldWait(mo, f, rate, state.ttft_pct),
-    coldWaitMean: coldWait(mo, f, rate, 'mean'),
+    coldWaitNow:  coldWait(mo, fU, rate, state.ttft_pct),
+    coldWaitMean: coldWait(mo, fU, rate, 'mean'),
   });
   renderSpikeTiles(op, sp, model, topo, wl, cs, false, '');
   renderCeilingBars(op);
   renderDeployCard(op, model, topo, wl, mo, decodeUsers);
   renderTestCard(op, model, topo, wl);
   // power prices decode time against the aggregate decode throughput: the
-  // ceiling x floor, or under a max_num_seqs cap the aggregate at the cap
-  renderCostCard(op, model, topo, wl, mo, decodePower);
+  // ceiling x floor, or under a max_num_seqs cap the aggregate at the cap;
+  // its prefill duty is the one at this load's miss share
+  renderCostCard(op, model, topo, wlU, mo, decodePower);
+  // chart F marks the share that misses at this load, at the tile's B*
+  d.fNow = fU; d.bNow = op.bstar;
   renderBindingChart(d, op);
   renderLatencyCharts(op, model, topo, wl, mo);
 
@@ -570,11 +588,14 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
 }
 
 // €/seat/month: the bill with the configuration carrying its max users,
-// divided by them. Infinity where there is no ceiling to fill.
+// divided by them. Infinity where there is no ceiling to fill. Its prefill
+// duty is priced at the miss share at that load, which past the warm pool
+// is more than f.
 function seatPrice(op, topo, mo, f, wl, r){
   if (!isFinite(op.limit) || op.limit < 1) return Infinity;
   const rateMax = serverRate(op.limit, state.think, wl.sub_ratio) / r.reps;
-  return energyCost(topo, mo, f, rateMax, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth / op.limit;
+  const fMax = missShareAt(op.limit / r.reps, r.warmUsers / r.reps, f);
+  return energyCost(topo, mo, fMax, rateMax, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth / op.limit;
 }
 function assembleFrontier(wl, cs){
   const f = wl.invalidation;
@@ -594,12 +615,13 @@ function assembleFrontier(wl, cs){
     const op = operatingPoint(m2, t2, wl, csSteps, {
                mo: mo2, reps: r.reps,
                warmUsers: r.warmUsers, decodeUsers: r.decodeUsers });
+    // each row at the share that misses with YOUR load on ITS pool
     return { ...r, op,
-             bstar: bStar(mo2, f, SPIKE_SLA_S, r2),
+             bstar: bStar(mo2, op.missShare, SPIKE_SLA_S, r2),
              // the whole bill at YOUR load — hardware plus energy
              // (research/power.md) — comparable across rows because every
              // row is priced at the same demand and the same €/GPU-hour
-             eur: energyCost(t2, mo2, f, r2, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth,
+             eur: energyCost(t2, mo2, op.missShare, r2, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth,
              // and the bill at the row's OWN ceiling, per seat: what one
              // user costs when the configuration is full. At your load the
              // bill is the GPU count and every row on a topology prices the
@@ -655,7 +677,12 @@ function stressPoint(dc, topo, warm){
 
 export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   const pool=kv_pool_tokens(model,topo);
-  const ceiling=(1-wl.invalidation)*100;
+  // the cache at this load (issue #117): W users kept warm per group, and
+  // the share of requests that hit with state.users on it
+  const wlU = workloadAtLoad(wl, topo, warm.p5), fU = wlU.invalidation;
+  const warmG = warmUsersNow(warm.p5, wl), usersG = state.users/(topo.replicas || 1);
+  const knee = wl.invalidation < 1 ? warmG/(1 - wl.invalidation) : 0;
+  const hit = 1 - fU;
   // Stress point (computed once in stressPoint(), marked on charts C and D):
   // every GPU-RESIDENT p5-warm session decoding at once. CPU-offloaded sessions
   // are storage — their KV lives in host RAM, so they cannot decode until they
@@ -707,9 +734,10 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   const groupRate = serverRate(state.users, state.think, wl.sub_ratio)
                     / (topo.replicas || 1);
   const fstar = noFit ? 0 : (1/groupRate - warmS)/(coldS - warmS);
+  // against the share that misses at this load, capacity misses included
   const prefillClass = noFit ? undefined
-    : (wl.invalidation >= fstar ? 'crit'
-      : (wl.invalidation >= fstar/2 ? 'warn' : 'good'));
+    : (fU >= fstar ? 'crit'
+      : (fU >= fstar/2 ? 'warn' : 'good'));
   // the ITL spike (mirrors itl_spike): one chunk lands in the decode batch,
   // and every decoder at the stress point sees one inter-token gap of
   // step-time + chunk-time instead of step-time (a forward pass yields ~mtp
@@ -724,7 +752,7 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
                               spikeStep < CH ? 0 : cs.mean/2)) / stepS : 0;
   // cold-SPIKE tolerance (research/spike.md): the duty cycle above is a mean
   // rate against a mean service time, and misses arrive in clumps
-  const sp = noFit ? null : spikeMetrics(model, topo, wl, cs, groupRate, CH);
+  const sp = noFit ? null : spikeMetrics(model, topo, wlU, cs, groupRate, CH);
   // p5 of the OFFLOADED population itself (per-draw all-gpu, then percentiled).
   // Not p5(all)-p5(gpu): that subtracts two marginal percentiles taken from
   // different draws and is not a count of anything.
@@ -785,8 +813,14 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
           + ` = ${fmt(sdUse*100, sdUse<0.1?2:1)}% of the all-warm decode aggregate`
           + ` · at ${fmt(state.out,0)} output tok per response`,
      tip:"Mean number of sequences in the decode batch at any instant — Little's law: arrival rate × seconds spent decoding. This is an EXPECTED occupancy, not a setting: max_num_seqs is a cap and the deploy card rightly leaves it at the ceiling, so the batch can absorb bursts. Scales linearly with the request rate (Concurrent users ÷ Think time) and with output length, and only weakly with anything else — which is why the percentage beside it, not the warm count, is the honest read on how loaded the decode side is. Output length is the one ASSUMED input here (the workload model fits prompt lengths, never output lengths)."},
-    {act:2, k:"Warm-hit ceiling", v:fmt(ceiling,1), u:"%", sub:`invalidation ${fmt(wl.invalidation*100,1)}%`,
-     tip:"Upper bound on the warm-hit rate: the invalidating fraction f can never match cached KV (edited prefix, changed tools...), so at best (1−f) of requests avoid the cold-prefill thrash."},
+    {act:2, k:"Cache hit rate, at this load", v:noFit?"—":fmt(hit*100, hit>0.995||hit<0.1?1:0), u:noFit?"":"%",
+     sub: noFit ? `model weights do not fit this configuration — ${fitHint}`
+        : (usersG <= knee
+          ? `${fmt(usersG, usersG<10?1:0)} users${dp?" per replica":""} fit the ${fmt(warmG,0)} kept warm (p5) · the misses are the ${fmt(wl.invalidation*100,1)}% configured`
+          : `${fmt(warmG,0)} of ${fmt(usersG,0)} users${dp?" per replica":""} stay warm (p5) · the other ${fmt(usersG-warmG,0)} miss and queue as cold requests`)
+          + ` · a round-robin benchmark misses every request past ${fmt(warmG,0)}`,
+     cls: noFit ? undefined : (usersG <= knee ? 'good' : (hit >= 0.5 ? 'warn' : 'crit')),
+     tip:"The share of requests whose prefix is still cached at the load you set. LRU keeps the sessions that come back soonest; with only a think time to go on, their gaps are taken as exponential, and then with U users on a cache that keeps W warm a share W ÷ U of them comes back warm (LRU's characteristic time). Up to W ÷ (1 − f) users the configured miss rate f (edited prefixes, changed tools) is the whole miss share. Past it the users the cache cannot hold miss, and those cold requests count in the cold-wait, slowed-generation and saturation limits — the cache is not a ceiling of its own. A benchmark that sends prompts in a fixed round-robin order is the worst case: LRU evicts each prompt just before it comes back, so every request past W misses."},
     {act:2, k:"Max cold req/s", v:noFit?"—":fmt(coldRate,2), u:noFit?"":"req/s",
      sub:noFit?`model weights do not fit this configuration — ${fitHint}`
         :`miss ≈ ${fmt(coldS,1)} s (p5–p95 ${fmt(coldP5,1)}–${fmt(coldP95,1)}) · f* ${fstar>10?"> 1,000":"= "+fmt(fstar*100,0)}% at ${fmt(groupRate,2)} req/s${dp?"/replica":""}`

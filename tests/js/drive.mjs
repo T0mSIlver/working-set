@@ -20,7 +20,7 @@ import { decodeCurves, decodePlan, warmCapacity }
 import { bStar, warmUsersCurve, warmUsersNow } from '../../interactive/src/planner.js';
 import { energyCost } from '../../interactive/src/cost.js';
 import {
-  breakevenMissRate, capDecodeUsers, coldRequestSeconds, decodePowerUsers, decodeSlotMean, decodeSlotUsers, effectiveMns, p50AtCap, contextStats, maxUsersDecode, meanPasses,
+  breakevenMissRate, capDecodeUsers, capacityLimit, missShareAt, coldRequestSeconds, decodePowerUsers, decodeSlotMean, decodeSlotUsers, effectiveMns, p50AtCap, contextStats, maxUsersDecode, meanPasses,
   maxUsersLatency, maxUsersSaturation, missServiceQuantile, ttftServiceQuantile, mfuCeil, mfuEff, missContextSeconds,
   peakFlops, prefillContextSeconds, prefillFlops, prefillOverheadSeconds,
   prefillSeconds, prefillServiceMoments, serverRate, setLiveThink, setLiveTurn,
@@ -89,41 +89,10 @@ export function driveState(v){
   o.moments_hit = mo.hit;
   o.moments_hit_sq = mo.hitSq;
 
-  const sp = spikeMetrics(m, topo, wl, cs, rate, chunk);
-  const f = wl.invalidation;
-  o.prefill_duty = sp.rho;
-  o.queue_wait_seconds = sp.wait;
-  // spikeMetrics computes fsla against the same hard-wired SPIKE_SLA_S = 10
-  o.sla_miss_rate_sla10 = sp.fsla;
-  // spikeMetrics hard-wires SPIKE_BURST = 32; the vectors price Python's
-  // burst_drain_seconds at the same 32 so the two are comparable at all
-  o.burst_drain_seconds_b32 = sp.drain;
-  const ttft = ttftMoments(mo, f, rate, sp.rho);
-  o.ttft_miss_fcfs = ttft.miss;
-  o.ttft_hit_fcfs = ttft.hitFcfs;
-  o.ttft_hit_ps = ttft.hitPs;
-  o.breakeven_miss_rate = breakevenMissRate(m, topo, wl, rate, cs, chunk);
-  o.spike_tolerance = bStar(mo, f, state.sla, rate);
-  o.spike_tolerance_sla10 = sp.bstar;
-  o.max_users_latency = maxUsersLatency(mo, f, state.sla, state.think,
-                                        'fcfs', wl.sub_ratio, state.ttft_pct);
-  o.max_users_saturation = maxUsersSaturation(mo, f, state.think, wl.sub_ratio);
-
-  const steps = slowedSteps(m, topo, cs, chunk, state.decode_floor);
-  o.slowed_chunk_seconds = steps.chunkS;
-  o.slowed_speed = steps.speed;
-  o.slowed_share = slowedShare(mo, steps, f, rate);
-  o.slowed_stretch = slowedStretch(m, topo, cs, chunk, steps, stretchPct(state.ttft_pct));
-  o.cold_wait_seconds = coldWait(mo, f, rate, state.ttft_pct);
-  o.max_users_slowed = maxUsersSlowed(mo, steps, f, state.slowed_pct/100,
-                                      state.think, wl.sub_ratio);
-  o.max_users_cold_wait = maxUsersColdWait(mo, f, state.cold_wait, state.think,
-                                           wl.sub_ratio, state.ttft_pct);
-  o.idle_cold_ttft_cap = idleColdTtft(m, topo, wl.cap, chunk);
-  o.miss_service_q95 = missServiceQuantile(mo, 95);
-  o.ttft_service_q95 = ttftServiceQuantile(mo, f, 95);
-
   // ---- warm fill -----------------------------------------------------
+  // drawn under its own seed (seedFor reseeds per purpose), so drawing it
+  // before the prefill figures moves no draw. W prices the miss share at the
+  // load (issue #117): render.js workloadAtLoad / operatingPoint.
   seedFor('warm');
   const wc = warmCapacity(m, topo, wl, ramPerCache(topo), WARM_ITER,
                           CONFIG.WARM_BUDGET);
@@ -131,12 +100,53 @@ export function driveState(v){
   // This remains a standing approximation: the explorer scales the whole warm
   // p5 by the non-subagent share, where Python counts user-class sessions
   // inside each fill (warm_capacity which="user").
-  o.max_users_cache = warmUsersNow(wc.all[0], wl);
+  const warm = warmUsersNow(wc.all[0], wl);
+  o.max_users_cache = warm;
   // A fill that hit warmOnce's SAFETY draw cap is a LOWER BOUND, and the page
   // prints it as one ("≥ N"). Python's fixture grows its draw until the fill
   // is uncensored, so the two counts are compared as bound-vs-value: not a
   // golden quantity, read by golden.test.mjs for the two counts above.
   o._warm_censored = wc.censored;
+
+  const f = wl.invalidation;
+  const fU = missShareAt(state.users / reps, warm, f);
+  const wlU = { ...wl, invalidation: fU };
+  o.cache_hit_rate = 1 - fU;
+
+  const sp = spikeMetrics(m, topo, wlU, cs, rate, chunk);
+  o.prefill_duty = sp.rho;
+  o.queue_wait_seconds = sp.wait;
+  // spikeMetrics computes fsla against the same hard-wired SPIKE_SLA_S = 10
+  o.sla_miss_rate_sla10 = sp.fsla;
+  // spikeMetrics hard-wires SPIKE_BURST = 32; the vectors price Python's
+  // burst_drain_seconds at the same 32 so the two are comparable at all
+  o.burst_drain_seconds_b32 = sp.drain;
+  const ttft = ttftMoments(mo, fU, rate, sp.rho);
+  o.ttft_miss_fcfs = ttft.miss;
+  o.ttft_hit_fcfs = ttft.hitFcfs;
+  o.ttft_hit_ps = ttft.hitPs;
+  o.breakeven_miss_rate = breakevenMissRate(m, topo, wl, rate, cs, chunk);
+  o.spike_tolerance = bStar(mo, fU, state.sla, rate);
+  o.spike_tolerance_sla10 = sp.bstar;
+  // the per-group capacity-aware ceilings operatingPoint() builds
+  o.max_users_latency = capacityLimit(x => maxUsersLatency(mo, x, state.sla, state.think,
+                                        'fcfs', wl.sub_ratio, state.ttft_pct), warm, f);
+  o.max_users_saturation = capacityLimit(x => maxUsersSaturation(mo, x, state.think,
+                                                                 wl.sub_ratio), warm, f);
+
+  const steps = slowedSteps(m, topo, cs, chunk, state.decode_floor);
+  o.slowed_chunk_seconds = steps.chunkS;
+  o.slowed_speed = steps.speed;
+  o.slowed_share = slowedShare(mo, steps, fU, rate);
+  o.slowed_stretch = slowedStretch(m, topo, cs, chunk, steps, stretchPct(state.ttft_pct));
+  o.cold_wait_seconds = coldWait(mo, fU, rate, state.ttft_pct);
+  o.max_users_slowed = capacityLimit(x => maxUsersSlowed(mo, steps, x, state.slowed_pct/100,
+                                                         state.think, wl.sub_ratio), warm, f);
+  o.max_users_cold_wait = capacityLimit(x => maxUsersColdWait(mo, x, state.cold_wait, state.think,
+                                                              wl.sub_ratio, state.ttft_pct), warm, f);
+  o.idle_cold_ttft_cap = idleColdTtft(m, topo, wl.cap, chunk);
+  o.miss_service_q95 = missServiceQuantile(mo, 95);
+  o.ttft_service_q95 = ttftServiceQuantile(mo, f, 95);
 
   // ---- decode --------------------------------------------------------
   seedFor('decodeCeil');
@@ -176,7 +186,7 @@ export function driveState(v){
   // under a cap that holds the batch, the aggregate at the cap (render.js
   // prices the cost card so)
   const decPower = decodePowerUsers(decC, mns, capPu, state.decode_floor);
-  const e = energyCost(topo, mo, f, rate, decPower);
+  const e = energyCost(topo, mo, fU, rate, decPower);
   o.power_d_p = e.dP;
   o.power_d_d = e.dD;
   o.power_per_gpu_w = e.perGpu;

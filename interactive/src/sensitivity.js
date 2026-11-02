@@ -1,7 +1,8 @@
 import { DECODE_MBU, GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, effective_bw,
          kv_pool_tokens, replicated, state_traffic, w_decode } from './config.js';
-import { capDecodeUsers, contextStats, decodeFloor, decodeSlotUsers, liveTurn, maxUsersColdWait, maxUsersSaturation,
-         maxUsersSlowed, prefillChunk, prefillServiceMoments, setLiveTurn, slowedSteps } from './prefill.js';
+import { capDecodeUsers, capacityLimit, contextStats, decodeFloor, decodeSlotUsers, liveTurn, maxUsersColdWait,
+         maxUsersSaturation, maxUsersSlowed, prefillChunk, prefillServiceMoments, setLiveTurn,
+         slowedSteps } from './prefill.js';
 import { clip, seedFor } from './mathlib.js';
 import { decodeTokenSeconds } from './capacity.js';
 import { p_sub, sampleReqInto } from './workload.js';
@@ -18,8 +19,9 @@ import { CEILING_KEYS, PLANNER_COLORS, PLANNER_LABEL, fAxisMax } from './planner
    and names the nearest handover. Rows sort by distance-to-flip: the top row
    is the assumption the current decision leans on hardest.
 
-   The two sampled ceilings (cache, decode) cannot be Monte-Carlo re-filled at
-   every point of every sweep, so the workload axes use MEAN-FIELD stand-ins —
+   The two sampled inputs (the warm pool W, the decode ceiling) cannot be
+   Monte-Carlo re-filled at every point of every sweep, so the workload axes
+   use MEAN-FIELD stand-ins —
    expected pool cost per session, mean-context decode speed — each CALIBRATED
    so it passes exactly through the MC value at the current settings. The
    approximation is stated in the panel caption; the directly-priced axes (miss
@@ -96,7 +98,9 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   // max_num_seqs cap (op.mns, per group: set or recommended) is applied on
   // top of every point, at the swept think time, with the cap and the decode
   // speed at its p99-bound batch held at their current values
-  const cacheNow = op.ceilings.cache, decodeNow = op.decodeRaw ?? op.ceilings.decode;
+  // W (system-wide) is not a ceiling: it prices the capacity misses inside
+  // the three latency ceilings (prefill.js capacityLimit, per group)
+  const cacheNow = op.warmUsers, decodeNow = op.decodeRaw ?? op.ceilings.decode;
   // `vs` scales that decode speed on the axes that move it (MBU, speedup,
   // MFU, context): there the bandwidth ceiling moves in proportion to speed,
   // so its ratio to decodeNow stands in for the speed ratio. The floor axis
@@ -111,13 +115,14 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   const steps0 = slowedSteps(model, topo, cs, prefillChunk());
   const evalAt = (mo_, f_, wait_, think_, cacheU, decodeU, vs = 1, steps = steps0,
                   slowedPct_ = state.slowed_pct) => {
-    const c = { cache: cacheU, decode: capD(decodeU, think_, vs),
-      cold_wait: reps * maxUsersColdWait(mo_, f_, wait_, think_, subR,
-                                         state.ttft_pct),
-      slowed: reps * maxUsersSlowed(mo_, steps, f_, slowedPct_/100,
-                                    think_, subR),
-      saturation: reps * maxUsersSaturation(mo_, f_, think_, subR) };
-    let bind = 'cache';
+    const wG = cacheU / reps;
+    const c = { decode: capD(decodeU, think_, vs),
+      cold_wait: reps * capacityLimit(x => maxUsersColdWait(mo_, x, wait_, think_, subR,
+                                                           state.ttft_pct), wG, f_),
+      slowed: reps * capacityLimit(x => maxUsersSlowed(mo_, steps, x, slowedPct_/100,
+                                                      think_, subR), wG, f_),
+      saturation: reps * capacityLimit(x => maxUsersSaturation(mo_, x, think_, subR), wG, f_) };
+    let bind = 'decode';
     for (const k in c) if (c[k] < c[bind]) bind = k;
     return { bind, limit: c[bind] };
   };
@@ -236,7 +241,7 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
         state.decode_floor) });
   // 7 & 8 · the prompt-length distribution — median and shape. Both re-draw
   //     the context stats (4k samples: flip resolution, not tile precision)
-  //     and move ALL FIVE ceilings through them.
+  //     and move ALL FOUR ceilings through them (W through the stand-in).
   const wlAxis = (label, key, lo, hi, cur, fmtFn) => {
     // seeds are keyed by VALUE, not sweep index: inserting the current value
     // into the grid must not shift every later point onto different draws

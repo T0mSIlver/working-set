@@ -34,9 +34,14 @@ class HCache(Hypothesis):
     probes = frozenset({LADDER})
 
     def statement(self, cfg, p) -> str:
+        # the warm count is still the claim; what happens past it is a hit
+        # rate, not a cliff (issue #117)
         return (f"H-cache: >= {p.warm_capacity_p5:g} user sessions stay warm "
-                "(p5). A run bounds this below unless load reaches eviction "
-                "(watch the effective-cold fraction).")
+                f"(p5); past them the hit rate falls as "
+                f"{p.warm_capacity_p5:g} / users, not to zero (a round-robin "
+                "order is the worst case: every request misses). A run bounds "
+                "this below unless load reaches eviction (watch the "
+                "effective-cold fraction).")
 
     def predict(self, cfg, p) -> Prediction:
         return Prediction(value=p.warm_capacity_p5, unit=" users")

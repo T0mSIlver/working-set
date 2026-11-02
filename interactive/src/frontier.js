@@ -9,8 +9,9 @@ import { CEILING_KEYS, PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
    columns only (score on the active benchmark, the verdict at YOUR load, max
    users, what binds, €/seat); the rest are opt-in from the column picker.
    Clicking a header sorts by it; sort and optional columns are view state
-   and re-render from the cached rows. The five ceilings ride state.showCeil
-   so old share links that set it still open with them. */
+   and re-render from the cached rows. The four ceilings ride state.showCeil
+   so old share links that set it still open with them; the cache rides with
+   them as its hit rate at your load, not as a ceiling (issue #117). */
 export let lastFrontierRows = null, lastFrontierCurKey = null;
 const OPTIONAL = { otherBench: false, headroom: false, bstar: false, eur: false };
 let sortBy = null, sortDir = 1;   // null = the order the rows were handed in (max users)
@@ -70,6 +71,11 @@ function frontierColumns(){
               ? `${fmt(r.op.ceilings[k],0)} sessions<br><span style="color:${muted}">≈ ${fmt(peopleFromSessions(r.op.ceilings[k]),0)} people</span>`
               : fmt(r.op.ceilings[k],0))
             : '—'}${k==='decode'&&r.capped&&state.mns!==null?` <span style="color:${muted}">cap</span>`:''}</td>` });
+  // the cache, where the cache column used to be: the share of YOUR load's
+  // requests that hit on this row's pool
+  if (state.showCeil)
+    cols.push({ key:'hit', head:'cache hit', num:true, sort:r => r.op.hitRate,
+      cell:r => `<td class="num">${fmt(r.op.hitRate*100, r.op.hitRate > 0.995 ? 1 : 0)}%</td>` });
   if (OPTIONAL.bstar) cols.push({ key:'bstar', head:'B*', num:true, sort:r => r.bstar,
     cell:r => `<td class="num">${fmt(r.bstar,1)}</td>` });
   // energy is meaningful only where the load can actually be served
@@ -94,7 +100,7 @@ export function renderFrontierTable(rows, curKey){
   }).map(([r]) => r) : rows;
   const other = Object.entries(CONFIG.BENCHES).find(([k]) => k !== state.bench);
   const picks = [['otherBench', other ? other[1].label : 'other benchmark'], ['headroom', 'headroom'],
-                 ['ceil', 'the five ceilings'], ['bstar', 'B*'], ['eur', '€/mo']];
+                 ['ceil', 'the four ceilings'], ['bstar', 'B*'], ['eur', '€/mo']];
   const picker = `<div class="colpick"><span class="lbl">columns</span>`
     + picks.map(([k, l]) => `<button type="button" data-col="${k}" aria-pressed="${k === 'ceil' ? state.showCeil : OPTIONAL[k]}">${esc(l)}</button>`).join('')
     + `</div>`;

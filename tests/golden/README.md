@@ -140,7 +140,11 @@ explorer reports a censored fill the test compares `warm_p5_all` and
 bound, within the band — and counts them in its summary line. The cap is a UI
 cost guard, not a modelling difference: it is only reached by DeepSeek-V4.1-
 Flash's 890 B/token cache on the largest pools, where the count binds nothing
-the page decides (the users slider ends at 1,024).
+the page decides (the users slider ends at 1,024). Since issue #117 the same
+reading covers what is priced off that count past the warm pool —
+`cache_hit_rate` and the four capacity-aware ceilings, all of which rise with
+W — so on a censored fill they are lower bounds too, past a knee of 10^4+
+users.
 
 Two quantities have their bands derived from the probe states with
 `warm_p5 >= 12` only (`max_users_cache`, `warm_p5_all`): below that a fill
@@ -155,6 +159,40 @@ significant digits so the file regenerates byte-identically on any machine
 reads). The `exact` assertion is at 1e-6, six orders coarser than that
 quantisation. So a reported worst residual of ~5e-12 is the **storage floor**,
 not a measured agreement to 5e-12: read it as "nothing above 1e-11".
+
+## The cache at the configured users (issue #117)
+
+Since 2026-11-02 the cache is a hit rate, not a ceiling. Every vector carries
+`cache_hit_rate`, `1 - max(f0, 1 - W/U)` at the state's users per group with
+W = `max_users_cache`; every at-load figure (`prefill_duty`, the queue and
+TTFT figures, B*, the drain, `slowed_share`, `cold_wait_seconds`, power and
+energy) is priced at that miss share, and the four latency ceilings are the
+capacity-aware fixed points at W (`model._capacity_limit`, `capacityLimit` in
+`prefill.js`, both 100 halvings of the same bracket). The thresholds on the
+miss share itself (`breakeven_miss_rate`, `sla_miss_rate_sla10`) and
+`ttft_service_q95` stay at the configured rate.
+
+The mirror prices all of it on its own W (`warmUsersNow`), so W's sampling
+difference reaches every figure priced past the knee `W / (1 - f0)`. A
+ceiling that lands just past the knee tracks W at most one for one; an
+at-load figure just past it carries the difference amplified by
+`_miss_share_swing`, because `1 - W/U` there is a difference of two near
+numbers. The allowlist owns both by that cause: the at-load figures where
+`_miss_share_swing >= 0.5` (16 states just past the knee), past it with
+under 20 warm sessions (`_warm_p5 < 20`, where one session is more than the
+5% the swing measures), and the prefill duty past it otherwise; the ceilings
+and `cache_hit_rate` on a handful of sessions, beside `max_users_cache`'s own
+entry.
+
+It also moved the measured bands. A ceiling past the knee carries W's
+seed-to-seed spread, which would have widened the four latency ceilings'
+`mc` bands from 3-6% to 11-13% on every state. So those four are banded
+twice: `mc` from the probe states where the ceiling sits inside the knee,
+and `tolerances.mc_past_knee` from those where it sits past it (never
+tighter than its `mc` band). The test picks the band by comparing the
+Python value with the state's `cond.knee_users`, W / (1 - f0) per group, so
+a configuration inside the pool is held to the old check. The at-load
+figures' bands barely moved, since most probe states sit inside the pool.
 
 ## The allowlist
 
@@ -180,6 +218,7 @@ can be gated on the **cause** rather than on a model name.
 | `_steady_cap_ratio` | demand / aggregate throughput at the resident cap (the GPU-resident warm p95, where both `steady_decode_point` and `steadyDecodePoint` stop). At `>= 1` both report `saturated`; the cap itself is a Monte-Carlo draw on each side, so `n` there differs by the draw |
 | `_wait_margin` | `rho - (1 - p)`; the p-th cold wait `(E[W]/rho) ln(rho/(1 - p))` leaves zero at 0, so near it a small difference in rho is a large relative one in the wait (1 under `mean`) |
 | `_stretch_chunk_edge` | `|L_p - C round(L_p/C)| / L_p`: how close the stretch's prompt length sits to a chunk boundary, where `ceil(L_p/C)` adds a decode step |
+| `_miss_share_swing` | `(f(U; 0.95 W) - f(U; 1.05 W)) / f(U; W)`, f = `miss_share_at`: how far the at-load miss share moves when W moves 5% either way. 0 well inside the warm pool (both sides price the configured rate); past it the share is `1 - W/U`, a difference of two near numbers just past the knee, and each side prices it on its own W |
 
 ```jsonc
 {
