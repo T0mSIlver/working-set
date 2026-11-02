@@ -303,13 +303,13 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>n</i>, <i>n</i>*</td><td class="d">sessions admitted in arrival order; <i>n</i>* the last that fits (<code>searchsorted</code> on the cumulative sum)</td><td class="tnum"><i>n</i>* ≈ 224 (p50; cold draws included)</td><td>sessions</td></tr>
       <tr><td><i>P</i><sub>kv</sub></td><td class="d">the group's pool (above)</td><td class="tnum">6.48×10⁶</td><td>tok</td></tr>
       <tr><td><i>x</i><sub>res</sub></td><td class="d">prefix blocks reserved once per class present (<code>reserved</code>)</td><td class="tnum">18,000</td><td>tok</td></tr>
-      <tr><td><i>N</i><sub>warm</sub></td><td class="d">warm reusable capacity of one pool (<code>warm_capacity()</code>)</td><td class="tnum">p5/p50/p95 = 195/222/252; user-class p5 = 176</td><td>sessions</td></tr>
+      <tr><td><i>N</i><sub>warm</sub></td><td class="d">warm reusable capacity of one pool (<code>warm_capacity()</code>)</td><td class="tnum">p5/p50/p95 = 194/222/252 (p5 194.95, floored as § F.4–F.5 use it); user-class p5 = 176</td><td>sessions</td></tr>
     </table></div>
     <p class="tnote">Cold draws (probability <i>f</i>, § F.5) occupy their full length and never count as warm. Percentiles are taken over 4,000 draws of 2,000 sessions (<code>n_iter</code>, <code>draw</code>); the explorer seeds the RNG from the configuration. Token equivalents of <i>S</i> on the other models: 3,264 (35B-A3B), 4,521 (DeepSeek-V4-Flash-0731 and its Vision-Exp sibling), 3,293 (DeepSeek-V4.1-Flash), 4,701 (Qwen3.8-Flash-Next), 11,925 (GLM-5.3-Flash at FP8 KV, its Blackwell-only arm; 5,962 at the FP16 KV H200 must run), 0 (Mistral-3.5, GLM-5.3). <code>warm_capacity()</code> fills with the replicated model (block above), so the pool, the state charge and the offload buffer all count per stored copy. CPU offload: a session past the pool costs <i>u</i><sub>i</sub>·<i>b</i><sub>kv</sub> + <i>S</i> bytes of host RAM — counted as capacity (<code>which="all"</code>) but not as decodable (<code>which="gpu"</code>); with no offload buffer the two coincide, as in the example.</p>
 
     <h3 id="f-decode">F.2 — Decode (HBM roofline)</h3>
     <p><b>TP efficiency and group bandwidth</b><span class="fn">model.py · tp_efficiency() / effective_bw()</span></p>
-    <div class="eq"><i>η</i>(<i>t</i>) = <i>η</i>₂<sup>log₂ <i>t</i></sup> &nbsp;(<i>t</i> ≤ <i>N</i><sub>nvl</sub>);&nbsp; × <i>η</i><sub>x</sub><sup>log₂(<i>t</i>/<i>N</i><sub>nvl</sub>)</sup> past the NVLink domain<br>
+    <div class="eq"><i>η</i>(<i>t</i>) = <i>η</i>₂<sup>log₂ min(<i>t</i>, <i>N</i><sub>nvl</sub>)</sup> · <i>η</i><sub>x</sub><sup>log₂ max(1, <i>t</i>/<i>N</i><sub>nvl</sub>)</sup> &nbsp;(the second factor is 1 inside the NVLink domain)<br>
     <i>BW</i><sub>g</sub> = <i>t</i>·<i>BW</i><sub>HBM</sub>·<i>η</i>(<i>t</i>)</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
@@ -381,7 +381,8 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p class="tnote">2.94 is the accepted length measured on the production 27B deployment recorded as Qwen3.6-27B (<code>research/decode_mbu.md</code>, 2026-08-28) and carried over unmeasured to Qwen3.8-27B (acceptance is a property of the draft head's weights); the i.i.d. model predicts the second draft at <i>α</i>² = 0.943 against 0.944 measured. It was fitted with MBU, so the two move together. Every other MTP model keeps the baseline's pre-measurement fit, <i>m</i>(0.475) = 1.70, transplanted unmeasured. The 2-draft inversion is exact only for the two Qwens that draft 2 (Qwen3.8-27B, Qwen3.6-35B-A3B): GLM-5.3 and GLM-5.3-Flash draft 5, DeepSeek-V4-Flash-0731 7, Vision-Exp 3, V4.1-Flash 5, Qwen3.8-Flash-Next 3, and Mistral-3.5 has no MTP module (<i>m</i> = 1.0).</p>
 
     <p><b>The steady decode point — the batch a load actually produces</b><span class="fn">model.py · steady_decode_point()</span></p>
-    <div class="eq"><span class="op" style="padding-left:0"><i>n</i>·<i>v</i><sub>user</sub>(<i>n</i>) =</span><span class="term"><span><i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub></span><span class="ub"></span><span class="lbl">output tok/s the load demands</span></span><span class="op">,&nbsp;&nbsp; 1 ≤ <i>n</i> ≤ <i>N</i><sub>res</sub>;&nbsp;&nbsp; saturated if <i>N</i><sub>res</sub>·<i>v</i><sub>user</sub>(<i>N</i><sub>res</sub>) &lt; <i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub></span></div>
+    <div class="eq"><span class="op" style="padding-left:0"><i>n</i>·<i>v</i><sub>user</sub>(<i>n</i>) =</span><span class="term"><span><i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub></span><span class="ub"></span><span class="lbl">output tok/s the load demands</span></span><span class="op">,&nbsp;&nbsp; 1 ≤ <i>n</i> ≤ <i>N</i><sub>res</sub>;&nbsp;&nbsp; saturated if <i>N</i><sub>res</sub>·<i>v</i><sub>user</sub>(<i>N</i><sub>res</sub>) &lt; <i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub></span><br>
+    below one decoder (<i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub> ≤ <i>v</i><sub>user</sub>(1)): <i>n</i> = <i>λ</i><sub>g</sub>·<i>N</i><sub>out</sub> / <i>v</i><sub>user</sub>(1) at speed <i>v</i><sub>user</sub>(1), and <i>n</i> = 0 with no demand</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td><i>n</i></td><td class="d">mean sequences decoding at once at this load (<code>["n"]</code>)</td><td class="tnum">6.85</td><td>seqs</td></tr>
@@ -652,14 +653,14 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td><i>d</i><sub>p</sub></td><td class="d">fraction of time spent prefilling — the § F.4 duty, clamped (<code>d_p</code>)</td><td class="tnum">0.226</td><td>—</td></tr>
       <tr><td><i>d</i><sub>d</sub></td><td class="d">fraction of time decode-active: output demand over floor capacity, capped at what prefill leaves (<code>d_d</code>)</td><td class="tnum">0.317</td><td>—</td></tr>
-      <tr><td><i>λ</i><sub>g</sub></td><td class="d">total req/s one replica group sees (= <i>λ</i>/dp)</td><td class="tnum">2.35</td><td>req/s</td></tr>
+      <tr><td><i>λ</i><sub>g</sub></td><td class="d">total req/s one replica group sees: § F.5's rate, already per group (<code>rate_group</code>)</td><td class="tnum">2.35</td><td>req/s</td></tr>
       <tr><td>E[<i>S</i>]</td><td class="d">mean prefill service time (§ F.4)</td><td class="tnum">0.0962</td><td>s</td></tr>
       <tr><td><i>N</i><sub>out</sub></td><td class="d">output tokens per request (<code>AVG_OUT_TOK</code>, an alias of <code>OUT_TOKENS_DEFAULT</code>)</td><td class="tnum">400</td><td>tok</td></tr>
       <tr><td><i>U</i><sub>dec</sub></td><td class="d">the group's decode ceiling at the floor (<code>max_users_decode()</code>)</td><td class="tnum">74</td><td>users</td></tr>
       <tr><td><i>v</i><sub>floor</sub></td><td class="d">decode floor (<code>DECODE_FLOOR_TOKS</code>)</td><td class="tnum">40</td><td>tok/s</td></tr>
       <tr><td><i>P</i><sub>prefill</sub>, <i>P</i><sub>decode</sub>, <i>P</i><sub>idle</sub></td><td class="d">per-GPU phase draw (<code>p_prefill_w</code>, <code>p_decode_w</code>, <code>idle_w</code>)</td><td class="tnum">630, 385, 80</td><td>W</td></tr>
       <tr><td><i>P</i><sub>gpu</sub></td><td class="d">average draw of one GPU (<code>per_gpu_w</code>)</td><td class="tnum">301</td><td>W</td></tr>
-      <tr><td><i>n</i><sub>gpu</sub></td><td class="d">GPUs in the deployment (<code>Topology.n_gpu</code> = dp·<i>t</i>)</td><td class="tnum">2</td><td>GPUs</td></tr>
+      <tr><td><i>n</i><sub>gpu</sub></td><td class="d">GPUs in the deployment (<code>Topology.n_gpu</code> = <i>R</i>·<i>t</i>, <i>R</i> replica groups)</td><td class="tnum">2</td><td>GPUs</td></tr>
       <tr><td><i>P</i><sub>host</sub></td><td class="d">flat per-GPU chassis adder (<code>host_w</code>)</td><td class="tnum">575</td><td>W</td></tr>
       <tr><td>PUE</td><td class="d">facility power-usage effectiveness (<code>PUE_DEFAULT</code>)</td><td class="tnum">1.5</td><td>—</td></tr>
       <tr><td><i>P</i><sub>sys</sub></td><td class="d">draw at the meter (<code>kw</code> × 1000)</td><td class="tnum">2,628</td><td>W</td></tr>
@@ -668,7 +669,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
 
     <p><b>The bill</b><span class="fn">model.py · energy_cost()</span></p>
     <div class="eq">€<sub>elec</sub> = (<i>P</i><sub>sys</sub>/1000)·<i>h</i><sub>mo</sub>·<i>c</i><sub>kWh</sub>;&nbsp;&nbsp; €<sub>hw</sub> = <i>n</i><sub>gpu</sub>·<i>c</i><sub>gpu</sub>·<i>h</i><sub>mo</sub>;&nbsp;&nbsp; €<sub>month</sub> = €<sub>elec</sub> + €<sub>hw</sub><br>
-    €<sub>Mtok</sub> = (€<sub>month</sub>/<i>h</i><sub>mo</sub>/3600) / (<i>λ</i><sub>g</sub>·dp·<i>N</i><sub>out</sub>) × 10⁶;&nbsp;&nbsp; €<sub>user</sub> = €<sub>month</sub> / max(1, <i>U</i>)</div>
+    €<sub>Mtok</sub> = (€<sub>month</sub>/<i>h</i><sub>mo</sub>/3600) / (<i>λ</i><sub>g</sub>·<i>R</i>·<i>N</i><sub>out</sub>) × 10⁶;&nbsp;&nbsp; €<sub>user</sub> = €<sub>month</sub> / max(1, <i>U</i>)</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td>€<sub>elec</sub></td><td class="d">monthly electricity (<code>eur_month</code>)</td><td class="tnum">359</td><td>€</td></tr>
@@ -683,7 +684,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>c</i><sub>kWh</sub></td><td class="d">electricity tariff (<code>EUR_PER_KWH_DEFAULT</code>)</td><td class="tnum">0.19</td><td>€/kWh</td></tr>
       <tr><td><i>λ</i><sub>g</sub>, dp, <i>N</i><sub>out</sub></td><td class="d">group request rate, replica count, output tokens (above)</td><td class="tnum">2.35 req/s, 1, 400 tok</td><td></td></tr>
     </table></div>
-    <p class="tnote">The literals are unit conversions: /1000 W → kW; /<i>h</i><sub>mo</sub> then /3600 turn the monthly bill into a cost rate in €/s; ×10⁶ tokens → millions; the denominator <i>λ</i><sub>g</sub>·dp·<i>N</i><sub>out</sub> is the system's output-token rate in tok/s. The electricity line is linear in both PUE and <i>c</i><sub>kWh</sub> (asserted in the self-checks), so tariff and facility scenarios are one multiply. €<sub>user</sub> and €<sub>Mtok</sub> divide the whole bill: a €/Mtok that priced the watts but not the silicon read an order of magnitude too cheap. The hardware line is GPU-hours at an on-demand rental list price (cross-provider medians, September 2026, at EUR/USD 1.16), a market snapshot and not a cost of ownership. A rental rate includes power, so for a rented GPU the electricity line double-counts (6% of the bill here); for owned hardware, enter an amortised €/GPU-hour and both lines apply.</p>
+    <p class="tnote">The literals are unit conversions: /1000 W → kW; /<i>h</i><sub>mo</sub> then /3600 turn the monthly bill into a cost rate in €/s; ×10⁶ tokens → millions; the denominator <i>λ</i><sub>g</sub>·<i>R</i>·<i>N</i><sub>out</sub> is the system's output-token rate in tok/s, <i>R</i> the replica groups (<code>Topology.replicas</code>, written dp elsewhere on this page; renamed here so it does not read as the duty <i>d</i><sub>p</sub>). The electricity line is linear in both PUE and <i>c</i><sub>kWh</sub> (asserted in the self-checks), so tariff and facility scenarios are one multiply. €<sub>user</sub> and €<sub>Mtok</sub> divide the whole bill: a €/Mtok that priced the watts but not the silicon read an order of magnitude too cheap. The hardware line is GPU-hours at an on-demand rental list price (cross-provider medians, September 2026, at EUR/USD 1.16), a market snapshot and not a cost of ownership. A rental rate includes power, so for a rented GPU the electricity line double-counts (6% of the bill here); for owned hardware, enter an amortised €/GPU-hour and both lines apply.</p>
 
     <h3 id="f-constants">F.7 — Constants</h3>
     <p><b>Global constants</b></p>
