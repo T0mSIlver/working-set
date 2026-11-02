@@ -430,6 +430,10 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
         # the share when W moves +-5%: 0 well inside the knee (both price
         # f0), ~0.1 at twice W, ~10 at the kink under f0 = 1%
         "miss_share_swing": _miss_share_swing(users_g, warm, wl.invalidation),
+        # WHERE THE KNEE SITS, users per group: W / (1 - f0). A capacity-aware
+        # ceiling above it is priced on W's noisy miss share and is compared
+        # under tolerances.mc_past_knee; one below it under the plain mc band
+        "knee_users": _knee_users(warm, wl.invalidation),
         "decode_ceiling": dec,
         # 1 when sla_miss_rate returned its `hi` clamp, i.e. the SLA survives
         # an all-cold stream at this load and the latency constraint is not
@@ -465,6 +469,19 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
             warm_gpu95 if st["mns"] is None else min(warm_gpu95, st["mns"]), seed),
     }
     return o, cond
+
+
+def _knee_users(warm: float, f0: float) -> float:
+    """W / (1 - f0); with f0 = 1 every request misses whatever W is, so no
+    ceiling leans on W: a knee no ceiling reaches."""
+    return warm / (1.0 - f0) if f0 < 1 else KNEE_NEVER
+
+
+def past_knee(q: str, out: dict, cond: dict) -> bool:
+    """Does capacity-aware ceiling `q` sit past the state's knee?"""
+    v = out.get(q)
+    return (q in KNEE_QUANTITIES and v is not None and math.isfinite(v)
+            and v > cond["knee_users"])
 
 
 def _miss_share_swing(users: float, warm: float, f0: float) -> float:
@@ -981,9 +998,17 @@ FLAG_QUANTITIES = ["max_users_decode_censored", "steady_saturated", "decode_capp
 
 SPREAD_SEEDS = (0, 1, 2)
 
+# the capacity-aware ceilings (issue #117): past the knee each is priced on the
+# miss share 1 - W/U, so it carries W's seed noise, and is banded apart
+KNEE_QUANTITIES = ("max_users_latency", "max_users_saturation",
+                   "max_users_slowed", "max_users_cold_wait")
+PAST_KNEE = "@past_knee"
+KNEE_NEVER = 1e18
+
 
 def _spread_one(st: dict, n: int, warm_iter: int, dec_iter: int) -> tuple:
-    """(spread-per-quantity, cond) for one state: compute() at three seeds.
+    """(spread-per-quantity, cond, values) for one state: compute() at three
+    seeds; cond and values are seed 0's.
 
     `cond` rides along so the band derivation can EXCLUDE probe states from a
     quantity whose noise is dominated by a regime the allowlist already owns —
@@ -1008,7 +1033,7 @@ def _spread_one(st: dict, n: int, warm_iter: int, dec_iter: int) -> tuple:
         lo, hi = min(vals), max(vals)
         mid = 0.5 * (lo + hi)
         out[q] = 0.0 if mid == 0 else abs(hi - lo) / abs(mid)
-    return out, runs[0][1]
+    return out, runs[0][1], runs[0][0]
 
 
 # A probe state is dropped from these quantities' band when its warm count is
@@ -1033,7 +1058,7 @@ def _pct(xs: list[float], p: float) -> float:
 
 def _spread_task(args):
     """Picklable entry point for the process pool: (state, n, warm_iter,
-    decode_iter) -> (spread, cond)."""
+    decode_iter) -> (spread, cond, values)."""
     return _spread_one(*args)
 
 
@@ -1119,16 +1144,22 @@ def measure_spread(probe: list[dict], jobs: int = 1,
     for label, n, wi, di in (("python", CTX_N, WARM_ITER, DECODE_ITER),
                              ("mirror", MIRROR_CTX_N, WARM_ITER, DECODE_ITER)):
         agg: dict[str, list] = {}
-        for spr, cond in _map(_spread_task,
-                              [(st, n, wi, di) for st in probe], jobs):
+        for spr, cond, vals in _map(_spread_task,
+                                    [(st, n, wi, di) for st in probe], jobs):
             small = cond["warm_p5"] < SMALL_COUNT_THRESHOLD
             for q, v in spr.items():
                 if small and q in SMALL_COUNT_QUANTITIES:
                     continue
-                agg.setdefault(q, []).append(v)
+                # a ceiling past the knee carries W's seed noise; it gets a
+                # band of its own so states inside the pool keep theirs
+                key = q + PAST_KNEE if past_knee(q, vals, cond) else q
+                agg.setdefault(key, []).append(v)
         out[label] = {q: {"p50": r12(_pct(v, 50)), "p90": r12(_pct(v, 90)),
                           "max": r12(max(v)), "n": len(v)}
                       for q, v in sorted(agg.items())}
+    out["past_knee"] = (
+        f"'<q>{PAST_KNEE}' is the spread of ceiling q over the probe states "
+        "where it sits past the knee W / (1 - f0); 'q' alone, over the rest")
     out["excluded_from_bands"] = {
         q: f"probe states with warm_p5 < {SMALL_COUNT_THRESHOLD:g} "
            "(the allowlist owns that tail)"
@@ -1183,18 +1214,34 @@ def bands_from_spread(spread: dict) -> dict:
     known_disagreements.json — with the states it happens on — is worth more
     than a band nothing could fail.
     """
-    bands = {}
-    for q in MC_QUANTITIES:
-        s = spread["mirror"].get(q, {}).get("p90", 0.0)
+    def band(s: float) -> float:
         b = min(BAND_CAP, max(BAND_FLOOR, SPREAD_MULT * s))
         mag = 10 ** math.floor(math.log10(b))
-        bands[q] = r12(math.ceil(b / mag * 10) * mag / 10)
+        return r12(math.ceil(b / mag * 10) * mag / 10)
+
+    bands = {q: band(spread["mirror"].get(q, {}).get("p90", 0.0))
+             for q in MC_QUANTITIES}
     for group in BAND_GROUPS:
         widest = max(bands[q] for q in group if q in bands)
         for q in group:
             if q in bands:
                 bands[q] = widest
     return bands
+
+
+def past_knee_bands(spread: dict, inside: dict) -> dict:
+    """The bands of the four capacity-aware ceilings past the knee, by the
+    same rule over the probe states where each sits past it; never tighter
+    than the same ceiling's band inside."""
+    out = {}
+    for q in KNEE_QUANTITIES:
+        s = spread["mirror"].get(q + PAST_KNEE)
+        if s is None:
+            continue
+        b = min(BAND_CAP, max(BAND_FLOOR, SPREAD_MULT * s["p90"]))
+        mag = 10 ** math.floor(math.log10(b))
+        out[q] = max(inside[q], r12(math.ceil(b / mag * 10) * mag / 10))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1412,12 +1459,18 @@ def render(states: list[dict], spread: dict, bands: dict, jobs: int) -> str:
         "tolerances": {
             "exact": {"rel": 1e-06},
             "mc": bands,
+            # the four capacity-aware ceilings on states where the Python
+            # value sits past cond.knee_users (issue #117)
+            "mc_past_knee": past_knee_bands(spread, bands),
             "mc_default": 0.1,
             "mc_derivation": (
                 f"{SPREAD_MULT:g}x the p90 seed-to-seed spread under mc_spread"
                 f".mirror, floored at {BAND_FLOOR:g}, capped at {BAND_CAP:g}, "
-                "rounded up to two significant digits. See "
-                "scripts/golden.py bands_from_spread and tests/golden/README.md"),
+                "rounded up to two significant digits. The four capacity-aware "
+                "ceilings are banded twice: mc over the probe states where the "
+                "ceiling sits inside the knee, mc_past_knee over those past it. "
+                "See scripts/golden.py bands_from_spread / past_knee_bands and "
+                "tests/golden/README.md"),
             "storage_precision": (
                 "every value here is rounded to 12 significant digits so the "
                 "file regenerates byte-identically. The exact class is "

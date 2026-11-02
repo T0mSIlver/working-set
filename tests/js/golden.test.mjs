@@ -69,9 +69,15 @@ function klass(q){
   if (FLAGS.has(q)) return 'flag';
   return MC.has(q) ? 'mc' : 'exact';
 }
-function tolerance(q){
+// A capacity-aware ceiling past the state's knee (W / (1 - f0), issue #117) is
+// priced on W's noisy miss share and has its own band; the one inside keeps
+// the plain mc band. The side is read off the Python value.
+const PAST_KNEE = doc.tolerances.mc_past_knee || {};
+function tolerance(q, vec){
   if (FLAGS.has(q)) return 0;
   if (!MC.has(q)) return doc.tolerances.exact.rel;
+  if (vec && q in PAST_KNEE && vec.cond
+      && num(vec.out[q]) > num(vec.cond.knee_users)) return PAST_KNEE[q];
   return doc.tolerances.mc[q] ?? doc.tolerances.mc_default;
 }
 
@@ -190,7 +196,7 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
       const jsv = js[q];
       compared++;
       let rel = relErr(py, jsv);
-      const tol = tolerance(q);
+      const tol = tolerance(q, vec);
       // A censored warm fill (capacity.js warmOnce hit its SAFETY draw cap;
       // the page prints "≥ N") is a lower bound, not an estimate: Python's
       // reference must sit at or above it, within the band. The explorer's

@@ -184,10 +184,15 @@ under 20 warm sessions (`_warm_p5 < 20`, where one session is more than the
 and `cache_hit_rate` on a handful of sessions, beside `max_users_cache`'s own
 entry.
 
-It also moved the measured bands. The probe states whose ceilings now land
-past the knee carry W's seed-to-seed spread, so the four latency ceilings'
-`mc` bands widened from 3-6% to 11-13%; the at-load figures' bands barely
-moved, since most probe states sit inside the pool.
+It also moved the measured bands. A ceiling past the knee carries W's
+seed-to-seed spread, which would have widened the four latency ceilings'
+`mc` bands from 3-6% to 11-13% on every state. So those four are banded
+twice: `mc` from the probe states where the ceiling sits inside the knee,
+and `tolerances.mc_past_knee` from those where it sits past it (never
+tighter than its `mc` band). The test picks the band by comparing the
+Python value with the state's `cond.knee_users`, W / (1 - f0) per group, so
+a configuration inside the pool is held to the old check. The at-load
+figures' bands barely moved, since most probe states sit inside the pool.
 
 ## The allowlist
 
