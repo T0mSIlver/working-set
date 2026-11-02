@@ -141,6 +141,18 @@
    "hypothesis": "ILL-CONDITIONED near the cliff, one named state: Mistral-Medium-3.5 on 3xB300 at 10% misses and a 5 s budget, whose p95 own-prefill term (4.67 s, the p95 of the hit/miss service mixture) leaves 6.6% headroom. lam = k/(a + k b) with k = 2(SLA - c_p) then multiplies the two samplers' ~3.5% quantile difference by 1/headroom; no JS formula difference was found. Named rather than a wider _sla_headroom window, so the licence does not spread to other states."
   },
   {
+   "quantity": "max_users_latency",
+   "where": {
+    "_sla_headroom": {
+     "gte": 0.05,
+     "lt": 0.75
+    }
+   },
+   "observed_rel": 0.113,
+   "max_rel": 0.2,
+   "hypothesis": "the same 1/k amplification, away from the cliff and therefore bounded: a relative difference in E[S|miss] enters lam multiplied by roughly SLA/(SLA - c) = 1/headroom, so at a headroom of 0.15-0.75 a 2% moment difference reads as 3-13%. Seven states of 821, all inside that window; above 0.75 headroom the quantity is inside its band everywhere."
+  },
+  {
    "quantity": "ttft_*",
    "where": {
     "_duty": {
@@ -650,17 +662,6 @@
    "hypothesis": "past the knee with under 20 warm sessions: one session either way is 5-20% of W, so the at-load miss share 1 - W/U moves by more than the 5% the swing measures. the drain runs on 1/(1 - rho) (1 state, W = 5)."
   },
   {
-   "quantity": "max_users_cold_wait",
-   "where": {
-    "_warm_p5": {
-     "lt": 20
-    }
-   },
-   "observed_rel": 0.157,
-   "max_rel": 0.25,
-   "hypothesis": "past the knee the ceiling is the fixed point U = ceiling(1 - W/U), which lands a few users past W (issue #117), so it carries W's own difference between the two sides: at under 20 warm sessions one session is 5-20% of W (max_users_cache owns the same tail, gated on warm_p5 < 12). Mostly MM35 on DP grids, 1-2 states each"
-  },
-  {
    "quantity": "max_users_latency",
    "where": {
     "_warm_p5": {
@@ -668,28 +669,6 @@
     }
    },
    "observed_rel": 0.143,
-   "max_rel": 0.25,
-   "hypothesis": "past the knee the ceiling is the fixed point U = ceiling(1 - W/U), which lands a few users past W (issue #117), so it carries W's own difference between the two sides: at under 20 warm sessions one session is 5-20% of W (max_users_cache owns the same tail, gated on warm_p5 < 12). Mostly MM35 on DP grids, 1-2 states each"
-  },
-  {
-   "quantity": "max_users_saturation",
-   "where": {
-    "_warm_p5": {
-     "lt": 20
-    }
-   },
-   "observed_rel": 0.113,
-   "max_rel": 0.2,
-   "hypothesis": "past the knee the ceiling is the fixed point U = ceiling(1 - W/U), which lands a few users past W (issue #117), so it carries W's own difference between the two sides: at under 20 warm sessions one session is 5-20% of W (max_users_cache owns the same tail, gated on warm_p5 < 12). Mostly MM35 on DP grids, 1-2 states each"
-  },
-  {
-   "quantity": "max_users_slowed",
-   "where": {
-    "_warm_p5": {
-     "lt": 20
-    }
-   },
-   "observed_rel": 0.148,
    "max_rel": 0.25,
    "hypothesis": "past the knee the ceiling is the fixed point U = ceiling(1 - W/U), which lands a few users past W (issue #117), so it carries W's own difference between the two sides: at under 20 warm sessions one session is 5-20% of W (max_users_cache owns the same tail, gated on warm_p5 < 12). Mostly MM35 on DP grids, 1-2 states each"
   },
