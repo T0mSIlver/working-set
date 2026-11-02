@@ -4,8 +4,9 @@
 was off the frontier once seats were priced at capacity; GLM-5.3 (released
 2026-08-25) scores 83.9% on Terminal-Bench 2.1 against 77.9%. This note
 checks whether it can take the row without touching a constant. Verdict:
-**yes for everything the architecture determines; the MTP fit and the NVFP4
-bytes stay projections, and the license changed.**
+**yes for everything the architecture determines; the MTP fit stays a
+projection, the NVFP4 bytes are measured since 2026-10-02 (§ 2), and the
+license changed.**
 
 ## 1. What was compared (read 2026-09-06)
 
