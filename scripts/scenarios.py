@@ -516,9 +516,9 @@ def fig_binding_map():
     axL.set_ylabel(f"max concurrent users  (one turn / {THINK:.0f} s)")
     axL.legend(frameon=False, fontsize=8.5, loc="upper right")
     axL.set_title("27B on TP2: every constraint in ONE unit\n"
-                  "cache and decode barely move with f and the prefill side\n"
-                  "collapses, so the binding one changes hands inside the "
-                  "slider's own range", fontsize=10.5)
+                  "decode barely moves with f and the prefill side collapses,\n"
+                  "so the binding one changes hands inside the slider's own "
+                  "range", fontsize=10.5)
 
     # -- right: the frontier across configurations -------------------------
     rows = [("27B", 1, 1, "H200", "27B 1xH200"), ("27B", 1, 2, "H200", "27B TP2"),
