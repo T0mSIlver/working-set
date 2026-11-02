@@ -330,8 +330,10 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     fstar:   breakevenMissRate(model, topo, wl, rate, cs, prefillChunk()),
     fsla:    sp.fsla, duty: sp.rho,
     burstDrain: sp.rho >= 1 ? Infinity : drain,
+    // every step carries mtp tokens per user: steps lost x mtp (model.py
+    // spike_token_debt)
     tokensLost: (sp.rho >= 1 || !(dm.ratio > 1)) ? 0
-              : drain * (1/dm.decodeS - 1/dm.mixedS),
+              : drain * model.mtp * (1/dm.decodeS - 1/dm.mixedS),
     ttftMiss:    ttft.miss,
     ttftHitFcfs: ttft.hitFcfs,
     ttftHitPs:   ttft.hitPs,
@@ -655,7 +657,7 @@ function itlSpikeRatio(model, topo, wl, cs){
   const st = lastStress;
   const pu = st && st.pu > 0 ? st.pu : 0;
   if (!(pu > 0)) return { decodeS: 0, mixedS: 0, ratio: 0 };
-  const decodeS = model.mtp / pu;
+  const decodeS = model.mtp / pu;     // one decode step, mtp tokens per user
   // priced mid-re-prefill: prior = E[L]/2, the average cache a chunk attends
   // over during a full cold re-prefill. A chunk larger than the mean context
   // is a single whole-context pass with no cache behind it.
