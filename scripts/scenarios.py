@@ -453,21 +453,38 @@ def fig_cold_spike():
             for mk, dp, tp, gk, _, lab in configs}
 
 
+# how each ceiling operating_point can return is drawn: colour, legend, the
+# short name the frontier's bars quote. The set is read off the model, so a
+# ceiling added or retired there (#94 split latency in two) needs no edit here
+# beyond a style; one without a style is drawn muted under its own name.
+CEIL_STYLE = {
+    "cache": (BLUE, "cache — warm user sessions that fit", "cache"),
+    "decode": (GREEN, f"decode — {M.DECODE_FLOOR_TOKS:.0f} tok/s floor", "dec"),
+    "cold_wait": (ORANGE, "cold wait — a cold request queues 5 s (p95)", "wait"),
+    "slowed": (PURPLE, "slowed — generation slowed 15% of the time", "slow"),
+    "saturation": (RED, "saturation — prefill duty hits 100%", "sat"),
+    "latency": (YELLOW, "latency — TTFT hits the budget", "lat"),
+}
+
+
+def _ceiling_styles(keys) -> list:
+    return [(k, *CEIL_STYLE.get(k, (MUTED, k, k))[:2]) for k in keys]
+
+
 def fig_binding_map():
-    """The two-axis planner: four ceilings in one unit, and the crossover
+    """The two-axis planner: every ceiling in one unit, and the crossover
     where the binding constraint changes hands (research/spike.md)."""
     CH, TURN, SLA = 32_768, 2_000, 10.0
     THINK = M.THINK_TIME_S
     fs = np.linspace(0, 0.30, 31)
-    CEIL = [("cache", BLUE, "cache — warm user sessions that fit"),
-            ("decode", GREEN, f"decode — {M.DECODE_FLOOR_TOKS:.0f} tok/s floor"),
-            ("latency", ORANGE, f"latency — mean TTFT hits {SLA:.0f} s"),
-            ("saturation", RED, "saturation — prefill duty hits 100%")]
 
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 5.0))
 
     # -- left: the 27B/TP2 planner, ceiling by ceiling ---------------------
     m, t = MODELS["27B"], M.topology_grid(1, 2, "H200")
+    op0 = M.operating_point(m, t, base_workload(invalidation=fs[0]),
+                            M.REF_USERS, CH, TURN, SLA, n_iter=500)
+    CEIL = _ceiling_styles(op0["ceilings"])
     series = {k: [] for k, _, _ in CEIL}
     for f in fs:
         op = M.operating_point(m, t, base_workload(invalidation=f), M.REF_USERS,
@@ -499,9 +516,9 @@ def fig_binding_map():
     axL.set_ylabel(f"max concurrent users  (one turn / {THINK:.0f} s)")
     axL.legend(frameon=False, fontsize=8.5, loc="upper right")
     axL.set_title("27B on TP2: every constraint in ONE unit\n"
-                  "two ceilings barely move with f and two collapse, so the\n"
-                  "binding one changes hands inside the slider's own range",
-                  fontsize=10.5)
+                  "cache and decode barely move with f and the prefill side\n"
+                  "collapses, so the binding one changes hands inside the "
+                  "slider's own range", fontsize=10.5)
 
     # -- right: the frontier across configurations -------------------------
     rows = [("27B", 1, 1, "H200", "27B 1xH200"), ("27B", 1, 2, "H200", "27B TP2"),
@@ -510,7 +527,7 @@ def fig_binding_map():
             ("MM35", 1, 4, "H200", "Mistral-3.5 TP4"),
             ("GLM52", 1, 8, "H200", "GLM-5.3 TP8"),
             ("27B", 1, 1, "B300", "27B 1xB300")]
-    COLOR = {k: c for k, c, _ in CEIL}
+    COLOR = {k: CEIL_STYLE.get(k, (MUTED,))[0] for k in CEIL_STYLE}
     bars = []
     for mk, dp, tp, gk, lab in rows:
         mm, tt = MODELS[mk], M.topology_grid(dp, tp, gk)
@@ -519,16 +536,14 @@ def fig_binding_map():
         bars.append((op["limit"], lab, op["binding"], op["ceilings"]))
     bars.sort()
     y = np.arange(len(bars))
-    axR.barh(y, [b[0] for b in bars], color=[COLOR[b[2]] for b in bars],
+    axR.barh(y, [b[0] for b in bars], color=[COLOR.get(b[2], MUTED) for b in bars],
              height=.6)
     for i, (lim, lab, binding, ceilings) in enumerate(bars):
-        SHORT = {"cache": "cache", "decode": "dec", "latency": "lat",
-                 "saturation": "sat"}
-        others = " · ".join(f"{SHORT[k]} {ceilings[k]:.0f}"
-                            for k, _, _ in CEIL if k != binding)
+        others = " · ".join(f"{CEIL_STYLE.get(k, (0, 0, k))[2]} {v:.0f}"
+                            for k, v in ceilings.items() if k != binding)
         axR.annotate(f"{lim:.0f} — {binding}", (lim, i), xytext=(5, 3),
                      textcoords="offset points", va="center", fontsize=8.5,
-                     fontweight="bold", color=COLOR[binding])
+                     fontweight="bold", color=COLOR.get(binding, MUTED))
         axR.annotate(others, (lim, i), xytext=(5, -7), textcoords="offset points",
                      va="center", fontsize=7.2, color=MUTED)
     axR.axvline(M.REF_USERS, color="black", lw=1.4, ls="--")

@@ -1507,7 +1507,11 @@ explorer; the hand-written tables below predate them.
 
 ### Results — warm capacity by GPU part and weight dtype
 
-Reference workload, FP8 KV, 0 offload (`tables.py` "B300 × weight dtype"):
+Reference workload, FP8 KV, 0 offload (`tables.py` "B300 × weight dtype").
+The GLM rows' NVFP4 cells are priced on `nvidia/GLM-5.3-NVFP4` since
+2026-10-02 (the study's GLM row has carried GLM-5.3, tensor-identical at FP8,
+since 2026-09-06); NVIDIA's 5.2 recipe read 11.83M / 403 / 442 and
+33.26M / 1,177 / 1,247 ([`research/nvfp4_2026-10.md`](../research/nvfp4_2026-10.md)):
 
 | Config | FP8: pool / warm p5 / p50 | NVFP4: pool / warm p5 / p50 |
 | --- | --- | --- |
@@ -1517,8 +1521,8 @@ Reference workload, FP8 KV, 0 offload (`tables.py` "B300 × weight dtype"):
 | 35B-A3B, 2×B300 TP | 47.19M / **1,509** / 1,582 | 48.30M / **1,544** / 1,613 |
 | MM-3.5, 1×B300 | 0.70M / **16** / 26 | 0.91M / **24** / 33 |
 | MM-3.5, 2×B300 TP | 2.14M / **61** / 79 | 2.35M / **70** / 88 |
-| GLM-5.2, 4×B300 TP | 5.82M / **187** / 217 | 11.83M / **403** / 442 |
-| GLM-5.2, 8×B300 TP | 27.25M / **957** / 1,023 | 33.26M / **1,177** / 1,247 |
+| GLM-5.2, 4×B300 TP | 5.82M / **187** / 217 | 11.84M / **402** / 446 |
+| GLM-5.2, 8×B300 TP | 27.25M / **957** / 1,023 | 33.27M / **1,175** / 1,252 |
 
 And on H200s where the new models fit at FP8:
 
@@ -1552,9 +1556,10 @@ Observations:
    workload comfortably.
 3. **NVFP4's capacity upside scales with how much of the checkpoint the
    experts are.** GLM-5.2's pool more than doubles on 4×B300 (5.82M →
-   11.83M, warm p5 187 → 403) because routed experts are **725 GB of its
-   756 GB** FP8 footprint and are the *only* tensors `nvidia/GLM-5.2-NVFP4`
-   quantizes (725 → 408 GB; whole checkpoint 756 → 465 GB); the Qwen models
+   11.84M, warm p5 187 → 402) because routed experts are **725 GB of its
+   756 GB** FP8 footprint and are the *only* tensors NVIDIA's NVFP4
+   checkpoints quantize (725 → 408 GB; whole checkpoint 756 → 465 GB on the
+   5.2 recipe, 464 GB on `nvidia/GLM-5.3-NVFP4`); the Qwen models
    gain only ~4% in warm capacity (their checkpoints keep large BF16
    shares under NVFP4).
 4. **NVFP4 decode crosses over on MoE models** (35B-A3B, 1×B300 p50):

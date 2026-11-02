@@ -82,9 +82,11 @@ asserted).
 No NVIDIA or RedHatAI NVFP4 checkpoint exists (Hub search 2026-10-02: only
 community repacks, `s-zaizen/…-NVFP4`, `msuiche/…-NVFP4`). The routed experts
 already ship 4-bit with E8M0 block-32 scales; NVIDIA's repack of 0731 to E4M3
-block-16 came out 5.2% heavier (`research/nvfp4_2026-09.md`). Same policy as
-DSv4.1-Flash: greyed out rather than projected. (A projection would be
-0731's NVFP4 total + 932,836,352 B, should anyone want one.)
+block-16 came out 5.2% heavier (`research/nvfp4_2026-09.md`), and its repack
+of DSv4.1-Flash 3.3% heavier (`research/nvfp4_2026-10.md`). The policy
+DSv4.1-Flash had until that checkpoint was measured: greyed out rather than
+projected. (A projection would be 0731's NVFP4 total + 932,836,352 B, should
+anyone want one.)
 
 ## 5. Outside check: a vLLM 0.30.0 startup log on 2×B300
 
