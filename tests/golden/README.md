@@ -8,7 +8,7 @@ and the explorer would publish numbers the package would not.
 
 **`vectors.json` is what the Python model says.** Every deployment the explorer
 can reach — 9 models x 2 GPU parts x 1-8 GPUs x every DP/TP split of those that
-holds the weights x the servable weight/KV dtype arms, **642 of them, each
+holds the weights x the servable weight/KV dtype arms, **650 of them, each
 priced at least once** — plus a one-knob-at-a-time sweep on four anchors, the
 all-defaults reference of each model/part, and the 27 spread-probe states. Each state is priced by
 `workingset.model` and written out with its inputs, its outputs, a `cond` block
@@ -42,7 +42,7 @@ regenerates in memory and diffs; CI runs it, so the fixture cannot drift behind
 the model.
 
 Runtime: ~10.5 min of CPU, so ~2.5 min wall on four cores and ~2 min on eight
-(954 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
+(963 states, two Monte-Carlo warm fills and a decode-ceiling bisection each,
 plus a 27-state named spread probe at three seeds and two sampling scales). The JS
 side is ~80 s. That is the price of pricing every legal deployment rather than
 a sample of them.
