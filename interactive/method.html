@@ -528,20 +528,20 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
     <p><b>Bursts, drains, and what the warm users lose</b><span class="fn">model.py · burst_drain_seconds() / spike_tolerance() / itl_spike() / spike_token_debt()</span></p>
     <div class="eq"><i>T</i><sub>drain</sub> = <i>B</i>·E[<i>S</i>|miss] / (1 − <i>ρ</i>);&nbsp;&nbsp; <i>B</i>* = SLA·(1 − <i>ρ</i>) / E[<i>S</i>|miss]<br>
     <span class="op" style="padding-left:0"><i>t</i><sub>dec</sub> = <i>m</i> / <i>v</i><sub>user</sub>(<i>n</i><sub>w</sub>);&nbsp;&nbsp; <i>t</i><sub>mix</sub> =</span><span class="term"><span><i>t</i><sub>dec</sub></span><span class="ub"></span><span class="lbl">the normal decode step</span></span><span class="op">+</span><span class="term"><span><i>t</i><sub>pf</sub>(chunk₀, <i>H</i> = E[<i>L</i>]/2)</span><span class="ub"></span><span class="lbl">the prefill chunk sharing the forward pass</span></span><br>
-    <i>Δ</i><sub>tok</sub> = <i>T</i><sub>drain</sub>·(1/<i>t</i><sub>dec</sub> − 1/<i>t</i><sub>mix</sub>)</div>
+    <i>Δ</i><sub>tok</sub> = <i>T</i><sub>drain</sub>·<i>m</i>·(1/<i>t</i><sub>dec</sub> − 1/<i>t</i><sub>mix</sub>)</div>
     <div class="tblwrap"><table class="c">
       <tr><th>Symbol</th><th>Definition (code name)</th><th>Example</th><th>Unit</th></tr>
       <tr><td><i>T</i><sub>drain</sub></td><td class="d">wall-clock to clear a burst on top of the standing load (<code>burst_drain_seconds()</code>)</td><td class="tnum">10.0 at <i>B</i> = <i>B</i>*</td><td>s</td></tr>
       <tr><td><i>B</i></td><td class="d">simultaneous cache misses in the burst (<code>burst</code>)</td><td class="tnum">4.93 (= <i>B</i>*)</td><td>misses</td></tr>
       <tr><td><i>B</i>*</td><td class="d">cold-spike tolerance: largest burst whose last request meets the budget (<code>spike_tolerance()</code>)</td><td class="tnum">4.93</td><td>misses</td></tr>
       <tr><td>E[<i>S</i>|miss], <i>ρ</i>, SLA</td><td class="d">as above</td><td class="tnum">1.570 s, 0.226, 10 s</td><td></td></tr>
-      <tr><td><i>t</i><sub>dec</sub></td><td class="d">one normal decode step, the inter-token gap a decoding user sees (from <code>decode_curves()</code> via <code>itl_spike()</code>)</td><td class="tnum">0.166</td><td>s</td></tr>
-      <tr><td><i>t</i><sub>mix</sub></td><td class="d">inter-token gap when a prefill chunk shares the forward pass (<code>itl_spike()</code>)</td><td class="tnum">1.46</td><td>s</td></tr>
+      <tr><td><i>t</i><sub>dec</sub></td><td class="d">one normal decode step: a forward pass that hands each decoding user <i>m</i> tokens, the gap between its streamed events (from <code>decode_curves()</code> via <code>itl_spike()</code>)</td><td class="tnum">0.166</td><td>s</td></tr>
+      <tr><td><i>t</i><sub>mix</sub></td><td class="d">the step when a prefill chunk shares the forward pass (<code>itl_spike()</code>)</td><td class="tnum">1.46</td><td>s</td></tr>
       <tr><td><i>m</i>, <i>v</i><sub>user</sub>(·)</td><td class="d">MTP speedup and per-user decode speed (§ F.2)</td><td class="tnum">2.94; 17.7 tok/s at <i>n</i><sub>w</sub></td><td></td></tr>
       <tr><td><i>n</i><sub>w</sub></td><td class="d">decoding population at the stress point: GPU-resident p5 warm sessions (§ F.1)</td><td class="tnum">194</td><td>seqs</td></tr>
       <tr><td><i>t</i><sub>pf</sub>(·, ·), chunk₀</td><td class="d">marginal pass time and chunk size (§ F.3)</td><td class="tnum">—, 32,768 tok</td><td></td></tr>
       <tr><td><i>H</i>, E[<i>L</i>]</td><td class="d">cached tokens the spike chunk attends over, mean context (§ F.3)</td><td class="tnum">20,070, 40,141</td><td>tok</td></tr>
-      <tr><td><i>Δ</i><sub>tok</sub></td><td class="d">output tokens one warm user never receives during the drain (<code>spike_token_debt()</code>)</td><td class="tnum">53.3 (× 194 users ≈ 10,350 total)</td><td>tok</td></tr>
+      <tr><td><i>Δ</i><sub>tok</sub></td><td class="d">output tokens one warm user never receives during the drain: steps lost × <i>m</i> (<code>spike_token_debt()</code>)</td><td class="tnum">156.8 (53.3 steps; × 194 users ≈ 30,420 total)</td><td>tok</td></tr>
     </table></div>
     <p class="tnote">A backlog drains at (1 − <i>ρ</i>) seconds of work per second because standing traffic keeps arriving; the burst's <em>last</em> request gets its first token at <i>T</i><sub>drain</sub> under either discipline. <i>B</i>* inverts the drain equation, is linear in the SLA, and reaches zero exactly at <i>f</i>* — with <i>B</i> = <i>B</i>* the drain equals the budget by construction, as the example shows. The spike chunk is priced mid-re-prefill (<i>H</i> = E[<i>L</i>]/2); during a drain the scheduler has a chunk to place in every pass, so <i>t</i><sub>mix</sub> is the steady state for the whole drain, and <i>Δ</i><sub>tok</sub> integrates the difference. <i>t</i><sub>dec</sub> is read at the stress batch <i>n</i><sub>w</sub>; slowed generation below prices the decode step at the floor instead.</p>
 

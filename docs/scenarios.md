@@ -629,11 +629,11 @@ values, not attending over them). A miss re-pays everything.
 
 | Model / topology | miss | hit | **thrash** | ITL spike, 64 decoders |
 | --- | --- | --- | --- | --- |
-| 27B, 1×H200 | 2,826 ms | 146 ms | **19×** | 25.9 → 2,356 ms (**91×**) |
-| 27B, TP2 | 1,570 ms | 81 ms | **19×** | 14.4 → 1,309 ms (**91×**) |
-| 35B-A3B, TP2 | 265 ms | 14 ms | **18×** | 7.5 → 229 ms (**31×**) |
-| Mistral-3.5, TP4 | 5,485 ms | 292 ms | **19×** | 37.6 → 4,595 ms (**122×**) |
-| GLM-5.2, TP8 | 1,954 ms | 110 ms | **18×** | 27.0 → 1,675 ms (**62×**) |
+| 27B, 1×H200 | 2,826 ms | 146 ms | **19×** | 117.9 → 2,448 ms (**21×**) |
+| 27B, TP2 | 1,570 ms | 81 ms | **19×** | 65.5 → 1,360 ms (**21×**) |
+| 35B-A3B, TP2 | 265 ms | 14 ms | **18×** | 34.0 → 256 ms (**8×**) |
+| Mistral-3.5, TP4 | 5,485 ms | 292 ms | **19×** | 170.8 → 4,728 ms (**28×**) |
+| GLM-5.2, TP8 | 1,954 ms | 110 ms | **18×** | 122.9 → 1,770 ms (**14×**) |
 
 **A cache miss costs 18–19× the machine time of a hit — near-identical across
 all four architectures.** The ratio cancels MFU and the GPU part, and once
@@ -647,7 +647,7 @@ The ITL column is the "*for every active user*" half of the claim, and it is
 worth being precise about the mechanism. With chunked prefill vLLM batches the
 chunk *with* the running decodes, so nobody is starved — the forward pass
 containing the chunk simply takes prefill-time instead of decode-time, and all
-64 waiting users see one inter-token gap **31–122× their normal** latency (the
+64 waiting users see one inter-token gap **8–28× their normal** latency (the
 chunk is priced mid-re-prefill, at E[L]/2 of cache; the last chunk of a mean
 context roughly doubles the cross term). Not a stall: a synchronised latency
 spike. That is the thrash.
@@ -703,7 +703,7 @@ priced including the turn's attention over its cached context.
 #### What this does and does not establish
 
 It **supports** the founding hypothesis with a cost ratio of 18–19× —
-strikingly consistent across all four architectures — and a 31–122× latency
+strikingly consistent across all four architectures — and an 8–28× latency
 spike, and it adds a constraint the capacity model never had: a hard
 cold-request ceiling. One configuration (Mistral-3.5 TP4) saturates on prefill
 within the explorer's miss-rate range; three more do so under stress
@@ -817,18 +817,19 @@ every row and moves no ranking.
 
 | Model / topology | B\* (10 s) | drain of a 32-miss spike | tokens lost per warm user |
 | --- | --- | --- | --- |
-| 27B, 1×H200 | 2.2 | 143 s | 5,459 |
-| 27B, TP2 | 5.1 | 63 s | 4,333 |
-| 35B-A3B, 1×H200 | 19.6 | 16 s | 1,175 |
-| **35B-A3B, TP2** | **36.4** | 8.8 s | 1,140 |
-| Mistral-3.5, TP4 | **0.5** — *cannot absorb one* | 657 s | 17,337 |
-| GLM-5.2, TP8 | 3.7 | 86 s | 3,132 |
-| 35B-A3B, 2×B300 | 84.4 | 3.8 s | 809 |
+| 27B, 1×H200 | 2.2 | 143 s | 3,398 |
+| 27B, TP2 | 5.1 | 63 s | 2,698 |
+| 35B-A3B, 1×H200 | 19.6 | 16 s | 394 |
+| **35B-A3B, TP2** | **36.4** | 8.8 s | 382 |
+| Mistral-3.5, TP4 | **0.5** — *cannot absorb one* | 657 s | 3,706 |
+| GLM-5.2, TP8 | 3.7 | 86 s | 1,108 |
+| 35B-A3B, 2×B300 | 84.4 | 3.8 s | 262 |
 
 The token column is § 8's ITL spike carried through time. One chunk is a blip;
 during a drain the scheduler has a chunk to place in *every* forward pass, so the
-31–122× spike is the **steady state for the whole drain**. A 32-miss spike on the
-27B/TP2 costs each of 64 warm users ~4,300 output tokens across a 63-second
+spike (6–28× across these rows) is the **steady state for the whole drain**, and every pass it delays
+carried the model's MTP accepted length in tokens. A 32-miss spike on the
+27B/TP2 costs each of 64 warm users ~2,700 output tokens across a 63-second
 plateau — the shape a latency dashboard shows, from an event none of those users
 caused.
 
@@ -1627,7 +1628,7 @@ Ordered roughly by how much each could move the numbers:
 2. **Prefill/decode interference: bounded, not integrated.** *Partially retired
    2026-07-29.* § 8 now prices prefill on its own (compute) roofline: a cache miss
    costs 18–19× a hit, one 32k chunk spikes every concurrent decoder's
-   inter-token latency 31–122×, and the FLOP-bound cold-request ceiling
+   inter-token latency 31–122× (8–28× since the decode MBU calibration), and the FLOP-bound cold-request ceiling
    saturates within the explorer's miss-rate range on one configuration
    (Mistral-3.5 TP4 at 3% — whose cache is *also* short of the reference
    load). What remains unmodelled: the two rooflines are still reported
