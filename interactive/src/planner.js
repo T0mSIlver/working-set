@@ -343,11 +343,20 @@ export function renderSpikeChart(d, others){
   g+=`<text class="dlabel" x="${mL+pw-4}" y="${Y1-6}" text-anchor="end" fill="${crit}">cannot absorb a single simultaneous miss</text>`;
   // the share that misses at your load: the configured rate, or more once
   // the users outgrow the warm pool (d.fNow / d.bNow, set by the planner)
-  const f0=clip(d.fNow ?? state.inval/100,0,fMax), i0=Math.round(f0*100);
+  const fEff = d.fNow ?? state.inval/100;
+  const f0=clip(fEff,0,fMax), i0=Math.round(f0*100);
   const b0 = d.bNow ?? d.spike.mid[i0];
   const X0=sx(f0), Y0=sy(clip(b0,yLo,yHi));
-  g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${s1}" stroke="${surface}" stroke-width="1.5"/>`;
-  g+=`<text class="dlabel" x="${X0+9}" y="${Y0+4}" text-anchor="start" fill="${s1}">B* ${fmt(b0,1)}</text>`;
+  if (fEff > fMax){
+    // past the warm pool the share can outrun the f axis (over 2x the pool
+    // with the axis at 50%): B* is still priced at the real share, so the
+    // marker sits hollow on the edge and says where it really is
+    g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${surface}" stroke="${s1}" stroke-width="1.5"/>`;
+    g+=`<text class="dlabel" x="${X0-4}" y="${Y0-10}" text-anchor="end" fill="${s1}">B* ${fmt(b0,1)} at f ${fmt(fEff*100,0)}% →</text>`;
+  } else {
+    g+=`<circle cx="${X0}" cy="${Y0}" r="5" fill="${s1}" stroke="${surface}" stroke-width="1.5"/>`;
+    g+=`<text class="dlabel" x="${X0+9}" y="${Y0+4}" text-anchor="start" fill="${s1}">B* ${fmt(b0,1)}</text>`;
+  }
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
   g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">standing cache-miss rate f</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">B* — simultaneous misses (log)</text>`;
