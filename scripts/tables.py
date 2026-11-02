@@ -751,6 +751,12 @@ def spike_tables():
     print("  agentic traffic is burstier than Poisson — that is why B* exists).")
 
 
+def _ceilings(c: dict, w: int = 5) -> str:
+    """Every ceiling `operating_point` returns, whatever their names: the set
+    changes with the model (#94 split latency into cold wait and slowed)."""
+    return "  ".join(f"{k} {v:{w}.0f}" for k, v in c.items())
+
+
 def planner_tables():
     """The two-axis planner: all four ceilings in one unit (research/spike.md).
 
@@ -791,8 +797,7 @@ def planner_tables():
         op = M.operating_point(m, t, w0, M.REF_USERS, CH, TURN, SLA, n_iter=600)
         c = op["ceilings"]
         ref = "fits" if op["fits"] else "OVER"
-        print(f"  {mk:7} {t.name:16} cache {c['cache']:6.0f}  decode {c['decode']:6.0f}  "
-              f"latency {c['latency']:6.0f}  sat {c['saturation']:6.0f}  -> "
+        print(f"  {mk:7} {t.name:16} {_ceilings(c, 6)}  -> "
               f"{op['binding'].upper():10} at {op['limit']:5.0f} users "
               f"({M.REF_USERS} {ref}, {op['headroom']:4.0%} of it)")
     print("  Mistral-Medium-3.5 is the one row where DECODE binds, and it is not a")
@@ -812,8 +817,7 @@ def planner_tables():
                                CH, TURN, SLA, n_iter=600)
         c = op["ceilings"]
         mark = "  <-- CROSSOVER" if prev and prev != op["binding"] else ""
-        print(f"  f={f:6.1%}  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
-              f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
+        print(f"  f={f:6.1%}  {_ceilings(c)}  -> "
               f"{op['binding'].upper()}{mark}")
         prev = op["binding"]
 
@@ -830,8 +834,7 @@ def planner_tables():
                                think_time_s=think, n_iter=600)
         c = op["ceilings"]
         mark = "  <-- measured interval" if think == M.MEASURED_CYCLE_S else ""
-        print(f"  think {think:5.0f} s  cache {c['cache']:5.0f}  decode {c['decode']:5.0f}  "
-              f"latency {c['latency']:5.0f}  sat {c['saturation']:5.0f}  -> "
+        print(f"  think {think:5.0f} s  {_ceilings(c)}  -> "
               f"{op['binding'].upper()}{mark}")
 
     print("\n== Think time, measured (scripts/think_time_trace.py) ==")
@@ -857,10 +860,10 @@ def planner_tables():
         opc = M.operating_point(m27, tp2, wl(invalidation=f), M.REF_USERS,
                                 CH, TURN, SLA, closed=True, n_iter=600)
         co, cc = opo["ceilings"], opc["ceilings"]
-        print(f"  f={f:4.0%}  open   latency {co['latency']:5.0f}  sat "
-              f"{co['saturation']:5.0f}  -> {opo['binding'].upper()}")
-        print(f"          closed latency {cc['latency']:5.0f}  knee "
-              f"{cc['saturation']:5.0f}  -> {opc['binding'].upper()}")
+        print(f"  f={f:4.0%}  open   {_ceilings(co)}  -> "
+              f"{opo['binding'].upper()}")
+        print(f"          closed {_ceilings(cc)}  -> "
+              f"{opc['binding'].upper()}  (saturation is the knee)")
     print("  TTFT budget moves only the latency ceiling (and B* with it):")
     for sla in (5.0, 10.0, 20.0, 30.0):
         lat = M.max_users_latency(m27, tp2, w0, CH, sla, TURN)
