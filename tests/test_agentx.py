@@ -242,3 +242,68 @@ def test_planner_fills_to_the_ceiling_with_room_and_empties_without():
     caps = [planner(traces, Server(hbm_tokens=c, ranks=4), Replay(concurrency=32))["hbm_hit_rate"]
             for c in (2e6, 8e6, 32e6, 1e9)]
     assert caps == sorted(caps)
+
+
+# --- issue #115: one test per mechanism a mutation slipped past -------------
+
+def _interleaved(blocks=100, n=8):
+    """Two growing sessions offset by 5 s, so each request lands while the
+    other session sits idle in the cache. No primers: every lane starts at
+    turn 0."""
+    def sess(tid, t0):
+        reqs = [A.Request(t0 + 10.0 * k, (blocks + k) * 64, 0, 1.0, None,
+                          blocks + k - 1 if k else 0, blocks + k - 1 if k else 0,
+                          blocks + k, 1) for k in range(n)]
+        return A.Trace(tid, 64, [A.Stream("root", reqs)])
+    return [sess("a", 0.0), sess("b", 5.0)]
+
+
+def test_write_through_keeps_what_the_next_turn_needs_in_dram():
+    # HBM holds one running prompt and half of the other session's idle one,
+    # so each turn's arrival trims the other session's tail. The write-through
+    # copy made in `run` is the only place that tail survives.
+    size = 110 * 64
+    srv = Server(ranks=1, hbm_tokens=1.5 * size, dram_tokens=1e9, block=64,
+                 retention=None, prefill_tps=1e9, decode_tps=1e9,
+                 dram_load_tps=1e9)
+    rp = Replay(concurrency=2, start_min=0.0, start_max=0.0,
+                warmup_requests_per_lane=0, duration_s=70.0)
+    d = simulate(_interleaved(), srv, rp).to_dict()
+    assert d["requests"] >= 10
+    assert 0 < d["hbm_hit_rate"] < 0.8 * d["ceiling_hit_rate"]
+    assert d["dram_hit_rate"] > 0.2 * d["ceiling_hit_rate"]
+    assert d["overall_hit_rate"] == pytest.approx(d["ceiling_hit_rate"])
+
+
+def test_finished_request_caches_its_prompt_not_its_reply():
+    # The next prompt carries the recorded reply, not the live one, so a
+    # finished request leaves only its prompt cached. With retention on, an
+    # append-only turn then resumes at that prompt's end; were the reply kept,
+    # the boundary would sit past the next turn's shared prefix and the
+    # resume would fall back to a retention point (0 here).
+    reqs = [A.Request(10.0 * k, (20 + 4 * k) * 64, 500, 1.0, None,
+                      20 + 4 * (k - 1) if k else 0, 20 + 4 * (k - 1) if k else 0,
+                      20 + 4 * k, 1) for k in range(6)]
+    tr = [A.Trace("r", 64, [A.Stream("root", reqs)])]
+    srv = Server(ranks=1, hbm_tokens=1e9, block=64, retention=32_768,
+                 prefill_tps=1e9, decode_tps=1e9)
+    d = simulate(tr, srv, _one_lane(warmup_requests_per_lane=0,
+                                    duration_s=55.0)).to_dict()
+    assert d["requests"] >= 6 and d["ceiling_hit_rate"] > 0.5
+    assert d["hbm_hit_rate"] == pytest.approx(d["ceiling_hit_rate"])
+
+
+def test_mid_session_lanes_start_at_t_star_not_turn_zero():
+    # Request k carries (k + 1) units of prompt. t* = 0.5 x 91 s lands the
+    # lane on request 5, so a 30 s window replays requests 5, 6 and 7 (9 s
+    # gaps). From turn 0 it would replay requests 0-3 instead.
+    unit = 640
+    reqs = [A.Request(10.0 * k, (k + 1) * unit, 0, 1.0, None, 0, 0,
+                      (k + 1) * 10, 1) for k in range(10)]
+    tr = [A.Trace("m", 64, [A.Stream("root", reqs)])]
+    srv = Server(ranks=1, hbm_tokens=1e9, prefill_tps=1e9, decode_tps=1e9)
+    d = simulate(tr, srv, Replay(concurrency=1, start_min=0.5, start_max=0.5,
+                                 warmup_requests_per_lane=0,
+                                 duration_s=30.0)).to_dict()
+    assert d["requests"] == 3
+    assert d["prompt_tokens"] == (6 + 7 + 8) * unit
