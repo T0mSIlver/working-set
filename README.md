@@ -8,8 +8,8 @@ for agentic coding workloads.
 
 **Start with the [interactive explorer](https://workingset.tomvaucourt.com/)** —
 live sliders for the workload, model (Qwen3.8-27B / 35B-A3B /
-Mistral-Medium-3.5 / GLM-5.3 / DeepSeek-V4-Flash / DeepSeek-V4.1-Flash /
-Qwen3.8-Flash-Next /
+Mistral-Medium-3.5 / GLM-5.3 / DeepSeek-V4-Flash /
+DeepSeek-V4-Flash-Vision-Exp / DeepSeek-V4.1-Flash / Qwen3.8-Flash-Next /
 GLM-5.3-Flash), GPU (H200 / B300), weight & KV dtypes, and DP × TP
 topology. It answers as a decision tool: a binding-constraint verdict, a
 deploy recipe (vLLM flags), the **bill** (€/GPU-hour and €/kWh sliders:
@@ -84,6 +84,105 @@ For a vision model, set `image_share` in `[workload]` (with
 that share of warm turns then attaches generated PNGs, which stay in the
 session history, and the report splits warm-turn TTFT by whether the turn
 sent a new image. The model does not price images yet.
+
+## How many agent sessions an endpoint serves
+
+`ws replay` answers that from the endpoint and recorded sessions alone, with
+no config and nothing from the model:
+
+```bash
+uv run ws trace pi -o trace.json          # ~/.pi/agent/sessions -> sizes and waits, no text
+uv run ws replay trace.json --base-url http://gpu:8000/v1 --out run.json
+uv run ws report run.json                 # re-print it
+```
+
+1. **Alone.** One replayed session sends 40 requests back to back, one in
+   flight at a time. The endpoint's own speed is fitted from them: time to
+   first token from the uncached tokens and the context, then time per output
+   token from the context.
+2. **Load.** 1, 2, 4, ... replayed sessions run at once with their recorded
+   waits, a 60 s ramp and a 300 s measured window each, until one step
+   fails. Then the bracket between the last pass and the first fail is
+   halved until it is within 10%.
+3. **Verdict.** A turn is what the agent did between two messages from the
+   person. Its slowdown is the time its requests took, send to last token,
+   over what the fitted speed gives for the same requests alone. A step
+   passes when the p90 turn is at most `--max-slowdown` (1.5) times as long
+   as alone and at most 5% of requests failed. A prefix the server evicted
+   under load is priced alone as the cache hit it was meant to be, so the
+   eviction shows as slowdown.
+
+The answer reads `serves 15 sessions at p90 turn <= 1.5x alone; fails at
+16`, with the turn times at each step and, with `--metrics-url`, what the
+server showed (queue, preemptions, KV use, running requests, prefix hits).
+`--config workingset.toml` prints the model's prediction for the trace's
+averages next to it, and never feeds the verdict. Two deployments replayed
+with the same trace and `--seed` compare directly.
+
+The synthetic sessions of `ws test` send a request every `think_time_s` on
+average, spread evenly. A real coding agent works in bursts instead: a
+request every second or so while it runs tools, then a long pause while the
+person reads. `ws test --replay` puts the model's predictions to that load,
+hypothesis by hypothesis:
+
+```bash
+uv run ws test workingset.toml --replay trace.json --exclusive --out run.json
+```
+
+`ws trace pi` keeps, for each request, the prompt and reply token counts, the
+wait before it and what it waited on, and nothing of the text, so other people
+can export their sessions and hand the file over. On a machine without
+workingset, the module runs alone:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/T0mSIlver/working-set/main/src/workingset/agent_trace.py
+python3 agent_trace.py pi -o trace.json
+```
+
+Each wait gets a kind read from the session's events: a tool, a permission
+prompt (timed from pi-permission-system's log when it is there), the agent's
+question to the person, think time after an answer, a retry after an
+interruption, a move in the session tree, a compaction, a failed request, a
+restart of pi, or a session left open (a person's wait past 30 minutes with
+no restart). `ws trace` prints the count of each.
+
+A replay (either command) plays one recorded session per simulated session, from a random
+request on, and a session that ends moves on to another recording, so a
+ladder rung of any size draws from a small corpus. Prompts are synthetic text
+of the recorded sizes that grows on top of the server's own replies, so the
+prefix cache sees what it saw then without a byte of the real prompts.
+Replies have the recorded length (`max_tokens` plus `ignore_eos`). Waits
+are the recorded ones, except where the session sat unused (a failed request,
+a restart, a session left open): `--replay-gap-policy` replaces those with a
+think gap drawn from the trace (`sample`, the default), caps them at
+`--replay-max-gap-s` (`cap`), or drops them (`drop`); `ws replay` always
+samples. Under `ws test` the config's
+`[workload]` is replaced by the trace's averages, so the predictions price the
+same load arriving smoothly and the gap to the measurement is what the bursts
+cost. `--dry-run` shows what each rung would offer at the recorded server's
+speed. [research/replay_gaps.md](research/replay_gaps.md) has the gap counts
+of the study's own sessions.
+
+## Predicting AgentX's prefix-cache hit rates
+
+SemiAnalysis published the Claude Code sessions behind AgentX
+([`semianalysisai/cc-traces-weka-062126`](https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126),
+Apache-2.0) and the hit rates DeepSeek V4 Pro reached on them. `ws agentx`
+replays those sessions against a model of the server's caches, per DP rank:
+an HBM tier evicted the way vLLM does, a write-through DRAM tier, and
+sliding-window retention points.
+
+```bash
+uv run ws agentx compact traces.jsonl agentx.json.gz   # 1.8 GB -> 2 MB, prefix structure only
+uv run ws agentx predict agentx.json.gz --sweep       # both published points, with the sensitivity runs
+```
+
+On B300 at concurrency 384 it predicts 91.4% HBM hits (90.5-92.2% over ten
+seeds) against a measured 91%, and 1.4% DRAM hits against 1.36%. On B200
+at 196 it predicts 41% (28-48%) against 73%: a miss of about 32 points, at
+a point on the knee of the curve, where 73% needs ~34M tokens of KV and the
+bytes, priced from one vLLM anchor, give 24M. Method, sources and the misses:
+[research/agentx_kv_hits.md](research/agentx_kv_hits.md).
 
 ## Contents
 

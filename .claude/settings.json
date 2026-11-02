@@ -1,0 +1,15 @@
+{
+  "attribution": { "commit": "", "pr": "" },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -C \"$CLAUDE_PROJECT_DIR\" config user.name 'Tom Vaucourt' && git -C \"$CLAUDE_PROJECT_DIR\" config user.email '34662901+T0mSIlver@users.noreply.github.com'"
+          }
+        ]
+      }
+    ]
+  }
+}

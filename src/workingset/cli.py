@@ -11,6 +11,14 @@
     ws metrics probe|tail|window ...           sample a live /metrics endpoint
     ws workload --prometheus URL --range 7d    measure the real workload and
                                                emit the config's [workload]
+    ws trace pi [PATH ...] -o trace.json       agent sessions' timing and sizes,
+                                               for `ws test --replay`
+    ws agentx compact|predict ...              SemiAnalysis' public AgentX traces
+                                               against a finite prefix cache
+    ws traces mooncake|bailian|tracelab PATH   public prefix-cache traces: exact
+                                               LRU vs the planner and fill rule
+    ws aa stats|predict ...                    Artificial Analysis' AgentPerf-Local
+                                               traces at N concurrent agents
 """
 from __future__ import annotations
 
@@ -70,7 +78,7 @@ def cmd_predict(args) -> int:
               "opt-in, one deployment's constants")
     users = cfg.users_per_group()
     print(f"operating point: {users:g} users/group, think {w.think_time_s} s, "
-          f"miss {w.miss_rate:.0%}, {'closed' if args.closed else 'open'} loop")
+          f"miss {w.miss_rate:.1%}, {'closed' if args.closed else 'open'} loop")
     if w.headcount is not None:
         sessions = M.sessions_from_headcount(
             w.headcount, w.peak_active_share, w.sessions_per_active_user)
@@ -420,6 +428,21 @@ def build_parser() -> argparse.ArgumentParser:
                         "while the operating point is per replica group, and "
                         "KV occupancy cannot be combined at all")
     p.add_argument("--seed", type=int, help="probe RNG seed")
+    p.add_argument("--replay", metavar="TRACE",
+                   help="replay recorded agent sessions (a `ws trace` file) "
+                        "instead of the config's synthetic workload: recorded "
+                        "prompt and reply sizes and recorded waits, the "
+                        "config's [workload] replaced by the trace's averages "
+                        "for the predictions")
+    p.add_argument("--replay-max-gap-s", type=float, metavar="S",
+                   help="cap on any recorded wait (default 1800)")
+    p.add_argument("--replay-gap-policy", choices=("sample", "cap", "drop"),
+                   help="what replaces a gap where the recorded session sat "
+                        "unused (a retry after a failed request, a restart, a "
+                        "session left open past 30 min): a think gap drawn "
+                        "from the trace (sample, the default), the recorded "
+                        "wait capped at --replay-max-gap-s (cap), or none "
+                        "(drop)")
     p.add_argument("--run-nonce", metavar="HEX",
                    help="mixed into every miss salt and session context so a "
                         "re-run at the same --seed cannot be answered from the "
@@ -437,7 +460,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_test)
 
     p = sub.add_parser("report", help="re-print a run record's report")
-    p.add_argument("record", help="run.json written by `ws test --out`")
+    p.add_argument("record", help="run.json written by `ws test --out` "
+                                  "or `ws replay --out`")
     p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("hypotheses", help="list the H-* and what they need")
@@ -454,6 +478,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_metrics(sub)
     from .workload import add_subparser as _add_workload
     _add_workload(sub)
+    from .agent_trace import add_subparser as _add_trace
+    _add_trace(sub)
+    from .agentx_sim import add_subparser as _add_agentx
+    _add_agentx(sub)
+    from .traces import add_subparser as _add_traces
+    _add_traces(sub)
+    from .aa_local import add_subparser as _add_aa
+    _add_aa(sub)
+    from .bench import add_subparser as _add_replay
+    _add_replay(sub)
     return ap
 
 

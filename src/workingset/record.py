@@ -199,10 +199,20 @@ def not_established_notes(cfg, opts, plan, rungs=None, sample=None,
             + ", ".join(h["key"] for h in open_rows) + ".")
 
     # --- standing caveats of the workload itself -------------------------
-    notes.append(
-        "Think time is exponential around a fixed mean; real agentic cadence "
-        "is burstier (lognormal sigma 2.43 in the measured trace), which "
-        "moves the latency ceiling down, not up.")
+    if getattr(opts, "replay", None):
+        notes.append(
+            "Replayed recorded agent sessions: their bursts and pauses are "
+            "the recording's, so the load is as bursty as those sessions "
+            "were. The predictions price a smooth arrival of the same "
+            "averages; a measurement worse than predicted is partly the cost "
+            "of the bursts. A replay goes cold only where the recording did, "
+            "never because a parked session's cache was evicted.")
+    else:
+        notes.append(
+            "Think time is exponential around a fixed mean; real agentic "
+            "cadence is burstier (lognormal sigma 2.43 in the measured "
+            "trace), which moves the latency ceiling down, not up. "
+            "`ws test --replay` plays recorded sessions instead.")
     if any(r.get("slowed") for r in ok_rungs):
         notes.append(
             "Slowed speed counts each slow gap as the stream's mean tokens "

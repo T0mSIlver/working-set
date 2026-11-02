@@ -1,5 +1,5 @@
 """Warm-capacity from REAL provider data: clean -> fit log-normal -> Monte-Carlo fill."""
-import os
+import glob, os
 import pandas as pd, numpy as np, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from scipy import stats
@@ -25,9 +25,8 @@ RNG = np.random.default_rng(0)
 
 # ---- load + clean ----
 U = DATA_DIR + os.sep
-igp = pd.read_csv(U+"prompt_tokens_by_response_uid_igp.csv")['prompt_tokens'].values
-wx  = pd.read_csv(U+"prompt_tokens_by_response_uid_watsonx.csv")['prompt_tokens'].values
-raw = {"IGP":igp, "WatsonX":wx}
+files = sorted(glob.glob(U+"prompt_tokens*.csv"))
+raw = {f"set {chr(65+i)}": pd.read_csv(f)['prompt_tokens'].values for i,f in enumerate(files)}
 clean = {k: v[v>=MIN_TOKENS] for k,v in raw.items()}
 combined = np.concatenate(list(clean.values()))
 for k in raw:
@@ -84,7 +83,7 @@ plt.rcParams.update({"figure.dpi":120,"font.size":9,"axes.grid":True,"grid.alpha
 # Plot 1: real histograms + fitted lognormal
 fig,ax=plt.subplots(figsize=(9,5))
 bins=np.linspace(0,230_000,60)
-for k,c in [("IGP","#2a78d6"),("WatsonX","#e08e0b")]:
+for k,c in zip(clean,["#2a78d6","#e08e0b","#1f9d6b","#8e44ad"]):
     ax.hist(clean[k],bins=bins,density=True,alpha=.45,color=c,label=f"{k} (real, n={len(clean[k])})")
 xs=np.linspace(1,230_000,1500)
 ax.plot(xs,stats.lognorm.pdf(xs,shape,scale=scale),color="#c0392b",lw=2.4,

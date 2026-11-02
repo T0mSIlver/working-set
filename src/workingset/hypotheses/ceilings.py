@@ -46,15 +46,19 @@ class HCache(Hypothesis):
         held = v.warm_held
         if held:
             bound = max(held)
+            src = next((r.evict_source for r in v.full if r.pop == bound), "")
             return Measurement(value=bound, lo=bound, unit=" users",
                                text=f">= {bound}",
                                data={"held_pops": held,
-                                     "classifier": "0.4x-cold TTFT heuristic"})
+                                     "classifier": "server prefill histogram"
+                                     if src == "server histogram"
+                                     else "0.4x-cold TTFT heuristic"})
         ev = v.warm_evicted
         if ev is not None:
             return Measurement(value=ev.pop, hi=ev.pop, unit=" users",
                                text=f"< ~{ev.pop}",
                                data={"evict_frac": ev.evict_frac,
+                                     "evict_source": ev.evict_source,
                                      "pop": ev.pop,
                                      "cached_frac": ev.cached_frac})
         unwitnessed = v.warm_unwitnessed
@@ -81,6 +85,9 @@ class HCache(Hypothesis):
             note = (f"{ef:.0%} of hit turns re-prefilled at {m.hi} users"
                     if isinstance(ef, float) and math.isfinite(ef)
                     else f"eviction observed at {m.hi} users")
+            if m.data.get("evict_source") == "ttft heuristic":
+                note += (" (TTFT heuristic: no cached_tokens or prefill "
+                         "histogram from the server; queueing can inflate it)")
             if wc is not None and m.hi < 0.75 * wc:
                 return Verdict(REFUTED, note)
             return Verdict(NOT_ESTABLISHED, note)

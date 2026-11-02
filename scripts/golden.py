@@ -759,6 +759,11 @@ SPREAD_PROBE = [
     # subagent share (DSv4-Flash-0731, back alongside V4.1 on 2026-09-16).
     dict(model='DSV4F', gpu='H200', wdt='fp8', kv='fp8', ngpu=8, tp=4,
          user_median=60, sub_ratio=0.4, users=128, think=45, decode_floor=60),
+    # B300 compressed-sparse MoE on TP2 with speculation off: the deployment
+    # the DSv4-Flash-Vision-Exp startup log describes (2026-10-02; no
+    # --speculative-config). research/model_dsv4flash_vision.md.
+    dict(model='DSV4FV', gpu='B300', wdt='fp8', kv='fp8', ngpu=2, tp=2,
+         mtp=1.0),
 ]
 # how many knobs of the sweep each anchor gets (the first anchor gets all of
 # them; the others cover the knobs most likely to interact with topology)
@@ -788,6 +793,20 @@ KNOB_COMBOS = [
     (0, {"dprice": "latency", "mfu": 0.3, "users": 200}),
     (1, {"dprice": "latency", "dspec": 5, "mns": 16, "users": 200}),
     (3, {"dprice": "latency", "mns": 8, "users": 400}),
+]
+
+# Whole configurations someone reported, priced as stated rather than as a
+# knob off an anchor. Each is (deployment, knobs).
+# Issue #105: Qwen3.8-27B on 4xH200 TP4, a long-context low-miss agentic
+# load under latency decode pricing, the region no sweep state sat in (the
+# latency states all ran chunk 32,768, cap 180, miss 1%). Its slowed and
+# cold-wait figures read 1-3% apart on the page and in `ws predict`; that was
+# the explorer's 20,000-draw context sample, inside the `mc` bands.
+NAMED_STATES = [
+    (dict(model="27B", gpu="H200", wdt="fp8", kv="fp8", ngpu=4, tp=4),
+     {"chunk": "16384", "cap": 262, "user_median": 68, "user_sigma": 0.69,
+      "inval": 2.5, "think": 46, "out": 807, "decode_floor": 50, "mfu": 0.33,
+      "mns": 96, "dprice": "latency", "users": 48}),
 ]
 
 
@@ -823,6 +842,12 @@ def build_states() -> list[dict]:
     # 2b. the named knob combinations
     for idx, knobs in KNOB_COMBOS:
         st = base_state(SWEEP_ANCHORS[idx])
+        st.update(knobs)
+        add(st)
+
+    # 2c. the named whole configurations
+    for dep, knobs in NAMED_STATES:
+        st = base_state(dep)
         st.update(knobs)
         add(st)
 

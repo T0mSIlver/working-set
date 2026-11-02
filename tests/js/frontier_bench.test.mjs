@@ -66,6 +66,7 @@ const LEDGER = {
   "MM35":   { tb21: 135, tb40:   0 },
   "GLM52":  { tb21: 224, tb40:  83 },
   "DSV4F":  { tb21: 210, tb40:  24 },
+  "DSV4FV": { tb21: 198, tb40:  24 },
   "DSV41F": { tb21: 0.906, tb40: 0.312, vendor: true },
   "Q38FN":  { tb21: 230, tb40:  50 },
   "GLM53F": { tb21: 225, tb40:  65 },

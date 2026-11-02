@@ -512,6 +512,27 @@ def test_eval_rung_eviction_and_cached_fractions():
     assert r.cached_frac == pytest.approx(0.5)
 
 
+def test_eval_rung_eviction_reads_the_prefill_histogram_without_cached_tokens():
+    cfg, opts = small_cfg(), small_opts(measure_s=1.0)
+    tr = [
+        trace(1, "miss", 1.0, 10.0, tps=100, ctok=10, ptok=24000),
+        # queued behind a long chunk: slow, but the server computed few tokens
+        trace(2, "hit", 1.0, 5.0, tps=100, ctok=10, ptok=24000),
+        trace(3, "hit", 1.0, 0.1, tps=100, ctok=10, ptok=24000),
+    ]
+    # the forced miss computed 24k; both hits computed under 10k
+    hist = {"count": 3, "buckets": {2048: 0, 8192: 2, 16384: 2, 32768: 3,
+                                    "+Inf": 3}}
+    server = {"histograms": {"prefill_kv_computed_tokens_hist": hist}}
+    r = eval_rung(3, 0, tr, 0.0, cfg, opts, server)
+    assert r.evict_frac == pytest.approx(0.0)
+    assert r.evict_source == "server histogram"
+    # no histogram: the TTFT heuristic still runs, and says so
+    r = eval_rung(3, 0, tr, 0.0, cfg, opts)
+    assert r.evict_frac == pytest.approx(0.5)
+    assert r.evict_source == "ttft heuristic"
+
+
 def test_rung_round_trips_through_a_dict():
     cfg, opts = small_cfg(), small_opts(measure_s=1.0)
     r = eval_rung(1, 0, [trace(1, "hit", 1.0, 0.5, tps=100,

@@ -306,17 +306,28 @@ async def sampler_window(metrics, t0: float, t1: float) -> dict | None:
     if metrics is None:
         return None
     tick = getattr(metrics, "next_tick", None)
-    if tick is not None:
+    # more than one tick when the first does not cover it: under the heaviest
+    # load a scrape can fail or time out, a failed snapshot cannot close the
+    # window, and one tick left the last rung of a ladder with no server
+    # block (#110). WindowNotCovered is a ValueError.
+    for attempt in range(WINDOW_TICKS if tick is not None else 1):
+        if tick is not None:
+            try:
+                r = tick()
+                if asyncio.iscoroutine(r):
+                    await r
+            except Exception:               # noqa: BLE001
+                pass
         try:
-            r = tick()
-            if asyncio.iscoroutine(r):
-                await r
+            return window_dict(metrics.window(t0, t1))
+        except ValueError:
+            continue
         except Exception:                   # noqa: BLE001
-            pass
-    try:
-        return window_dict(metrics.window(t0, t1))
-    except Exception:                       # noqa: BLE001
-        return None
+            return None
+    return None
+
+
+WINDOW_TICKS = 4
 
 
 def window_dict(w) -> dict | None:

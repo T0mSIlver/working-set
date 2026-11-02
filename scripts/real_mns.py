@@ -1,6 +1,6 @@
 """max_num_seqs decode tradeoff: per-user speed band + aggregate throughput vs concurrency,
 using the real workload distribution (with a fitted log-normal overlay)."""
-import os
+import glob, os
 import pandas as pd, numpy as np, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from scipy import stats
@@ -17,8 +17,8 @@ SHARED_PREFIX=15_000; GPU_POOL_TOKENS=2.77e6; CAP=180_000; MIN_TOKENS=1000
 MNS=np.arange(1,151); N_ITER=3000; MIN_TOK_S=[20,30,40]; RNG=np.random.default_rng(0)
 
 U=DATA_DIR+os.sep
-combined=np.concatenate([pd.read_csv(U+f"prompt_tokens_by_response_uid_{p}.csv")['prompt_tokens'].values
-                         for p in ("igp","watsonx")])
+combined=np.concatenate([pd.read_csv(f)['prompt_tokens'].values
+                         for f in sorted(glob.glob(U+"prompt_tokens*.csv"))])
 combined=combined[combined>=MIN_TOKENS]; full_real=np.clip(combined,0,CAP).astype(float)
 shape,_,scale=stats.lognorm.fit(combined,floc=0)
 to_unique=lambda L: np.maximum(np.clip(L,0,CAP)-SHARED_PREFIX,0)

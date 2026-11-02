@@ -93,6 +93,8 @@ ALIASES: dict[str, tuple[str, ...]] = {
     # ---- per-request size histograms ------------------------------------
     "request_prompt_tokens_hist": ("vllm:request_prompt_tokens",),
     "request_generation_tokens_hist": ("vllm:request_generation_tokens",),
+    # tokens each request actually computed in prefill (prompt minus cache hit)
+    "prefill_kv_computed_tokens_hist": ("vllm:request_prefill_kv_computed_tokens",),
     # ---- engine-step histograms -----------------------------------------
     # Declared name ends in `_total` but the family IS a histogram; `_count`
     # is the forward-pass count.

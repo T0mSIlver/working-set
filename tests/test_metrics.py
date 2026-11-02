@@ -1403,3 +1403,31 @@ def test_keep_filter_presets():
     assert keep_filter(None) is None
     assert keep_filter("decode") == DECODE_KEEP
     assert keep_filter("foo, bar ,") == ("foo", "bar")
+
+
+def test_a_falling_gauge_is_not_a_restart():
+    """running 8 -> 6 -> 1 and KV 0.40 -> 0.05 are load easing off (#110)."""
+    w = window_from_snapshots(_series(), 1.5, 3.5)
+    assert w.invalid == {}
+    assert w.counter_resets == ()
+
+
+def test_sampler_window_ticks_again_past_a_failed_scrape():
+    """A scrape that fails at the end of the heaviest rung cannot close the
+    window; one tick then left that rung with no server block (#110)."""
+    from workingset.probe.request import sampler_window
+
+    class Flaky:
+        ticks = 0
+
+        async def next_tick(self):
+            self.ticks += 1
+
+        def window(self, t0, t1):
+            if self.ticks < 2:
+                raise WindowNotCovered("the tick after t1 failed")
+            return {"dt_s": t1 - t0}
+
+    m = Flaky()
+    assert asyncio.run(sampler_window(m, 0.0, 5.0)) == {"dt_s": 5.0}
+    assert m.ticks == 2
