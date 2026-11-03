@@ -59,7 +59,8 @@ class Request:
 
 def _open(path: str | Path):
     p = str(path)
-    return gzip.open(p, "rt") if p.endswith(".gz") else open(p)
+    return (gzip.open(p, "rt", encoding="utf-8") if p.endswith(".gz")
+            else open(p, encoding="utf-8"))
 
 
 def read_mooncake(path: str | Path) -> list[Request]:
