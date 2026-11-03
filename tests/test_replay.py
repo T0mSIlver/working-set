@@ -128,6 +128,19 @@ def test_replay_extends_the_cached_prompt_to_the_recorded_size():
     assert s.think_s(None) == 60               # a parked wait is capped
 
 
+def test_a_prompt_leaves_room_for_the_reply_under_the_cap():
+    """The server rejects prompt + max_tokens past the model length, so a
+    prompt at the cap itself failed with HTTP 400 on every request."""
+    s = _session([TraceRequest(900, 50, None, "start"),
+                  TraceRequest(2_000, 100, 1.0, "tool")], cap=1_000)
+    p1, _ = s.next_turn()
+    assert len(p1) / 4 <= 1_000 - 50 + 2          # chars to tokens, a few over
+    s.commit("r" * 200)
+    p2, kind = s.next_turn()
+    assert kind == "miss"                         # past the room: cold
+    assert len(p2) / 4 <= 1_000 - 100 + 2
+
+
 def test_a_shrinking_prompt_restarts_from_the_shared_prefix():
     s = _session([TraceRequest(400, 50, None, "start"),
                   TraceRequest(200, 30, 1.0, "user")])

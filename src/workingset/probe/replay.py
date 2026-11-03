@@ -84,12 +84,18 @@ class ReplaySession:
     def _chars(self, tokens: float) -> int:
         return int(tokens * self.cpt)
 
+    def room(self) -> int:
+        """The most prompt tokens this request may send: the context cap
+        less the reply it asks for, since the server rejects a request whose
+        prompt plus `max_tokens` passes the model length."""
+        return max(self.cap - max(1, self._req.output_tokens), 1)
+
     def next_turn(self, force_miss: bool | None = None) -> tuple[str, str]:
         r = self._req
-        want = min(r.prompt_tokens, self.cap)
+        want = min(r.prompt_tokens, self.room())
         prev = self._prev
         if self._fresh or prev is None or want < prev[0] or \
-                r.prompt_tokens > self.cap:
+                r.prompt_tokens > self.room():
             kind = "first" if (self.n_turn == 0 or self._pos == 0) else "miss"
             n_prefix = min(self.prefix_tokens, want)
             self._text = (self.prefix_text[:self._chars(n_prefix)] + "\n"

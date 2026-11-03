@@ -116,7 +116,32 @@ def test_failed_requests_fail_the_step_past_five_percent():
     bad = B.Row(0, 99, "hit", 1, 1, 1, sent=1.0, error="HTTP 500", done=True)
     s = B.judge(B.Step(1, ok + [bad], window=(0.0, 10.0)), FLAT, 1.5)
     assert s.errors == 1 and not s.passed
-    assert "1 of 11 requests failed" in s.reasons
+    assert s.reasons == ["1 of 11 requests failed (first: HTTP 500)"]
+
+
+def test_a_step_where_every_request_failed_says_why():
+    bad = [B.Row(0, 0, "hit", 1, 1, 1, sent=1.0, error="HTTP 400: too long",
+                 done=True) for _ in range(3)]
+    s = B.judge(B.Step(1, bad, window=(0.0, 10.0)), FLAT, 1.5)
+    assert not s.passed
+    assert "HTTP 400: too long" in " ".join(s.reasons)
+
+
+def test_calibration_stops_when_the_endpoint_rejects_the_requests(
+        tmp_path, monkeypatch):
+    """19 of 20 calibration requests got a 400 and the fit went ahead on the
+    one that passed: the speed (and every verdict) came from nothing."""
+    def handler(request):
+        return httpx.Response(400, json={"error": {"message": "too long"}})
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(_trace(n=30).to_dict()))
+    load_trace.cache_clear()
+    monkeypatch.setattr(B, "make_client", lambda: httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(B, "_endpoint_info", lambda *a: {"model": "m"})
+    monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 5)
+    rc = main(["replay", str(path), "--base-url", "http://fake/v1"])
+    assert rc == 3
 
 
 def test_the_step_round_trips_through_its_record():

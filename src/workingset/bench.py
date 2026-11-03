@@ -194,7 +194,7 @@ class _Seat(ReplaySession):
 
     def next_turn(self, force_miss=None):
         r = self._req
-        want = min(r.prompt_tokens, self.cap)
+        want = min(r.prompt_tokens, self.room())
         prev, new_rec = self._prev, self._fresh or self._pos == 0
         text, kind = super().next_turn(force_miss)
         if kind == "hit":
@@ -329,12 +329,13 @@ def judge(step: Step, speed: Speed, max_slowdown: float) -> Step:
     step.turn_s_p50 = _pct([took[k] for k in keys], 50)
     step.turn_s_p90 = _pct([took[k] for k in keys], PERCENTILE)
     step.reasons = []
+    if step.errors > MAX_ERROR_SHARE * max(step.requests, 1):
+        first = next((r.error for r in rows if r.done and r.error), "")
+        step.reasons.append(f"{step.errors} of {step.requests} requests "
+                            f"failed (first: {first[:160]})")
     if not step.turns:
         step.reasons.append("no request completed in the window")
     else:
-        if step.errors > MAX_ERROR_SHARE * max(step.requests, 1):
-            step.reasons.append(f"{step.errors} of {step.requests} requests "
-                                "failed")
         if step.slowdown_p90 > max_slowdown:
             step.reasons.append(f"p{PERCENTILE} turn {step.slowdown_p90:.2f}x "
                                 f"alone > {max_slowdown:g}x")
@@ -430,6 +431,11 @@ async def calibrate(client, ep, plan: Plan, trace: AgentTrace,
     except asyncio.TimeoutError:
         stop.set()
         await task
+    failed = [r for r in rows if r.done and r.error]
+    if failed and len(failed) > MAX_ERROR_SHARE * len(rows):
+        raise ValueError(
+            f"{len(failed)} of {len(rows)} requests failed while measuring "
+            f"the endpoint alone; the first: {failed[0].error[:300]}")
     return fit_speed(rows), rows
 
 
@@ -505,8 +511,12 @@ def signals(server: dict | None) -> str:
     return ", ".join(out)
 
 
+def _say(msg: str = "") -> None:
+    print(msg, flush=True)      # a run piped to a file or `tee` shows progress
+
+
 async def run(ep: EndpointSpec, plan: Plan, metrics=None,
-              on_step=print) -> dict:
+              on_step=_say) -> dict:
     trace = load_trace(plan.trace_path)
     prefix = _prefix_text(plan)
     from .probe.options import process_nonce
@@ -540,7 +550,9 @@ def _turns_alone(trace: AgentTrace, speed: Speed, plan: Plan) -> float:
     for s in trace.sessions:
         prev = None
         for i, r in enumerate(s):
-            want = min(r.prompt_tokens, plan.context_cap_tokens or r.prompt_tokens)
+            out = max(1, r.output_tokens)
+            want = min(r.prompt_tokens, max(plan.context_cap_tokens - out, 1)
+                       if plan.context_cap_tokens else r.prompt_tokens)
             if i == 0 or r.kind in TURN_KINDS:
                 turns += 1
             if prev is None or want < prev[0]:
