@@ -260,10 +260,11 @@ def histogram_evict_frac(server: dict | None, hit: list, miss: list,
     thresh = 0.5 * min(ptoks)
     bounds = sorted((float("inf") if b == "+Inf" else float(b), v)
                     for b, v in h["buckets"].items())
-    below = next((v for b, v in bounds if b >= thresh), 0.0)
+    cutoff, below = next(((b, v) for b, v in bounds if b >= thresh),
+                         (float("inf"), 0.0))
     above = h["count"] - below
     cold_above = sum(1 for t in cold
-                     if (t.ptok_achieved or t.ptok_intended or 0) >= thresh)
+                     if (t.ptok_achieved or t.ptok_intended or 0) > cutoff)
     return max(0.0, above - cold_above) / len(hit)
 
 
