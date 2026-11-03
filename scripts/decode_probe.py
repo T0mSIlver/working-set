@@ -10,7 +10,7 @@
 
 decode_mbu.py fits t_pass = t0 + bytes/(eta x bw). Both terms are identified
 only if step bytes VARY: at one operating point every (t0, eta) on a line
-through the data fits equally well. Passive production traffic sits at n ~
+through the data fits equally well. Passive live traffic sits at n ~
 1-10 and, on a dense model whose weights are 94% of the step, that is a
 byte range of about 1.2x. This script buys the range, then gets out.
 
@@ -210,7 +210,7 @@ async def watchdog(client, args, stop, events, armed_in=0.0):
     Not armed until the ramp is over. Launching k streams at once queues our
     OWN requests by construction -- at k=8 that reads as "somebody is
     waiting" and aborts the plateau before it starts, which is what killed
-    arm A's k=8 rung and both arm C rungs on the first production run. After
+    arm A's k=8 rung and both arm C rungs on the first live run. After
     the ramp, a queue means a co-tenant and the abort is real."""
     if not args.metrics:
         return

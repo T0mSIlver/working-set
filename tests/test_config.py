@@ -420,7 +420,7 @@ def test_optional_float_is_type_checked_too():
 
 
 def test_predict_reference_row():
-    """27B / 4xH200 TP4 / chunk 4096 at the measured workload: the explorer's
+    """27B / 4xH200 TP4 / chunk 4096 at the reference workload: the explorer's
     reference example (the harness template's predictions block) — cache 403,
     TTFT 412 (all-request p95), cold wait 409, slowed generation 242,
     saturation 413, miss TTFT 0.92 s, B* 9.8. These are the explorer's
@@ -594,9 +594,9 @@ def test_max_num_seqs_round_trips_and_validates(tmp_path):
 
 def test_latency_decode_pricing_is_opt_in_and_reproduces_its_calibration():
     """The three-leg decode pricing: off by default (nothing published moves),
-    and when selected it must reproduce the held-batch step times it was read
-    from — 27B / 4xH200 TP4, fp32 state, MTP depth 3, prefill MFU 0.32 — from
-    its physical terms, not from a fit to them."""
+    and when selected it must reproduce the step times it was calibrated on
+    — 27B / 4xH200 TP4, fp32 state, MTP depth 3, prefill MFU 0.32 — from its
+    physical terms, not from a fit to them."""
     dep = {"model": "27B", "gpu": "H200", "tensor_parallel": 4,
            "recurrent_state_dtype": "fp32"}
     base = RunConfig.from_dict({"deployment": dep})
@@ -606,7 +606,7 @@ def test_latency_decode_pricing_is_opt_in_and_reproduces_its_calibration():
                                                "mfu": 0.32}})
     lat = cfg.decode_latency()
     m, t = cfg.to_model(), cfg.to_topology()
-    # (sequences, context per sequence) -> measured ms per step, rounded
+    # (sequences, context per sequence) -> calibration ms per step, rounded
     for (n, ctx), ms in {(1, 46e3): 8.6, (8, 47e3): 11.1, (32, 40e3): 19.7,
                          (64, 37e3): 31.3, (8, 111e3): 14.4, (32, 105e3): 31.7,
                          (64, 103e3): 56.0}.items():

@@ -217,23 +217,20 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 # the assumption ledger: research/model_35ba3b.md.
 # ============================================================================
 # ---- DECODE efficiency: MFU's counterpart, and the study's newest constant ----
-# Decode was priced as a PURE roofline until 2026-08-28: bytes / effective_bw,
-# with no efficiency term at all, while prefill had carried an MFU anchor for
-# weeks. research/decode_mbu.md measures the gap on the reference row
-# (27B / 4xH200 TP4, production, five sessions): the model ran **4.1x
-# optimistic**, and ONE multiplicative constant brings it to a median 13%
-# (worst 20%) across batch sizes 1-25 and step bytes 35-90 GB.
+# Decode was first priced as a PURE roofline: bytes / effective_bw, with no
+# efficiency term at all, while prefill carried an MFU anchor. A measurement
+# not published in this repo found that roofline optimistic on the reference
+# row, and ONE multiplicative constant fits it across batch sizes 1-25.
 #
 # CONVENTION, as in prefill.md: this is the MODEL-convention figure, i.e.
 # already divided by tp_efficiency, so it multiplies effective_bw() directly.
-# The measurement reads 0.179 of the RAW advertised aggregate; 0.179/0.81 =
-# 0.221 here. Quote the convention whenever quoting the number.
+# Quote the convention whenever quoting the number.
 #
 # WHAT IT ABSORBS, and why that matters: the constant is fitted on a HYBRID
 # model (48 Gated-DeltaNet layers of 64) running speculative decoding at
 # num_speculative_tokens=2. It therefore absorbs both the streaming
 # inefficiency and whatever the speculative verify costs on a sequential
-# recurrence -- decode_mbu.md could not separate those from outside the pod.
+# recurrence -- a black-box measurement cannot separate those.
 # Two consequences:
 #   * MBU and the model's `mtp` TRAVEL TOGETHER. The 27B's mtp is the measured
 #     accepted length at k=2; changing one without the other breaks the fit.
@@ -247,8 +244,8 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 # of the step. Folding a weight-side inefficiency into a multiplier on the
 # WHOLE ledger then over-charges the KV term, and the decode ceiling lives at
 # n ~ 100-250 where KV dominates instead. Against the two candidate mechanisms
-# in decode_mbu.md sec 4.3, both anchored to the same n=1 measurement, the
-# 27B / 4xH200 decode ceiling reads:
+# (A: the verify multiplies the weight reads; B: it serialises as latency),
+# both anchored to the same n=1 point, the 27B / 4xH200 decode ceiling reads:
 #     this single-constant fold      108 users
 #     reading A (weights x(1+k))     238 users
 #     reading B (serial latency)     154 users
@@ -266,9 +263,9 @@ MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
 
 
 # ----------------------------------------------------------------------------
-# OPT-IN decode pricing: bytes + compute + latency (research/decode_mbu.md § 8,
-# 2026-09-18). NOT the default: every published decode figure still comes from
-# the single-constant fold above. This is the form a held-batch sweep to n=64
+# OPT-IN decode pricing: bytes + compute + latency. NOT the default: every
+# published decode figure still comes from the single-constant fold above.
+# This is the form a held-batch sweep to n=64
 # at two context lengths supports, offered as a CALIBRATION a deployment can
 # select ([calibration] decode_pricing = "latency") until a second deployment
 # says whether its constants travel.
@@ -278,8 +275,8 @@ MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
 #            + fixed_s                                     collectives, draft, launches
 #     per-user tok/s = mtp / t_step
 #
-# The fold misfits (it returns a NEGATIVE fixed cost on every batch sweep, in
-# August and again in September) because it has the bytes and nothing else:
+# The fold misfits (it returns a NEGATIVE fixed cost on every batch sweep)
+# because it has the bytes and nothing else:
 #   * speculative decoding verifies 1 + k positions per sequence per step.
 #     That is 1 + k tokens of GEMM compute per sequence, priced here at the
 #     SAME per-token time prefill achieves (2 x params / (peak x mfu)) — an
@@ -288,13 +285,13 @@ MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
 #   * a TP group pays two all-reduces per layer whatever the batch, and the
 #     draft head runs k more passes: a latency, not a byte count.
 # With those two terms present ONE bandwidth efficiency serves weights and KV
-# alike — § 4.3's reading B, and its parsimony argument, confirmed.
+# alike — reading B above, and its parsimony argument, confirmed.
 #
-# NOT modelled: above ~64 sequences the measured step jumped 1.2-1.6x and then
-# stayed flat to 96 (mechanism unknown, one deployment). Ceilings from this
+# NOT modelled: above ~64 sequences the step jumps in the measurements behind
+# this fit (not published in this repo; mechanism unknown). Ceilings from this
 # pricing are therefore the LINEAR regime's and optimistic past that batch.
 # ----------------------------------------------------------------------------
-DECODE_BW_EFF = 0.36        # model convention; 0.29 of the raw advertised aggregate at TP4
+DECODE_BW_EFF = 0.36        # model convention: already divided by tp_efficiency
 DECODE_FIXED_S = 2.7e-3     # TP4, 64 layers, MTP depth 3: what bytes and compute leave over
 DECODE_SPEC_TOKENS = 3      # the depth the constants above were read at
 
@@ -456,12 +453,10 @@ MODELS = {
         w_decode_shared=28.8 * GIB,      # dense: every step reads all weights
         w_route_pertok=0.0,
         w_route_total=0.0,
-        # MEASURED 2026-08-28 on the production 27B deployment recorded as
-        # Qwen3.6-27B (research/decode_mbu.md): accepted length 2.94 at
-        # num_speculative_tokens=2, per-draft acceptance 0.971 -- and the
-        # 1+a+a^2 acceptance model confirmed to three decimals against vLLM's
-        # per-position counters. Was 1.7, the baseline's fit. NOT re-measured
-        # on Qwen3.8-27B: acceptance is a property of the draft head's
+        # Accepted length at num_speculative_tokens=2 on Qwen3.6-27B, from a
+        # measurement not published in this repo (1 + a + a^2 = 2.94 gives a
+        # per-draft acceptance a ~ 0.98). Was 1.7, the baseline's fit. NOT
+        # re-measured on Qwen3.8-27B: acceptance is a property of the draft head's
         # weights, not the architecture. PAIRED WITH MBU_DEFAULT: both were
         # calibrated against the same passes, so moving one without the
         # other breaks the fit (see MBU_DEFAULT).
@@ -1253,31 +1248,18 @@ def effective_bw(topo: Topology) -> float:
 #                          rate — the curve that decides whether KV capacity
 #                          or prefill throughput is the binding constraint
 #
-# STATUS: analytic, MFU CALIBRATED 2026-08-27 (was: unvalidated). Two
-# production measurements anchor MFU (research/prefill.md #1), agreeing at
-# ~40% of the raw ADVERTISED peak on both BF16-Ampere (39.6% ± 0.4%, n=9,
-# engine-side counter deltas) and Hopper FP8 (40.0% implied from a 7-day
-# production mean prefill time, research/workload_agentic_poc.md). In THIS
-# module's convention — mfu divides peak_flops(topo), which already carries
-# the tp_efficiency haircut — those same points read 44.4% (TP2) and 49.4%
-# (TP4) against the 45% central. State the convention when quoting. The
-# bracket tightened [0.30,0.60] → [0.35,0.55]: the plausible range then moved
-# every figure here by ~1.6x (was 2x). LOW EDGE RE-OPENED to 0.30 on
-# 2026-09-18: a third point, the first CONTROLLED Hopper-FP8 one (4xH200 TP4,
-# 16k chunk, 16k-160k cold prompts, three methods agreeing), reads 0.30-0.34
-# in this convention — under the old bracket. The central stays 0.45 until
-# that point and the August implied one (which re-prices to 0.44 as a
-# hit/miss mixture, not 0.49) are reconciled; the bracket now spans ~1.8x.
-# research/prefill.md #1. Still bounds that rank configurations, not latency
+# STATUS: analytic. The MFU bracket rests on measurements not published in
+# this repo (research/prefill.md §1). In THIS module's convention, mfu
+# divides peak_flops(topo), which already carries the tp_efficiency haircut;
+# state the convention when quoting. The bracket [0.30, 0.55] moves every
+# figure here by ~1.8x. Still bounds that rank configurations, not latency
 # commitments.
 # ============================================================================
 
 # Model FLOP Utilisation: achieved FLOPs / dense peak on a large prefill GEMM.
 # 45% is a mid-range figure for FP8 attention+MLP prefill on Hopper-class
-# parts with TP collectives in the loop, now bracketed (in the model
-# convention only: 44.4% / 49.4%) by the two calibration points above rather
-# than by published-benchmark spread alone. Every prefill
-# number in this study should be read with the bracket, not the point.
+# parts with TP collectives in the loop. Every prefill number in this study
+# should be read with the bracket, not the point.
 MFU_LOW, MFU_DEFAULT, MFU_HIGH = 0.30, 0.45, 0.55
 
 
@@ -2338,9 +2320,9 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     # per-step KV and state bytes scale by the same factor as the storage
     model = _replicated(model, topo)
     rng = np.random.default_rng(seed)
-    # MEASURED decode efficiency (research/decode_mbu.md). Before 2026-08-28
-    # this line read `bw = effective_bw(topo)` -- a pure roofline, 4.1x
-    # optimistic against production. Pass mbu=1.0 to recover that reading.
+    # Calibrated decode efficiency (MBU_DEFAULT). This line once read
+    # `bw = effective_bw(topo)`, a pure roofline; pass mbu=1.0 to recover
+    # that reading.
     bw = effective_bw(topo) * (MBU_DEFAULT if mbu is None else mbu)
     # dense-attention models read every cached token per step (kv_bpt); a
     # sparse-attention model (GLM-5.3/DSA) reads kv_decode_bpt per context
@@ -2452,11 +2434,9 @@ DECODE_FLOOR_TOKS = 40.0    # the study's hard per-user floor (50 is comfortable
 THINK_TIME_S = 30.0         # reference: one main-agent request every 30 s
 REF_USERS = 64              # reference population -> 64/30 = 2.13 req/s (main
                             # requests; the prefill server sees 1 + sub_ratio x)
-OUT_TOKENS_DEFAULT = 400    # MEASURED 2026-08-27: 404.1 mean output tokens
-                            # per request over ~39k requests / 7 days on a
-                            # production agentic deployment (research/
-                            # workload_agentic_poc.md). Was ASSUMED 1,000
-                            # ("decoded share of the 2,000-token turn").
+OUT_TOKENS_DEFAULT = 400    # mean output tokens per agentic request, from a
+                            # trace not published in this repo. Was ASSUMED
+                            # 1,000 ("decoded share of the 2,000-token turn").
 
 # Measured think-time anchors — role-tagged pi-agent trace, 2026-08-04:
 # 8 sessions, 306 main-agent requests, 39 human turns. Regenerate with
@@ -3557,9 +3537,9 @@ EUR_PER_KWH_DEFAULT = 0.19   # Eurostat non-household EU average €0.1902/kWh
 HOURS_PER_MONTH = 720.0      # the explorer's flat billing month (30 x 24 h)
 
 # Output tokens ONE REQUEST decodes (applied to every request, subagents
-# included) — MEASURED 2026-08-27 (research/workload_agentic_poc.md): 404.1
-# mean over ~39k production requests; was assumed 1,000. At the observed
-# 50-90 tok/s this decodes in ~5-8 s of the measured 10.8 s served per turn
+# included) — ~400 mean, from a trace not published in this repo; was
+# assumed 1,000. At 50-90 tok/s this decodes in ~5-8 s of the measured
+# 10.8 s served per turn
 # (MEASURED_SERVICE_R_S) — the remainder is prefill + queue. Scales d_d linearly;
 # the €/1M-token figure moves hyperbolically (fixed idle/prefill watts
 # amortise as outputs lengthen); the €/month bill moves least (decode is one
@@ -4637,13 +4617,13 @@ def _selfcheck():
         "cache ceiling must reproduce the published warm-users p5 of 177"
     # PUBLISHED-TABLE CONVENTION. These two pin figures that appear in
     # docs/scenarios.md, and those tables were generated before decode had any
-    # efficiency term at all (MBU_DEFAULT, 2026-08-28). They are pinned at
+    # efficiency term at all (MBU_DEFAULT). They are pinned at
     # mbu=1.0 so the published numbers stay reproducible from this file; the
     # DEFAULT model is now the calibrated one and disagrees with them by ~2.6x.
     # Regenerating the tables is an owner decision, not a mechanical one --
     # until it happens, every decode figure in the docs is roofline-convention.
     # ...and at the pre-calibration mtp too: the 27B's speedup moved 1.7 -> 2.94
-    # on the same measurement, so BOTH knobs must be rewound to reproduce a
+    # with the same calibration, so BOTH knobs must be rewound to reproduce a
     # published figure. That they travel together is the point, not an
     # inconvenience -- see MBU_DEFAULT.
     m27_pub = dataclasses.replace(m27, mtp=1.7)
@@ -4656,16 +4636,15 @@ def _selfcheck():
     # reference workload. It held for every configuration under the roofline
     # convention, and the first assertion still guards that published claim.
     #
-    # What the measurement (research/decode_mbu.md, 2026-08-28) DID identify
-    # is per-user decode speed at the batch sizes it ran: 250-330 tok/s on the
-    # 27B / 4xH200 TP4 across n = 1-4, reproduced in four sessions. That is
-    # the pin: the model must land inside the measured band there (it reads
-    # 314 / 302 / 276 at n = 1 / 2 / 4). What it did NOT identify is the
+    # What the calibration DID identify is per-user decode speed at the batch
+    # sizes it was fitted on: the 27B / 4xH200 TP4 across n = 1-4. That is
+    # the pin: the model must land inside the 250-330 tok/s band there (it
+    # reads 314 / 302 / 276 at n = 1 / 2 / 4). What it did NOT identify is the
     # decode CEILING, and so not the binding order either: the constant is
     # fitted where weights dominate the step (n = 1-25) and applied where KV
-    # does (n ~ 100-250), and the note's two candidate mechanisms put the
-    # 4xH200 ceiling at 238 (A, H7 stands) or 154 (B, H7 inverts) against a
-    # cache ceiling of 249, with the single-constant fold used here at ~150.
+    # does (n ~ 100-250), and the two candidate mechanisms (see MBU_DEFAULT)
+    # put the 4xH200 ceiling at 238 (A, H7 stands) or 154 (B, H7 inverts)
+    # against a cache ceiling of 249, with the single-constant fold used here at ~150.
     # On the 1xH200 row these assertions run on, the fold reads decode ~32
     # against cache ~70 (published: 118 against 69) -- but that ordering is a
     # projection of the fold, not a measurement, so it is deliberately NOT
@@ -4729,10 +4708,10 @@ def _selfcheck():
     #    decodes ~2 sequences at a time at ~430 tok/s, against the 228-decoder
     #    / 40 tok/s ceiling the planner's decode column reports. The gap IS the
     #    finding; if it closes, the load conversion has broken somewhere.
-    #    (Re-pinned 2026-08-27 when OUT_TOKENS_DEFAULT moved 1,000 -> 400,
-    #    the measured value: fewer decode-seconds per request means a smaller
-    #    steady batch running faster. Old pin: ~6.4 at ~370 tok/s.
-    #    Re-pinned again 2026-08-28 for MBU_DEFAULT + the 27B's measured mtp:
+    #    (Re-pinned when OUT_TOKENS_DEFAULT moved 1,000 -> 400: fewer
+    #    decode-seconds per request means a smaller steady batch running
+    #    faster. Old pin: ~6.4 at ~370 tok/s.
+    #    Re-pinned again for MBU_DEFAULT + the 27B's calibrated mtp:
     #    slower decode keeps each request in the batch longer, so the steady
     #    batch GROWS and each member runs slower. 2.2 at 430 -> 6.8 at 138.
     #    The band is tight: cross-seed spread is ~0.1 in n and ~2 in tok/s,

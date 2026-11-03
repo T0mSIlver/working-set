@@ -674,7 +674,7 @@ details.more .more-body{padding:0 0 16px}
           <input type="range" id="s-turn" min="250" max="16000" step="250" value="2000">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Tokens one response decodes. Measured at about 400 on average over a 7-day production agentic trace. Sets how long a request stays in the decode batch, so decoders in flight and €/1M tokens scale with it.">Output per response</span> <span class="val"><span id="v-out">400</span> tok</span></label>
+          <label class="flabel"><span class="tip" data-tip="Tokens one response decodes. About 400 on average in an agentic trace not published here. Sets how long a request stays in the decode batch, so decoders in flight and €/1M tokens scale with it.">Output per response</span> <span class="val"><span id="v-out">400</span> tok</span></label>
           <input type="range" id="s-out" min="100" max="8000" step="100" value="400">
         </div>
       </div>
@@ -723,7 +723,7 @@ details.more .more-body{padding:0 0 16px}
         <p class="elede">Set the prefill and decode efficiency the test measured.</p>
         <div class="ctl-grid cal-grid">
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Share of the GPU&#x27;s advertised FP8 peak a prefill pass achieves. Default 0.45: two calibrations agree at about 40% (2×A100 BF16 controlled; 4×H200 FP8 production trace). A third controlled H200 FP8 point (2026-09, 16k chunk) reads 30 to 34%, so the range 0.30 to 0.55 is provisional. Moves TTFT, the cold-request ceiling, f* and B*; cache and decode do not change.">Prefill efficiency (MFU)</span> <span class="val"><span id="v-mfu">0.45</span></span></label>
+          <label class="flabel"><span class="tip" data-tip="Share of the GPU&#x27;s advertised FP8 peak a prefill pass achieves. Default 0.45, a mid-range figure for FP8 prefill on Hopper-class parts. The range 0.30 to 0.55 rests on measurements not published here, so treat it as provisional. Moves TTFT, the cold-request ceiling, f* and B*; cache and decode do not change.">Prefill efficiency (MFU)</span> <span class="val"><span id="v-mfu">0.45</span></span></label>
           <input type="range" id="s-mfu" min="0.10" max="1.00" step="0.01" value="0.45">
         </div>
         <div class="field">
@@ -731,7 +731,7 @@ details.more .more-body{padding:0 0 16px}
           <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How a decode step is priced. Roofline, the default and every published figure: step bytes over the group's bandwidth times the MBU. Latency, opt-in (research/decode_mbu.md § 8): every byte at one bandwidth efficiency, plus the speculative verify as (1 + draft tokens) tokens of compute per sequence at the prefill MFU, plus a fixed time per step. Its three constants come from one deployment (TP4, MTP depth 3); set draft tokens to your server's num_speculative_tokens first. Under Latency the MBU slider is unused and the MFU slider moves decode too. Above about 64 sequences the measured step jumped 1.2 to 1.6×, which this form does not price. Mirrors [calibration] decode_pricing.">Decode pricing</span></label>
+          <label class="flabel"><span class="tip" data-tip="How a decode step is priced. Roofline, the default and every published figure: step bytes over the group's bandwidth times the MBU. Latency, opt-in: every byte at one bandwidth efficiency, plus the speculative verify as (1 + draft tokens) tokens of compute per sequence at the prefill MFU, plus a fixed time per step. Its three constants come from one deployment (TP4, MTP depth 3); set draft tokens to your server's num_speculative_tokens first. Under Latency the MBU slider is unused and the MFU slider moves decode too. Above about 64 sequences the step jumps for an unknown reason, which this form does not price. Mirrors [calibration] decode_pricing.">Decode pricing</span></label>
           <div class="seg" id="seg-dprice" data-key="dprice">
             <button data-v="roofline" aria-pressed="true">Roofline (MBU)</button>
             <button data-v="latency" aria-pressed="false">Latency</button>

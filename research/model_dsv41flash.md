@@ -238,8 +238,8 @@ weighs 527.27 GB against 510.29 GB native.
   puts the *persistent* KV footprint at roughly **1/8** of V4-Flash's, against
   1/4 for the global (HBM) cache priced in § 2; the figure caption adds a
   **437×** reduction relative to DeepSeek-V1. The card's own positioning is
-  "input-heavy agentic workloads" — the study's workload (57k in / 400 out,
-  `research/workload_agentic_poc.md`).
+  "input-heavy agentic workloads" — the study's workload (long prompts,
+  ~400 tokens out).
 
 ### Positioning — what the model card reports (README, read 2026-09-10)
 
@@ -323,9 +323,8 @@ AA does not publish the context window it ran.)
 recommends allowing a single response (thinking + answer) a quarter of the
 context. The card gives no observed response-length distribution, so how
 long responses *are* at effort 100 is not known from it. The study prices
-**404 output tokens per request** on average
-(`research/workload_agentic_poc.md`, a production trace on the Qwen 27B
-deployment, effort setting unknown); nothing in this note changes that
+**400 output tokens per request** on average (`OUT_TOKENS_DEFAULT`, from a
+trace on the Qwen 27B, effort setting unknown); nothing in this note changes that
 constant. *Hypothesis:* a deployment run as the card was evaluated would
 sit to the decode-heavy side of the study's workload; the card cannot say
 by how much.
