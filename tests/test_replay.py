@@ -370,3 +370,16 @@ def test_a_version_1_trace_still_loads():
               "after": "user"}]}]}
     tr = AgentTrace.from_dict(d)
     assert [r.kind for r in tr.sessions[0]] == ["start", "think"]
+
+
+def test_a_rung_without_a_sample_prints_a_dash_not_nan(capsys):
+    """A replay forces no miss, so every rung's miss TTFT is NaN and the
+    progress line read 'miss p50 nans'."""
+    from types import SimpleNamespace
+    from workingset.test_cmd import _progress
+    nan = float("nan")
+    _progress("rung-done", SimpleNamespace(
+        passed=True, reasons=[], slowed={}, cold_wait={}, ttft_hit_p50=0.2,
+        ttft_miss_p50=nan, decode_p50=nan, achieved_rps=0.1))
+    out = capsys.readouterr().out
+    assert "nan" not in out and "miss p50 -" in out

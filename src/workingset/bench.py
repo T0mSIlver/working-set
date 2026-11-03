@@ -391,13 +391,15 @@ class Plan:
     chars_per_token: float = 4.0
     tokenizer: str | None = None
     seed: int = 0
+    request_timeout_s: float = 300.0
 
     def options(self) -> ProbeOptions:
         return ProbeOptions(chars_per_token=self.chars_per_token,
                             tokenizer=self.tokenizer,
                             context_cap_tokens=self.context_cap_tokens,
                             replay=self.trace_path, replay_max_gap_s=PARK_S,
-                            seed=self.seed)
+                            seed=self.seed,
+                            request_timeout_s=self.request_timeout_s)
 
 
 def _seat(trace: AgentTrace, plan: Plan, prefix_text: str, uid: int,
@@ -726,6 +728,7 @@ def cmd_replay(args) -> int:
                                       else default_shared_prefix(trace)),
                 context_cap_tokens=int(cap), chars_per_token=cpt,
                 tokenizer=args.tokenizer, seed=args.seed,
+                request_timeout_s=args.request_timeout_s,
                 calibrate_requests=CALIBRATE_REQUESTS,
                 calibrate_max_s=CALIBRATE_MAX_S)
     ep = EndpointSpec(base_url=base, model=args.model or info.get("model", ""),
@@ -801,6 +804,10 @@ def cmd_replay(args) -> int:
         Path(args.out).write_text(json.dumps(rec, indent=1) + "\n",
                                   encoding="utf-8")
     print_report(rec)
+    if args.metrics_url and not any(s.server for s in res["steps"]):
+        print("\nwarning: --metrics-url gave no reading (unreachable, or "
+              "refused without credentials): the verdict above stands, but it "
+              "cannot say what ran out", file=sys.stderr)
     if args.out:
         print(f"\nrun record written to {args.out}")
     return 0
@@ -858,6 +865,9 @@ def add_subparser(sub) -> None:
                         "first prompt in the trace)")
     p.add_argument("--config", help="also print the model's prediction for "
                                     "this config at the trace's averages")
+    p.add_argument("--request-timeout-s", type=float, default=300.0,
+                   help="seconds to wait for the next byte of a response "
+                        "before the request counts as failed (default 300)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--dry-run", action="store_true",
                    help="print the plan, send nothing")

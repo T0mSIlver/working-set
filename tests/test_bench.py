@@ -319,3 +319,10 @@ def test_a_config_the_model_cannot_price_does_not_stop_the_run(
     assert main(["replay", str(path), "--dry-run", "--config",
                  str(cfg)]) == 0
     assert "could not price this trace" in capsys.readouterr().out
+
+
+def test_the_request_timeout_reaches_the_requests(tmp_path, monkeypatch):
+    rec = _run(tmp_path, monkeypatch, _endpoint(free=10_000),
+               "--max-sessions", "1", "--request-timeout-s", "7")
+    assert rec["plan"]["request_timeout_s"] == 7
+    assert B.Plan("t", request_timeout_s=7).options().request_timeout_s == 7

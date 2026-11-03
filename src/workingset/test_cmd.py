@@ -464,6 +464,10 @@ async def _score_from_cache(ctx, pl, done: set) -> list[dict]:
     return rows
 
 
+def _sec(v: float) -> str:
+    return f"{v:.2f}s" if v == v else "-"      # NaN: no sample in the rung
+
+
 def _progress(kind, payload) -> None:
     if kind == "rung":
         print(f"\n--- rung: {payload} users ---", flush=True)
@@ -474,8 +478,10 @@ def _progress(kind, payload) -> None:
         cw = r.cold_wait.get("value_s")
         print(f"  slowed {'-' if sl is None else f'{sl:.1%}'} | cold wait "
               f"{'-' if cw is None else f'{cw:.2f}s'} | TTFT hit p50 "
-              f"{r.ttft_hit_p50:.2f}s / miss p50 "
-              f"{r.ttft_miss_p50:.2f}s | decode p50 {r.decode_p50:.1f} tok/s "
+              f"{_sec(r.ttft_hit_p50)} / miss p50 "
+              f"{_sec(r.ttft_miss_p50)} | decode p50 "
+              f"{'-' if r.decode_p50 != r.decode_p50 else f'{r.decode_p50:.1f}'}"
+              " tok/s "
               f"| {r.achieved_rps:.2f} req/s | {v}", flush=True)
     elif kind == "blown":
         print("  SLOs clearly blown — stopping the ladder early (higher rungs "
