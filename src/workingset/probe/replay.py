@@ -39,6 +39,15 @@ from ..agent_trace import (DEFAULT_GAP_POLICY, AgentTrace, load,
 from .session import make_text, nonce_bits
 
 
+def root_sessions(trace: AgentTrace) -> tuple[int, ...]:
+    """The recordings that are not a subagent's, each with at least one
+    request."""
+    links = trace.links or (None,) * len(trace.sessions)
+    roots = tuple(i for i, (s, l) in enumerate(zip(trace.sessions, links))
+                  if s and not l)
+    return roots or tuple(i for i, s in enumerate(trace.sessions) if s)
+
+
 @functools.lru_cache(maxsize=4)
 def load_trace(path: str) -> AgentTrace:
     return load(path)
@@ -59,7 +68,12 @@ class ReplaySession:
                  prefix_tokens: int, cpt: float, cap_tokens: int,
                  max_gap_s: float, rng: random.Random,
                  text_rng: random.Random,
-                 gap_policy: str = DEFAULT_GAP_POLICY):
+                 gap_policy: str = DEFAULT_GAP_POLICY,
+                 roots: tuple[int, ...] | None = None,
+                 start: tuple[int, int] | None = None):
+        """`roots` limits the recordings a session may start at or move on to
+        (`ws replay` leaves subagent recordings to their parent); `start` =
+        (recording, request) fixes where it begins."""
         self.trace, self.uid, self.is_sub = trace, uid, False
         self.prefix_text, self.prefix_tokens = prefix_text, prefix_tokens
         self.cpt, self.cap, self.max_gap_s = cpt, cap_tokens, max_gap_s
@@ -73,9 +87,11 @@ class ReplaySession:
         self._fresh = True                            # next turn starts over
         # a random request of a random recording: weighted by requests, so a
         # long session is entered more often, as it is more often running
-        flat = [(i, j) for i, s in enumerate(trace.sessions)
-                for j in range(len(s))]
-        self._s, self._pos = flat[rng.randrange(len(flat))]
+        self.roots = tuple(roots) if roots else tuple(
+            range(len(trace.sessions)))
+        flat = [(i, j) for i in self.roots
+                for j in range(len(trace.sessions[i]))]
+        self._s, self._pos = start or flat[rng.randrange(len(flat))]
 
     @property
     def _req(self):
@@ -120,7 +136,7 @@ class ReplaySession:
         self.n_turn += 1
         self._pos += 1
         if self._pos >= len(self.trace.sessions[self._s]):
-            self._s = self.rng.randrange(len(self.trace.sessions))
+            self._s = self.roots[self.rng.randrange(len(self.roots))]
             self._pos, self._prev, self._fresh = 0, None, True
 
     def think_s(self, wl) -> float:

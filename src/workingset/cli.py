@@ -299,8 +299,15 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default: completions, as the harness does)")
     p.add_argument("--metrics-url", help="vLLM /metrics, for server-side "
                                          "covariates and window deltas")
+    p.add_argument("--metrics-header", action="append", default=[],
+                   metavar="'Name: value'",
+                   help="a header for every /metrics request (repeatable); "
+                        "without it the API key goes as a bearer token to "
+                        "/metrics on the same host as --base-url")
     # probe knobs
-    p.add_argument("--rungs", help="ladder multipliers of predicted_limit_users")
+    p.add_argument("--rungs", help="ladder multipliers of predicted_limit_users "
+                                   "(only these rungs run, without the "
+                                   "operating point the default ladder adds)")
     p.add_argument("--max-users", type=int, help="hard cap on any rung")
     p.add_argument("--ramp-s", type=float, help="per-rung ramp, s")
     p.add_argument("--measure-s", type=float, help="per-rung measure window, s")

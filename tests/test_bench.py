@@ -96,10 +96,42 @@ def test_a_turn_is_scored_by_its_total_time():
     assert not s.passed and "p90 turn 1.90x" in s.reasons[0]
 
 
-def test_only_requests_sent_in_the_window_count():
-    rows = [_row(1, 1, 1, 9.0, 9.0, sent=0.5), _row(1, 1, 1, 1.0, 1.0)]
-    s = B.judge(B.Step(1, rows, window=(1.0, 10.0)), FLAT, 1.5)
-    assert s.requests == 1 and s.passed
+def test_a_request_in_flight_during_the_window_counts_wherever_it_was_sent():
+    """A request sent in the ramp and finishing in the window is the slowest
+    one an overloaded server has; dropping it for its send time let an
+    overloaded step pass on the few requests that happened to start later."""
+    ramp_slow = _row(1, 1, 1, 9.0, 9.0, sent=0.5, seat=1)      # ends at 9.5
+    ramp_done = _row(1, 1, 1, 0.2, 0.2, sent=0.1, seat=2)      # ends at 0.3
+    fast = _row(1, 1, 1, 1.0, 1.0)
+    s = B.judge(B.Step(2, [ramp_slow, ramp_done, fast],
+                       window=(1.0, 10.0)), FLAT, 1.5)
+    assert s.requests == 2 and s.turns == 2
+    assert s.slowdown_p90 > 1.5 and not s.passed
+
+
+def test_requests_left_running_fail_the_step_and_are_censored():
+    ok = [_row(1, 1, 1, 1.0, 1.0, turn=k, sent=2.0 + k) for k in range(5)]
+    stuck = B.Row(9, 0, "hit", 1, 1, 1, sent=1.0)      # never finished
+    s = B.judge(B.Step(1, ok + [stuck], window=(0.0, 10.0), drain_s=5.0),
+                FLAT, 1.5)
+    assert s.unfinished == 1 and not s.passed
+    assert any("1 of 6 requests failed" in r and "still running" in r
+               for r in s.reasons)
+    assert s.slowdown_p90 > 5            # the stuck one counts 14x, not nothing
+
+
+def test_a_step_with_few_turns_for_its_sessions_fails():
+    rows = [_row(1, 1, 1, 1.0, 1.0, seat=k) for k in range(2)]
+    s = B.judge(B.Step(8, rows, window=(0.0, 10.0)), FLAT, 1.5)
+    assert not s.passed
+    assert "only 2 turns judged for 8 session(s)" in s.reasons[0]
+
+
+def test_the_mean_requests_in_flight_over_the_window():
+    rows = [_row(1, 1, 1, 5.0, 5.0, sent=2.0, seat=0),     # 2..7
+            _row(1, 1, 1, 10.0, 10.0, sent=0.0, seat=1)]   # 0..10
+    s = B.judge(B.Step(2, rows, window=(0.0, 10.0)), FLAT, 99)
+    assert s.streams_mean == pytest.approx(1.5)
 
 
 def test_a_request_still_running_counts_with_its_time_so_far():

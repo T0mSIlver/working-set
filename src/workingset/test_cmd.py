@@ -50,6 +50,7 @@ def build_options(args, cfg) -> ProbeOptions:
         v = getattr(args, flag, None)
         if v is not None:
             kw[field] = v
+    kw["rungs_given"] = getattr(args, "rungs", None) is not None
     # the same flag overrides the slow-gap threshold, which otherwise follows
     # the predicted mixed step
     if getattr(args, "freeze_threshold_ms", None) is not None:
@@ -154,7 +155,8 @@ def build_endpoint(args, cfg) -> EndpointSpec:
         api_key_env=getattr(args, "api_key_env", None))
 
 
-def open_metrics(url: str | None, engine: str | None = None):
+def open_metrics(url: str | None, engine: str | None = None,
+                 headers: dict | None = None):
     """Duck-typed hand-off to `workingset.metrics.MetricsSampler`, built by a
     separate module. Only `at(t)` and `window(t0, t1)` are relied on; start /
     stop are called when they exist, and the constructor is tried positionally
@@ -170,13 +172,14 @@ def open_metrics(url: str | None, engine: str | None = None):
     # replica group, and occupancy cannot be combined at all -- see
     # `SharedResult.reading`, which refuses the fit rather than compare two
     # different units.
+    kw = {"headers": headers} if headers else {}
     try:
-        return MetricsSampler(url, engine=engine)
+        return MetricsSampler(url, engine=engine, **kw)
     except TypeError:
         try:
-            return MetricsSampler(url=url, engine=engine)
+            return MetricsSampler(url=url, engine=engine, **kw)
         except TypeError:
-            return MetricsSampler(url)
+            return MetricsSampler(url, **kw)
 
 
 async def _maybe(obj, *names):
@@ -280,7 +283,8 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
     if args.metrics_url:
         try:
             sampler = open_metrics(args.metrics_url,
-                                   getattr(args, 'engine', None))
+                                   getattr(args, 'engine', None),
+                                   _metrics_headers(args, ep))
         except SystemExit:
             sampler = True          # unreachable module: the rails still bind
     w("\nPROBE BUDGET — the rails this run may not cross"
@@ -302,7 +306,8 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
     if pl.run_ladder:
         from .probe.ladder import build_ladder
         ladder = build_ladder(preds.predicted_limit_users, opts.rungs,
-                              opts.max_users, preds.operating_point_users)
+                              opts.max_users, preds.operating_point_users,
+                              opts.rungs_given)
         w("\nLOAD LADDER (users; each rung: "
           f"ramp {opts.ramp_s:g}s + measure {opts.measure_s:g}s)")
         tr = None
@@ -464,6 +469,13 @@ async def _score_from_cache(ctx, pl, done: set) -> list[dict]:
     return rows
 
 
+def _metrics_headers(args, ep) -> dict:
+    from .bench import metrics_headers
+    return (metrics_headers(getattr(args, "metrics_header", None) or [],
+                            ep.api_key, ep.base_url, args.metrics_url)
+            if args.metrics_url else {})
+
+
 def _sec(v: float) -> str:
     return f"{v:.2f}s" if v == v else "-"      # NaN: no sample in the rung
 
@@ -605,7 +617,8 @@ def cmd_test(args) -> int:
             print(f"  {h.key:<14} {reason}", file=sys.stderr)
         return 2
 
-    metrics = open_metrics(args.metrics_url, getattr(args, 'engine', None))
+    metrics = open_metrics(args.metrics_url, getattr(args, 'engine', None),
+                           _metrics_headers(args, ep))
     budget, sopts = build_budget(args), build_shared(args)
     try:
         rows, cached, bracket, interrupted, aborted = asyncio.run(

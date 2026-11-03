@@ -227,7 +227,8 @@ class RunContext:
     def ladder_pops(self) -> list[int]:
         return build_ladder(self.predictions.predicted_limit_users,
                             self.opts.rungs, self.opts.max_users,
-                            self.predictions.operating_point_users)
+                            self.predictions.operating_point_users,
+                            self.opts.rungs_given)
 
     async def ladder(self) -> LadderView:
         key = self._ladder_key()

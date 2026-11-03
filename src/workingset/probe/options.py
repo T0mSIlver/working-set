@@ -28,6 +28,9 @@ def process_nonce() -> str:
 class ProbeOptions:
     # --- ladder shape -----------------------------------------------------
     rungs: str = DEFAULT_RUNGS          # multipliers of predicted_limit_users
+    # True when --rungs named the ladder: it then holds exactly those rungs,
+    # without the operating point the default ladder adds
+    rungs_given: bool = False
     max_users: int = 1024               # hard cap on any rung's population
     ramp_s: float = 90.0                # sessions establish; not measured
     measure_s: float = 180.0            # steady-state measure window
@@ -71,7 +74,7 @@ class ProbeOptions:
 
     def ladder_key(self) -> tuple:
         """Cache key: everything that changes what a ladder rung measures."""
-        return (self.rungs, self.max_users, self.ramp_s, self.measure_s,
+        return (self.rungs, self.rungs_given, self.max_users, self.ramp_s, self.measure_s,
                 self.turns_per_user, self.chars_per_token,
                 self.context_cap_tokens, self.request_timeout_s,
                 self.ignore_eos, self.api, self.freeze_threshold_ms,
