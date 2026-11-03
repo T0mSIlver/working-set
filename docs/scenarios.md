@@ -1155,10 +1155,10 @@ because per-user speed falls as the batch grows:
 configuration outright — 4,000-token responses at 2.35 req/s ask for more
 output than 251 resident sessions retire. **Output length is the one assumed
 input in this section** — the workload model is fitted on 1,850 real prompt
-*lengths* and has never fitted output lengths. The 400-token reference is the
-measured mean of the traced responses; the traced 10.8 s served per request
-(`MEASURED_SERVICE_R_S`) at the observed 50–90 tok/s would put it nearer
-1,000, so the two rows around it bracket that uncertainty, and a k× error in
+*lengths* and has never fitted output lengths. The 400-token reference is a
+mean from a trace not published in this repo; the think-time trace's 10.8 s
+served per request (`MEASURED_SERVICE_R_S`) at the observed 50–90 tok/s would
+put it nearer 1,000, so the two rows around it bracket that uncertainty, and a k× error in
 it is a k× error in the demand. That is why the explorer exposes it as a
 slider rather than burying it as a constant.
 
@@ -1798,7 +1798,7 @@ Ordered roughly by how much each could move the numbers:
     driven by `λ × out`, and `out` — output tokens per response — is a single
     mean (400 tokens, from a trace not published in this repo), not a fitted
     distribution. The workload model's log-normal is fitted on
-    1,850 real *prompt* lengths; no output-length trace has been collected, and
+    1,850 real *prompt* lengths; no output-length distribution has been fitted, and
     the traced 10.8 s served per request at 50–90 tok/s would put the mean
     nearer 1,000. The section is not merely linear in this input: 4× moves *n*
     8.8× on the 27B/TP2 and the next 4× saturates it outright — so an
