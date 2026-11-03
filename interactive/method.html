@@ -411,7 +411,7 @@ table.c td.d{text-align:left; white-space:normal; min-width:240px}
       <tr><td><i>N</i><sub>p</sub>, <i>C</i><sub>g</sub>, MFU</td><td class="d">prefill constants (§ F.3)</td><td class="tnum">24.5×10⁹, 3.56×10¹⁵, 0.45</td><td></td></tr>
       <tr><td><i>v</i><sub>user</sub>(<i>n</i>)</td><td class="d">per-user decode speed under this pricing</td><td class="tnum">58.0 (p50, <i>n</i> = 64)</td><td>tok/s</td></tr>
     </table></div>
-    <p class="tnote">Selected with <code>[calibration] decode_pricing = "latency"</code> (<code>config.py · RunConfig.decode_latency()</code>); never the default — every published decode figure is the MBU fold above. Fitted on a held-batch sweep to <i>n</i> = 64 at two context lengths (TP4, MTP depth 3). Above ~64 sequences the measured step jumped 1.2–1.6× for an unknown reason, so ceilings from this pricing are the linear regime's and optimistic past that batch. Example decode ceiling: 102 users, against 74 under the fold.</p>
+    <p class="tnote">Selected with <code>[calibration] decode_pricing = "latency"</code> (<code>config.py · RunConfig.decode_latency()</code>); never the default — every published decode figure is the MBU fold above. Fitted on a held-batch sweep to <i>n</i> = 64 at two context lengths (TP4, MTP depth 3), from measurements not published in this repo. Above ~64 sequences the step jumps for an unknown reason, so ceilings from this pricing are the linear regime's and optimistic past that batch. Example decode ceiling: 102 users, against 74 under the fold.</p>
 
     <h3 id="f-prefill">F.3 — Prefill (compute roofline)</h3>
     <p><b>FLOPs of one forward pass</b><span class="fn">model.py · prefill_flops()</span></p>

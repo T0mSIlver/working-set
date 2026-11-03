@@ -287,8 +287,8 @@ MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
 # With those two terms present ONE bandwidth efficiency serves weights and KV
 # alike — reading B above, and its parsimony argument, confirmed.
 #
-# NOT modelled: above ~64 sequences the measured step jumped 1.2-1.6x and then
-# stayed flat to 96 (mechanism unknown, one deployment). Ceilings from this
+# NOT modelled: above ~64 sequences the step jumps in the measurements behind
+# this fit (not published in this repo; mechanism unknown). Ceilings from this
 # pricing are therefore the LINEAR regime's and optimistic past that batch.
 # ----------------------------------------------------------------------------
 DECODE_BW_EFF = 0.36        # model convention: already divided by tp_efficiency
