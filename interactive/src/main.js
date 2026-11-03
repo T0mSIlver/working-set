@@ -460,16 +460,16 @@ function syncLabels(){
   const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
     : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
   document.getElementById('mtp-tip').setAttribute('data-tip',
-    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — the accepted length measured on the production 27B deployment before the Qwen3.8-27B swap, carried over unmeasured on 3.8 (research/decode_mbu.md: per-position acceptance 0.971 then 0.944, which the two-draft inversion rounds up to 98%; 1.7× ⇔ α ≈ 47% was the pre-measurement fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
+    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — an accepted length calibrated on Qwen3.6-27B from a measurement not published here, carried over unmeasured on 3.8 (1.7× ⇔ α ≈ 47% was the earlier fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
   // MBU provenance, stated on the control: one measurement, applied to every
   // row, the frontier included -- the slider is how a reader argues with it.
   const mbuProv = state.model === "27B"
-    ? 'Measured on the production 27B deployment before the Qwen3.8-27B swap (research/decode_mbu.md) and carried over with its paired MTP fit, unmeasured on 3.8: the uncalibrated roofline was ~4× optimistic; this constant brought it to a median 13% error.'
+    ? 'Calibrated on Qwen3.6-27B from a measurement not published here, and carried over with its paired MTP fit, unmeasured on 3.8.'
     : (is_moe(CONFIG.MODELS[state.model]) || CONFIG.MODELS[state.model].deltanet_state > 0
         ? 'Measured on the 27B and applied here unchanged; unmeasured on this model.'
         : 'Measured on a recurrent hybrid and applied here unchanged; this model has no recurrence to serialise and may well sit higher, but nothing in this study measures a dense one.');
   document.getElementById('mbu-tip').setAttribute('data-tip',
-    'Memory Bandwidth Utilisation — the fraction of the group\'s advertised HBM bandwidth a decode pass achieves. Decode\'s counterpart to the prefill MFU below, and the study\'s newest constant: before 2026-08-28 decode was priced at 1.00, a pure roofline. MODEL CONVENTION (already divided by tp_efficiency). ONE value for every row, the frontier included: a global sensitivity knob, not a per-model property — drag it and watch which configurations survive. It absorbs both streaming inefficiency and whatever speculative verification costs on a sequential recurrence, so on the 27B it TRAVELS WITH the MTP slider. ' + mbuProv);
+    'Memory Bandwidth Utilisation — the fraction of the group\'s advertised HBM bandwidth a decode pass achieves. Decode\'s counterpart to the prefill MFU below, and the study\'s newest constant: decode was first priced at 1.00, a pure roofline. MODEL CONVENTION (already divided by tp_efficiency). ONE value for every row, the frontier included: a global sensitivity knob, not a per-model property — drag it and watch which configurations survive. It absorbs both streaming inefficiency and whatever speculative verification costs on a sequential recurrence, so on the 27B it TRAVELS WITH the MTP slider. ' + mbuProv);
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
   // the 0.1k step is only reachable at the chat end of the range, so show the

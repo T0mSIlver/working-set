@@ -110,8 +110,8 @@ free key; the pages were used because no key was on hand.
 - It is a **model** property. Every row of a model — TP2, DP4, FP16-KV —
   gets the same x; the vertical spread at one x is what the topology costs.
 - It is **not** the study's workload. AA's runs are at the vendor's max
-  effort; the explorer's tokens-per-request come from a production trace
-  (`research/workload_agentic_poc.md`). A cheaper effort setting would
+  effort; the explorer's tokens-per-request come from an agentic trace
+  not published in this repo. A cheaper effort setting would
   score lower and generate fewer tokens; neither side of that trade is in
   the model yet.
 - It moves. Seven AA-scored models released between April and August 2026

@@ -595,10 +595,10 @@ export function steadyChecks(){
   //    ~46 tok/s if they all decoded at once. Stable to ~1% from step 1 to
   //    step 40, so the tolerance is MC jitter only; a units slip in the
   //    arrival rate or the output length moves it by multiples.
-  //    (Re-pinned 2026-08-27 with AVG_OUT_TOK 1000 -> 400, measured: fewer
-  //    decode-seconds per request, smaller faster batch. Was ~6.4 at ~365 —
+  //    (Re-pinned with AVG_OUT_TOK 1000 -> 400: fewer decode-seconds per
+  //    request, smaller faster batch. Was ~6.4 at ~365 —
   //    the JS pin; the Python mirror's historical pin was 370.)
-  // Re-pinned 2026-08-28 for DECODE_MBU + the 27B's measured mtp: slower
+  // Re-pinned for DECODE_MBU + the 27B's calibrated mtp: slower
   // decode holds each request in the batch longer, so the steady batch GROWS
   // and each member runs slower. 2.2 at 430 -> ~6.5 at ~135. Mirrors the
   // same re-pin in scenario_model.py's _selfcheck.

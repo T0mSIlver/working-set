@@ -177,11 +177,11 @@ def _le(b: float) -> str:
     return "+Inf" if math.isinf(b) else repr(b)
 
 
-# the study's workload, as a Prometheus would hold it after 7 days
-N_REQ = 39_412.0
-PROMPT_MEDIAN, PROMPT_SIGMA = 47_400.0, 0.81
+# a synthetic agentic workload, as a Prometheus would hold it after 7 days
+N_REQ = 41_873.0    # not round: the firewall test looks for it verbatim
+PROMPT_MEDIAN, PROMPT_SIGMA = 40_000.0, 0.81
 OUT_MEDIAN, OUT_SIGMA = 300.0, 0.80
-SAVINGS = 0.875
+SAVINGS = 0.85
 # deliberately high-precision: a raw reading that survived into an emitted
 # number would be visible verbatim, which is what the firewall test looks for
 RUNNING = [3.1415926, 7.2360679, 11.0905356, 2.7182818, 0.5772156,
@@ -356,7 +356,7 @@ def test_parse_duration():
 # ===========================================================================
 # the log-normal fit
 # ===========================================================================
-@pytest.mark.parametrize("median,sigma,n", [(47_400.0, 0.81, 40_000),
+@pytest.mark.parametrize("median,sigma,n", [(40_000.0, 0.81, 40_000),
                                             (300.0, 0.80, 40_000),
                                             (3_000.0, 0.60, 20_000)])
 def test_fit_recovers_known_lognormal_parameters(median, sigma, n):
@@ -387,8 +387,8 @@ def test_fit_recovers_a_noisily_sampled_lognormal(seed):
     on the line by construction. These buckets come from 40,000 random draws,
     so the extreme edges (F ~ 5e-5, where one request moves the quantile a
     long way) are wrong by exactly as much as sampling makes them."""
-    f = fit_lognormal(sampled_hist(seed, 40_000, 47_400.0, 0.81))
-    assert f.median_tokens == pytest.approx(47_400.0, rel=0.01)
+    f = fit_lognormal(sampled_hist(seed, 40_000, 40_000.0, 0.81))
+    assert f.median_tokens == pytest.approx(40_000.0, rel=0.01)
     assert f.sigma == pytest.approx(0.81, rel=0.02)
 
 
@@ -408,7 +408,7 @@ def test_the_fit_weights_the_edges_by_how_much_they_know():
 
     worst_w = worst_u = 0.0
     for seed in range(12):
-        h = sampled_hist(seed, 40_000, 47_400.0, 0.81)
+        h = sampled_hist(seed, 40_000, 40_000.0, 0.81)
         worst_w = max(worst_w, abs(fit_lognormal(h).sigma / 0.81 - 1))
         worst_u = max(worst_u, abs(unweighted(h) / 0.81 - 1))
     assert worst_w < worst_u
@@ -430,11 +430,11 @@ def test_a_fit_through_too_few_edges_says_so():
 
 
 def test_fit_reports_censoring_when_the_top_bucket_overflows():
-    """vLLM's top size bucket is 200k tokens; a 47.4k-median, sigma-0.81
-    workload puts ~4% of prompts above it."""
-    f = fit_lognormal(lognormal_hist(40_000, 47_400.0, 0.81))
+    """vLLM's top size bucket is 200k tokens; a 40k-median, sigma-0.81
+    workload puts ~2.3% of prompts above it."""
+    f = fit_lognormal(lognormal_hist(40_000, 40_000.0, 0.81))
     assert f.censored
-    assert f.censored_fraction == pytest.approx(0.038, abs=0.005)
+    assert f.censored_fraction == pytest.approx(0.0235, abs=0.005)
     assert f.top_finite_bound == 200_000.0
 
     g = fit_lognormal(lognormal_hist(40_000, 3_000.0, 0.6))
@@ -522,7 +522,7 @@ def test_fit_refuses_rather_than_guessing():
 
 
 def test_fit_mean_and_histogram_mean_are_separate_readings():
-    h = lognormal_hist(40_000, 47_400.0, 0.81)
+    h = lognormal_hist(40_000, 40_000.0, 0.81)
     f = fit_lognormal(h)
     assert f.mean_tokens == pytest.approx(h.mean())          # exact, from _sum
     assert f.fit_mean_tokens == pytest.approx(               # from the fit
@@ -588,7 +588,7 @@ def test_single_class_asserts_the_mixture_away_and_unlocks_the_assignment():
     est, _ = study_estimate(**{"single_class": True})
     assert est.prompt_assignable is True
     body = tomllib.loads(emit_toml(est))["workload"]
-    assert body["user_prompt_median_tokens"] == pytest.approx(47_400, rel=0.02)
+    assert body["user_prompt_median_tokens"] == pytest.approx(PROMPT_MEDIAN, rel=0.02)
     assert body["user_prompt_sigma"] == pytest.approx(0.81, rel=0.02)
     assert "user_prompt_median_tokens" not in est.unobservable
     assert "asserted single-class by --single-class" in emit_toml(est)
@@ -736,8 +736,8 @@ def test_cache_savings_admits_exactly_two_readings():
         ((1 - SAVINGS) * C - T) / (C - T))
     assert c.turn_tokens_given_miss == pytest.approx(
         C * (1 - SAVINGS - f) / (1 - f))
-    # the study's 7-day reading, recovered from the counters
-    assert c.miss_rate_given_turn == pytest.approx(0.093, abs=0.02)
+    # the fixture's reading, recovered from the counters
+    assert c.miss_rate_given_turn == pytest.approx(0.118, abs=0.02)
 
 
 def test_the_two_readings_are_each_labelled_with_their_assumption():
@@ -1044,7 +1044,7 @@ def test_an_unrounded_number_never_reaches_the_output():
 # the firewall
 # ===========================================================================
 def test_no_raw_series_value_or_timestamp_is_emitted():
-    """The employer-data firewall: every emitted number is an aggregate that
+    """The data firewall: every emitted number is an aggregate that
     has been rounded, so no timestamp-value pair from the source survives —
     and no label off the series it was read from."""
     est, prom = study_estimate()
@@ -1193,7 +1193,7 @@ def test_into_rewrites_only_the_workload_block(tmp_path):
     assert new["schema_version"] == old["schema_version"]
     assert new["workload"] != old["workload"]
     assert new["workload"]["user_prompt_median_tokens"] == pytest.approx(
-        47_400, rel=0.02)
+        PROMPT_MEDIAN, rel=0.02)
     load_config(p).validate()
 
 

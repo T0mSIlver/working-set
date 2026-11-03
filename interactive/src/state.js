@@ -14,7 +14,7 @@ export const state = {
   // the baseline's 75 MiB); wover: deployed-weight overhead over the raw or
   // on-disk checkpoint bytes ("pub" = as published, "p15" = +15%).
   // mtp follows the SELECTED model's own value (the model segment resets it);
-  // the seed here is the 27B's measured 2.94 (decode_mbu.md), was 1.7.
+  // the seed here is the 27B's calibrated 2.94, was 1.7.
   state_dt: "bf16", wover: "pub", mtp: 2.94,
   // kvshard: how a group's KV cache is laid out across its TP ranks. "dcp"
   // (decode context parallelism, the layout every published number assumes;

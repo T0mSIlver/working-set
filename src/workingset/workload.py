@@ -1,12 +1,10 @@
 """`ws workload` — characterise the real workload, emit the config's `[workload]`.
 
-The study's `[workload]` block was last set BY HAND from a 7-day Grafana pull
-(`research/workload_agentic_poc.md`: mean prompt 57.4k tokens, 87.5%
-prefix-cache savings, 404 mean output tokens). This module makes that pull
-reproducible, and doubles as the EMPLOYER-DATA FIREWALL: it reads a
-Prometheus that scrapes vLLM, and emits only ROUNDED AGGREGATES — never a
-timestamp, never a raw series value, never the instance's identity beyond the
-selector you typed yourself.
+The study's `[workload]` block was once set BY HAND from a dashboard pull.
+This module makes that pull reproducible, and doubles as a DATA FIREWALL: it
+reads a Prometheus that scrapes vLLM, and emits only ROUNDED AGGREGATES —
+never a timestamp, never a raw series value, never the instance's identity
+beyond the selector you typed yourself.
 
 Three sources behind one interface, all producing a `Reading`:
 
@@ -45,9 +43,9 @@ docstring):
                       population in either direction.
     prefix cache      hits / queries, and the TWO readings it admits
 
-The prefix-cache reading is the point the research note makes and this module
-refuses to blur: 87.5% savings is ONE observable over TWO unknowns (the miss
-rate and the warm-turn size). Fixing either yields the other; nothing in
+The prefix-cache reading is the point this module refuses to blur: the
+savings fraction is ONE observable over TWO unknowns (the miss rate and the
+warm-turn size). Fixing either yields the other; nothing in
 `/metrics` separates them. Both are printed, each labelled with the
 assumption it needs.
 
@@ -87,7 +85,7 @@ __all__ = [
     "DEFAULT_TURN_TOKENS", "DEFAULT_MISS_RATE", "DEFAULT_SUBAGENT_RATIO",
 ]
 
-# The study's two candidate assumptions, from research/workload_agentic_poc.md.
+# The study's two candidate assumptions.
 DEFAULT_TURN_TOKENS = 2_000.0     # the study's warm turn (tokens)
 DEFAULT_MISS_RATE = 0.01          # the config's `miss_rate` default
 # the model's `r`: subagent requests per main-user request. Not observable
@@ -396,7 +394,7 @@ class Provenance:
     # A file's BASENAME, or "" for a live endpoint. NEVER a URL and never a
     # path: an emitted block is meant to be pasted into a config other people
     # read, and the Prometheus hostname is the deployment's identity — the
-    # one thing the employer-data firewall exists to keep in the building.
+    # one thing the data firewall exists to keep private.
     # What the user typed is theirs to repeat; what this command learned by
     # dialling is not, so the endpoint is used and then forgotten.
     target: str = ""
@@ -878,10 +876,9 @@ class CacheReadings:
         miss_rate_given_turn = ((1 - S) * C - T) / (C - T)
         turn_tokens_given_miss = C * (1 - S - f) / (1 - f)
 
-    They cannot be separated by any counter vLLM exports — the note in
-    research/workload_agentic_poc.md §3 is the same finding, reached from a
-    dashboard rather than from the counters. Separating them needs per-request
-    hit/query attribution, which is not on the /metrics surface.
+    They cannot be separated by any counter vLLM exports. Separating them
+    needs per-request hit/query attribution, which is not on the /metrics
+    surface.
 
     C (`mean_prompt_tokens`) is the mean prompt length over the window, from
     the `request_prompt_tokens` histogram (or prompt_tokens_total / requests).
@@ -1399,8 +1396,8 @@ def estimate(rd: Reading, *, turn_tokens: float = DEFAULT_TURN_TOKENS,
         caveats.append(
             f"prefix-cache savings {cache.savings:.1%} is ONE observable over "
             f"TWO unknowns: the miss rate and the warm-turn size cannot be "
-            f"separated from these counters (research/workload_agentic_poc.md "
-            f"section 3). Each reading here carries the assumption it needs.")
+            f"separated from these counters. Each reading here carries the "
+            f"assumption it needs.")
         if (cache.cached_savings is not None
                 and abs(cache.cached_savings - cache.savings) > 0.01
                 and cache.savings_source.startswith("prefix_cache")):
@@ -1658,8 +1655,8 @@ def emit_toml(est: WorkloadEstimate, preserve: dict[str, Any] | None = None) -> 
                 f"warm turn {_tok(est.cache.turn_tokens_given_miss):,} tokens IF the "
                 f"miss rate is {est.cache.assumed_miss_rate:.1%}", indent="#   - ")
         lines += _wrap_comment(
-            "these cannot be separated by any counter vLLM exports "
-            "(research/workload_agentic_poc.md section 3).", indent="#   ")
+            "these cannot be separated by any counter vLLM exports.",
+            indent="#   ")
         lines.append("#")
     for key, why in sorted(est.unobservable.items()):
         lines += _wrap_comment(f"{key}: not observable from these metrics: {why}",

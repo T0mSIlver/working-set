@@ -13,8 +13,8 @@ The study prices decode as a pure HBM roofline (docs/scenarios.md limitation
 term and NO fixed cost. Prefill got its MFU anchor (research/prefill.md);
 decode never got its counterpart, so every tok/s figure in the study is an
 upper bound of unknown tightness. This script measures the counterpart from
-vLLM's /metrics counters, on a SHARED production instance, with no
-exclusive access and (in the passive tier) no added load.
+vLLM's /metrics counters, on a SHARED instance, with no exclusive access
+and (in the passive tier) no added load.
 
 THE FITTED MODEL — the roofline plus the two terms it is missing:
 
@@ -475,7 +475,7 @@ def self_test(args):
     """Generate a scrape log from a KNOWN t0/eta with the arm-A shape, run the
     real harvester and fit over it, and check the recovery. Offline: proves
     the estimator inverts its own generative model before it is pointed at a
-    production endpoint."""
+    live endpoint."""
     import tempfile
     T0, ETA, K, ALPHA, PREFIX, POOL = 0.0024, 0.47, 2, 0.55, 64_000, 13.9e6
     model = S.MODELS["27B"]
@@ -618,7 +618,7 @@ def main():
     ap.add_argument("--cascade", action="store_true",
                     help="cascade attention on: the shared prefix is read once "
                          "per batch, so skip the correction")
-    ap.add_argument("--assumed-context", type=float, default=57_400,
+    ap.add_argument("--assumed-context", type=float, default=50_000,
                     help="fallback per-sequence context when no KV gauge exists")
     ap.add_argument("--min-window", type=float, default=0.8)
     ap.add_argument("--max-window", type=float, default=20.0)
@@ -633,9 +633,9 @@ def main():
     ap.add_argument("--ceilings", action="store_true",
                     help="re-solve the decode ceiling under the fit and say "
                          "which constraint binds")
-    ap.add_argument("--wl-median", type=float, default=47_400,
+    ap.add_argument("--wl-median", type=float, default=31_000,
                     help="workload lognormal median for --ceilings (the "
-                         "measured-trace fit)")
+                         "study's reference median)")
     ap.add_argument("--self-test", action="store_true",
                     help="recover known parameters from a synthetic log, offline")
     args = ap.parse_args()
@@ -753,7 +753,7 @@ def apply_shared_prefix(pts, args):
     the batch is stored once and read n times, so add the missing (n-1)
     copies -- unless cascade attention reads it once for the batch too, which
     is exactly what decode_probe's arm C is for. Per-window, because a probe
-    plateau's prefix (arms.jsonl) and production's system prompt
+    plateau's prefix (arms.jsonl) and the live traffic's system prompt
     (--shared-prefix) are different lengths."""
     for p in pts:
         if p["L_src"] != "metrics":

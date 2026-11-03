@@ -241,7 +241,7 @@ evenly instead of resetting to an end of the range.
 | Expert-union saturation (linear) | — | n = 32 (= 256 experts / 8 per token) |
 | KV pool, 1×H200 | 2.77M tok (measured anchor) | **8.42M tok** |
 | KV pool, 2×H200 TP2 | 6.48M tok | **20.30M tok** |
-| MTP decode speedup | 1.7× (α ≈ 47% per-draft acceptance; the pre-measurement fit — measured accepted length is 2.94 as of 2026-08-28, `research/decode_mbu.md`) | 1.7× (transplanted fit) |
+| MTP decode speedup | 1.7× (α ≈ 47% per-draft acceptance; the earlier fit — the calibrated accepted length is now 2.94) | 1.7× (transplanted fit) |
 
 Both columns now come from **published configs** (the 27B's 64-layer / 16-full-attn /
 4-KV-head config reproduces the baseline's 32 KiB/token exactly). The 35B-A3B's
@@ -597,7 +597,7 @@ B300's FP8 rate, three of the four `params_prefill` constants, cross-chunk
 attention and the E[L²] tail pricing were all corrected — see
 `research/prefill.md` for what changed and why.)*
 
-#### One first chunk (32,768 tokens = `max_num_batched_tokens`), MFU 45% [30–60% when generated; bracket tightened to 35–55% on 2026-08-27, research/prefill.md #1]
+#### One first chunk (32,768 tokens = `max_num_batched_tokens`), MFU 45% [30–60% when generated; the bracket is now 30–55%, research/prefill.md §1]
 
 Attn share is the *cache-empty* first chunk's; later chunks of the same
 context pay their cross-attention over the cache on top.
@@ -710,12 +710,10 @@ within the explorer's miss-rate range; three more do so under stress
 (f* = 12–26%).
 
 It is **analytic and unvalidated**. The baseline collected prefill speeds but
-kept only the `ttft < 0.4 × cold` heuristic. *(Update 2026-08-27: MFU now
-carries two production calibration points and the bracket tightened to
-35–55%, moving absolute figures ~1.6×; 2026-09-18: a third, controlled point
-reads 30–34% and re-opened the low edge to 30% (~1.8×), central unchanged —
-research/prefill.md #1; the rest of
-this section still predates any prefill measurement.)* MFU is the soft
+kept only the `ttft < 0.4 × cold` heuristic. *(Update: the MFU bracket is now
+30–55% (~1.8×), central unchanged, resting on measurements not published in
+this repo — research/prefill.md §1; the rest of this section still predates
+any prefill measurement.)* MFU is the soft
 input — it moves every absolute millisecond figure, though not the ratios.
 The model omits queueing, preemption/recompute and PCIe restore contention,
 **all of which make the real machine worse than this**; cross-chunk attention,
@@ -1025,7 +1023,7 @@ the direct anchor as the default.
 does not transfer to an on-prem box, so `operating_point(closed=True)` drops it:
 Z becomes the knob and the deployment supplies its own response time (queue wait
 + prefill + decoding 1,000 tokens at the 40 tok/s floor — the then-default
-output length; measured at ~400 as of 2026-08-27). A session cannot fire
+output length; now ~400). A session cannot fire
 while it is being served, so a slower deployment stretches its users' cycles and
 lightens its own arrival rate — the open model's divergence becomes a
 **throughput knee** (past it, users buy latency, not throughput), and the open
@@ -1101,9 +1099,8 @@ delivered      demanded      (output tok/s, one replica group)
 crossing is unique, and it is what `steady_decode_point()` bisects.
 
 At the reference load (64 users / 30 s, r = 0.10, 400 output tokens per
-response — the measured mean, 404.1 tokens on 2026-08-27,
-research/workload_agentic_poc.md; regenerated 2026-09-07 with the calibrated
-MBU and the 27B's measured MTP, which is why the speeds are lower and the
+response, `OUT_TOKENS_DEFAULT`; regenerated 2026-09-07 with the calibrated
+MBU and the 27B's calibrated MTP, which is why the speeds are lower and the
 batches larger than the first version of this table):
 
 | config | warm p5 | n@load | v@load | v@warm | ratio | % of `mns@40` capacity |
@@ -1653,8 +1650,8 @@ Ordered roughly by how much each could move the numbers:
    upper bounds); every one of those makes the real machine worse
    (`research/prefill.md` #5, `research/spike.md` #7). The prefill numbers are
    analytic and **unvalidated** — no measured prefill figure existed in this
-   repo when written *(update 2026-08-27: the MFU input now carries two
-   production calibration points — research/prefill.md #1; the queueing and
+   repo when written *(update: the MFU bracket now rests on measurements not
+   published in this repo — research/prefill.md §1; the queueing and
    chunking machinery around it remains unvalidated)*.
 3. **35B-A3B is modelled, not measured.** Constants come from the published config,
    but FP8-KV support, hybrid-model prefix caching, and MTP acceptance (~1.7× is the
@@ -1710,9 +1707,9 @@ Ordered roughly by how much each could move the numbers:
 11. **Decode is a pure HBM roofline — now carrying one measured efficiency
     term.** Expert-dispatch overhead, attention/DeltaNet compute, TP
     collectives and scheduler overhead are still not priced individually;
-    since 2026-08-28 a single multiplicative constant (`MBU_DEFAULT`, 0.22 in
-    the model convention) stands in for all of them, fitted on one production
-    deployment of the 27B ([`research/decode_mbu.md`](../research/decode_mbu.md)).
+    a single multiplicative constant (`MBU_DEFAULT`, 0.22 in the model
+    convention) now stands in for all of them, fitted on one deployment of the
+    27B in a measurement not published in this repo.
     The byte ledger survived that measurement intact — weights, `kv_bpt`, pool
     size and per-sequence prefix reads all confirmed — so the error was
     entirely on the time side, and the leading explanation is speculative
@@ -1799,8 +1796,8 @@ Ordered roughly by how much each could move the numbers:
     stops at the pool** (§ 10; added 2026-08-07, revised 2026-09-07). Little's
     law is exact and the flow balance it produces needs no fitting, but it is
     driven by `λ × out`, and `out` — output tokens per response — is a single
-    measured mean (404 tokens, 2026-08-27, research/workload_agentic_poc.md),
-    not a fitted distribution. The workload model's log-normal is fitted on
+    mean (400 tokens, from a trace not published in this repo), not a fitted
+    distribution. The workload model's log-normal is fitted on
     1,850 real *prompt* lengths; no output-length trace has been collected, and
     the traced 10.8 s served per request at 50–90 tok/s would put the mean
     nearer 1,000. The section is not merely linear in this input: 4× moves *n*

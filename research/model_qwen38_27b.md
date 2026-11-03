@@ -45,23 +45,16 @@ tokens, the MFU(chunk) anchor, decode MBU).
 
 - **Weights.** Different values, hence the score. Nothing in the memory,
   prefill or decode model reads a weight value.
-- **MTP acceptance (`mtp: 2.94`).** Measured 2026-08-28 on the production
-  27B deployment that `decode_mbu.md` records as Qwen3.6-27B. Draft
+- **MTP acceptance (`mtp: 2.94`).** Calibrated on Qwen3.6-27B, with
+  MBU_DEFAULT, from a measurement not published in this repo. Draft
   acceptance is a property of the MTP head's weights against the base
   model's, so it does not carry over by architecture. Kept at 2.94 and
   marked unmeasured; re-measure on a confirmed 3.8 deployment (the
   harness's per-position counters do this).
-- **Two deployments, not one.** The MFU anchor in `prefill.md` (2026-08-27)
-  was measured on a Qwen3.8-27B FP8 checkpoint on **2×A100 TP2** (FP8
-  weight-only on Ampere, BF16 compute); the decode MBU / MTP measurements in
-  `decode_mbu.md` (2026-08-28) on Qwen3.6-27B on **4×H200 TP4**. Both labels
-  are correct (owner, 2026-09-06). So the MTP/MBU pair remains a 3.6
-  measurement and the caveat above stands; the MFU anchor is the one
-  figure the study already holds on a 3.8 checkpoint.
 - **Reasoning effort ladder.** Qwen3.8-27B exposes effort levels; AA ran
   low (67.4%), medium (65.2%), xhigh (79.8%, the index run) and
   non-reasoning (49.1%). The ledger takes xhigh per the variant rule. The
-  study's tokens-per-request (400, a production trace on 3.6) were not
+  study's tokens-per-request (400, from a trace on 3.6) were not
   measured at that effort; a higher effort emits more tokens per turn.
 - **NVFP4 checkpoint.** `nvidia/Qwen3.6-27B-NVFP4` was measured (21.92e9 B).
   No NVIDIA NVFP4 of Qwen3.8-27B exists as of 2026-09-05; the community
@@ -76,6 +69,5 @@ tokens, the MFU(chunk) anchor, decode MBU).
 `CONFIG.MODELS["27B"]` is named Qwen3.8-27B with the comments above;
 `CONFIG.QUALITY["27B"]` is 213/267; `scenario_model.py`'s mirror, the
 model button, the method page, the README and the harness's default
-endpoint follow. Measurements in `docs/scenarios.md`, `decode_mbu.md`,
-`prefill.md` and `workload_agentic_poc.md` keep saying Qwen3.6-27B: that is
-the model they were taken on.
+endpoint follow. Measurements in `docs/scenarios.md` keep saying
+Qwen3.6-27B: that is the model they were taken on.

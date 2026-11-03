@@ -705,8 +705,8 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   // true whenever the cache SPLITS across >1 replica group (pure DP or a DP×TP
   // grid) — that is what makes the headline a per-replica number
   const dp = topo.replicas>1;
-  // Prefill ceiling (analytic; MFU calibrated 2026-08-27, remainder
-  // unvalidated — research/prefill.md). ONE
+  // Prefill ceiling (analytic, unvalidated; MFU is the soft input —
+  // research/prefill.md). ONE
   // context-length draw (shared with chart E via computeAndRender) feeds the
   // ceiling, the p5/p95 miss costs and f*, so they stay consistent within a
   // render; the colour compares the invalidation slider f to f*. The tile is

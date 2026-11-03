@@ -5,13 +5,12 @@
 export const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 
 // DECODE efficiency -- MFU's counterpart, and the newest constant here.
-// Decode was a PURE roofline until 2026-08-28 (bytes / effective_bw, no
-// efficiency term at all) while prefill had carried an anchor for weeks.
-// research/decode_mbu.md measures the gap on the reference row -- 27B /
-// 4xH200 TP4, production, five sessions -- at 4.1x optimistic, and ONE
-// constant brings it to a median 13% error across n = 1-25.
+// Decode was first a PURE roofline (bytes / effective_bw, no efficiency term
+// at all) while prefill carried an anchor. A measurement not published in
+// this repo found it optimistic on the reference row, and ONE constant fits
+// it across n = 1-25.
 // MODEL CONVENTION (already divided by tp_efficiency), so it multiplies
-// effective_bw directly; the raw advertised reading is 0.179.
+// effective_bw directly.
 // It is fitted on a HYBRID model running speculative decode at k=2, so it
 // absorbs both streaming inefficiency and whatever the speculative verify
 // costs on a sequential recurrence. It therefore travels WITH the model's
@@ -19,7 +18,8 @@ export const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 // EXTRAPOLATION BIAS: fitted over n = 1-25, where weights are 80-95% of the
 // step. The decode ceiling lives at n ~ 100-250, where KV dominates and a
 // whole-ledger multiplier over-charges. The 27B/TP4 ceiling reads 108 here,
-// 238 under decode_mbu.md's reading A and 154 under reading B -- against a
+// 238 under reading A (the verify multiplies the weight reads) and 154 under
+// reading B (it serialises as latency) -- against a
 // cache ceiling of 249, so the BINDING ORDER is not identified. Per-user
 // speed near the fitted mix is; the ceiling is not. See MBU_DEFAULT.
 // ONE value for EVERY row, from the slider. A dense or MLA model has no
@@ -31,7 +31,7 @@ export const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 // Per-row values come back the day a second architecture is measured.
 export const DECODE_MBU    = 0.22;
 
-// OPT-IN decode pricing (research/decode_mbu.md § 8). Mirrors DECODE_BW_EFF,
+// OPT-IN decode pricing. Mirrors DECODE_BW_EFF,
 // DECODE_FIXED_S and DECODE_SPEC_TOKENS in workingset.model: a decode step is
 //   step_bytes / (effective_bw x bw_eff) + n x (1 + spec) x t_token + fixed
 // with t_token = 2 x params_prefill / (peak x mfu). Read on ONE deployment
@@ -132,10 +132,9 @@ export const CONFIG = {
       w_decode_shared: 28.8 * GIB, // dense: every step reads all weights
       w_route_pertok: 0.0,
       w_route_total: 0.0,
-      // MEASURED 2026-08-28 on the production Qwen3.6-27B deployment
-      // (decode_mbu.md): accepted length 2.94 at num_speculative_tokens=2,
-      // per-draft acceptance 0.971, and 1+a+a^2 confirmed against vLLM's
-      // per-position counters. Was 1.7. PAIRED WITH DECODE_MBU -- see its
+      // Accepted length at num_speculative_tokens=2 on Qwen3.6-27B, from a
+      // measurement not published in this repo (1+a+a^2 = 2.94 gives a
+      // per-draft acceptance a ~ 0.98). Was 1.7. PAIRED WITH DECODE_MBU -- see its
       // comment. NOT re-measured on Qwen3.8-27B: acceptance depends on the
       // draft head's weights, not the architecture. Re-measure when it ships.
       mtp: 2.94,
@@ -497,9 +496,8 @@ export const ACT_RESERVE = actReserve();
    them at load, and the module that holds them must not depend on anything
    that depends on state. ---- */
 export const PREFILL_MFU   = 0.45;    // the central of the plausible [0.30, 0.55] FP8 bracket
-
-                               // (tightened from [0.30, 0.60] 2026-08-27 on two
-                               // production calibration points — prefill.md #1)
+                               // (prefill.md §1; the bracket rests on
+                               // measurements not published in this repo)
 export const PREFILL_MFU_LO = 0.30, PREFILL_MFU_HI = 0.55;  // the bracket itself:
 // an ERROR BAR on every prefill-derived figure, not a knob anyone chooses
 export const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor — now the
@@ -511,9 +509,9 @@ export const DECODE_FLOOR_TOKS = 40;      // the study's hard per-user floor —
 // split still mean the same thing at any floor the slider is set to
 export const DECODE_COMFORT_RATIO = 1.25;
 // Output tokens ONE REQUEST decodes (every request, subagents included) —
-// MEASURED 2026-08-27: ~400 mean over a 7-day production agentic trace
-// (research/workload_agentic_poc.md; was assumed 1,000). At the observed
-// 50-90 tok/s this decodes in ~5-8 s of the measured 10.8 s served per turn.
+// ~400 mean, from an agentic trace not published in this repo (was assumed
+// 1,000). At 50-90 tok/s this decodes in ~5-8 s of the measured 10.8 s
+// served per turn.
 // The reference value; the `out` slider starts here and STATE_DEFAULTS pins it,
 // so a default page still reproduces every published number. Drives the
 // steady-state decode point below and the power model's decode duty.
