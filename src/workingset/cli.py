@@ -69,7 +69,8 @@ def cmd_predict(args) -> int:
     print(f"{cfg.to_model().name} on {d.gpus} (TP{d.tensor_parallel} x DP{d.replicas}{layout}), "
           f"chunk {d.max_num_batched_tokens:,}, max_model_len {d.max_model_len:,}"
           + f", max_num_seqs {p.max_num_seqs}"
-          + (" (recommended)" if p.max_num_seqs_recommended else ""))
+          + (" (recommended, lower bound)" if p.max_num_seqs_lower_bound
+             else " (recommended)" if p.max_num_seqs_recommended else ""))
     lat = cfg.decode_latency()
     if lat is not None:
         print(f"decode pricing: latency (bytes at {lat.bw_eff:g} of bandwidth + "
@@ -113,7 +114,10 @@ def cmd_predict(args) -> int:
         if w.headcount is not None:
             denom = w.peak_active_share * w.sessions_per_active_user
             people = f"  ≈ {_fmt_count(v * d.replicas / denom)} people"
-        print(f"  {k:36} {_fmt(v):>14}{people}{mark}")
+        shown = _fmt(v)
+        if key == "decode" and p.decode_ceiling_censored:
+            shown = "≥ " + shown     # beyond the search cap: a lower bound
+        print(f"  {k:36} {shown:>14}{people}{mark}")
     if p.replicas > 1:
         print(f"  (per replica group; x{p.replicas} under balanced routing)")
     print(f"  not in the verdict: {stat} TTFT reaches {slo.ttft_budget_s:g} s "

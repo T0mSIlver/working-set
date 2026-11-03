@@ -2668,6 +2668,33 @@ def max_users_decode(model: Model, topo: Topology, wl: Workload,
     return float(lo)
 
 
+def decode_search_cap(floor: float = DECODE_FLOOR_TOKS) -> int:
+    """The largest concurrency the decode-ceiling search probes.
+
+    Per-user speed is aggregate/n, so the crossing sits at ~1/floor: a 5 tok/s
+    floor lands ~8x higher than the study's 40. The cap scales the same way and
+    stays at exactly 4,096 for floors of 40 and above. Mirrors HI in
+    prefill.js maxUsersDecode."""
+    return max(4096, round(4096 * DECODE_FLOOR_TOKS / floor))
+
+
+def max_users_decode_bounded(model: Model, topo: Topology, wl: Workload,
+                             floor: float = DECODE_FLOOR_TOKS, **kw) -> tuple:
+    """(ceiling, censored): max_users_decode searched to decode_search_cap.
+
+    A crossing beyond the cap is a LOWER BOUND, returned as (cap, True) -- what
+    the explorer prints as ">= cap". max_users_decode itself keeps raising so
+    that a caller who cannot carry the flag never takes the cap for a value.
+    """
+    cap = decode_search_cap(floor)
+    try:
+        return max_users_decode(model, topo, wl, floor=floor, hi=cap, **kw), False
+    except ValueError as e:
+        if "censored" not in str(e):
+            raise
+        return float(cap), True
+
+
 def steady_decode_point(model: Model, topo: Topology, wl: Workload,
                         rate_group: float,
                         out_tokens: float = OUT_TOKENS_DEFAULT,
@@ -3441,9 +3468,11 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
     z = z_think_s if closed else None
     warm = max_users_cache(model, topo, wl, ram_gib=ram_gib, n_iter=n_iter,
                            seed=seed)
+    decode_n, decode_censored = max_users_decode_bounded(
+        model, topo, wl, floor=decode_floor, union=union, n_iter=n_iter,
+        seed=seed)
     ceilings = {
-        "decode": max_users_decode(model, topo, wl, floor=decode_floor,
-                                   union=union, n_iter=n_iter, seed=seed),
+        "decode": decode_n,
         "cold_wait": max_users_cold_wait(model, topo, wl, chunk,
                                          cold_wait_budget_s, turn_tokens,
                                          think_time_s, mfu, discipline,
@@ -3489,6 +3518,9 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                                          discipline, per_pass_overhead)
                      if closed else request_rate(users, think_time_s)),
         "ceilings": ceilings,
+        # True when the decode crossing lies beyond the search cap: the decode
+        # ceiling is then a lower bound (">= N"), not a value
+        "decode_censored": decode_censored,
         "ttft_ceiling": ttft_ceiling,
         "warm_users": warm,
         "miss_share": miss,

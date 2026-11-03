@@ -578,13 +578,9 @@ def _decode_ceiling(m, topo, wl, st, seed) -> tuple:
     the model, not the default. A crossing genuinely beyond the shared cap is
     recorded as (cap, censored=True), which is what the explorer returns.
     """
-    hi = max(4096, round(4096 * M.DECODE_FLOOR_TOKS / st["decode_floor"]))
-    try:
-        return M.max_users_decode(m, topo, wl, floor=st["decode_floor"],
-                                  n_iter=DECODE_ITER, seed=seed, hi=hi,
-                                  mbu=st["mbu"], latency=_latency(st)), False
-    except ValueError:
-        return float(hi), True
+    return M.max_users_decode_bounded(
+        m, topo, wl, floor=st["decode_floor"], n_iter=DECODE_ITER, seed=seed,
+        mbu=st["mbu"], latency=_latency(st))
 
 
 # ---------------------------------------------------------------------------

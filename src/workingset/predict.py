@@ -81,6 +81,11 @@ class Predictions:
     # (model.recommended_max_num_seqs)
     max_num_seqs: int = 0
     max_num_seqs_recommended: bool = False
+    # True when the decode crossing lies beyond the search cap (4,096 at the
+    # default floor): decode_ceiling_users is then a lower bound (">= N"), and
+    # so is a recommended max_num_seqs that was set by it
+    decode_ceiling_censored: bool = False
+    max_num_seqs_lower_bound: bool = False
     # --- the two latency limits in the verdict ----------------------------
     # users per replica group where the slowed share reaches
     # [slo] slowed_share_max, and where the cold-request wait reaches
@@ -148,9 +153,9 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     # configured one so the calibration block is honoured
     lat = cfg.decode_latency()
     if cal.mbu != M.MBU_DEFAULT or lat is not None:
-        dec = M.max_users_decode(m, t, wl, floor=slo.itl_floor_tok_s,
-                                 n_iter=n_iter, seed=seed, mbu=cal.mbu,
-                                 latency=lat)
+        dec, op["decode_censored"] = M.max_users_decode_bounded(
+            m, t, wl, floor=slo.itl_floor_tok_s, n_iter=n_iter, seed=seed,
+            mbu=cal.mbu, latency=lat)
         op["ceilings"]["decode"] = dec
         op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
         op["limit"] = op["ceilings"][op["binding"]]
@@ -178,6 +183,11 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     bw = op["ceilings"]["decode"]
     mns = (dep.max_num_seqs if dep.max_num_seqs is not None
            else M.recommended_max_num_seqs(bw, resident5))
+    # a censored crossing is a lower bound, and so is the cap recommended off
+    # it -- unless the GPU-resident warm p5 is what set the cap
+    decode_censored = bool(op["decode_censored"])
+    mns_lower_bound = (decode_censored and dep.max_num_seqs is None
+                       and bw <= resident5)
     below_bw = mns <= bw
     slots = M.max_users_decode_slots(
         m, t, wl, mns, think_time_s=w.think_time_s,
@@ -251,6 +261,8 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         decode_cap_below_bandwidth=below_bw,
         max_num_seqs=mns,
         max_num_seqs_recommended=dep.max_num_seqs is None,
+        decode_ceiling_censored=decode_censored,
+        max_num_seqs_lower_bound=mns_lower_bound,
         slowed_ceiling_users=_int(op["ceilings"]["slowed"]),
         cold_wait_ceiling_users=_int(op["ceilings"]["cold_wait"]),
         slowed_speed_tok_s=round(steps["speed"], 2),

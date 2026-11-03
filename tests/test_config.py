@@ -781,3 +781,21 @@ def test_a_cap_above_the_bandwidth_crossing_keeps_the_floor_claim():
     assert p.decode_capped_by_max_num_seqs and not p.decode_cap_below_bandwidth
     assert p.decode_ceiling_users < bw
     assert "no decode-floor failure" not in HDecode().statement(cfg, p)
+
+
+def test_decode_crossing_beyond_the_search_cap_is_a_lower_bound(tmp_path, capsys):
+    """DSV4FV fp8 on 8xB300 TP8 DP1 crosses the 40 tok/s floor near 10,000
+    users, past the 4,096 search cap. predict reports the cap as a lower bound
+    instead of exiting with 'decode floor crossing beyond hi' (the explorer
+    prints the same case as '>= 4,096')."""
+    cfg = RunConfig.from_dict({"deployment": {
+        "model": "DSV4FV", "gpu": "B300", "tensor_parallel": 8, "replicas": 1,
+        "weight_dtype": "fp8"}})
+    p = predict(cfg, n_iter=100)
+    assert p.decode_ceiling_censored and p.max_num_seqs_lower_bound
+    assert p.max_num_seqs == 4096 and p.decode_ceiling_users >= 4096
+    path = tmp_path / "c.toml"
+    path.write_text(cfg.dumps("toml"))
+    assert cli.main(["predict", str(path), "--n-iter", "100"]) == 0
+    out = capsys.readouterr().out
+    assert "≥ " in out and "(recommended, lower bound)" in out
