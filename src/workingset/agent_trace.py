@@ -399,7 +399,8 @@ def mean_gap(trace: AgentTrace, policy: str = DEFAULT_GAP_POLICY,
              max_gap_s: float = PARK_S) -> float | None:
     """The mean wait a replay under `policy` puts between requests."""
     pool = think_pool(trace)
-    sampled = (min(sum(pool) / len(pool), max_gap_s) if pool else None)
+    sampled = (sum(min(g, max_gap_s) for g in pool) / len(pool)
+               if pool else None)
     gaps = []
     for s in trace.sessions:
         for r in s:
@@ -508,7 +509,7 @@ def equivalent_workload(trace: AgentTrace, park_s: float = PARK_S,
     return {
         "user_prompt_median_tokens": int(round(math.exp(mu))),
         "user_prompt_sigma": round(max(sigma, 0.01), 3),
-        "think_time_s": round(think, 1) if think is not None else 30.0,
+        "think_time_s": (_round_think(think) if think is not None else 30.0),
         "warm_turn_tokens": int(round(sum(growth) / len(growth))) if growth else 0,
         "max_output_tokens": max(1, int(round(
             sum(r.output_tokens for r in reqs) / len(reqs)))),
@@ -516,6 +517,13 @@ def equivalent_workload(trace: AgentTrace, park_s: float = PARK_S,
         "miss_rate": 0.0,
         "image_share": 0.0,
     }
+
+
+def _round_think(think: float) -> float:
+    """One decimal, but never down to zero: a trace of short waits keeps a
+    positive think time (the config rejects 0)."""
+    r = round(think, 1)
+    return r if r > 0 else max(round(think, 3), 0.001)
 
 
 # ============================================================================
