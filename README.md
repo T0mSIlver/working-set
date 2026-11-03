@@ -139,6 +139,15 @@ curl -fsSLO https://raw.githubusercontent.com/T0mSIlver/working-set/main/src/wor
 python3 agent_trace.py pi -o trace.json
 ```
 
+`ws trace claude` does the same for Claude Code's session files
+(`~/.claude/projects`): responses written as several lines are merged into one
+request, background-task and subagent waits get the kind `background`, and each
+subagent is its own session, linked to the one that launched it. Sessions run
+with `claude -p` or the SDK are left out unless you pass `--include-headless`.
+Claude Code keeps no request start time or permission log, so a request's
+service time includes the client's overhead and a permission wait counts as
+tool time (see the module's docstring).
+
 Each wait gets a kind read from the session's events: a tool, a permission
 prompt (timed from pi-permission-system's log when it is there), the agent's
 question to the person, think time after an answer, a retry after an

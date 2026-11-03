@@ -11,7 +11,7 @@
     ws metrics probe|tail|window ...           sample a live /metrics endpoint
     ws workload --prometheus URL --range 7d    measure the real workload and
                                                emit the config's [workload]
-    ws trace pi [PATH ...] -o trace.json       agent sessions' timing and sizes,
+    ws trace pi|claude [PATH ...] -o trace.json  agent sessions' timing and sizes,
                                                for `ws test --replay`
     ws agentx compact|predict ...              SemiAnalysis' public AgentX traces
                                                against a finite prefix cache

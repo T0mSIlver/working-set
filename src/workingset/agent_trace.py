@@ -14,6 +14,36 @@ only numbers and tool names:
     tools           the tools the previous request called, builtin names kept
                     and every other name reported as "other"
 
+`extract_claude` does the same for Claude Code's session files
+(`~/.claude/projects/*/*.jsonl`, with the subagents' files beside them). Its
+differences from pi, all from what the files hold:
+
+    request         Claude Code writes one line per content block; the lines
+                    of one API response share a message id and are merged
+                    (output tokens: the largest of them, since the first
+                    lines carry a partial count)
+    service_s       the files have no request start time. A request starts at
+                    the tool result, person's message or background
+                    notification that triggered it and ends at its last
+                    block's line, so service_s also holds the client's own
+                    overhead (a few hundred ms) and the first-token wait, and
+                    is never shorter than the true one. The first request of
+                    a session starts at its first block
+    permission      no log exists: a wait on a permission prompt is counted as
+                    tool time (the trace's notes say so), so the long tail of
+                    "tool" gaps is partly a person
+    background      a background task or subagent finished, or another agent
+                    sent a message (kind "background"); inside a turn, no
+                    person typed
+    subagents       each subagent is its own session in the trace, linked to
+                    the session that launched it (`SessionLink`): which
+                    session, when its first request started after the
+                    parent's first request, and the parent request that
+                    spawned it. `ws replay` replays them as independent
+                    sessions (it does not launch them from their parent)
+    headless        sessions run with `claude -p` or the SDK (entrypoint
+                    sdk-cli, sdk-ts) are left out unless asked for
+
 No prompt, reply, path or tool argument leaves the file, so a colleague can
 export their sessions and hand over the trace. The tokenizer is the one of
 whatever model served the session; the replay re-sizes nothing.
@@ -26,7 +56,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -60,8 +90,10 @@ PARK_S = 1800.0
 #               gap is an outage, not anyone's think time
 #   resume      pi was closed and the session reopened later
 #   idle        a person's wait past PARK_S with no restart: left open
+#   background  (Claude Code) a background task or subagent finished, or
+#               another agent wrote to the session, and nobody typed
 KINDS = ("start", "tool", "permission", "ask", "think", "abort", "branch",
-         "compaction", "error", "resume", "idle")
+         "compaction", "error", "resume", "idle", "background")
 # The kinds where the session was not in use. `ws test --replay` applies the
 # gap policy to these only; every other gap is replayed as recorded.
 INACTIVE = frozenset({"error", "resume", "idle"})
@@ -112,20 +144,43 @@ class TraceRequest:
 
 
 @dataclass(frozen=True)
+class SessionLink:
+    """A subagent session's place among the trace's sessions: the index of
+    the session that launched it, seconds from that session's first request
+    to the subagent's first, and the index of the parent request that
+    spawned it (None when unknown)."""
+    parent: int
+    start_offset_s: float
+    spawn_request: int | None = None
+
+    def to_dict(self) -> dict:
+        d = {"parent": self.parent,
+             "start_offset_s": round(self.start_offset_s, 3)}
+        if self.spawn_request is not None:
+            d["spawn_request"] = self.spawn_request
+        return d
+
+
+@dataclass(frozen=True)
 class AgentTrace:
     source: str
     sessions: tuple[tuple[TraceRequest, ...], ...]
     # dropped requests and other counts `ws trace` reports (not replayed)
     notes: dict | None = None
+    # per session: its SessionLink when a subagent, else None; () when the
+    # trace has none (pi, and every trace of version 2 before links)
+    links: tuple[SessionLink | None, ...] = ()
 
     @property
     def n_requests(self) -> int:
         return sum(len(s) for s in self.sessions)
 
     def to_dict(self) -> dict:
+        links = self.links or (None,) * len(self.sessions)
         d = {"format": FORMAT, "version": VERSION, "source": self.source,
-             "sessions": [{"requests": [r.to_dict() for r in s]}
-                          for s in self.sessions]}
+             "sessions": [{"requests": [r.to_dict() for r in s],
+                           **(l.to_dict() if l else {})}
+                          for s, l in zip(self.sessions, links)]}
         if self.notes:
             d["notes"] = self.notes
         return d
@@ -137,8 +192,8 @@ class AgentTrace:
         if d.get("version") not in (1, VERSION):
             raise ValueError(f"trace version {d.get('version')!r}, "
                              f"this ws reads versions 1 and {VERSION}")
-        sessions = []
-        for s in d["sessions"]:
+        sessions, raw_links, kept = [], [], {}
+        for i, s in enumerate(d["sessions"]):
             reqs = tuple(TraceRequest(
                 prompt_tokens=int(r["prompt_tokens"]),
                 output_tokens=int(r["output_tokens"]),
@@ -149,11 +204,23 @@ class AgentTrace:
                            else float(r["service_s"])))
                 for r in s["requests"])
             if reqs:
+                kept[i] = len(sessions)
                 sessions.append(reqs)
+                raw_links.append(s if "parent" in s else None)
         if not sessions:
             raise ValueError("the trace holds no request")
+        links = []
+        for s in raw_links:
+            if s is not None and s["parent"] in kept:
+                sr = s.get("spawn_request")
+                links.append(SessionLink(
+                    kept[s["parent"]], float(s.get("start_offset_s", 0.0)),
+                    None if sr is None else int(sr)))
+            else:
+                links.append(None)
         return cls(source=d.get("source", ""), sessions=tuple(sessions),
-                   notes=d.get("notes"))
+                   notes=d.get("notes"),
+                   links=tuple(links) if any(links) else ())
 
 
 def load(path: str | Path) -> AgentTrace:
@@ -205,6 +272,8 @@ def classify(after: str, human_s: float, gap: float, events: set,
     for k in ("error", "resume", "compaction", "branch"):
         if k in events:
             return k
+    if "background" in events:
+        return "background"
     if after == "tool":
         if "permission" in events or "ask" in events:
             if human_s > park_s:
@@ -364,6 +433,278 @@ def extract_pi(paths, permission_log: str | None = None,
 
 
 # ============================================================================
+# Claude Code session files
+# ============================================================================
+DEFAULT_CLAUDE_SESSIONS = "~/.claude/projects"
+
+# Claude Code's builtin tool names in the vocabulary of KNOWN_TOOLS.
+_CLAUDE_TOOLS = {"Bash": "bash", "Read": "read", "Edit": "edit",
+                 "MultiEdit": "edit", "NotebookEdit": "edit",
+                 "Write": "write", "Grep": "grep", "Glob": "glob",
+                 "LS": "ls", "TodoWrite": "todo", "WebFetch": "web_fetch",
+                 "WebSearch": "web_search", "Task": "task", "Agent": "task",
+                 "AskUserQuestion": "ask_user_question"}
+# entrypoints of `claude -p` and the SDK: scripts, not a person at a prompt
+HEADLESS_ENTRYPOINTS = frozenset({"sdk-cli", "sdk-ts"})
+
+
+@dataclass
+class ClaudeSession:
+    """One Claude Code file, parsed: its requests and what links it."""
+    requests: tuple[TraceRequest, ...]
+    t0: float                                  # first request's start
+    entrypoint: str = ""
+    tool_use_ids: dict = field(default_factory=dict)   # id -> request index
+    spawned_by: str = ""                       # tool_use id (subagent files)
+
+
+def _claude_user_kind(row: dict) -> str | None:
+    """What a user line is: "tool" (a tool result), "human", "background"
+    (task notification, another agent's message, a plugin), "abort" (the
+    person interrupted), or None for lines that trigger nothing (meta lines,
+    local commands). Only the structure is read, never kept."""
+    if row.get("isMeta"):
+        return None
+    msg = row.get("message") or {}
+    content = msg.get("content")
+    if "toolUseResult" in row or (
+            isinstance(content, list) and content
+            and all(isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in content)):
+        return "tool"
+    origin = row.get("origin")
+    okind = origin.get("kind") if isinstance(origin, dict) else None
+    text = content if isinstance(content, str) else "".join(
+        b.get("text", "") for b in content or ()
+        if isinstance(b, dict) and b.get("type") == "text")
+    head = text.lstrip()[:40]
+    if head.startswith("[Request interrupted"):
+        return "abort"
+    if okind in ("task-notification", "peer", "plugin", "system") or \
+            row.get("promptSource") == "system" or \
+            head.startswith("<task-notification"):
+        return "background"
+    if head.startswith(("<command-name", "<local-command")):
+        return None
+    return "human"
+
+
+def extract_claude_session(lines, counts: dict | None = None
+                           ) -> ClaudeSession | None:
+    """One Claude Code file's lines -> its requests, in file order.
+
+    Lines of one API response share `message.id` and are merged (first
+    timestamp, last timestamp, the largest output count). A request starts at
+    the latest event that could have triggered it since the previous request
+    ended (a tool result, the person's message, a background notification),
+    else at its own first line, and ends at its last line. Responses without
+    usage (API errors are logged as `<synthetic>`) are not replayed; they
+    mark the next gap as an outage.
+    """
+    counts = counts if counts is not None else {}
+    reqs: dict[str, dict] = {}              # message id -> merged lines
+    order: list[str] = []
+    events: list[tuple[int, float, str]] = []   # (line no, ts, kind)
+    entry = ""
+    spawned_by = ""
+    for n, line in enumerate(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            counts["torn_lines"] = counts.get("torn_lines", 0) + 1
+            continue
+        typ = row.get("type")
+        if not entry and row.get("entrypoint"):
+            entry = row["entrypoint"]
+        try:
+            t = _iso_s(row["timestamp"]) if row.get("timestamp") else None
+        except ValueError:
+            t = None
+        if typ == "assistant":
+            msg = row.get("message") or {}
+            usage = msg.get("usage") or {}
+            mid = msg.get("id") or row.get("requestId") or f"line{n}"
+            prompt = (usage.get("input_tokens", 0) or 0) + (
+                usage.get("cache_read_input_tokens", 0) or 0) + (
+                usage.get("cache_creation_input_tokens", 0) or 0)
+            if msg.get("model") == "<synthetic>" or (prompt <= 0 and
+                                                     not usage.get("output_tokens")):
+                if t is not None:
+                    counts["dropped_error"] = counts.get("dropped_error", 0) + 1
+                    events.append((n, t, "error"))
+                continue
+            if t is None:
+                continue
+            r = reqs.get(mid)
+            if r is None:
+                r = reqs[mid] = {"first": n, "last": n, "t0": t, "t1": t,
+                                 "prompt": 0, "out": 0, "calls": []}
+                order.append(mid)
+            r["last"] = n
+            r["t0"], r["t1"] = min(r["t0"], t), max(r["t1"], t)
+            r["prompt"] = max(r["prompt"], prompt)
+            r["out"] = max(r["out"], usage.get("output_tokens", 0) or 0)
+            for b in msg.get("content") or ():
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    r["calls"].append((b.get("id", ""), b.get("name", "")))
+        elif typ == "user" and t is not None:
+            k = _claude_user_kind(row)
+            if k:
+                events.append((n, t, k))
+        elif typ == "system" and t is not None:
+            if row.get("subtype") == "compact_boundary":
+                events.append((n, t, "compaction"))
+    out: list[TraceRequest] = []
+    ids: dict[str, int] = {}
+    prev = None
+    t_first = None
+    for mid in order:
+        r = reqs[mid]
+        if r["prompt"] <= 0:
+            counts["dropped_error"] = counts.get("dropped_error", 0) + 1
+            continue
+        cand, marks = [], set()
+        lo = prev["last"] if prev else -1
+        for n, t, k in events:
+            if lo < n < r["first"]:
+                if k in ("tool", "human", "background"):
+                    if t <= r["t0"] + 1.0:
+                        cand.append((t, k))
+                elif k == "abort":
+                    marks.add("abort")
+                    cand.append((t, "abort"))
+                else:
+                    marks.add(k)
+        if prev is None:
+            start, after, kind, gap, human = r["t0"], "start", "start", None, 0.0
+            if cand:
+                start = min(r["t0"], max(t for t, _ in cand))
+        else:
+            if cand:
+                start, trig = max(cand, key=lambda c: c[0])
+            else:
+                start, trig = r["t0"], ("tool" if prev["calls"] else "human")
+            if trig == "background":
+                marks.add("background")
+            elif trig == "human":
+                # the person's own wait is not an outage or a compaction,
+                # even if one happened somewhere in it
+                marks -= {"error", "compaction"}
+            after = "tool" if trig in ("tool", "background") else "user"
+            gap = round(max(0.0, start - prev["t1"]), 3)
+            tools = tuple(sorted({_CLAUDE_TOOLS.get(n_, "other")
+                                  for _, n_ in prev["calls"]}))
+            human = 0.0
+            if after == "tool" and "ask_user_question" in tools:
+                marks.add("ask")
+                human = gap
+            kind = classify(after, human, gap, marks)
+        tools = (tuple(sorted({_CLAUDE_TOOLS.get(n_, "other")
+                               for _, n_ in prev["calls"]}))
+                 if prev is not None and after == "tool" else ())
+        if t_first is None:
+            t_first = start
+        out.append(TraceRequest(
+            prompt_tokens=int(r["prompt"]), output_tokens=int(r["out"]),
+            gap_s=gap, after=after, tools=tools, kind=kind,
+            human_s=round(min(human, gap or 0.0), 3),
+            service_s=max(0.0, round(r["t1"] - start, 3))))
+        for cid, _ in r["calls"]:
+            if cid:
+                ids[cid] = len(out) - 1
+        prev = r
+    if not out:
+        return None
+    return ClaudeSession(tuple(out), t_first or 0.0, entry, ids)
+
+
+def _claude_files(paths) -> list[Path]:
+    files: list[Path] = []
+    for p in map(Path, paths):
+        files += sorted(p.rglob("*.jsonl")) if p.is_dir() else [p]
+    return files
+
+
+def extract_claude(paths, include_headless: bool = False,
+                   exclude: tuple[str, ...] = ()) -> AgentTrace:
+    """Claude Code session files, or directories searched for `*.jsonl`
+    (the subagents' files under `<session>/subagents/` are found there and
+    linked to the session that launched them)."""
+    import fnmatch
+    counts: dict = {"permission_log": False,
+                    "permission_waits": "no log: counted as tool time"}
+    units: dict[Path, ClaudeSession] = {}
+    for f in _claude_files(paths):
+        if any(fnmatch.fnmatch(str(f), pat) for pat in exclude):
+            continue
+        try:
+            with f.open(encoding="utf-8") as fh:
+                u = extract_claude_session(fh, counts)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            raise ValueError(f"{f}: {type(e).__name__}: {e}") from e
+        if u is None:
+            continue
+        if f.parent.name == "subagents":
+            try:
+                meta = json.loads(f.with_suffix(".meta.json").read_text())
+                u.spawned_by = str(meta.get("toolUseId", ""))
+            except (OSError, ValueError):
+                pass
+        units[f] = u
+    # headless sessions and their subagents are dropped together
+    def root_of(f: Path) -> Path:
+        return f.parent.parent.with_suffix(".jsonl") \
+            if f.parent.name == "subagents" else f
+    dropped = {f for f in units
+               if not include_headless
+               and (units[root_of(f)] if root_of(f) in units
+                    else units[f]).entrypoint in HEADLESS_ENTRYPOINTS}
+    if dropped:
+        counts["headless_sessions_left_out"] = sum(
+            1 for f in dropped if f.parent.name != "subagents")
+        counts["headless_subagents_left_out"] = sum(
+            1 for f in dropped if f.parent.name == "subagents")
+    kept = {f: u for f, u in units.items() if f not in dropped}
+    # order: a session, then the subagents it launched, by start
+    roots = [f for f in kept if f.parent.name != "subagents"]
+    orphans = [f for f in kept if f.parent.name == "subagents"
+               and root_of(f) not in kept]
+    seq: list[Path] = []
+    for r in roots + orphans:
+        seq.append(r)
+        fam = sorted((f for f in kept if f.parent.name == "subagents"
+                      and root_of(f) == r), key=lambda f: kept[f].t0)
+        seq += fam
+    index = {f: i for i, f in enumerate(seq)}
+    links: list[SessionLink | None] = []
+    for f in seq:
+        if f.parent.name != "subagents" or root_of(f) not in kept:
+            links.append(None)
+            continue
+        u = kept[f]
+        par = root_of(f)
+        # the nearest owner of the spawning tool call: another subagent of
+        # the same session, else the session itself
+        for g in seq:
+            if g is not f and root_of(g) == par and u.spawned_by in kept[g].tool_use_ids:
+                par = g
+                break
+        spawn = kept[par].tool_use_ids.get(u.spawned_by) if u.spawned_by else None
+        links.append(SessionLink(index[par], max(0.0, u.t0 - kept[par].t0), spawn))
+    if not seq:
+        raise ValueError("no Claude Code request with token usage in "
+                         + ", ".join(map(str, paths)))
+    counts["subagent_sessions"] = sum(1 for l in links if l)
+    return AgentTrace(source="claude",
+                      sessions=tuple(kept[f].requests for f in seq),
+                      notes=counts,
+                      links=tuple(links) if any(links) else ())
+
+
+# ============================================================================
 # what the trace says, and the smooth workload with the same averages
 # ============================================================================
 def _pct(xs, q):
@@ -461,7 +802,7 @@ def summarize(trace: AgentTrace, park_s: float = PARK_S) -> dict:
     outs = [r.output_tokens for r in reqs]
     tool_gaps = [min(r.gap_s, park_s) for r in reqs
                  if r.after == "tool" and r.gap_s is not None
-                 and r.kind not in INACTIVE]
+                 and r.kind not in INACTIVE and r.kind != "background"]
     user_gaps = [min(r.gap_s, park_s) for r in reqs
                  if r.after == "user" and r.gap_s is not None
                  and r.kind not in INACTIVE]
@@ -470,8 +811,11 @@ def summarize(trace: AgentTrace, park_s: float = PARK_S) -> dict:
         if r.after == "tool" and r.gap_s is not None and r.kind == "tool":
             for t in r.tools or ("other",):
                 by_tool.setdefault(t, []).append(min(r.gap_s, park_s))
-    n_user = sum(1 for r in reqs if r.after in ("user", "start"))
+    links = trace.links or (None,) * len(trace.sessions)
+    n_user = sum(1 for sess, l in zip(trace.sessions, links) for r in sess
+                 if r.after == "user" or (r.after == "start" and l is None))
     return {"sessions": len(trace.sessions), "requests": len(reqs),
+            "subagent_sessions": sum(1 for l in links if l),
             "requests_per_user_message": len(reqs) / max(n_user, 1),
             "prompt_tokens": _stats(prompts), "output_tokens": _stats(outs),
             "tool_wait_s": _stats(tool_gaps), "user_wait_s": _stats(user_gaps),
@@ -540,10 +884,17 @@ def _fmt_stats(s: dict, unit: str = "") -> str:
 
 def cmd_trace(args) -> int:
     import sys
-    paths = args.paths or [str(Path(DEFAULT_PI_SESSIONS).expanduser())]
+    claude = args.source == "claude"
+    paths = args.paths or [str(Path(
+        DEFAULT_CLAUDE_SESSIONS if claude else DEFAULT_PI_SESSIONS
+    ).expanduser())]
     try:
-        trace = extract_pi(paths, permission_log=args.permission_log,
-                           exclude=tuple(args.exclude or ()))
+        if claude:
+            trace = extract_claude(paths, args.include_headless,
+                                   exclude=tuple(args.exclude or ()))
+        else:
+            trace = extract_pi(paths, permission_log=args.permission_log,
+                               exclude=tuple(args.exclude or ()))
     except (OSError, ValueError, KeyError) as e:
         print(f"ws trace: error: {e}", file=sys.stderr)
         return 2
@@ -567,9 +918,14 @@ def cmd_trace(args) -> int:
     notes = trace.notes or {}
     dropped = {k[len("dropped_"):]: v for k, v in notes.items()
                if k.startswith("dropped_")}
+    if s.get("subagent_sessions"):
+        say(f"  {s['subagent_sessions']} of the sessions are subagents "
+            "(linked to their parent; `ws replay` plays them independently)")
     say("gaps by what they waited on (uncapped; "
         + ("permission prompts timed from pi-permission-system's log"
            if notes.get("permission_log") else
+           "no permission log: a permission wait is counted as tool time"
+           if claude else
            "no permission log: a denied prompt marks its gap, an approved "
            "one is counted as tool time") + "):")
     say(f"  {'kind':<11} {'n':>5} {'p50':>9} {'p90':>9} {'max':>10} "
@@ -580,6 +936,9 @@ def cmd_trace(args) -> int:
         say(f"  {k:<11} {g['n']:>5} {g['p50']:>8.1f}s {g['p90']:>8.1f}s "
             f"{g['max']:>9.0f}s {g['total_h']:>7.2f}h"
             + ("  (replay: --replay-gap-policy)" if k in INACTIVE else ""))
+    if notes.get("headless_sessions_left_out"):
+        say(f"  left out: {notes['headless_sessions_left_out']} headless "
+            "session(s) (--include-headless keeps them)")
     if dropped or notes.get("forked_sessions") or notes.get("torn_lines"):
         say("  not replayed: " + ", ".join(
             [f"{v} {k} request(s)" for k, v in sorted(dropped.items())]
@@ -606,7 +965,8 @@ def add_subparser(sub) -> None:
         epilog="Examples:\n"
                "  ws trace pi -o trace.json\n"
                "  ws trace pi ~/.pi/agent/sessions/--home-me-work-repo-- "
-               "-o trace.json\n")
+               "-o trace.json\n"
+               "  ws trace claude -o trace.json\n")
     tsub = p.add_subparsers(dest="source", required=True)
     q = tsub.add_parser("pi", help="pi session files (*.jsonl)")
     q.add_argument("paths", nargs="*", metavar="PATH",
@@ -623,6 +983,19 @@ def add_subparser(sub) -> None:
                    help="trace file to write ('-' for stdout; default "
                         "trace.json)")
     q.set_defaults(fn=cmd_trace)
+    c = tsub.add_parser("claude", help="Claude Code session files (*.jsonl)")
+    c.add_argument("paths", nargs="*", metavar="PATH",
+                   help=f"session files or directories (default "
+                        f"{DEFAULT_CLAUDE_SESSIONS})")
+    c.add_argument("--include-headless", action="store_true",
+                   help="keep `claude -p` and SDK sessions (entrypoint "
+                        "sdk-cli, sdk-ts), left out by default")
+    c.add_argument("--exclude", action="append", metavar="GLOB",
+                   help="skip session files whose path matches (repeatable)")
+    c.add_argument("-o", "--output", default="trace.json",
+                   help="trace file to write ('-' for stdout; default "
+                        "trace.json)")
+    c.set_defaults(fn=cmd_trace)
 
 
 def main(argv=None) -> int:
