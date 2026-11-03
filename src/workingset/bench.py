@@ -483,7 +483,7 @@ def _server(w: dict | None) -> dict | None:
             "waiting_max": gs("requests_waiting", "max"),
             "kv_max": gs("kv_cache_usage", "max"),
             "preemptions": c.get("preemptions_total"),
-            "queue_p90_s": h.get("p95"),
+            "queue_p95_s": h.get("p95"),
             "prefix_hit_rate": (w.get("derived") or {}).get("prefix_hit_rate")}
 
 
