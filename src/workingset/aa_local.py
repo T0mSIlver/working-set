@@ -251,8 +251,8 @@ def simulate(box: Box, lanes: list[list[Turn]], max_time: float = 36_000.0,
                 ram.pop(next(iter(ram)))
         L[k].cached, L[k].marks = 0, []
 
-    def restore_s(tokens: int) -> float:
-        return (tokens * box.kv_bpt + box.state_bytes * len(L[0].marks or [1])) / box.pcie_bw
+    def restore_s(tokens: int, marks: list) -> float:
+        return (tokens * box.kv_bpt + box.state_bytes * len(marks or [1])) / box.pcie_bw
 
     while now < max_time:
         for k, l in enumerate(L):
@@ -268,7 +268,7 @@ def simulate(box: Box, lanes: list[list[Turn]], max_time: float = 36_000.0,
                         to_ram(j)
             if l.cached == 0 and k in ram:
                 l.cached, l.marks = ram.pop(k)
-                now += restore_s(l.cached)
+                now += restore_s(l.cached, l.marks)
                 restores += 1
             hit = _hit(l, t, box)
             l.ctx, l.left, l.phase = hit, t.prompt - hit, "prefill"
