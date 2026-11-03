@@ -101,6 +101,10 @@ class ReplaySession:
             grow = want - prev[0] - prev[1]
             if grow > 0:
                 self._text += "\n" + make_text(self.text_rng, grow, self.cpt)
+            elif grow < 0:
+                # the retained prompt + reply is longer than the recorded
+                # prompt: keep the prefix that fits (still a cache hit)
+                self._text = self._text[:self._chars(want)]
         return self._text, kind
 
     def commit(self, reply: str) -> None:
