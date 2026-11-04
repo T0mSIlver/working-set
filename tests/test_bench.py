@@ -268,7 +268,8 @@ def _run(tmp_path, monkeypatch, handler, *extra):
     monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 10)
     out = tmp_path / "run.json"
     rc = main(["replay", str(path), "--base-url", "http://fake/v1",
-               "--ramp-s", "0.05", "--measure-s", "0.5", "--out", str(out),
+               "--ramp-s", "0.05", "--measure-s", "0.5", "--min-turns", "0",
+               "--out", str(out),
                *extra])
     assert rc == 0
     return json.loads(out.read_text())

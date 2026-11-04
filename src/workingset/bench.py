@@ -339,6 +339,9 @@ class Step:
     turns: int = 0
     streams_mean: float = float("nan")   # requests in flight, window mean
     ran_out: str = ""
+    inconclusive: bool = False  # too few turns to say, even after measuring on
+    p90_lo: float = float("nan")        # bootstrap 90% interval on the p90
+    p90_hi: float = float("nan")
     slowdown_p90: float = float("nan")
     slowdown_mean: float = float("nan")
     raw_p90: float = float("nan")       # vs one stream alone, not the tree
@@ -368,6 +371,18 @@ class Step:
         return cls(rows=rows, **d)
 
 
+def bootstrap_p90(xs: list[float], n: int = 500, seed: int = 0
+                  ) -> tuple[float, float]:
+    """A 90% interval on the p90 of `xs`, resampling the turns."""
+    xs = [x for x in xs if math.isfinite(x)]
+    if len(xs) < 2:
+        return float("nan"), float("nan")
+    rng = random.Random(seed)
+    ps = sorted(_pct([rng.choice(xs) for _ in xs], PERCENTILE)
+                for _ in range(n))
+    return ps[int(0.05 * n)], ps[min(int(0.95 * n), n - 1)]
+
+
 MIN_TURN_SHARE = 0.5    # a step judged on fewer turns than this share of
                         # its sessions fails: it showed too little to pass
 
@@ -383,7 +398,8 @@ def _in_window(r: Row, w0: float, w1: float, end_all: float) -> bool:
     return not math.isfinite(end) or end >= w0
 
 
-def judge(step: Step, speed: Speed, max_slowdown: float) -> Step:
+def judge(step: Step, speed: Speed, max_slowdown: float,
+          min_turns: int = 0) -> Step:
     """Score a step's requests against the endpoint alone. Every request in
     flight during the window counts. One still running when the drain ended
     counts with the time it had taken so far, a lower bound, and as a failed
@@ -415,6 +431,7 @@ def judge(step: Step, speed: Speed, max_slowdown: float) -> Step:
     step.turns = len(keys)
     slow = [took[k] / alone[k] for k in keys]
     step.slowdown_p90 = _pct(slow, PERCENTILE)
+    step.p90_lo, step.p90_hi = bootstrap_p90(slow)
     tot_alone = sum(alone[k] for k in keys)
     step.slowdown_mean = (sum(took[k] for k in keys) / tot_alone
                           if tot_alone else float("nan"))
@@ -449,6 +466,13 @@ def judge(step: Step, speed: Speed, max_slowdown: float) -> Step:
         if step.slowdown_p90 > max_slowdown:
             step.reasons.append(f"p{PERCENTILE} turn {step.slowdown_p90:.2f}x "
                                 f"alone > {max_slowdown:g}x")
+    step.inconclusive = False
+    if not step.reasons and step.turns < min_turns:
+        step.inconclusive = True
+        step.reasons.append(
+            f"inconclusive: {step.turns} turns judged in "
+            f"{w1 - w0:.0f} s, {min_turns} wanted (counted as a fail; "
+            "--max-measure-s measures longer)")
     step.passed = not step.reasons
     return step
 
@@ -523,6 +547,8 @@ class Plan:
     max_sessions: int = 256
     ramp_s: float = 60.0
     measure_s: float = 300.0
+    min_turns: int = 30                 # a step measures on until it has these
+    max_measure_s: float = 0.0          # ... up to this (0: 3 x measure_s)
     calibrate_requests: int = CALIBRATE_REQUESTS
     calibrate_max_s: float = CALIBRATE_MAX_S
     shared_prefix_tokens: int = 0
@@ -535,6 +561,10 @@ class Plan:
     # --tokenizer), "measured" (the server's prompt token counts), "default"
     cpt_source: str = "given"
     cpt_probes: int = 0
+
+    @property
+    def measure_cap_s(self) -> float:
+        return max(self.max_measure_s or 3 * self.measure_s, self.measure_s)
 
     def options(self) -> ProbeOptions:
         return ProbeOptions(chars_per_token=self.chars_per_token,
@@ -761,7 +791,8 @@ async def measure_chars_per_token(client, ep, plan: Plan,
 
 
 async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
-                   prefix_text: str, run_nonce: str, metrics=None) -> Step:
+                   prefix_text: str, run_nonce: str, metrics=None,
+                   speed: Speed | None = None) -> Step:
     rows: list[Row] = []
     stop = asyncio.Event()
     rng = random.Random(f"stagger {plan.seed} {n}")
@@ -778,6 +809,16 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
         for i in range(n)]
     s_start = sampler_now(metrics) + plan.ramp_s
     await asyncio.sleep(plan.ramp_s + plan.measure_s)
+    # keep measuring until the window holds enough turns to say anything
+    measured = plan.measure_s
+    while speed is not None and measured < plan.measure_cap_s and plan.min_turns:
+        probe = judge(Step(sessions=n, rows=list(rows), window=(
+            plan.ramp_s, plan.ramp_s + measured)), speed, math.inf)
+        if probe.turns >= plan.min_turns:
+            break
+        more = min(plan.measure_s / 6, plan.measure_cap_s - measured, 30.0)
+        await asyncio.sleep(max(more, 0.01))
+        measured += max(more, 0.01)
     s_end = sampler_now(metrics)
     # no new request starts; the ones in flight finish, so the slowest of
     # them are measured rather than dropped. A request still running after
@@ -793,7 +834,7 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
             t.cancel()
         await asyncio.gather(*still, return_exceptions=True)
     step = Step(sessions=n, rows=rows, drain_s=drain_s,
-                window=(plan.ramp_s, plan.ramp_s + plan.measure_s))
+                window=(plan.ramp_s, plan.ramp_s + measured))
     step.server = _server(await sampler_window(metrics, s_start, s_end))
     return step
 
@@ -867,8 +908,8 @@ async def run(ep: EndpointSpec, plan: Plan, metrics=None,
         while (n := next_sessions(results, plan.max_sessions)) is not None:
             on_step(f"\n--- {n} session{'s' if n != 1 else ''} ---")
             step = judge(await run_step(client, ep, plan, trace, n, prefix,
-                                        nonce, metrics),
-                         speed, plan.max_slowdown)
+                                        nonce, metrics, speed),
+                         speed, plan.max_slowdown, plan.min_turns)
             steps.append(step)
             results[n] = step.passed
             on_step(step_line(step))
@@ -921,17 +962,23 @@ def describe_speed(speed: Speed, trace: AgentTrace, plan: Plan) -> str:
 
 
 def step_line(s: Step) -> str:
-    v = "PASS" if s.passed else "FAIL (" + "; ".join(s.reasons) + ")"
+    v = ("PASS" if s.passed else ("INCONCLUSIVE" if s.inconclusive else "FAIL")
+         + " (" + "; ".join(s.reasons) + ")")
     sig = signals(s.server)
     failed = s.errors + s.unfinished
     return (f"  {s.turns} turns, {s.requests} requests, {failed} failed | "
-            f"turn p90 {_x(s.slowdown_p90)} alone, mean {_x(s.slowdown_mean)} "
+            f"turn p90 {_x(s.slowdown_p90)}{_ci(s)} alone, mean {_x(s.slowdown_mean)} "
             f"(vs one stream: p90 {_x(s.raw_p90)}, mean {_x(s.raw_mean)}) "
             f"| turn time p50 {_s(s.turn_s_p50)} p90 {_s(s.turn_s_p90)} | "
             f"{_f1(s.streams_mean)} requests in flight | {v}"
             + (f"\n  server: {sig}" if sig else "")
             + (f"\n  the limit is {ran_out(s.server)[1]}" if not s.passed
                else ""))
+
+
+def _ci(s: Step) -> str:
+    return (f" [{s.p90_lo:.2f}-{s.p90_hi:.2f}]"
+            if math.isfinite(s.p90_lo) else "")
 
 
 def _f1(v: float) -> str:
@@ -960,6 +1007,10 @@ def headline(rec: dict) -> str:
         key, words = ran_out(bad.get("server"))
         out = (f"; at {a['fails_at']} the limit is {words}" if key != "unknown"
                else "; the limit is unknown (no /metrics reading)")
+        if bad.get("inconclusive"):
+            out = (f"; the step at {a['fails_at']} is INCONCLUSIVE ("
+                   f"{bad.get('turns')} turns judged, too few to call it a "
+                   "fail; counted as one for the search)")
     if a["serves"] == 0:
         return (f"serves no session at p{PERCENTILE} turn <= {ms:g}x alone "
                 f"(one session already fails: see the step above){out}")
@@ -1005,12 +1056,13 @@ def print_report(rec: dict, out=None) -> None:
       "count in the turn that spawned them")
     w()
     w(f"{'sessions':>8} {'turns':>6} {'req':>6} {'fail':>5} "
-      f"{'turn p90':>9} {'mean':>6} {'vs 1 stream':>12} "
+      f"{'turn p90 [90% CI]':>21} {'mean':>6} {'vs 1 stream':>12} "
       f"{'turn s p50/p90':>15} {'in flight':>9}  verdict")
     for s in steps:
-        v = "PASS" if s.passed else "FAIL: " + "; ".join(s.reasons)
+        v = ("PASS" if s.passed else ("INCONCLUSIVE: " if s.inconclusive
+                                      else "FAIL: ") + "; ".join(s.reasons))
         w(f"{s.sessions:>8} {s.turns:>6} {s.requests:>6} {s.errors:>5} "
-          f"{_x(s.slowdown_p90):>9} {_x(s.slowdown_mean):>6} "
+          f"{_x(s.slowdown_p90) + _ci(s):>21} {_x(s.slowdown_mean):>6} "
           f"{_x(s.raw_p90):>12} {_s(s.turn_s_p50):>7}/{_s(s.turn_s_p90):<7} "
           f"{_f1(s.streams_mean):>9}  {v}")
     sig = [(s.sessions, signals(s.server)) for s in steps if s.server]
@@ -1131,7 +1183,8 @@ def cmd_replay(args) -> int:
         cpt, cpt_source = 4.0, "default"
     plan = Plan(trace_path=args.trace, max_slowdown=args.max_slowdown,
                 max_sessions=args.max_sessions, ramp_s=args.ramp_s,
-                measure_s=args.measure_s,
+                measure_s=args.measure_s, min_turns=args.min_turns,
+                max_measure_s=args.max_measure_s,
                 shared_prefix_tokens=(args.shared_prefix_tokens
                                       if args.shared_prefix_tokens is not None
                                       else default_shared_prefix(trace)),
@@ -1174,7 +1227,9 @@ def cmd_replay(args) -> int:
           f"endpoint alone, <= {MAX_ERROR_SHARE:.0%} failed requests")
     print(f"  steps: 1, 2, 4, ... sessions until one fails, then halved to "
           f"{RESOLUTION:.0%}; each {plan.ramp_s:g} s ramp + "
-          f"{plan.measure_s:g} s measured (cap {plan.max_sessions})")
+          f"{plan.measure_s:g} s measured, longer (up to "
+          f"{plan.measure_cap_s:g} s) until {plan.min_turns} turns are judged "
+          f"(cap {plan.max_sessions})")
     if pred and "error" in pred:
         print(f"  the model ({args.config}) could not price this trace: "
               f"{pred['error']}")
@@ -1272,6 +1327,13 @@ def add_subparser(sub) -> None:
                         f"times as long as alone (default "
                         f"{DEFAULT_MAX_SLOWDOWN:g})")
     p.add_argument("--max-sessions", type=int, default=256)
+    p.add_argument("--min-turns", type=int, default=30,
+                   help="a step measures past --measure-s until it has this "
+                        "many judged turns (default 30); with fewer by "
+                        "--max-measure-s it is inconclusive, which the "
+                        "search treats as a fail")
+    p.add_argument("--max-measure-s", type=float, default=0.0,
+                   help="longest a step measures (default 3 x --measure-s)")
     p.add_argument("--ramp-s", type=float, default=60.0,
                    help="seconds sessions start over, not measured")
     p.add_argument("--measure-s", type=float, default=300.0,

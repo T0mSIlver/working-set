@@ -271,3 +271,57 @@ def test_tree_calibration_replays_a_whole_tree_from_its_first_spawn(
     kids = [r for r in rows if r.child]
     assert len(kids) == 3                    # the child recording, once
     assert [r.prompt for r in rows if not r.child][0] == 1_200   # request 1
+
+
+# ---- a step measures until it can say something -----------------------------
+def test_a_step_with_too_few_turns_is_inconclusive_not_a_pass():
+    rows = [_row_(k, 0, 1.0) for k in range(4)]
+    s = B.judge(B.Step(4, rows, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
+                min_turns=30)
+    assert s.inconclusive and not s.passed
+    assert "inconclusive: 4 turns judged" in s.reasons[0]
+    # a clear fail stays a fail
+    slow = [_row_(k, 0, 9.0) for k in range(4)]
+    f = B.judge(B.Step(4, slow, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
+                min_turns=30)
+    assert not f.inconclusive and not f.passed
+    # enough turns: a pass
+    many = [_row_(k, 0, 1.0) for k in range(30)]
+    assert B.judge(B.Step(4, many, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
+                   min_turns=30).passed
+
+
+def test_the_search_treats_inconclusive_as_a_fail_and_the_headline_says_so():
+    rows = [_row_(k, 0, 1.0) for k in range(4)]
+    st = B.judge(B.Step(4, rows, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
+                 min_turns=30)
+    assert B.answer({2: True, 4: st.passed}, 64) == {
+        "serves": 2, "fails_at": 4, "capped": False}
+    rec = {"steps": [st.to_dict()], "plan": {"max_slowdown": 1.5},
+           "answer": {"serves": 2, "fails_at": 4, "capped": False}}
+    assert "INCONCLUSIVE" in B.headline(rec)
+
+
+def test_the_p90_has_a_bootstrap_interval():
+    lo, hi = B.bootstrap_p90([1.0 + 0.1 * k for k in range(40)])
+    assert lo < B.PERCENTILE and 1.0 < lo < hi <= 4.9
+    assert B.bootstrap_p90([1.0])[0] != B.bootstrap_p90([1.0])[0]   # nan
+
+
+def test_a_step_measures_past_the_window_until_it_has_the_turns(tmp_path):
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(_tree_trace().to_dict()))
+    load_trace.cache_clear()
+    tr = load_trace(str(path))
+    plan = B.Plan(str(path), ramp_s=0.05, measure_s=0.3, min_turns=10 ** 6,
+                  max_measure_s=1.2, context_cap_tokens=100_000)
+
+    async def go():
+        async with httpx.AsyncClient(
+                transport=httpx.MockTransport(_server_stub())) as c:
+            return await B.run_step(
+                c, B.EndpointSpec(base_url="http://fake/v1", model="m"),
+                plan, tr, 1, "p" * 100, "n", speed=B.Speed(a=0.01))
+    step = asyncio.run(go())
+    w0, w1 = step.window
+    assert 1.1 <= w1 - w0 <= 1.5              # stopped at the cap, not 0.3
