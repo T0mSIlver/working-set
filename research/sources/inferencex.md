@@ -130,3 +130,27 @@ Reading: a dense model on one GPU (TP1) reaches about 50-55% of HBM bandwidth ev
 - `n_gpus` for disagg rows is prefill+decode GPUs, sometimes 30-64; do not read these as single-node boxes.
 - Licence: InferenceX repo Apache-2.0; the app repo that serves the API is GPL-3.0. We use only API data, with attribution to SemiAnalysis.
 - Unchecked: whether FP4/FP8 checkpoints for DSV41F use KV in FP8; the API has no KV dtype field (`config.kv` is null).
+
+## Why the model's curve missed InferenceX's dots (2026-11-04)
+
+GLM-5.3 NVFP4 on 8×B300 (sglang, TP8): at 28 agent sessions InferenceX
+measured 145 tok/s per user; the model said 43. Two causes, in order:
+
+1. **Draft acceptance.** The run pins MTP acceptance at 2.94 tokens per step
+   (3 draft tokens, `inferencex/golden-al-glm-5.3-nvfp4`); the model assumes
+   1.7. Per-user speed scales with it, so the model is ×1.7 low before any
+   hardware question. At 2.94 the default constants are ×1.4 off.
+2. **Decode constants.** Fitting bandwidth efficiency and fixed step time to
+   the 10 points (latency form, expert union linear in batch) gives 0.79 of
+   the TP-derated bandwidth and 6.1 ms, within ×1.09 of every point. The
+   defaults (0.36, 2.7 ms) were read on Qwen 27B, 4×H200, vLLM, small batch.
+
+Still open before the curves can sit on the page: InferenceX's x-axis is
+sessions replaying agent traces with tool waits up to 10 s, not sequences
+decoding at once; the fit above treats them as equal. Other curves fit
+less well: DeepSeek-V4.1-Flash on 8×H200 vLLM stays ×1.4 off at best (a
+cliff past 64 the model lacks), and its H200 runs use FP4 weights that the
+model prices as FP8. Constants fitted on one model do not transfer: on H200
+sglang, DeepSeek-V4.1-Flash fits 0.14 and Qwen3.8-Flash-Next 0.58.
+
+Refresh with acceptance records: `IX_REPO=/path/to/InferenceX python3 scripts/external_inferencex.py build`.

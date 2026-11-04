@@ -22966,6 +22966,225 @@
    ],
    "quote": "API rows[id=40220].metrics.median_tpot=0.016734009394698508; params from /api/v1/views/model-architectures (totalParams=70, activeParams=70)",
    "note": "derived: MBU = active_params*bytes_per_param / (median_tpot * n_gpus * HBM_BW). Weights only (no KV, no activations, no scales), so a lower bound; conc=4 with MoE reads only the routed experts at conc 1. bytes/param is our assumption (fp8=1, nvfp4~0.5625)."
+  },
+  {
+   "id": "inferencex/golden-al-glm-5.3-nvfp4",
+   "kind": "measured",
+   "use": "calibrate",
+   "url": "https://github.com/SemiAnalysisAI/InferenceX/blob/6481779aae17f6f5e7c1a6057ac41d93ed8fcff8/inferencex-e2e/infx/golden_al_distribution/glm-5.3-nvfp4__mtp__native__default-default.yaml",
+   "read": "2026-11-04",
+   "config": {
+    "model": "GLM-5.3",
+    "ws_model": "GLM52",
+    "gpu": null,
+    "spec_decode": "mtp",
+    "extra": {
+     "run_url": "https://github.com/SemiAnalysisAI/InferenceX/actions/runs/41127067850"
+    }
+   },
+   "workload": {
+    "name": "SPEED-Bench coding",
+    "osl": 4096,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "acceptance_length",
+     "value": 1.84,
+     "unit": "tokens per step",
+     "at": "1 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.49,
+     "unit": "tokens per step",
+     "at": "2 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.94,
+     "unit": "tokens per step",
+     "at": "3 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.28,
+     "unit": "tokens per step",
+     "at": "4 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.48,
+     "unit": "tokens per step",
+     "at": "5 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.7,
+     "unit": "tokens per step",
+     "at": "6 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.74,
+     "unit": "tokens per step",
+     "at": "7 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.87,
+     "unit": "tokens per step",
+     "at": "8 draft tokens, thinking on"
+    }
+   ],
+   "quote": "glm-5.3-nvfp4__mtp__native__default-default.yaml: 1 draft tokens, thinking on=1.84; 2 draft tokens, thinking on=2.49; 3 draft tokens, thinking on=2.94; 4 draft tokens, thinking on=3.28",
+   "note": "Acceptance length per draft depth, including the verified token. InferenceX pins this value in its agentic throughput runs, so per-user speeds there assume it."
+  },
+  {
+   "id": "inferencex/golden-al-deepseek-v4.1-flash",
+   "kind": "measured",
+   "use": "calibrate",
+   "url": "https://github.com/SemiAnalysisAI/InferenceX/blob/6481779aae17f6f5e7c1a6057ac41d93ed8fcff8/inferencex-e2e/infx/golden_al_distribution/deepseek-v4.1-flash__dspark__native__probabilistic-block.yaml",
+   "read": "2026-11-04",
+   "config": {
+    "model": "DeepSeek-V4.1-Flash",
+    "ws_model": "DSV41F",
+    "gpu": null,
+    "spec_decode": "dspark",
+    "extra": {
+     "run_url": "https://github.com/SemiAnalysisAI/InferenceX/actions/runs/34493175056"
+    }
+   },
+   "workload": {
+    "name": "SPEED-Bench coding",
+    "osl": 4096,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "acceptance_length",
+     "value": 1.88,
+     "unit": "tokens per step",
+     "at": "1 draft tokens, thinking off"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.62,
+     "unit": "tokens per step",
+     "at": "2 draft tokens, thinking off"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.27,
+     "unit": "tokens per step",
+     "at": "3 draft tokens, thinking off"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.73,
+     "unit": "tokens per step",
+     "at": "4 draft tokens, thinking off"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 4.07,
+     "unit": "tokens per step",
+     "at": "5 draft tokens, thinking off"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 1.81,
+     "unit": "tokens per step",
+     "at": "1 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.43,
+     "unit": "tokens per step",
+     "at": "2 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.9,
+     "unit": "tokens per step",
+     "at": "3 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.26,
+     "unit": "tokens per step",
+     "at": "4 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 3.51,
+     "unit": "tokens per step",
+     "at": "5 draft tokens, thinking on"
+    }
+   ],
+   "quote": "deepseek-v4.1-flash__dspark__native__probabilistic-block.yaml: 1 draft tokens, thinking off=1.88; 2 draft tokens, thinking off=2.62; 3 draft tokens, thinking off=3.27; 4 draft tokens, thinking off=3.73",
+   "note": "Acceptance length per draft depth, including the verified token. InferenceX pins this value in its agentic throughput runs, so per-user speeds there assume it."
+  },
+  {
+   "id": "inferencex/golden-al-qwen3.8-flash-next-fp8",
+   "kind": "measured",
+   "use": "calibrate",
+   "url": "https://github.com/SemiAnalysisAI/InferenceX/blob/6481779aae17f6f5e7c1a6057ac41d93ed8fcff8/inferencex-e2e/infx/golden_al_distribution/qwen3.8-flash-next-fp8__mtp__native__default-default.yaml",
+   "read": "2026-11-04",
+   "config": {
+    "model": "Qwen3.8-Flash-Next",
+    "ws_model": "Q38FN",
+    "gpu": null,
+    "spec_decode": "mtp",
+    "extra": {
+     "run_url": "https://github.com/SemiAnalysisAI/InferenceX/actions/runs/33034290269"
+    }
+   },
+   "workload": {
+    "name": "SPEED-Bench coding",
+    "osl": 4096,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "acceptance_length",
+     "value": 1.65,
+     "unit": "tokens per step",
+     "at": "1 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.06,
+     "unit": "tokens per step",
+     "at": "2 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.32,
+     "unit": "tokens per step",
+     "at": "3 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.47,
+     "unit": "tokens per step",
+     "at": "4 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.59,
+     "unit": "tokens per step",
+     "at": "5 draft tokens, thinking on"
+    },
+    {
+     "name": "acceptance_length",
+     "value": 2.66,
+     "unit": "tokens per step",
+     "at": "6 draft tokens, thinking on"
+    }
+   ],
+   "quote": "qwen3.8-flash-next-fp8__mtp__native__default-default.yaml: 1 draft tokens, thinking on=1.65; 2 draft tokens, thinking on=2.06; 3 draft tokens, thinking on=2.32; 4 draft tokens, thinking on=2.47",
+   "note": "Acceptance length per draft depth, including the verified token. InferenceX pins this value in its agentic throughput runs, so per-user speeds there assume it."
   }
  ]
 }

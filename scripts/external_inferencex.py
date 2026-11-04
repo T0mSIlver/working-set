@@ -126,6 +126,7 @@ def build():
         if not (lowc and mx['id'] == max(lowc, key=lambda r: r['metrics']['median_intvty'])['id']): recs.append(record(mx, 'max', '/'.join(key)))
     # MBU records
     recs += mbu_records(load())
+    recs += golden_al_records()
     src = {'id':'inferencex','name':'SemiAnalysis InferenceX v2 (formerly InferenceMAX)','publisher':'SemiAnalysis',
            'url':'https://inferencex.semianalysis.com/','license':'Apache License 2.0 for the InferenceX repo (LICENSE @ %s); the InferenceX-app repo (dashboard + API) is GPL-3.0 (LICENSE @ %s)' % (REPO_COMMIT[:7], APP_COMMIT[:7]),
            'method':'Nightly sweeps of open models on vendor GPUs with SGLang/vLLM/TRT-LLM (and AMD ATOM/MoRI); single-turn random 8k/1k and AgentX trace replay; tok/s/GPU vs tok/s/user across concurrency; cost = costh USD/GPU-h / (tok/s/GPU*3600/1e6).',
@@ -171,6 +172,38 @@ def mbu_records(allrows):
                      {'name':'mbu','value':round(mbu,3),'unit':'fraction','kind':'derived','at':'weights-only lower bound'}],
           'quote':'API rows[id=%s].metrics.median_tpot=%s; params from /api/v1/views/model-architectures (totalParams=%s, activeParams=%s)' % (r['id'], r['metrics']['median_tpot'], tot, act),
           'note':'derived: MBU = active_params*bytes_per_param / (median_tpot * n_gpus * HBM_BW). Weights only (no KV, no activations, no scales), so a lower bound; conc=%d with MoE reads only the routed experts at conc 1. bytes/param is our assumption (fp8=1, nvfp4~0.5625).' % r['conc']})
+    return recs
+
+# Draft acceptance InferenceX pins in its agentic runs ("golden AL", measured
+# with SPEED-Bench coding). Needs a clone: IX_REPO=/path/to/InferenceX.
+GOLDEN = {'glm-5.3-nvfp4__mtp__native__default-default.yaml': ('GLM-5.3', 'GLM52', 'mtp'),
+          'deepseek-v4.1-flash__dspark__native__probabilistic-block.yaml': ('DeepSeek-V4.1-Flash', 'DSV41F', 'dspark'),
+          'qwen3.8-flash-next-fp8__mtp__native__default-default.yaml': ('Qwen3.8-Flash-Next', 'Q38FN', 'mtp')}
+def golden_al_records():
+    repo = os.environ.get('IX_REPO')
+    if not repo:
+        print('IX_REPO unset: no acceptance records'); return []
+    d = os.path.join(repo, 'inferencex-e2e', 'infx', 'golden_al_distribution')
+    recs = []
+    for fn, (name, ws, method) in GOLDEN.items():
+        lines = open(os.path.join(d, fn)).read().splitlines()
+        run = next((l.split(': ', 1)[1] for l in lines if l.startswith('# Source GitHub Actions run:')), '')
+        mode, mets = None, []
+        for l in lines:
+            if l and not l.startswith(' ') and not l.startswith('#') and not l.startswith(fn.split('__')[0]):
+                mode = None                      # a later top-level block (client settings)
+            if l in ('  thinking_on:', '  thinking_off:'): mode = l.strip()[:-1]
+            elif mode and l.startswith('    ') and l.strip()[:1].isdigit():
+                k, v = l.strip().split(':', 1)
+                if v.strip() not in ('', 'N/A'):
+                    mets.append({'name': 'acceptance_length', 'value': float(v), 'unit': 'tokens per step',
+                                 'at': '%s draft tokens, %s' % (k, mode.replace('_', ' '))})
+        recs.append({'id': 'inferencex/golden-al-%s' % fn.split('__')[0], 'kind': 'measured', 'use': 'calibrate',
+          'url': 'https://github.com/SemiAnalysisAI/InferenceX/blob/%s/inferencex-e2e/infx/golden_al_distribution/%s' % (REPO_COMMIT, fn),
+          'read': READ, 'config': {'model': name, 'ws_model': ws, 'gpu': None, 'spec_decode': method, 'extra': {'run_url': run}},
+          'workload': {'name': 'SPEED-Bench coding', 'osl': 4096, 'extra': {}}, 'metrics': mets,
+          'quote': '%s: %s' % (fn, '; '.join('%s=%s' % (m['at'], m['value']) for m in mets[:4])),
+          'note': 'Acceptance length per draft depth, including the verified token. InferenceX pins this value in its agentic throughput runs, so per-user speeds there assume it.'})
     return recs
 
 if __name__ == '__main__':
