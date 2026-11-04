@@ -97,7 +97,7 @@ unchanged. Percent = runs passed / 267 (2.1) or
 | `DSV41F` | `deepseek-v4-1-flash` | DeepSeek V4.1 Flash (Max). **2.1 is the vendor card's figure** (§ 1 exception): pass@1 on the **DeepSeek Harness, Minimal mode, max reasoning effort, 1M context**, from `https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash` (README, read 2026-09-10); AA has no 2.1 run. **4.0 is AA's run, read 2026-11-04**, replacing the card's 31.2 | **90.6%** (vendor) | — | **26.8%** | 53 | 2026-09-10 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | **25.3%** | 50 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | **32.8%** | 65 | 2026-08-26 |
-| `ML4` | `mistral-large-4` | Mistral Large 4 (High) — **read 2026-11-04**, when the model joined the study. AA has no 2.1 run. Mistral's technical report claims 41.0% on 4.0, labelled "AA Coding Agent Index", a different AA index run inside coding agents; this column is AA's mini-swe-agent run (`model_mistral_large4.md` § 9) | — | — | **24.7%** | 49 | 2026-10-29 |
+| `ML4` | `mistral-large-4` | Mistral Large 4 (High) — **read 2026-11-04**, when the model joined the study. AA has no 2.1 run. Mistral's technical report claims 41.0% on 4.0, labelled "AA Coding Agent Index", a different AA index run inside coding agents: it is Large 4 in Mistral Vibe at high effort, 41.4% (82/198), the largest agent-over-mini-swe-agent gain AA shows for any model (+16.7; most models sit within ±4). This column is AA's mini-swe-agent run (`model_mistral_large4.md` § 9) | — | — | **24.7%** | 49 | 2026-10-29 |
 
 A `—` in a 4.0 column is **no run**; a **0.0%** is a *measured* zero (0 of
 198 runs passed) and is plotted. The two are different facts and the
