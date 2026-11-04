@@ -82,7 +82,7 @@ function modelFor(key){
   // +15% deployed-weight overhead. Never applied to the 27B, whose 28.8 GiB is
   // already the as-deployed footprint (that is where the 15% came from) — the
   // UI disables the control on that model.
-  if (state.wover === "p15" && state.model !== "27B")
+  if (state.wover === "p15" && !CONFIG.MODELS[state.model].weights_as_deployed)
     m = { ...m, w_resident: m.w_resident*1.15, name: m.name + " [+15% weights]" };
   m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
   // ...and the decode-efficiency knob, baked onto the model so decodeCurves

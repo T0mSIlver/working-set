@@ -215,7 +215,7 @@ export function unitChecks(){
   // and is deliberately unpriced
   const NO_NVFP4 = ["DSV4FV"];
   for (const mk of Object.keys(CONFIG.MODELS))
-    console.assert(NO_NVFP4.includes(mk) ? CONFIG.MODELS[mk].nvfp4_w === null : !!CONFIG.MODELS[mk].nvfp4_w,
+    console.assert(NO_NVFP4.includes(mk) ? CONFIG.MODELS[mk].nvfp4_w == null : !!CONFIG.MODELS[mk].nvfp4_w,
       NO_NVFP4.includes(mk) ? mk+" must have NO NVFP4 arm" : mk+" must be NVFP4-selectable");
   let gateThrew = false;
   try { kv_pool_tokens({...CONFIG.MODELS["27B"], weight_dtype:"nvfp4"}, makeTopo("tp",1,"H200")); }

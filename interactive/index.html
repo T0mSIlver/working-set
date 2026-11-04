@@ -500,25 +500,11 @@ details.more .more-body{padding:0 0 16px}
       <div class="ctl-grid hyp-grid">
         <div class="field">
           <label class="flabel"><span class="tip" id="model-tip" data-tip="">Model</span></label>
-          <div class="seg" id="seg-model" data-key="model">
-            <button data-v="27B" aria-pressed="true">Qwen3.8-27B</button>
-            <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
-            <button data-v="MM35" aria-pressed="false">Mistral-Med-3.5</button>
-            <button data-v="GLM52" aria-pressed="false">GLM-5.3</button>
-            <button data-v="DSV4F" aria-pressed="false">DSv4-Flash</button>
-            <button data-v="DSV4FV" aria-pressed="false">DSv4-Flash-Vision</button>
-            <button data-v="DSV41F" aria-pressed="false">DSv4.1-Flash</button>
-            <button data-v="Q38FN" aria-pressed="false">Q3.8-Flash</button>
-            <button data-v="GLM53F" aria-pressed="false">G5.3-Flash</button>
-            <button data-v="ML4" aria-pressed="false">Mistral-Large-4</button>
-          </div>
+          <div class="seg" id="seg-model" data-key="model"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="H200 (141 GB, 4.8 TB/s) is the calibrated baseline. B300 (288.4 GB measured, 8 TB/s) is the only part that runs NVFP4 weights; its memory reserve is the H200 calibration plus a measured correction.">GPU</span></label>
-          <div class="seg" id="seg-gpu" data-key="gpu">
-            <button data-v="H200" aria-pressed="true">H200</button>
-            <button data-v="B300" aria-pressed="false">B300</button>
-          </div>
+          <div class="seg" id="seg-gpu" data-key="gpu"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Total GPUs, up to one 8-GPU NVLink node. Split decides how they form replica groups. Large models need several GPUs before any cache fits; dimmed splits show where.">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
