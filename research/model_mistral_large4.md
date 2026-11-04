@@ -276,6 +276,19 @@ vendor's agent, plausibly from training on Vibe's tool schema, which
 mini-swe-agent's plain bash loop does not offer. That is an inference: AA
 publishes no per-task trajectories to check it.
 
+Outside views (read 2026-11-04). Vals AI's own mini-swe-agent run of 4.0
+lands in the same place as AA's (low to mid 20s), so the 24.7 is not an AA
+artefact. The release post says the model gained 13 points over the
+preview's 28 on "Artificial Analysis Coding Agent Index - Terminal-Bench 4.0",
+credits "continuing to scale reinforcement learning", and names neither the
+harness nor the training tasks; a technical report is announced. AI Realist
+(`airealist.ai/p/mistral-large-4-weights-score-comes-with-harness`) notes
+Vibe moved from v2.26.0 (2026-10-06) to v3.0.0 (2026-10-19) between the
+preview and the release, so the 13-point gain may sit in the weights (RL on
+Vibe-shaped tasks), in Vibe 3.0 (prompting, thinking budget, sampling), or
+both. A run of the release weights in another agent would split it: ≥ 38
+puts the gain in the weights, 25–30 puts it in Vibe. No such run is public.
+
 **For the study:** the axis keeps 24.7. The one-harness rule
 (`terminal_bench.md` § 1) holds, and the Coding Agent Index cannot replace it:
 every model there runs in a different agent, and six of the study's ten
