@@ -342,8 +342,9 @@ class Model:
     kv_decode_bpt: float | None = None
     kv_decode_const: float = 0.0
     kv_decode_topk: float | None = None
-    # False for models vLLM can only serve with a quantized KV cache
-    # (GLM-5.3's DSA path asserts fp8) — with_kv_dtype("fp16") then raises.
+    # False for models vLLM can only serve with a quantized KV cache (the
+    # DeepSeek Flash models' fp8/fp4 caches; Mistral-Large-4, documented on
+    # fp8_ds_mla only) — with_kv_dtype("fp16") then raises.
     kv_fp16_ok: bool = True
     # The KV dtype these constants currently price ("fp8" = the study
     # baseline; with_kv_dtype("fp16") stamps "fp16"). Exists so
@@ -355,6 +356,18 @@ class Model:
     # figure must be produced from the with_kv_dtype("fp16") arm — silent
     # mis-pricing becomes a crash, not a wrong number.
     kv_fp8_blackwell_only: bool = False
+    # (kv_bpt, kv_decode_const) of the FP8 arm on a HOPPER part, for a model
+    # whose FP8 cache row depends on the GPU; None = one row on every part.
+    # GLM-5.3: Blackwell serves DSA through FlashInfer's sparse MLA with plain
+    # fp8_e4m3 rows (576 B per latent, the base constants), Hopper through
+    # FlashMLA's fp8_ds_mla rows (656 B: 512 fp8 + 16 B of fp32 scales + 64
+    # bf16 rope values). with_gpu() swaps them in and stamps kv_gpu;
+    # check_dtype_supported REFUSES a Hopper topology without the swap.
+    # research/model_glm52.md #2.
+    kv_hopper_fp8: tuple | None = None
+    # The GPU part with_gpu() resolved the FP8 row for (None = not resolved;
+    # only meaningful on models with kv_hopper_fp8).
+    kv_gpu: str | None = None
     # False when deltanet_state is NOT a bf16 recurrent state the fp32 toggle
     # can meaningfully double (the DeepSeek Flash models reuse the field for
     # their fixed per-session window + fp32 compressor buffers, already
@@ -551,7 +564,7 @@ MODELS = {
     # shapes, bytes) are identical to GLM-5.2's; research/model_glm53.md.
     "GLM52": Model(
         name="GLM-5.3 (MoE 744B-A40B, MLA+DSA)",
-        kv_bpt=48_408,                   # 79 x 576 (MLA latent) + 22 x 132 (indexer)
+        kv_bpt=48_408,                   # B300: 79 x 576 (fp8_e4m3 latent) + 22 x 132 (indexer)
         deltanet_state=0.0,              # MLA is cached attention, no recurrent state
         w_resident=755.5e9,              # official FP8 ckpt: 753.3e9 params + BF16 excess
         w_decode_shared=18.92e9,         # MLA + indexers + dense MLP + shared exp + lm_head
@@ -568,9 +581,14 @@ MODELS = {
                  12_740_212_800,          # 8 x 21,233,688 x 75
                  407_686_809_600),        # 256 x 21,233,688 x 75 (kink n=32)
         kv_decode_bpt=2_772,             # 21 indexer layers x 132 B per context token
-        kv_decode_const=92.0e6,          # 78 layers x top-2048 x 576 B per active seq
+        kv_decode_const=92.0e6,          # B300: 78 layers x top-2048 x 576 B per active seq
         kv_decode_topk=2_048,            # ...scaled down for sequences < 2,048 tokens
-        kv_fp16_ok=False,                # vLLM DSA path asserts a quantized KV cache
+        # H200: FlashMLA's fp8_ds_mla rows, 656 B per latent (vLLM's GLM-5.3
+        # recipe: --kv-cache-dtype fp8 on Hopper, fp8_e4m3 on Blackwell)
+        kv_hopper_fp8=(54_728,           # 79 x 656 + 22 x 132
+                       104_792_064),     # 78 x 2048 x 656
+        kv_fp16_ok=True,                 # BF16 is vLLM's default on Hopper and accepted on
+                                         # Blackwell (FlashMLA and FlashInfer sparse both list it)
         max_ctx=1_048_576,               # native 1M context (theta 8e6)
         # prefill: MoE — model_glm52.md's derivation gives 39.3e9 active
         # EXCLUDING embeddings (vLLM "39B"); less lm_head 1.903e9 (fires
@@ -583,7 +601,7 @@ MODELS = {
         # research/model_glm52.md, so the quadratic term here is pessimistic
         # and flagged. 64 heads x 256 (qk_nope 192 + rope 64 = v_head_dim).
         params_prefill=37.4e9, attn_layers=78, attn_d=64 * 256,
-        kv_heads=1,                      # MLA: one 576-B latent per token, replicated under plain TP
+        kv_heads=1,                      # MLA: one latent per token, replicated under plain TP
     ),
     # MoE 284B-A13B (304B on disk incl. 3 DSpark stages), MQA over a 512-dim
     # latent + per-layer-class compression (2 SWA / 21 CSA ratio-4 / 20 HCA
@@ -819,16 +837,17 @@ MODELS = {
     # layers of MLA + DSA, as GLM-5.3, with two cache savings of its own:
     # cross-layer KV sharing (9 late NoPE layers attend to layer 35's
     # latents and store none) and index sharing (28 layers reuse the top-k
-    # of the indexer before them). 63 x 576 B latents + 44 x 132 B indexer
-    # keys = 41.1 KiB/token, 13% below GLM-5.3. 128 experts / 4 routed
+    # of the indexer before them). 63 x 656 B fp8_ds_mla latents + 44 x 132 B
+    # indexer keys = 46.0 KiB/token, 3% below GLM-5.3 on B300 and 14% below
+    # it on H200. 128 experts / 4 routed
     # (kink n = 32). The largest model in the study: 1,060.5 GB in FP8, so
     # it fits no 8-GPU H200 node (min TP 9; the vLLM recipe runs it on
     # 2 x 8 H200) and needs TP8 on B300, TP4 with the official NVFP4
     # checkpoint. research/model_mistral_large4.md.
     "ML4": Model(
         name="Mistral-Large-4 (MoE 1.05T-A49B, MLA+DSA, KV sharing)",
-        kv_bpt=42_096,                   # 63 x 576 (MLA latent) + 44 x 132 (indexer keys)
-        deltanet_state=3_538_944,        # DSpark drafter: 3 MLA layers x 2,048-token window x 576 B
+        kv_bpt=47_136,                   # 63 x 656 (fp8_ds_mla latent) + 44 x 132 (indexer keys)
+        deltanet_state=4_030_464,        # DSpark drafter: 3 MLA layers x 2,048-token window x 656 B
                                          # (storage incl. the drafter, as DSV4F's DSpark windows)
         state_step_bytes=0.0,            # the drafter's window reads are folded into mtp, as every
                                          # draft model's are; the target layers carry no state
@@ -850,7 +869,7 @@ MODELS = {
                  18_091_088_544,          # 4 x 63,701,016 x 71
                  578_914_833_408),        # 128 x 63,701,016 x 71 (kink n=32)
         kv_decode_bpt=5_808,             # 44 indexer layers x 132 B per CONTEXT token
-        kv_decode_const=84_934_656,      # 72 layers x top-2048 x 576 B per active seq (the 9
+        kv_decode_const=96_731_136,      # 72 layers x top-2048 x 656 B per active seq (the 9
                                          # KV-sharing layers read layer 35's latents)
         kv_decode_topk=2_048,            # index_topk, read in token space
         kv_fp16_ok=False,                # every NVIDIA config Mistral and vLLM document runs the fp8
@@ -903,14 +922,17 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
     if model.kv_dtype != "fp8":
         raise ValueError(f"{model.name}: with_kv_dtype expects the base "
                          "(fp8) model; start from the MODELS[...] entry")
+    if model.kv_gpu is not None:
+        raise ValueError(f"{model.name}: with_kv_dtype must run before "
+                         "with_gpu (it would double the GPU's FP8 row)")
     if kv_dtype == "fp8":
         return model
     if not model.kv_fp16_ok:
         raise ValueError(
             f"{model.name}: FP16 KV is not servable (vLLM requires a quantized "
-            "KV cache on this model's sparse-attention path — GLM-5.3's and "
-            "Mistral-Large-4's DSA, DSv4-Flash's CSA, DSv4.1-Flash's CSA2; see the "
-            "model's research note)")
+            "KV cache on this model's sparse-attention path — Mistral-Large-4's "
+            "DSA, DSv4-Flash's CSA, DSv4.1-Flash's CSA2; see the model's research "
+            "note)")
     # On a sparse-decode model the top-k gathers read MAIN-KV bytes and double
     # with the cache dtype; the indexer scan (kv_decode_bpt) keeps its own
     # quantized width. kv_bpt doubles wholesale — the indexer share inside it
@@ -951,6 +973,28 @@ def with_weight_dtype(model: Model, weight_dtype: str) -> Model:
                    weight_dtype="nvfp4", name=model.name + " [NVFP4]")
 
 
+# ---- GPU-coupled FP8 cache row -------------------------------------------------
+def with_gpu(model: Model, gpu: str) -> Model:
+    """Return `model` with the FP8 cache row `gpu` serves it with.
+
+    Identity for every model whose row is the same on both parts. A model
+    with kv_hopper_fp8 (GLM-5.3) takes those constants on a Hopper part when
+    it prices the FP8 arm; every arm is stamped with the part, so
+    check_dtype_supported can refuse a model resolved for the other part.
+    Apply it last, after with_weight_dtype and with_kv_dtype."""
+    if gpu not in GPUS:
+        raise ValueError(f"gpu must be one of {tuple(GPUS)}, got {gpu!r}")
+    if model.kv_hopper_fp8 is None:
+        return model
+    if model.kv_gpu is not None:
+        raise ValueError(f"{model.name}: already resolved for {model.kv_gpu}")
+    if model.kv_dtype == "fp8" and not GPUS[gpu].supports_nvfp4:
+        kv_bpt, kv_decode_const = model.kv_hopper_fp8
+        return replace(model, kv_bpt=kv_bpt, kv_decode_const=kv_decode_const,
+                       kv_gpu=gpu)
+    return replace(model, kv_gpu=gpu)
+
+
 # ---- weight-dtype x GPU gating ----------------------------------------------
 # NVFP4 weights are only allowed on GPUs with native FP4 tensor cores (B300);
 # H-generation GPUs are deliberately excluded even where emulation kernels
@@ -980,6 +1024,18 @@ def check_dtype_supported(model: Model, topo: Topology) -> None:
             f"{topo.gpu.name} must price the BF16-KV arm "
             "(with_kv_dtype(model, \"fp16\"); vLLM recipe, "
             "research/model_glm53flash.md #2)")
+    # GPU-coupled FP8 row (GLM-5.3): the base constants are the Blackwell
+    # row, so a Hopper topology needs the with_gpu() swap and a swapped model
+    # may only price Hopper — otherwise the pool and the decode reads would
+    # price the other part's row. The FP16 row is the same on both parts.
+    if model.kv_hopper_fp8 is not None and model.kv_dtype == "fp8":
+        hopper_row = (model.kv_gpu is not None
+                      and not GPUS[model.kv_gpu].supports_nvfp4)
+        if hopper_row != (not topo.gpu.supports_nvfp4):
+            raise ValueError(
+                f"{model.name}: its FP8 cache row depends on the GPU — price "
+                f"with_gpu(model, \"{topo.gpu.name}\") on this topology "
+                "(research/model_glm52.md #2)")
 
 
 # ============================================================================
@@ -3859,11 +3915,13 @@ def _selfcheck():
     # (GLM-5.3-Flash appears as its BF16-KV arm wherever an H200 topology is
     # priced: the fp8-KV arm is Blackwell-only and check_dtype_supported
     # refuses it there — asserted below)
+    # (and GLM-5.3 as its Hopper FP8 row on H200: with_gpu, identity elsewhere)
     def _arm(mk, gk):
         m_ = MODELS[mk]
-        return (with_kv_dtype(m_, "fp16")
-                if m_.kv_fp8_blackwell_only and gk == "H200" else m_)
-    for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"], MODELS["DSV4FV"],
+        m_ = (with_kv_dtype(m_, "fp16")
+              if m_.kv_fp8_blackwell_only and gk == "H200" else m_)
+        return with_gpu(m_, gk)
+    for mdl in (MODELS["MM35"], _arm("GLM52", "H200"), MODELS["DSV4F"], MODELS["DSV4FV"],
                 MODELS["DSV41F"], MODELS["Q38FN"], _arm("GLM53F", "H200"),
                 MODELS["ML4"]):
         for n in (1, 2, 4, 8):
@@ -4030,7 +4088,21 @@ def _selfcheck():
 
     # published-config KV identities for the new models
     assert mm.kv_bpt == 88 * 8 * 128 * 2 * 1                    # 176 KiB/token FP8
-    assert glm.kv_bpt == 79 * 576 + 22 * 132                    # MLA latent + indexer
+    assert glm.kv_bpt == 79 * 576 + 22 * 132                    # B300: fp8_e4m3 latent + indexer
+    # H200: FlashMLA's fp8_ds_mla row, 512 fp8 + 4 fp32 scales + 64 bf16 rope
+    assert glm.kv_hopper_fp8 == (79 * (512 + 16 + 128) + 22 * 132, 78 * 2048 * 656)
+    glm_h = with_gpu(glm, "H200")
+    assert (glm_h.kv_bpt, glm_h.kv_decode_const) == glm.kv_hopper_fp8
+    assert with_gpu(glm, "B300").kv_bpt == glm.kv_bpt          # the base row is Blackwell's
+    assert with_gpu(with_kv_dtype(glm, "fp16"), "H200").kv_bpt == 2 * glm.kv_bpt
+    for bad_call in (lambda: kv_pool_tokens(glm, topology("tp", 8)),          # unresolved on H200
+                     lambda: kv_pool_tokens(glm_h, topology_grid(1, 4, "B300")),  # H200 row on B300
+                     lambda: with_kv_dtype(glm_h, "fp16")):                    # fp16 after the swap
+        try:
+            bad_call(); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+    assert all(MODELS[k].kv_hopper_fp8 is None for k in MODELS if k != "GLM52")
     assert mm.mtp == 1.0, "no MTP module on Mistral Medium 3.5"
     assert mm.deltanet_state == 0.0 and glm.deltanet_state == 0.0
 
@@ -4146,10 +4218,11 @@ def _selfcheck():
     # DSA on 72 layers; 63 store latents (9 NoPE layers attend to layer 35's)
     # and 44 run an indexer (28 reuse the top-k of the indexer before them)
     ml4 = MODELS["ML4"]
-    assert ml4.kv_bpt == 63 * 576 + 44 * 132                    # 42,096 B
+    # (rows are vLLM's fp8_ds_mla on both parts: 512 fp8 + 16 B scales + 128 B rope)
+    assert ml4.kv_bpt == 63 * 656 + 44 * 132                    # 47,136 B
     assert ml4.kv_decode_bpt == 44 * 132                        # every indexer scans
-    assert ml4.kv_decode_const == 72 * 2048 * 576               # every layer gathers top-k
-    assert ml4.deltanet_state == 3 * 2048 * 576                 # DSpark windows, storage only
+    assert ml4.kv_decode_const == 72 * 2048 * 656               # every layer gathers top-k
+    assert ml4.deltanet_state == 3 * 2048 * 656                 # DSpark windows, storage only
     assert ml4.state_traffic == 0.0 and not ml4.state_fp32_ok
     assert not ml4.kv_fp16_ok and not ml4.kv_fp8_blackwell_only   # fp8_ds_mla on both parts
     # an expert is 3 x 6144^2 FP8 plus 3 x 48^2 F32 block-128 scales, and the
@@ -4293,11 +4366,12 @@ def _selfcheck():
     assert kv_pool_tokens(g53_16, topology("tp", 4)) > 0
     assert kv_pool_tokens(g53, b2) > 0 and kv_pool_tokens(g53_16, b2) > 0
 
-    # KV dtype: Mistral doubles like the Qwens; GLM's DSA path and the DeepSeek
-    # Flash models' CSA / CSA2 paths must refuse FP16 (all serve only with a
-    # quantized main KV)
+    # KV dtype: Mistral-Medium and GLM-5.3 (BF16 on both parts) double like the
+    # Qwens; the DeepSeek Flash models' CSA / CSA2 paths must refuse FP16 (they
+    # serve only with a quantized main KV)
     assert with_kv_dtype(mm, "fp16").kv_bpt == 2 * mm.kv_bpt
-    for quant_only in (glm, ds4, ds4v, dsf):
+    assert with_kv_dtype(glm, "fp16").kv_bpt == 2 * glm.kv_bpt
+    for quant_only in (ds4, ds4v, dsf):
         try:
             with_kv_dtype(quant_only, "fp16")
             raise AssertionError("expected ValueError")
@@ -4322,17 +4396,17 @@ def _selfcheck():
 
     # GLM-5.3 sizing: FP8 weights (755.5e9 B) fit no single GPU — pool clamps
     # to 0 — but 8xH200 TP and 4xB300 hold a real pool, NVFP4 a bigger one
-    assert kv_pool_tokens(glm, t1) == 0 and kv_pool_tokens(glm, b1) == 0
-    assert kv_pool_tokens(glm, topology("tp", 8)) > 0
+    assert kv_pool_tokens(glm_h, t1) == 0 and kv_pool_tokens(glm, b1) == 0
+    assert kv_pool_tokens(glm_h, topology("tp", 8)) > 0
     assert kv_pool_tokens(with_weight_dtype(glm, "nvfp4"), b4) > kv_pool_tokens(glm, b4) > 0
 
     # sparse-attention decode: GLM's DSA pricing must beat the dense-read
     # pricing of the same bytes at long context (that is DSA's entire point);
     # same check for DSv4.1-Flash's compressed-sparse reads (8xH200: the
     # smallest H200 node split that holds its 510 GB)
-    glm_dense_read = replace(glm, kv_decode_bpt=None, kv_decode_const=0.0)
+    glm_dense_read = replace(glm_h, kv_decode_bpt=None, kv_decode_const=0.0)
     t8 = topology("tp", 8)
-    _, p_dsa, _, _ = decode_curves(glm, t8, wl, [64], n_iter=300)
+    _, p_dsa, _, _ = decode_curves(glm_h, t8, wl, [64], n_iter=300)
     _, p_dense, _, _ = decode_curves(glm_dense_read, t8, wl, [64], n_iter=300)
     assert p_dsa[0] > p_dense[0], "DSA decode must out-speed full-cache reads"
     dsf_dense_read = replace(dsf, kv_decode_bpt=None, kv_decode_const=0.0)
@@ -4367,7 +4441,7 @@ def _selfcheck():
     assert p_g53_b16[0] < p_g53_b8[0], \
         "BF16 KV (the Hopper-required arm) must decode slower than fp8 KV"
     # decode monotonicity holds for the new models on hardware they fit
-    for mdl, topo_fit in ((mm, tp2), (glm, t8), (ds4, tp2), (dsf, t8), (q38, tp2),
+    for mdl, topo_fit in ((mm, tp2), (glm_h, t8), (ds4, tp2), (dsf, t8), (q38, tp2),
                           (g53_h200, t4), (with_weight_dtype(glm, "nvfp4"), b4)):
         _, p50n, _, aggn = decode_curves(mdl, topo_fit, wl, [1, 8, 64], n_iter=300)
         assert p50n[0] > p50n[1] > p50n[2] > 0
@@ -5020,13 +5094,14 @@ def _selfcheck():
     for dtype in KV_DTYPES:
         for mk in MODELS:
             if dtype == "fp16" and not MODELS[mk].kv_fp16_ok:
-                continue   # GLM-5.3 (DSA) / DSv4-Flash (CSA) / DSv4.1-Flash (CSA2): FP16 KV not servable
+                continue   # Mistral-Large-4 / DSv4-Flash (CSA) / DSv4.1-Flash (CSA2): FP16 KV not servable
             if dtype == "fp8" and MODELS[mk].kv_fp8_blackwell_only:
                 continue   # GLM-5.3-Flash: fp8 KV is Blackwell-only and these
                            # legacy topologies are all H200 — its H200 arm is
                            # the fp16 row below
             for tk in TOPOLOGIES:
-                p = kv_pool_tokens(with_kv_dtype(MODELS[mk], dtype), TOPOLOGIES[tk])
+                p = kv_pool_tokens(with_gpu(with_kv_dtype(MODELS[mk], dtype), "H200"),
+                                   TOPOLOGIES[tk])
                 print(f"  pool {mk:7} {tk:12} {dtype:5} = {p / 1e6:6.2f} M tokens")
     print("  -- B300, fp8 KV, weight dtype fp8 | nvfp4 --")
     for mk in MODELS:

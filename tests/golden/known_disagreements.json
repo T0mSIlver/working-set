@@ -8,7 +8,7 @@
   "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
   "hypothesis": "one line on the cause"
  },
- "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 814 vectors / 46,398 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 176 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself. 2026-09-10 (KV layout): +16 vectors on the kvshard axis (three anchors' sweeps and three replicate+offload combinations); no band or entry moved. 2026-11-02 (issue #117, the cache as a hit rate): 955 vectors / 67,805 comparisons, 298 allowlisted, 84 compared as lower bounds on censored explorer fills. Every at-load figure is priced at the miss share at the state's users and the four latency ceilings are capacity-aware at W, so 23 entries gated on _miss_share_swing (just past the knee) and _warm_p5 (a handful of sessions past it) are new, and five entries that match nothing any more are gone (the ceilings' widened bands and the duty moving with the share cover them). 2026-11-04 (Mistral-Large-4): 979 vectors / 69,509 comparisons; the 28th SPREAD_PROBE entry (ML4 8xB300 TP8 FP8) narrowed the max_users_decode band from 3.5% to 3.4% and ttft_hit_ps's from 3.4% to 3.3%, so the integer-bisection gate widens from a ceiling of 25 to 29 and one past-knee ttft_hit_ps entry is new; no vector of another model moved.",
+ "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 814 vectors / 46,398 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 176 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself. 2026-09-10 (KV layout): +16 vectors on the kvshard axis (three anchors' sweeps and three replicate+offload combinations); no band or entry moved. 2026-11-02 (issue #117, the cache as a hit rate): 955 vectors / 67,805 comparisons, 298 allowlisted, 84 compared as lower bounds on censored explorer fills. Every at-load figure is priced at the miss share at the state's users and the four latency ceilings are capacity-aware at W, so 23 entries gated on _miss_share_swing (just past the knee) and _warm_p5 (a handful of sessions past it) are new, and five entries that match nothing any more are gone (the ceilings' widened bands and the duty moving with the share cover them). 2026-11-04 (Mistral-Large-4): 979 vectors / 69,509 comparisons; the 28th SPREAD_PROBE entry (ML4 8xB300 TP8 FP8) narrowed the max_users_decode band from 3.5% to 3.4% and ttft_hit_ps's from 3.4% to 3.3%, so the integer-bisection gate widens from a ceiling of 25 to 29 and one past-knee ttft_hit_ps entry is new; no vector of another model moved. 2026-11-04 (issue #122, vLLM's real MLA rows): 1,001 vectors / 71,071 comparisons. GLM-5.3's H200 FP8 vectors (27) and every Mistral-Large-4 vector (16) moved, and GLM-5.3's FP16 arm added 22; no other vector changed. The new FP16 states land in two known regimes at once (past the knee at duty 0.82), in GLM-5.3's dense-priced heavy tail, and at the steady cap's edge: 14 entries are new and one is widened, each gated on its cause.",
  "entries": [
   {
    "quantity": "steady_n",
@@ -17,9 +17,9 @@
      "gte": 1.0
     }
    },
-   "observed_rel": 0.111,
-   "max_rel": 0.15,
-   "hypothesis": "SATURATED ON BOTH SIDES, and both say so: past the cap each side reports n = floor(its own GPU-resident warm p95), and the two p95 draws come from different samplers (numpy vs mulberry32) at different iteration counts. The residual is that draw difference, worst on small populations (9 against 10 is 11%). 132 states at ratio >= 1, the flag identical on every one - which is why steady_saturated needs no entry."
+   "observed_rel": 0.167,
+   "max_rel": 0.2,
+   "hypothesis": "SATURATED ON BOTH SIDES, and both say so: past the cap each side reports n = floor(its own GPU-resident warm p95), and the two p95 draws come from different samplers (numpy vs mulberry32) at different iteration counts. The residual is that draw difference, worst on small populations (9 against 10 is 11%). 132 states at ratio >= 1, the flag identical on every one - which is why steady_saturated needs no entry. A population of 5-6 sequences puts one apart at 17% (GLM-5.3 FP16 KV, 3xB300, 2026-11-04)."
   },
   {
    "quantity": "steady_per_user_tok_s",
@@ -697,6 +697,188 @@
    "observed_rel": 0.267,
    "max_rel": 0.4,
    "hypothesis": "past the knee the hit rate is W/U, so it carries max_users_cache's own difference one for one, and max_users_cache owns the same tail under the same gate: one session either way is 33% of three. 1 state, W = 2"
+  },
+  {
+   "quantity": "ttft_*",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    },
+    "_miss_share_swing": {
+     "gt": 0,
+     "lt": 0.5
+    }
+   },
+   "observed_rel": 0.299,
+   "max_rel": 0.4,
+   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
+  },
+  {
+   "quantity": "queue_wait_seconds",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    },
+    "_miss_share_swing": {
+     "gt": 0,
+     "lt": 0.5
+    }
+   },
+   "observed_rel": 0.307,
+   "max_rel": 0.4,
+   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    },
+    "_miss_share_swing": {
+     "gt": 0,
+     "lt": 0.5
+    }
+   },
+   "observed_rel": 0.278,
+   "max_rel": 0.4,
+   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
+  },
+  {
+   "quantity": "spike_tolerance*",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    },
+    "_miss_share_swing": {
+     "gt": 0,
+     "lt": 0.5
+    }
+   },
+   "observed_rel": 0.221,
+   "max_rel": 0.3,
+   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
+  },
+  {
+   "quantity": "burst_drain_seconds_b32",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    },
+    "_miss_share_swing": {
+     "gt": 0,
+     "lt": 0.5
+    }
+   },
+   "observed_rel": 0.221,
+   "max_rel": 0.3,
+   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
+  },
+  {
+   "quantity": "slowed_share",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    },
+    "_miss_share_swing": {
+     "gt": 0,
+     "lt": 0.5
+    }
+   },
+   "observed_rel": 0.127,
+   "max_rel": 0.2,
+   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
+  },
+  {
+   "quantity": "power_*",
+   "where": {
+    "_duty": {
+     "gte": 0.7,
+     "lt": 0.85
+    },
+    "_miss_share_swing": {
+     "gt": 0,
+     "lt": 0.5
+    }
+   },
+   "observed_rel": 0.225,
+   "max_rel": 0.3,
+   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
+  },
+  {
+   "quantity": "ttft_hit_ps",
+   "where": {
+    "_ctx_cv2": {
+     "gt": 0.9
+    }
+   },
+   "observed_rel": 0.045,
+   "max_rel": 0.1,
+   "hypothesis": "a hit under processor sharing is its own prefill / (1 - duty), and the duty is lam E[S] with E[S] drawn from the heavy-tailed context (cv2 1.0): the same heavy-tail error as the FCFS twins above, times 1/(1 - rho) = 3.3 at duty 0.69. GLM-5.3 NVFP4 FP16-KV, 4xB300, 2026-11-04."
+  },
+  {
+   "quantity": "sla_miss_rate_sla10",
+   "where": {
+    "_duty": {
+     "gt": 0.85
+    }
+   },
+   "observed_rel": 0.105,
+   "max_rel": 0.2,
+   "hypothesis": "the miss rate that meets the 10 s budget solves a linear equation in the P-K wait, which carries 1/(1 - rho) = 43 at duty 0.98, so the samplers' 0.1% duty difference reaches it at 10%. GLM-5.3 NVFP4 FP16-KV, DP3xTP2 on 6xB300, 2026-11-04."
+  },
+  {
+   "quantity": "moments_miss_sq",
+   "where": {
+    "model": "GLM52"
+   },
+   "observed_rel": 0.128,
+   "max_rel": 0.2,
+   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
+  },
+  {
+   "quantity": "queue_wait_seconds",
+   "where": {
+    "model": "GLM52"
+   },
+   "observed_rel": 0.126,
+   "max_rel": 0.2,
+   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "model": "GLM52"
+   },
+   "observed_rel": 0.124,
+   "max_rel": 0.2,
+   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
+  },
+  {
+   "quantity": "ttft_hit_fcfs",
+   "where": {
+    "model": "GLM52"
+   },
+   "observed_rel": 0.087,
+   "max_rel": 0.2,
+   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
+  },
+  {
+   "quantity": "steady_saturated",
+   "where": {
+    "_steady_cap_ratio": {
+     "gte": 0.98,
+     "lt": 1.02
+    }
+   },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "the flag says whether the steady batch reached the GPU-resident cap; at a ratio of 1.002 the two samplers' resident p95 land on either side of it. Mistral-Large-4 NVFP4 on 7xB300, whose cache shrank 11% with the 656-B row (2026-11-04)."
   }
  ]
 }

@@ -223,6 +223,10 @@ class RunConfig:
         if d.weight_dtype != "fp8":
             m = M.with_weight_dtype(m, d.weight_dtype)
         m = M.with_kv_dtype(m, d.kv_dtype)
+        # the FP8 cache row this GPU serves (GLM-5.3: fp8_ds_mla on Hopper);
+        # an unknown GPU is to_topology's error to raise
+        if d.gpu in M.GPUS:
+            m = M.with_gpu(m, d.gpu)
         # The explorer's three remaining model knobs, in modelFor()'s own
         # order and under its own gates (interactive/src/render.js). They are
         # `replace` on the Model rather than functions in workingset.model

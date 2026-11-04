@@ -36,8 +36,9 @@ def servable(mk, gk):
     Blackwell-only, so its H200 curves price the BF16-KV arm (the model
     itself raises otherwise). research/model_glm53flash.md #2."""
     m = MODELS[mk]
-    return (M.with_kv_dtype(m, "fp16")
-            if m.kv_fp8_blackwell_only and gk == "H200" else m)
+    m = (M.with_kv_dtype(m, "fp16")
+         if m.kv_fp8_blackwell_only and gk == "H200" else m)
+    return M.with_gpu(m, gk)     # GLM-5.3's Hopper FP8 row (model_glm52.md #2)
 
 
 plt.rcParams.update({"figure.dpi": 120, "font.size": 9, "axes.grid": True,

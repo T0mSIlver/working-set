@@ -43,33 +43,35 @@ DSpark drafter 2.10B.
 
 ## 2. KV bytes per token
 
+vLLM stores each latent as an `fp8_ds_mla` row of 656 B: 512 fp8 values,
+16 B of fp32 scales and 64 rope values kept in BF16. That holds on both
+parts. FlashInfer's sparse MLA, which Blackwell uses for GLM-5.3, requires
+`qk_nope_head_dim` of 128–192, and Large 4's is 64, so FlashMLA serves it
+on B300 too. The recipe says so ("FlashMLA sparse attention and an FP8
+latent KV cache (`fp8_ds_mla`) by default").
+
 ```
 kv_bpt (fp8):
-  MLA latent  63 layers x 576 B   = 36,288
+  MLA latent  63 layers x 656 B   = 41,328
   indexer     44 layers x 132 B   =  5,808
   -------------------------------------------
-  TOTAL                           = 42,096 B = 41.1 KiB/token
+  TOTAL                           = 47,136 B = 46.0 KiB/token
 ```
 
-That is 13% below GLM-5.3's 48,408 B with the same per-layer layout: KV
-sharing removes 9 latent rows and index sharing 28 indexer rows. A 262k
-session holds 10.3 GiB, the full 1M 41.1 GiB.
+KV sharing removes 9 latent rows and index sharing 28 indexer rows: 3% below
+GLM-5.3 on B300 (48,408 B, whose Blackwell row is 576 B) and 14% below it on
+H200 (54,728 B). A 262k session holds 11.5 GiB, the full 1M 46.0 GiB.
 
-**The 576-B convention under-prices vLLM by about 10%.** vLLM's FlashMLA
-sparse path stores `fp8_ds_mla` rows of 656 B (512 fp8 + 16 B of fp32 scales +
-64 bf16 rope values), which puts the cache at 63 × 656 + 44 × 132 = **47,136
-B/token**. The recipe's own measurements say that is what runs. On 8 × GB300
-at `--gpu-memory-utilization 0.85`, without speculative decoding, it reports
+The recipe's own measurements confirm the row. On 8 × GB300 at
+`--gpu-memory-utilization 0.85`, without speculative decoding, it reports
 2.38M (FP8) and 3.60M (NVFP4) KV tokens under TP8, and 18.88M / 28.76M under
 DCP8. Solving each pair for one bytes-per-token figure and one per-GPU
-overhead gives **46.2 kB** (TP8) and **45.6 kB** (DCP8). The 656-B layout
+overhead gives **46.2 kB** (TP8) and **45.6 kB** (DCP8). The 656-B row
 leaves 0.9 and −0.3 GB/GPU of overhead (TP8) and 1.9 and 0.0 GB/GPU (DCP8).
-The 576-B layout needs 12.9 vs 17.9 GB/GPU and 13.8 vs 18.1 GB/GPU, so the
-two checkpoints would need overheads 5 GB apart.
-
-The row keeps 576 B anyway, because GLM-5.3 is priced at 576 B
-(`model_glm52.md` § 2) and the two must compare like for like. Correcting
-both together is issue #122.
+A 576-B row would need 12.9 vs 17.9 GB/GPU and 13.8 vs 18.1 GB/GPU, so the
+two checkpoints would need overheads 5 GB apart. (The row was priced at
+576 B, GLM-5.3's convention, until issue #122 moved both models to vLLM's
+real rows on 2026-11-04.)
 
 **KV dtype.** FP8 only (`kv_fp16_ok=False`): every NVIDIA configuration
 Mistral and vLLM document runs `fp8_ds_mla` (the default, so no flag needed),
@@ -84,15 +86,15 @@ the cache is not Blackwell-only.
 ```
 kv_decode_bpt   = 44 x 132         =      5,808 B per CONTEXT token per step
                   (every indexer scans its own keys; the 28 shared layers do not)
-kv_decode_const = 72 x 2048 x 576  = 84,934,656 B per ACTIVE SEQUENCE per step
+kv_decode_const = 72 x 2048 x 656  = 96,731,136 B per ACTIVE SEQUENCE per step
                   (every layer gathers its own top-2048; the 9 KV-sharing layers
                    gather from layer 35's latents, a separate read each)
 kv_decode_topk  = 2048
 ```
 
-At the 31k median context the indexer scan (~180 MB/seq) is twice the sparse
-gather (85 MB/seq); both are far below a dense read (31k × 41.1 KiB ≈ 1.3
-GB/seq).
+At the 31k median context the indexer scan (~180 MB/seq) is about twice the
+sparse gather (97 MB/seq); both are far below a dense read (31k × 46.0 KiB ≈
+1.5 GB/seq).
 
 ## 4. Weight bytes
 
@@ -164,13 +166,14 @@ caches latents over a sliding window of 2,048 context tokens (vLLM
 charge, not a per-token one:
 
 ```
-deltanet_state   = 3 x 2048 x 576 = 3,538,944 B (3.4 MiB) per session
+deltanet_state   = 3 x 2048 x 656 = 4,030,464 B (3.8 MiB) per session
 state_step_bytes = 0   (the drafter's reads are folded into mtp)
 state_heads      = 1   (a latent window: replicates with the cache under plain TP)
 ```
 
-This is DSv4-Flash's convention for its three DSpark stages (storage counted,
-decode left to the speedup). `mtp` stays at the study's transplanted 1.7, as
+The rows are taken as `fp8_ds_mla`, the cache dtype the draft layers share
+with the target. This is DSv4-Flash's convention for its three DSpark stages
+(storage counted, decode left to the speedup). `mtp` stays at the study's transplanted 1.7, as
 on every MoE row. The recipe reports DSpark acceptance lengths of 2.98 / 2.85
 / 2.79 at 8k / 32k / 60k input and "1.9–2.2× output throughput vs no spec" on
 GB300; the technical report gives +90% decode interactivity at 8 concurrent
@@ -260,8 +263,6 @@ two sharing schemes.
 
 ## 11. Open
 
-- The 656-B `fp8_ds_mla` row (§ 2, issue #122), shared with GLM-5.3: +12% on Large 4's
-  `kv_bpt` (+13% on GLM-5.3's) and +14% on both rows' `kv_decode_const`.
 - DSpark acceptance is measured (~2.9) and `mtp` is not: the study keeps 1.7
   on every row until the k-sweep of issue #74 settles how the speedup is
   priced.

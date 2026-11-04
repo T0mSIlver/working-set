@@ -29,8 +29,9 @@ def servable(mk, gpu="H200"):
     mis-printing. research/model_glm53flash.md #2."""
     m = MODELS[mk]
     if m.kv_fp8_blackwell_only and gpu == "H200":
-        return M.with_kv_dtype(m, "fp16")
-    return m
+        m = M.with_kv_dtype(m, "fp16")
+    # GLM-5.3's FP8 row on Hopper is fp8_ds_mla (research/model_glm52.md #2)
+    return M.with_gpu(m, gpu)
 
 
 def mean_context(w: Workload, n=400_000, seed=1):
@@ -351,9 +352,10 @@ def main():
     print("  cache; the dense-read row shows what the same bytes would cost if")
     print("  decode streamed the whole cache (the study's default pricing).")
     t_h8 = M.topology("tp", 8)
-    glm_dense = dataclasses.replace(MODELS["GLM52"], kv_decode_bpt=None, kv_decode_const=0.0)
+    glm_h = servable("GLM52", "H200")      # H200's fp8_ds_mla row
+    glm_dense = dataclasses.replace(glm_h, kv_decode_bpt=None, kv_decode_const=0.0)
     for n in (16, 64, 120):
-        _, a, _, _ = M.decode_curves(MODELS["GLM52"], t_h8, w0, [n], n_iter=1500)
+        _, a, _, _ = M.decode_curves(glm_h, t_h8, w0, [n], n_iter=1500)
         _, b, _, _ = M.decode_curves(glm_dense, t_h8, w0, [n], n_iter=1500)
         print(f"  8xH200 mns={n:3d}  DSA={a[0]:5.0f} tok/s  dense-read={b[0]:5.0f} tok/s")
 

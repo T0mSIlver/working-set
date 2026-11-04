@@ -1,6 +1,6 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
          dcpSize, effective_bw, kvReplication, kv_pool_tokens, makeGrid, makeTopo, minTpFor,
-         servableKv, state_traffic, tpEff, withKvDtype } from './config.js';
+         servableKv, state_traffic, tpEff, withGpu, withKvDtype } from './config.js';
 import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, capacityLimit, coldRequestSeconds,
          contextStats, liveThink, liveTurn, maxUsersColdWait, maxUsersLatency, maxUsersSaturation,
          maxUsersSlowed, mfuEff, missContextSeconds, missShareAt, prefillContextSeconds, prefillSeconds,
@@ -103,7 +103,7 @@ export function unitChecks(){
   for (const mk of ["MM35","GLM52","DSV4F","DSV4FV","DSV41F","Q38FN","GLM53F","ML4"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(
-          mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk],
+          withGpu(mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk], "H200"),
           makeTopo("dp",n))===0,
         mk+": pure DP of single H200s must stay a 0 pool");
   console.assert(kv_pool_tokens(CONFIG.MODELS["MM35"], makeGrid(4,2)) > 0,
@@ -182,7 +182,24 @@ export function unitChecks(){
   // new models: published-config KV identities (mirror _selfcheck)
   const mm = CONFIG.MODELS["MM35"], glm = CONFIG.MODELS["GLM52"];
   console.assert(mm.kv_bpt === 88*8*128*2*1, "MM35 kv_bpt = 176 KiB/token");
-  console.assert(glm.kv_bpt === 79*576 + 22*132, "GLM52 kv_bpt = MLA latent + indexer");
+  console.assert(glm.kv_bpt === 79*576 + 22*132, "GLM52 kv_bpt (B300) = fp8_e4m3 latent + indexer");
+  // H200: FlashMLA's fp8_ds_mla row, 512 fp8 + 4 fp32 scales + 64 bf16 rope
+  // (research/model_glm52.md #2; mirror _selfcheck)
+  const glmH = withGpu(glm, "H200");
+  console.assert(glm.kv_hopper_fp8[0] === 79*(512+16+128) + 22*132 &&
+                 glm.kv_hopper_fp8[1] === 78*2048*656 &&
+                 glmH.kv_bpt === glm.kv_hopper_fp8[0] && glmH.kv_decode_const === glm.kv_hopper_fp8[1] &&
+                 withGpu(glm, "B300").kv_bpt === glm.kv_bpt &&
+                 withGpu(withKvDtype(glm, "fp16"), "H200").kv_bpt === 2*glm.kv_bpt,
+    "GLM52 FP8 row: 576 B per latent on B300, fp8_ds_mla's 656 B on H200; FP16 doubles the 576-B row");
+  for (const [what, bad] of [["unresolved on H200", () => kv_pool_tokens(glm, makeTopo("tp",8,"H200"))],
+                             ["H200 row on B300", () => kv_pool_tokens(glmH, makeGrid(1,4,"B300"))],
+                             ["fp16 after the swap", () => withKvDtype(glmH, "fp16")]]){
+    let threw = false; try { bad(); } catch(e){ threw = true; }
+    console.assert(threw, "GLM52 must refuse: " + what);
+  }
+  console.assert(Object.keys(CONFIG.MODELS).every(k => k === "GLM52" || !CONFIG.MODELS[k].kv_hopper_fp8),
+    "only GLM-5.3's FP8 row depends on the GPU");
   console.assert(mm.mtp === 1.0, "MM35 has no MTP module");
   console.assert(Math.abs(glm.w_route_total/glm.w_route_pertok - 32) < 1e-9, "GLM kink n=32");
   // B300 + NVFP4: pool ordering, gate, and the ~465 GB GLM checkpoint check
@@ -204,8 +221,8 @@ export function unitChecks(){
   try { kv_pool_tokens({...CONFIG.MODELS["27B"], weight_dtype:"nvfp4"}, makeTopo("tp",1,"H200")); }
   catch(e){ gateThrew = true; }
   console.assert(gateThrew, "NVFP4 on H200 must throw (B300-only gate)");
-  console.assert(kv_pool_tokens(glm, makeTopo("tp",1,"H200")) === 0 &&
-                 kv_pool_tokens(glm, makeTopo("tp",8,"H200")) > 0,
+  console.assert(kv_pool_tokens(glmH, makeTopo("tp",1,"H200")) === 0 &&
+                 kv_pool_tokens(glmH, makeTopo("tp",8,"H200")) > 0,
     "GLM-5.3 FP8 must not fit 1 GPU but fit 8xH200");
   console.assert(kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",4,"H200")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",8,"H200")) > 0 &&
@@ -352,8 +369,9 @@ export function unitChecks(){
                  q38fp16.kv_decode_const === 2*q38.kv_decode_const &&
                  q38fp16.kv_decode_bpt === q38.kv_decode_bpt,
     "Q38FN FP16-KV: kv_bpt and kv_decode_const double, indexer scan unchanged");
-  console.assert(withKvDtype(glm, "fp16") === glm && withKvDtype(q38, "fp8") === q38,
-    "withKvDtype: identity on refused-FP16 models and on fp8");
+  console.assert(withKvDtype(ds4, "fp16") === ds4 && withKvDtype(q38, "fp8") === q38 &&
+                 withKvDtype(glm, "fp16").kv_bpt === 2*glm.kv_bpt,
+    "withKvDtype: identity on refused-FP16 models and on fp8; GLM-5.3 doubles (BF16 servable)");
   // GLM-5.3-Flash identities (research/model_glm53flash.md; mirror _selfcheck)
   const g53 = CONFIG.MODELS["GLM53F"];
   console.assert(g53.kv_bpt === 12*512 + 12*132/4,
@@ -390,10 +408,10 @@ export function unitChecks(){
   // MLA + DSA on 72 layers, 63 of which store latents (9 share layer 35's)
   // and 44 of which run an indexer (28 reuse the previous one's top-k)
   const ml4 = CONFIG.MODELS["ML4"], ml4e = 3*6144**2 + 3*48**2*4, ml4e4 = 3*6144**2/2 + 3*6144**2/16 + 6*4;
-  console.assert(ml4.kv_bpt === 63*576 + 44*132 && ml4.kv_decode_bpt === 44*132 &&
-                 ml4.kv_decode_const === 72*2048*576 && ml4.kv_decode_topk === 2048,
+  console.assert(ml4.kv_bpt === 63*656 + 44*132 && ml4.kv_decode_bpt === 44*132 &&
+                 ml4.kv_decode_const === 72*2048*656 && ml4.kv_decode_topk === 2048,
     "ML4 caches: 63 latents + 44 indexers stored; 44 scans + 72 top-k gathers read");
-  console.assert(ml4.deltanet_state === 3*2048*576 && state_traffic(ml4) === 0 && ml4.state_fp32_ok === false,
+  console.assert(ml4.deltanet_state === 3*2048*656 && state_traffic(ml4) === 0 && ml4.state_fp32_ok === false,
     "ML4 per-session state = the DSpark drafter's three 2,048-token latent windows, storage only");
   console.assert(ml4.w_route_pertok === 4*ml4e*71 && ml4.w_route_total === 128*ml4e*71 &&
                  ml4.w_route_total/ml4.w_route_pertok === 32,
@@ -406,7 +424,7 @@ export function unitChecks(){
     "ML4: fp8_ds_mla latent cache only, servable on Hopper and Blackwell");
   // zero-pool honesty: weights that don't fit report ZERO warm even with a
   // large CPU-offload buffer (the guard fires before the workload is touched)
-  const zr = warmCapacity(glm, makeTopo("tp",1,"H200"), null, 512, 3, 1000);
+  const zr = warmCapacity(glmH, makeTopo("tp",1,"H200"), null, 512, 3, 1000);
   console.assert(zr.all[2] === 0 && zr.gpu[2] === 0,
     "no-fit config must stay at zero warm regardless of offload");
   // ---- prefill ceiling, deterministic part (mirrors scenario_model.py's

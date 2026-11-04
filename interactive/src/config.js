@@ -193,7 +193,7 @@ export const CONFIG = {
       // the NVFP4 bytes (now measured on 5.3's own checkpoint). License changed: MIT -> "GLM-5.3 License" (MIT plus
       // a security-review clause for >$10B-revenue Model-as-a-Service).
       name: "GLM-5.3 (MoE 744B-A40B, MLA+DSA)",
-      kv_bpt: 48408,               // 79 x 576 MLA latent + 22 x 132 indexer keys (fp8)
+      kv_bpt: 48408,               // B300: 79 x 576 fp8_e4m3 latent + 22 x 132 indexer keys
       deltanet_state: 0,           // MLA is cached attention, no recurrent state
       w_resident: 755.5e9,         // official FP8 ckpt: 753.3e9 params + BF16 excess
       w_decode_shared: 18.92e9,    // MLA + indexers + dense MLP + shared exp + lm_head
@@ -207,10 +207,15 @@ export const CONFIG = {
       // FP8 constant + the measured delta on the same tensors (+15.89e9).
       nvfp4_w: [464115789896, 34811309576, 12740212800, 407686809600],
       kv_decode_bpt: 2772,         // DSA: 21 indexer layers x 132 B per context token
-      kv_decode_const: 92.0e6,     // DSA: 78 layers x top-2048 x 576 B per active seq
+      kv_decode_const: 92.0e6,     // DSA, B300: 78 layers x top-2048 x 576 B per active seq
       kv_decode_topk: 2048,        // ...scaled by min(len, topk)/topk per sequence
-      kv_fp16_ok: false,           // vLLM DSA path asserts a quantized KV cache
-      kv_heads: 1,                 // MLA: one 576-B latent per token, replicated under plain TP
+      // H200: FlashMLA's fp8_ds_mla rows, 656 B per latent (512 fp8 + 16 B of
+      // fp32 scales + 64 bf16 rope values); vLLM's GLM-5.3 recipe passes
+      // --kv-cache-dtype fp8 on Hopper and fp8_e4m3 on Blackwell. withGpu
+      // swaps these in (research/model_glm52.md #2)
+      kv_hopper_fp8: [54728, 104792064],   // 79 x 656 + 22 x 132; 78 x 2048 x 656
+      kv_fp16_ok: true,            // BF16: vLLM's default on Hopper, accepted on Blackwell
+      kv_heads: 1,                 // MLA: one latent per token, replicated under plain TP
       params_prefill: 37.4e9,      // MoE: ledger 39.3B active (excl embed) less lm_head 1.9e9
       attn_layers: 78, attn_d: 64*256,
       max_ctx: 1048576,            // native 1M context
@@ -360,8 +365,8 @@ export const CONFIG = {
       // NoPE layers attend to layer 35's latents and store none) and index
       // sharing (28 layers reuse the previous indexer's top-k)
       name: "Mistral-Large-4 (MoE 1.05T-A49B, MLA+DSA, KV sharing)",
-      kv_bpt: 42096,               // 63 x 576 (MLA latent) + 44 x 132 (indexer keys)
-      deltanet_state: 3538944,     // DSpark drafter: 3 MLA layers x 2,048-token window x 576 B
+      kv_bpt: 47136,               // 63 x 656 (fp8_ds_mla latent) + 44 x 132 (indexer keys)
+      deltanet_state: 4030464,     // DSpark drafter: 3 MLA layers x 2,048-token window x 656 B
                                    // (storage incl. the drafter, as DSV4F's DSpark windows)
       state_step_bytes: 0,         // the drafter's window reads are folded into mtp
       state_fp32_ok: false,        // an fp8 latent window, not a bf16 recurrent state
@@ -377,7 +382,7 @@ export const CONFIG = {
       // and dense MLP stay FP8, byte-identical. 610.03e9 B resident.
       nvfp4_w: [610030457408, 20990666304, 18091088544, 578914833408],
       kv_decode_bpt: 5808,         // 44 indexer layers x 132 B per context token
-      kv_decode_const: 84934656,   // 72 layers x top-2048 x 576 B per active seq
+      kv_decode_const: 96731136,   // 72 layers x top-2048 x 656 B per active seq
       kv_decode_topk: 2048,        // index_topk, read in token space
       kv_fp16_ok: false,           // every NVIDIA config Mistral and vLLM document runs fp8_ds_mla
                                    // ("needed" per the NVFP4 card); bfloat16 is a ROCm-only opt-out
@@ -499,9 +504,25 @@ export function withKvDtype(m, kv){
   // again or "back" — a round-trip would double-double and un-stamp kv_dtype
   if (m.kv_dtype === "fp16")
     throw new Error("withKvDtype expects a base (fp8) model");
+  if (m.kv_gpu)
+    throw new Error(`${m.name}: withKvDtype must run before withGpu`);
   if (kv !== "fp16" || m.kv_fp16_ok === false) return m;
   return { ...m, kv_bpt: m.kv_bpt*2, kv_decode_const: (m.kv_decode_const||0)*2,
            kv_dtype: "fp16", name: m.name + " [FP16 KV]" };
+}
+// The FP8 cache row this GPU serves (mirrors with_gpu). Identity for every
+// model with one row on both parts; GLM-5.3 (kv_hopper_fp8) takes FlashMLA's
+// fp8_ds_mla row on a Hopper part when it prices the FP8 arm. Every arm of
+// such a model is stamped with the part, so checkDtypeSupported can refuse a
+// model resolved for the other one. Apply it after withKvDtype.
+export function withGpu(m, gpuKey){
+  if (!m.kv_hopper_fp8) return m;
+  if (m.kv_gpu) throw new Error(`${m.name}: already resolved for ${m.kv_gpu}`);
+  if (m.kv_dtype !== "fp16" && !CONFIG.GPUS[gpuKey].supports_nvfp4){
+    const [kv_bpt, kv_decode_const] = m.kv_hopper_fp8;
+    return { ...m, kv_bpt, kv_decode_const, kv_gpu: gpuKey };
+  }
+  return { ...m, kv_gpu: gpuKey };
 }
 // The KV dtype actually SERVABLE for this model on this GPU (mirrors
 // check_dtype_supported): GLM-5.3-Flash's fp8 KV cache is Blackwell-only —
@@ -565,6 +586,14 @@ function checkDtypeSupported(m, topo){
   if (m.kv_fp8_blackwell_only === true && m.kv_dtype !== "fp16"
       && !gpu.supports_nvfp4)
     throw new Error(`${m.name}: FP8 KV is Blackwell-only — price the BF16-KV arm on ${gpu.name}`);
+  // GPU-coupled FP8 row (GLM-5.3): the base constants are the Blackwell row,
+  // so a Hopper topology needs withGpu's swap and a swapped model may price
+  // Hopper only (mirrors Python's check_dtype_supported)
+  if (m.kv_hopper_fp8 && m.kv_dtype !== "fp16"){
+    const hopperRow = !!m.kv_gpu && !CONFIG.GPUS[m.kv_gpu].supports_nvfp4;
+    if (hopperRow !== !gpu.supports_nvfp4)
+      throw new Error(`${m.name}: its FP8 cache row depends on the GPU — price withGpu(m, "${gpu.name}") on this topology`);
+  }
 }
 
 // KV pool of ONE replica group. A group owns topo.tp GPUs: the weights are
