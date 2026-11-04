@@ -136,7 +136,7 @@ function frontierColumns(){
   const priced = r => (ext(r) || viable(r)) && isFinite(r.eurSeat);
   cols.push({ key:'seat', head:'€/seat', num:true, asc:true,
     sort:r => priced(r) ? r.eurSeat : NaN,
-    cell:r => `<td class="num"${ext(r) ? '' : dim(fits(r))}>${priced(r) ? (cen(r)?'≤ ':'')+fmt(r.eurSeat, r.eurSeat < 10 ? 1 : 0) : '—'}</td>` });
+    cell:r => `<td class="num"${ext(r) ? '' : dim(fits(r))}>${priced(r) ? (cen(r)?'≤ ':'')+fmt(r.eurSeat, ext(r) && r.eurSeat < 10 ? 1 : 0) : '—'}</td>` });
   return cols;
 }
 export function renderFrontierTable(rows, curKey){
