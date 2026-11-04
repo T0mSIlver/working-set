@@ -95,6 +95,12 @@ export const state = {
   // CONFIG.GPUS[gpu].eur_gpu_h and re-seeded on every GPU switch, the way mtp
   // follows the model; a pricing constant, so NOT in samplingSig either.
   gpuh: CONFIG.GPUS["H200"].eur_gpu_h,
+  // how the GPUs are paid for (model.energy_cost): 'rent' bills the GPU-hour
+  // price for the hours they are up, power included; 'own' writes the
+  // purchase off over 36 months and adds electricity. `work` is the hours a
+  // month the team works, the hours the GPUs carry load
+  // (model.WORK_HOURS_DEFAULT: 10 h a day, 21 days). Pricing, not sampling.
+  pay: "rent", work: 210,
 };
 
 // Snapshot of the published reference configuration, taken BEFORE any URL

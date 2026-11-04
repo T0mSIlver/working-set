@@ -13,7 +13,8 @@ export const CATALOG = {
    "p_decode_w": 385.0,
    "p_prefill_w": 630.0,
    "host_w": 575.0,
-   "eur_gpu_h": 3.8
+   "eur_gpu_h": 3.8,
+   "eur_capex_gpu": 36418.0
   },
   "B300": {
    "name": "B300",
@@ -27,7 +28,8 @@ export const CATALOG = {
    "p_decode_w": 770.0,
    "p_prefill_w": 1260.0,
    "host_w": 500.0,
-   "eur_gpu_h": 6.8
+   "eur_gpu_h": 6.8,
+   "eur_capex_gpu": 73538.0
   }
  },
  "models": {
@@ -584,7 +586,8 @@ export const CATALOG = {
    "p_decode_w": 0.0,
    "p_prefill_w": 0.0,
    "host_w": 0.0,
-   "eur_gpu_h": 0.0
+   "eur_gpu_h": 0.0,
+   "eur_capex_gpu": 0.0
   },
   "model": {
    "spec_tokens": 0,

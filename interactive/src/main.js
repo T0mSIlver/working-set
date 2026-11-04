@@ -266,6 +266,7 @@ const sliderMap=[
   ['s-burst','burst',v=>parseInt(v,10)],
   ['s-ekwh','ekwh',v=>parseFloat(v)],
   ['s-gpuh','gpuh',v=>parseFloat(v)],
+  ['s-work','work',v=>parseInt(v,10)],
 ];
 sliderMap.forEach(([id,key,cast])=>{
   const el=document.getElementById(id);
@@ -452,6 +453,12 @@ function syncLabels(){
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
   document.getElementById('v-ekwh').textContent=state.ekwh.toFixed(2);
   document.getElementById('v-gpuh').textContent=state.gpuh.toFixed(2);
+  document.getElementById('v-work').textContent=fmt(state.work,0);
+  // a rented GPU's power is in its rent; an owned one has no hourly price
+  const own = state.pay === 'own';
+  document.getElementById('s-ekwh').disabled = !own;
+  document.querySelectorAll('#seg-pue button').forEach(b => { b.disabled = !own; });
+  document.getElementById('s-gpuh').disabled = own;
 }
 
 // the statistic the cold request wait limit is checked at, as its label prints it
@@ -472,6 +479,7 @@ const URL_ENUMS = {
   state_dt: () => ["bf16","fp32"], wover: () => ["pub","p15"],
   kvshard: () => ["dcp","replicate"],
   pue: () => ["1.2","1.5","2.0"],
+  pay: () => ["rent","own"],
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
   bench: () => Object.keys(CONFIG.BENCHES),
   ttft_pct: () => TTFT_PCTS,
@@ -560,7 +568,7 @@ function applyURLState(){
 // reflect enum state into the two segmented controls enforceConstraints does
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
-  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'],
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-pay','pay'], ['seg-bench','bench'],
                                   ['seg-ttft_pct','ttft_pct']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));

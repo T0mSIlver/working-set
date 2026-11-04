@@ -32,6 +32,9 @@ p_decode_w = 385.0
 p_prefill_w = 630.0
 host_w = 575.0
 eur_gpu_h = 3.80
+# purchase: Supermicro's store, 8-GPU HGX H200 server, "starting price"
+# $328,260.64 (read 2026-11-04), / 8 GPUs / 1.1267 USD per EUR (ECB that day)
+eur_capex_gpu = 36418.0
 
 # Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores.
 # vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
@@ -66,6 +69,10 @@ p_decode_w = 770.0
 p_prefill_w = 1260.0
 host_w = 500.0
 eur_gpu_h = 6.80
+# purchase: Supermicro's 8-GPU HGX B300 server at $662,846 (store listing as
+# reported 2026-09-21; the store showed it out of stock on 2026-11-04;
+# resellers list $551k to $795k), / 8 GPUs / 1.1267 USD per EUR
+eur_capex_gpu = 73538.0
 
 # ============================================================================
 # MODELS

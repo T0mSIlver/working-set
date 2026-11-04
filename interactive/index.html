@@ -919,19 +919,30 @@ details.more .more-body{padding:0 0 16px}
 <details class="hood" id="recipe"><summary><span class="lbl">The bill</span></summary>
 <div class="hood-body">
   <div class="panel card" id="costCard" style="margin-bottom:14px">
-    <p class="ct">Hardware and electricity per month</p>
+    <p class="ct">The bill per month</p>
     <div class="ctl-grid" style="margin-bottom:4px">
       <div class="ctl-group">
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Price of one kWh. Default €0.19, the EU-27 non-household average (Eurostat, H1 2025); countries range from €0.077 (FI) to €0.258 (CY). Moves the electricity line only.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
+          <label class="flabel"><span class="tip" data-tip="Rent: the GPU-hour price for the hours the GPUs are up, power, cooling and the host included, so there is no electricity line. A monthly reservation is rent at 720 hours. Own: the server's purchase price written off over 36 months (Supermicro store, Nov 2026: 8-GPU H200 server $328k, B300 about $663k), plus electricity at the meter, around the clock. Staff, networking and storage are in neither.">GPUs</span></label>
+          <div class="seg" id="seg-pay" data-key="pay">
+            <button data-v="rent" aria-pressed="true">rent by the hour</button>
+            <button data-v="own" aria-pressed="false">own</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Hours a month the team works, and so the hours the GPUs carry load. Rented GPUs are up and billed only then; owned GPUs idle the rest of the month. Default 210: 10 h a day, 21 working days. 720 is a monthly reservation or a team that never stops.">Hours the GPUs work</span> <span class="val"><span id="v-work">210</span> h / month</span></label>
+          <input type="range" id="s-work" min="40" max="720" step="10" value="210">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Price of one kWh. Default €0.19, the EU-27 non-household average (Eurostat, H1 2025); countries range from €0.077 (FI) to €0.258 (CY). Owned GPUs only: a rent includes power.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
           <input type="range" id="s-ekwh" min="0.05" max="0.60" step="0.01" value="0.19">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="One GPU-hour of the selected part, on demand. Default is the cross-provider median (getdeploying.com, Sept 2026: H200 $4.40, B300 $7.89, at 1.16 USD per EUR). Hyperscalers charge 2 to 3× that; owned hardware amortises to under €1. A rental price includes power, so for a rented GPU the electricity line double-counts (about 7% at the defaults). For owned hardware enter your amortised cost and both lines apply. Staff, networking and storage are not included.">GPU price</span> <span class="val">€<span id="v-gpuh">3.80</span> / GPU·h</span></label>
+          <label class="flabel"><span class="tip" data-tip="One GPU-hour of the selected part, on demand, power included. Default is the cross-provider median (getdeploying.com, Sept 2026: H200 $4.40, B300 $7.89, at 1.16 USD per EUR). Hyperscalers charge 2 to 3× that; reserved terms run lower (H200 1-year about $7.3-7.6 at the hyperscalers, $3.99 for 91-180 days at Together). Rented GPUs only.">GPU rent</span> <span class="val">€<span id="v-gpuh">3.80</span> / GPU·h</span></label>
           <input type="range" id="s-gpuh" min="0.5" max="20" step="0.1" value="3.8">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Facility watts per IT watt (cooling, power distribution). 1.2 is hyperscale, 1.5 the average colocation site (Uptime survey), 2.0 a small server room. Multiplies the electricity line only.">Facility PUE</span></label>
+          <label class="flabel"><span class="tip" data-tip="Facility watts per IT watt (cooling, power distribution). 1.2 is hyperscale, 1.5 the average colocation site (Uptime survey), 2.0 a small server room. Multiplies the electricity of owned GPUs.">Facility PUE</span></label>
           <div class="seg" id="seg-pue" data-key="pue">
             <button data-v="1.2" aria-pressed="false">1.2 hyperscale</button>
             <button data-v="1.5" aria-pressed="true">1.5 colo</button>

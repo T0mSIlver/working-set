@@ -112,6 +112,7 @@ DEFAULT_STATE = {
     "burst": 32,
     "out": M.AVG_OUT_TOK, "decode_floor": M.DECODE_FLOOR_TOKS,
     "ekwh": 0.19, "pue": "1.5", "gpuh": M.GPUS["H200"].eur_gpu_h,
+    "pay": "rent", "work": M.WORK_HOURS_DEFAULT,
     # the decode step equation's constants ([calibration] eta, tau_*_us,
     # union; None = the prior), the draft acceptance and depth (the model's
     # own, set by base_state) and deployment.max_num_seqs, per replica group
@@ -394,7 +395,8 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     e = M.energy_cost(m, topo, wl_u, rate, dec_power, st["users"], chunk,
                       turn_tokens=turn, pue=pue, eur_kwh=st["ekwh"], mfu=mfu,
                       out_tokens=st["out"], per_pass_overhead=True,
-                      eur_gpu_h=st["gpuh"], decode_floor=st["decode_floor"])
+                      eur_gpu_h=st["gpuh"], decode_floor=st["decode_floor"],
+                      pay=st["pay"], work_hours=st["work"])
     o["power_d_p"] = e["d_p"]
     o["power_d_d"] = e["d_d"]
     o["power_per_gpu_w"] = e["per_gpu_w"]
@@ -666,6 +668,8 @@ KNOB_SWEEP = [
     ("ekwh", [0.08, 0.26]),
     ("pue", ["1.2", "2.0"]),
     ("gpuh", [1.0, 12.0]),
+    ("pay", ["own"]),
+    ("work", [60, 720]),
     # KV layout across the TP ranks: "replicate" prices plain TP's copies
     # (a no-op on anchors whose tp <= kv_heads — the GLM-5.3 TP8 anchor is
     # the one that moves, by 8x on the pool)
@@ -842,6 +846,10 @@ KNOB_COMBOS = [
     (0, {"mfu": 0.3, "users": 200}),
     (1, {"dspec": 5, "mns": 16, "users": 200}),
     (3, {"union": "linear", "mns": 8, "users": 400}),
+    # owned GPUs: the electricity line and its two multipliers, and a
+    # month that never idles
+    (0, {"pay": "own", "ekwh": 0.26, "pue": "2.0"}),
+    (1, {"pay": "own", "work": 720, "users": 200}),
 ]
 
 # Whole configurations someone reported, priced as stated rather than as a
