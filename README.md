@@ -200,6 +200,8 @@ bytes, priced from one vLLM anchor, give 24M. Method, sources and the misses:
 - [docs/scenarios.md](docs/scenarios.md) — extended scenario model: multi-GPU
   topologies, MoE vs dense, subagent workloads, the cost of a cache miss, and
   cold-spike tolerance.
+- [docs/decode-sweep.md](docs/decode-sweep.md) — `ws decode-sweep`: decode step
+  time at n held sequences, from a vLLM endpoint and its `/metrics`.
 - [scripts/](scripts/) — everything is reproducible:
 
   ```bash

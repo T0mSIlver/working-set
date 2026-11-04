@@ -17,6 +17,7 @@
                                                against a finite prefix cache
     ws traces mooncake|bailian|tracelab PATH   public prefix-cache traces: exact
                                                LRU vs the planner and fill rule
+    ws decode-sweep --base-url URL --model M   decode step time at n held sequences
     ws aa stats|predict ...                    Artificial Analysis' AgentPerf-Local
                                                traces at N concurrent agents
 """
@@ -510,6 +511,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_aa(sub)
     from .bench import add_subparser as _add_replay
     _add_replay(sub)
+    from .decode_sweep import add_subparser as _add_decode
+    _add_decode(sub)
     return ap
 
 
