@@ -8,7 +8,7 @@ import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, capacityLimit,
          steadyDecodePoint } from './prefill.js';
 import { seedRng } from './mathlib.js';
 import { decodeCurves, warmCapacity } from './capacity.js';
-import { interpAt } from './charts.js';
+import { interpAt } from './mathlib.js';
 import { bStar } from './planner.js';
 import { sessionsFromHeadcount } from './state.js';
 

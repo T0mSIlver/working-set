@@ -76,3 +76,22 @@ export function percentiles(arr, ps){
     return a[lo] + frac*(a[hi]-a[lo]);
   });
 }
+
+// Value of a plotted series at an arbitrary x, read off the SAME straight
+// segments the chart draws (the sweep samples ~60 points across the dynamic
+// axis — decodePlan() picks the stride — so the
+// curve between samples IS a line). Clamped to the sampled range at the ends.
+// `log` = the chart plots this series on a log y-axis, where the drawn segment
+// is the GEOMETRIC interpolation of its endpoints — interpolate the same way or
+// the readout would not be the value the segment shows.
+export function interpAt(dc, key, x, log){
+  const ns=dc.ns, arr=dc[key], last=ns.length-1;
+  if(x<=ns[0]) return arr[0];
+  if(x>=ns[last]) return arr[last];
+  let i=last-1;
+  for(let j=0;j<last;j++){ if(ns[j+1]>=x){ i=j; break; } }
+  const t=(x-ns[i])/(ns[i+1]-ns[i]);
+  if(log && arr[i]>0 && arr[i+1]>0)
+    return Math.exp(Math.log(arr[i]) + t*(Math.log(arr[i+1])-Math.log(arr[i])));
+  return arr[i] + t*(arr[i+1]-arr[i]);
+}

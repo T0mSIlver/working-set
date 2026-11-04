@@ -9,6 +9,9 @@ import { hasHeadcount, peopleFromSessions, sessionsFromHeadcount, state } from '
 import { cssv, esc, fmt, linScale, logScale, logTicks, niceTicks, svgEl } from './svg.js';
 import { renderNoFit } from './charts.js';
 import { paintTiles, pendingLoadTiles } from './render.js';
+import { bStar, warmUsersNow } from './frontier-rows.js';
+// moved to frontier-rows.js (no DOM there); re-exported for existing importers
+export { bStar, warmUsersNow };
 
 /* ============================================================================
    THE PLANNER PANEL — spike tiles, charts F & G, the frontier table
@@ -55,7 +58,6 @@ function fAxisTicks(fMax){
 // curve passes exactly through the value the tiles quote — beat 50 fills for
 // any resolution this chart can show. Interpolation is stated in the caption
 // rather than hidden: this is the one series on the panel that is sampled.
-export function warmUsersNow(p5, wl){ return p5 * (1 - p_sub(wl)); }
 export function warmUsersCurve(model, topo, ram, iter, budget, wl0, fNow, warmNow){
   const fMax = fAxisMax();
   const anchors = [0, 0.25, 0.5, 0.75, 1.0].map(a => a*fMax);
@@ -122,12 +124,6 @@ export function plannerData(model, topo, wl, cs, warmFn, decodeUsers, mo){
   return { fs, ...series, spike, mo, moLo, moHi };
 }
 
-// B* from a moments bundle — the same arithmetic spikeMetrics does, factored
-// out so the MFU bracket and the f sweep can reuse it without re-sampling.
-export function bStar(mo, f, sla, rate){
-  const rho = rate * (f*mo.miss + (1-f)*mo.hit);
-  return rho >= 1 ? 0 : Math.max(0, sla*(1-rho)/mo.miss);
-}
 
 export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
   if (noFit){
