@@ -355,6 +355,37 @@ export const CONFIG = {
       attn_layers: 11, attn_d: 64*256,  // dense upper bound; DSA prefill sparsity uncharacterised
       max_ctx: 1048576,            // native 1M context
     },
+    "ML4": {                       // research/model_mistral_large4.md
+      // 72 layers of MLA + DSA, as GLM-5.3, plus cross-layer KV sharing (9
+      // NoPE layers attend to layer 35's latents and store none) and index
+      // sharing (28 layers reuse the previous indexer's top-k)
+      name: "Mistral-Large-4 (MoE 1.05T-A49B, MLA+DSA, KV sharing)",
+      kv_bpt: 42096,               // 63 x 576 (MLA latent) + 44 x 132 (indexer keys)
+      deltanet_state: 3538944,     // DSpark drafter: 3 MLA layers x 2,048-token window x 576 B
+                                   // (storage incl. the drafter, as DSV4F's DSpark windows)
+      state_step_bytes: 0,         // the drafter's window reads are folded into mtp
+      state_fp32_ok: false,        // an fp8 latent window, not a bf16 recurrent state
+      w_resident: 1060548427328,   // FP8 ckpt metadata.total_size, shard-header-verified
+      w_decode_shared: 20990666304,// exact ledger: MLA 8.67 + shared exp 8.04 + lm_head 2.52
+                                   // + indexers 1.20 + dense MLP 0.45 + routers 0.11 + norms
+      w_route_pertok: 32169775104, // 4 experts x 113,273,856 B (FP8 + F32 block scales) x 71
+      w_route_total: 1029432803328,// 128 experts (kink at n = 128/4 = 32)
+      mtp: 1.7,                    // DSpark (3 drafts, the recipe's depth); transplanted fit, unmeasured
+      // mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from
+      // every shard header: only the routed experts change (ModelOpt NVFP4,
+      // 63,701,016 B/expert, x0.5624); attention, indexers, shared experts
+      // and dense MLP stay FP8, byte-identical. 610.03e9 B resident.
+      nvfp4_w: [610030457408, 20990666304, 18091088544, 578914833408],
+      kv_decode_bpt: 5808,         // 44 indexer layers x 132 B per context token
+      kv_decode_const: 84934656,   // 72 layers x top-2048 x 576 B per active seq
+      kv_decode_topk: 2048,        // index_topk, read in token space
+      kv_fp16_ok: false,           // every NVIDIA config Mistral and vLLM document runs fp8_ds_mla
+                                   // ("needed" per the NVFP4 card); bfloat16 is a ROCm-only opt-out
+      kv_heads: 1, state_heads: 1, // MLA latents AND the drafter's latent windows replicate under plain TP
+      params_prefill: 49.82e9,     // MoE: active GEMM params excl embed/lm_head (card "49B")
+      attn_layers: 72, attn_d: 64*128,  // dense upper bound, as GLM-5.3
+      max_ctx: 1048576,            // native 1M; the vLLM recipe validates 262,144
+    },
   },
 
   // ---- QUALITY ----
@@ -364,41 +395,45 @@ export const CONFIG = {
   // harness per version) — vendor cards quote other harnesses and other
   // versions and are not comparable, so they are deliberately not used, with
   // ONE exception by owner decision (2026-09-10): DSV41F carries its vendor
-  // card's figures on BOTH versions because AA has no run of it at all. Those
-  // two are percentages, not run counts; the `source` key says so and the
-  // ledger flags them for replacement when AA publishes. Reasoning variant at
+  // card's 2.1 figure because AA has no 2.1 run of it (its card's 4.0 figure
+  // gave way to AA's run on 2026-11-04). That one is a percentage, not a run
+  // count; `source[bench]` names it. A model AA has not run on a version
+  // carries null there (ML4 on 2.1). Reasoning variant at
   // the effort AA ran for its index. The FP16-KV / NVFP4 arms inherit the base
   // score: the quantisation loss is unmeasured, and a per-arm guess would rank
   // the frontier on the guess. Ledger and protocol: research/terminal_bench.md.
   //
-  // 2.1 is AA's LEGACY agentic-coding eval and 4.0 the one carrying the
-  // Intelligence Index v4.3; they disagree about the top of this frontier.
+  // 2.1 is AA's LEGACY agentic-coding eval and 4.0 the one in the
+  // Intelligence Index (since v4.3; v5.0.1 on 2026-11-04); they disagree about
+  // the top of this frontier.
   // Among the AA-MEASURED eight, 2.1 ranks Q38FN first and GLM52 third while
   // 4.0 reverses them: GLM52 leads Q38FN by 16.7 points there and trails it
-  // by 2.2 on 2.1. (DSV41F's vendor pair tops 2.1 outright and sits second
-  // on 4.0, but it is not measured like the others — § source.) That is why
-  // the explorer offers both rather than picking one. Read 2026-09-10.
+  // by 2.2 on 2.1. (DSV41F's vendor 2.1 figure tops 2.1 outright, but it is
+  // not measured like the others — § source.) That is why the explorer offers
+  // both rather than picking one. Read 2026-09-10, re-read 2026-11-04.
   BENCHES: {
     tb21: { label: "TB 2.1", name: "Terminal-Bench 2.1", runs: 267,
             harness: "Terminus 2", protocol: "89 tasks × 3 repeats, Terminus 2",
             status: "AA legacy eval" },
     tb40: { label: "TB 4.0", name: "Terminal-Bench 4.0", runs: 198,
             harness: "mini-SWE-agent v2.4.6", protocol: "66 tasks × 3 repeats, mini-SWE-agent v2.4.6",
-            status: "AA Intelligence Index v4.3" },
+            status: "AA Intelligence Index v5" },
   },
   QUALITY: {
     // tb21 is n/267 (89 × 3), tb40 is n/198 (66 × 3) — the run counts the AA
-    // pages' `terminalbenchV21` / `terminalbenchV40` fields reduce to exactly
+    // pages' `terminalBench21` / `terminalBench40` fields (`terminalbenchV21` /
+    // `terminalbenchV40` until October 2026) reduce to exactly
     "27B":    { tb21: 213/267, tb40:  11/198, aa: "qwen3-8-27b" },   // xhigh effort (the index run); 3.6 was 162/267, no 4.0 run
     "35BA3B": { tb21: 120/267, tb40:   0/198, aa: "qwen3-6-35b-a3b" },  // 0/198 is a MEASURED zero, not a missing run
     "MM35":   { tb21: 135/267, tb40:   0/198, aa: "mistral-medium-3-5" },  // likewise
     "GLM52":  { tb21: 224/267, tb40:  83/198, aa: "glm-5-3" },   // max effort (the index run); 5.2 was 208/267, no 4.0 run
     "DSV4F":  { tb21: 210/267, tb40:  24/198, aa: "deepseek-v4-flash" },   // 0731, max effort
     "DSV4FV": { tb21: 198/267, tb40:  24/198, aa: "deepseek-v4-flash-vision" },   // max effort, read 2026-10-02
-    "DSV41F": { tb21: 0.906,   tb40: 0.312,   aa: null,   // vendor figures, not AA runs (see above)
-                source: "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — no Artificial Analysis run of any Terminal-Bench version as of 2026-09-10" },
+    "DSV41F": { tb21: 0.906,   tb40:  53/198, aa: "deepseek-v4-1-flash",   // max effort; 4.0 read 2026-11-04
+                source: { tb21: "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — Artificial Analysis has no 2.1 run (read 2026-11-04)" } },
     "Q38FN":  { tb21: 230/267, tb40:  50/198, aa: "qwen3-8-flash-next" },
     "GLM53F": { tb21: 225/267, tb40:  65/198, aa: "glm-5-3-flash" },
+    "ML4":    { tb21: null,    tb40:  49/198, aa: "mistral-large-4" },   // high effort, read 2026-11-04; no 2.1 run
   },
 
   // ---- TOPOLOGY ----

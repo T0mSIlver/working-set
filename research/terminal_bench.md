@@ -45,11 +45,20 @@ settled, and "expect the AA number to be lower" does not transfer. The vendor fi
 they publish**, and the ledger rows and `CONFIG.QUALITY.DSV41F.source` carry
 the provenance until then.
 
+**Replaced on 4.0, 2026-11-04.** AA now lists DeepSeek V4.1 Flash (Max),
+release date 2026-09-10, the study's checkpoint: **26.8% on 4.0 (53/198)**,
+which replaces the card's 31.2. AA has no 2.1 run of it and has stopped
+running its legacy 2.1 eval on new models, so the card's 90.6 stays on 2.1.
+It is the one vendor figure left on the frontier, and
+`CONFIG.QUALITY.DSV41F.source.tb21` names it. (AA also lists a later
+checkpoint, DeepSeek V4.1 Flash 1017, at 33.8%; the study's row is the
+09-10 one.)
+
 **Protocols (AA methodology page, read 2026-09-10):**
 
 | | Terminal-Bench 2.1 | Terminal-Bench 4.0 |
 |---|---|---|
-| status at AA | legacy eval | Intelligence Index v4.3 |
+| status at AA | legacy eval | Intelligence Index since v4.3 (v5.0.1 on 2026-11-04) |
 | tasks | 89 | 66 |
 | harness | Terminus 2 (E2B sandbox) | mini-SWE-agent v2.4.6 (per-task verifier container) |
 | repeats | 3 | 3 |
@@ -69,7 +78,10 @@ measured, and a per-arm guess would rank the frontier on the guess.
 ## 2. Ledger
 
 Read from the per-model pages' embedded dataset (`terminalbenchV21` and
-`terminalbenchV40` fields), 2026-09-10. Percent = runs passed / 267 (2.1) or
+`terminalbenchV40` fields), 2026-09-10; re-read 2026-11-04, when
+Mistral-Large-4 joined, from the same dataset, whose fields are now named
+`terminalBench21` and `terminalBench40`. Every AA figure read on 2026-09-10 was
+unchanged. Percent = runs passed / 267 (2.1) or
 / 198 (4.0).
 
 | Explorer key | AA slug | AA name | TB 2.1 | runs | TB 4.0 | runs | AA release date |
@@ -82,9 +94,10 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` and
 | — | `glm-5-2` | GLM-5.2 (max) — the model `GLM52` was until 2026-09-06 | 77.9% | 208 | — | — | 2026-06-16 |
 | `DSV4F` | `deepseek-v4-flash` | DeepSeek V4 Flash 0731 (Reasoning, Max Effort) — out of the study 2026-09-10 → 09-16, figures unchanged | **78.7%** | 210 | **12.1%** | 24 | 2026-07-31 |
 | `DSV4FV` | `deepseek-v4-flash-vision` | DeepSeek V4 Flash Vision (Max) — **read 2026-10-02**, when the model joined the study. Its card's own 2.1 figure is 83.9 (DeepSeek Harness), above 0731's 82.7; AA has it *below* 0731 | **74.2%** | 198 | **12.1%** | 24 | 2026-08-21 |
-| `DSV41F` | — | DeepSeek V4.1 Flash — **vendor figures, not AA runs** (§ 1 exception): the model card's pass@1 on the **DeepSeek Harness, Minimal mode, max reasoning effort, 1M context**. Source: `https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash` (README, read 2026-09-10). **No AA run of either version as of 2026-09-10**; replace when it publishes. | **90.6%** (vendor) | — | **31.2%** (vendor) | — | 2026-09-10 |
+| `DSV41F` | `deepseek-v4-1-flash` | DeepSeek V4.1 Flash (Max). **2.1 is the vendor card's figure** (§ 1 exception): pass@1 on the **DeepSeek Harness, Minimal mode, max reasoning effort, 1M context**, from `https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash` (README, read 2026-09-10); AA has no 2.1 run. **4.0 is AA's run, read 2026-11-04**, replacing the card's 31.2 | **90.6%** (vendor) | — | **26.8%** | 53 | 2026-09-10 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | **25.3%** | 50 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | **32.8%** | 65 | 2026-08-26 |
+| `ML4` | `mistral-large-4` | Mistral Large 4 (High) — **read 2026-11-04**, when the model joined the study. AA has no 2.1 run. Mistral's technical report claims 41.0% on 4.0, labelled "AA Coding Agent Index", a different AA index run inside coding agents; this column is AA's mini-swe-agent run (`model_mistral_large4.md` § 9) | — | — | **24.7%** | 49 | 2026-10-29 |
 
 A `—` in a 4.0 column is **no run**; a **0.0%** is a *measured* zero (0 of
 198 runs passed) and is plotted. The two are different facts and the
@@ -118,10 +131,9 @@ free key; the pages were used because no key was on hand.
   span 45 to 86 points on 2.1 and 0 to 42 on 4.0; the two newest lead 2.1 but
   on 4.0 they trail GLM-5.3, released eight days earlier. Re-read the ledger when a model is added, and record the date.
   The default for a model without a run on a version is `null` (left off that
-  axis, `—` in that column); the one departure is DeepSeek V4.1 Flash's
-  vendor pair (§ 1) — read its 2.1 lead over Qwen3.8-Flash-Next (86.1, AA)
-  as *unknown*, not as 4.5 points, and its 4.0 position against GLM-5.3
-  (41.9, AA) the same way, until AA publishes.
+  axis, `—` in that column): Mistral-Large-4 on 2.1. The one departure is
+  DeepSeek V4.1 Flash's vendor 2.1 figure (§ 1): read its 2.1 lead over
+  Qwen3.8-Flash-Next (86.1, AA) as *unknown*, not as 4.5 points.
 
 ## 4. Why both versions, and not one
 
@@ -130,7 +142,7 @@ is not noise:
 
 | | 2.1 | 4.0 |
 |---|---|---|
-| spread over the nine study models | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
+| spread over the study models with a run (nine on 2.1, ten on 4.0) | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
 | spread over the **top four** | 6.7 pts (83.9–90.6) | 16.7 pts (25.3–41.9) |
 | best AA-measured model | Qwen3.8-Flash-Next 86.1 | GLM-5.3 41.9 |
 | GLM-5.3 vs Qwen3.8-Flash-Next | −2.2 | **+16.7** |
@@ -141,9 +153,11 @@ spread one scaffold change produces on the same model (§ 1) — the version
 has saturated for this field. On 4.0 the same four are inside 17. How many
 steps chart H's staircase then has depends on the explorer state, not on the
 benchmark alone: the efficient set is recomputed per GPU, load and price, so
-at the 64-user H200 default both versions collapse to a single step
-(Qwen3.8-Flash-Next TP8), while at 8 users on 8×H200 the 2.1 staircase has
-two steps and the 4.0 staircase four — the same rows, reordered by the axis.
+at the 64-user H200 default the 2.1 staircase has two steps
+(Qwen3.8-Flash-Next and DeepSeek-V4.1-Flash, both TP8) and the 4.0 staircase
+three (GLM-5.3-Flash joins), while at 8 users on 8×H200 the 2.1 staircase has
+two steps and the 4.0 staircase four (GLM-5.3 joins) — the same rows,
+reordered by the axis (counted 2026-11-04).
 Reading 4.0 as "the harder, therefore better" axis is tempting and wrong in
 one direction: it is also a *different harness* (mini-SWE-agent, not
 Terminus 2) and a *smaller* task set (66, not 89), so a 0.0% is 0 of 198
@@ -152,6 +166,9 @@ the explorer claims is only that the choice of version changes which
 configurations are Pareto-efficient, so the reader should see both — hence
 the toggle rather than a pick.
 
-The default axis is **2.1**: it is the version every model in the study has
-a run on, and the one the write-up's prose was built against. That is a
-presentation default, not a judgement that 2.1 is the better benchmark.
+The default axis is **4.0** since 2026-11-04 (owner decision). It had been
+2.1, the version every model had a run on and the one the write-up's prose
+was built against, until Mistral-Large-4, which AA scored on 4.0 only: AA no
+longer runs its legacy 2.1 eval on new models, so 4.0 is now the version
+every study model has an AA run on. It is a presentation default, not a
+judgement that 4.0 is the better benchmark.

@@ -808,6 +808,10 @@ SPREAD_PROBE = [
     # --speculative-config). research/model_dsv4flash_vision.md.
     dict(model='DSV4FV', gpu='B300', wdt='fp8', kv='fp8', ngpu=2, tp=2,
          mtp=1.0),
+    # B300 MLA+DSA MoE with cross-layer KV sharing on TP8: the vLLM recipe's
+    # single-node FP8 layout, the only split of one node it fits
+    # (research/model_mistral_large4.md).
+    dict(model='ML4', gpu='B300', wdt='fp8', kv='fp8', ngpu=8, tp=8),
 ]
 # how many knobs of the sweep each anchor gets (the first anchor gets all of
 # them; the others cover the knobs most likely to interact with topology)

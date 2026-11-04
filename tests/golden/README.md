@@ -97,7 +97,7 @@ edited once, a dropped term, a different rounding convention.
 mulberry32 with Box-Muller normals. The two will never agree exactly, and the
 band has to say how close is close enough.
 
-The bands are measured, not guessed. `scripts/golden.py` runs the 27 states
+The bands are measured, not guessed. `scripts/golden.py` runs the 28 states
 named in `SPREAD_PROBE` at three seeds and two sampling scales, and records
 both the probe (each entry a deployment plus the knobs that differ from the
 defaults) and the p50 / p90 / max relative spread of every sampled quantity in
@@ -366,8 +366,11 @@ same two field edits `modelFor()` makes (`deltanet_state` x2,
 They remain unsampled by this fixture, but the spread probe no longer blocks
 adding them. `SPREAD_PROBE` started as the 25 states the old positional probe
 happened to select (the switch moved no band; a 26th, DSV4F's, was added on
-its return and a 27th, DSV4FV's — the logged 2×B300 TP2 deployment — on
-2026-10-02, tightening a few bands by ≤ 0.002), so adding a sweep axis or a
+its return, a 27th, DSV4FV's — the logged 2×B300 TP2 deployment — on
+2026-10-02, tightening a few bands by ≤ 0.002, and a 28th, ML4's — the vLLM
+recipe's 8×B300 TP8 FP8 layout — on 2026-11-04, tightening a few bands by
+≤ 0.002 and pushing two integer-bisection pairs and one past-knee
+`ttft_hit_ps` pair onto the allowlist), so adding a sweep axis or a
 state key no longer changes which states derive every `mc` band. What the
 coverage rule guarantees is a floor, not a cross-product: every model and GPU
 appears at least once, and a new model is represented only by the entry
