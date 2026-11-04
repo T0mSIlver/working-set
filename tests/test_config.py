@@ -289,13 +289,16 @@ def test_weight_overhead_shrinks_the_kv_pool_as_the_page_reports():
 
 
 def test_mtp_override_moves_the_decode_ceiling():
-    """Per-user decode is mtp x bandwidth / step bytes, so dropping the 1.7x
-    speedup to 1.0 has to drop the decode ceiling with it — the page goes
-    28 -> 16 users at this state."""
+    """Per-user decode is mtp x bandwidth / step bytes. On this MoE the
+    slider moves both: speculation off drops the 1.7x speedup AND the two
+    draft positions each sequence routes through the experts (issue #91).
+    At this state the expert reads outweigh the speedup, so turning
+    speculation off raises the ceiling a little (40 -> 42 users)."""
     base = predict(_knob("base"), n_iter=400)
     off = predict(_knob("mtp10"), n_iter=400)
-    assert off.decode_ceiling_users < base.decode_ceiling_users
-    assert 0.45 < off.decode_ceiling_users / base.decode_ceiling_users < 0.65
+    assert _knob("mtp10").to_model().verify_positions == 1
+    assert _knob("base").to_model().verify_positions == 3
+    assert 1.0 < off.decode_ceiling_users / base.decode_ceiling_users < 1.15
     # nothing else about the deployment moved
     assert off.warm_capacity_p5 == pytest.approx(base.warm_capacity_p5, rel=0.05)
 

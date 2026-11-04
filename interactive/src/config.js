@@ -102,6 +102,8 @@ export const CONFIG = {
   // w_resident: FP8 weights resident | w_decode_shared: always-active weight bytes/step
   // w_route_pertok: routed-expert bytes per decoding token | w_route_total: all routed experts
   // mtp: Multi-Token-Prediction decode speedup (1.0 = model has no MTP module)
+  // spec_tokens: num_speculative_tokens of the serving recipe (absent = no drafter);
+  //          while mtp > 1 each sequence routes 1 + spec_tokens positions per step
   // nvfp4_w: [w_resident, w_decode_shared, w_route_pertok, w_route_total] of the
   //          NVFP4 checkpoint (weights ONLY — KV and recurrent state unchanged;
   //          4-bit KV is deliberately not modelled). See research/nvfp4.md.
@@ -137,6 +139,7 @@ export const CONFIG = {
       // per-draft acceptance a ~ 0.98). Was 1.7. PAIRED WITH DECODE_MBU -- see its
       // comment. NOT re-measured on Qwen3.8-27B: acceptance depends on the
       // draft head's weights, not the architecture. Re-measure when it ships.
+      spec_tokens: 2,
       mtp: 2.94,
       // RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
       // header (research/nvfp4_2026-09.md): 23,417,339,744 B. The recipe
@@ -159,6 +162,7 @@ export const CONFIG = {
       w_decode_shared: 1940000000, // attn + deltanet + shared expert + router + lm_head / step
       w_route_pertok: 1006632960,  // 8 routed experts x 3.146M x 40 layers, FP8
       w_route_total: 32212254720,  // 256 routed experts (saturates at exactly n=32 linear)
+      spec_tokens: 2,
       mtp: 1.7,                    // MTP module, speedup kept equal to baseline's fit
       // RedHatAI NVFP4 recipe: experts+attn NVFP4; DeltaNet/lm_head/router/MTP BF16
       // -> shared per-step read GROWS 1.7x while expert reads shrink 1.78x
@@ -199,6 +203,7 @@ export const CONFIG = {
       w_decode_shared: 18.92e9,    // MLA + indexers + dense MLP + shared exp + lm_head
       w_route_pertok: 22649241600, // 8 experts x (3x6144x2048) x 75 MoE layers, FP8
       w_route_total: 724775731200, // 256 experts (saturates at n=32)
+      spec_tokens: 5,
       mtp: 1.7,                    // MTP module (5 drafts, same in the 5.3 recipe); transplanted fit, unmeasured
       // nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header
       // (research/nvfp4_2026-10.md): routed experts of the 75 main MoE
@@ -230,6 +235,7 @@ export const CONFIG = {
       w_decode_shared: 7.66e9,     // attn 4.60 + shared exp 1.08 + comp/idx/gates/mHC 0.92 + lm_head 1.06
       w_route_pertok: 3449290752,  // 6 experts x 13,369,344 B (FP4 packed + E8M0 scales) x 43
       w_route_total: 147169738752, // 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+      spec_tokens: 7,
       mtp: 1.7,                    // DSpark drafts 7 tokens; transplanted fit, unmeasured
       // nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
       // shard header (research/nvfp4_2026-09.md). Only the 43 main layers'
@@ -262,6 +268,7 @@ export const CONFIG = {
       w_decode_shared: 7.66e9,     // = DSV4F: the vision tower is never in a text decode read
       w_route_pertok: 3449290752,  // 6 experts x 13,369,344 B (FP4 packed + E8M0 scales) x 43
       w_route_total: 147169738752, // 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+      spec_tokens: 3,
       mtp: 1.7,                    // DSpark (the model card serves 3 drafts); transplanted fit, unmeasured
       nvfp4_w: null,               // no official NVFP4 checkpoint (community repacks only, 2026-10-02)
       kv_decode_bpt: 426,          // = DSV4F
@@ -283,6 +290,7 @@ export const CONFIG = {
       w_decode_shared: 8522921408, // exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/comp/idx/engram-proj 0.71 + lm_head 1.32
       w_route_pertok: 4512153600,  // 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
       w_route_total: 288777830400, // 384 experts (kink at n = 384/6 = 64)
+      spec_tokens: 5,
       mtp: 1.7,                    // DSpark drafts 5 tokens; transplanted fit, unmeasured
       // nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
       // shard header (research/nvfp4_2026-10.md). Only the 40 main layers'
@@ -308,6 +316,7 @@ export const CONFIG = {
       w_decode_shared: 8623999000, // exact ledger sum — BF16 always-active: attn+DN+shared exp+routers+hyper-conns+PLE+lm_head
       w_route_pertok: 2359584000,  // 10 experts x 4,915,800 B (FP8 + block scales) x 48
       w_route_total: 120810700800, // 512 experts (kink at n = 512/10 = 51.2 — the study's deepest)
+      spec_tokens: 3,
       mtp: 1.7,                    // MTP module (1 hybrid layer, 3 drafts per the vLLM recipe); transplanted fit, unmeasured
       // nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
       // shard header (research/nvfp4_2026-09.md): only the 48 main layers'
@@ -337,6 +346,7 @@ export const CONFIG = {
                                    // 1.06 + dense 0.45 + routers 0.10 + hc 0.07 + lm_head 1.27
       w_route_pertok: 8457781248,  // 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
       w_route_total: 304480124928, // 288 experts (kink at n = 288/8 = 36)
+      spec_tokens: 5,
       mtp: 1.7,                    // MTP draft layer (recipe runs 5 drafts); transplanted fit
       // RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
       // NVFP4 checkpoint), MEASURED from every shard header (research/
@@ -375,6 +385,7 @@ export const CONFIG = {
                                    // + indexers 1.20 + dense MLP 0.45 + routers 0.11 + norms
       w_route_pertok: 32169775104, // 4 experts x 113,273,856 B (FP8 + F32 block scales) x 71
       w_route_total: 1029432803328,// 128 experts (kink at n = 128/4 = 32)
+      spec_tokens: 3,
       mtp: 1.7,                    // DSpark (3 drafts, the recipe's depth); transplanted fit, unmeasured
       // mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from
       // every shard header: only the routed experts change (ModelOpt NVFP4,
@@ -484,12 +495,16 @@ for (const t of Object.values(CONFIG.TOPOLOGIES)) t.gpu = CONFIG.GPUS["H200"];
 
 /* ---- model helpers ---- */
 export function is_moe(m){ return m.w_route_total > 0; }
+// positions one sequence routes per decode step: its own token, plus its
+// drafts while speculative decoding is on (mirrors Model.verify_positions)
+export function verifyPositions(m){ return m.mtp > 1 ? 1 + (m.spec_tokens || 0) : 1; }
 // concurrency at which the conservative expert union saturates (every routed
-// expert read each step): n_sat = total/pertok = E/k = 32 for both MoE models
-export function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / m.w_route_pertok) : null; }
-// Conservative (no-overlap) expert-union bound, the study's planning default;
-// the expected-union "coverage" model is the optimistic bracket (see docs).
-export function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_pertok, m.w_route_total); }
+// expert read each step): n_sat = E / (k x verify positions)
+export function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / (m.w_route_pertok * verifyPositions(m))) : null; }
+// Conservative (no-overlap) expert-union bound over every verified position,
+// the study's planning default; the expected-union "coverage" model (one draw
+// per sequence) is the optimistic bracket (see docs).
+export function w_decode(m, n){ return m.w_decode_shared + Math.min(n * verifyPositions(m) * m.w_route_pertok, m.w_route_total); }
 // recurrent / fixed-state bytes moved per active sequence per decode step:
 // read + write of the whole state unless the model says otherwise (mirrors
 // Model.state_traffic — the DeepSeek Flash models' windows are read inside kv_decode_const)

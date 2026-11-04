@@ -22,17 +22,6 @@
    "hypothesis": "SATURATED ON BOTH SIDES, and both say so: past the cap each side reports n = floor(its own GPU-resident warm p95), and the two p95 draws come from different samplers (numpy vs mulberry32) at different iteration counts. The residual is that draw difference, worst on small populations (9 against 10 is 11%). 132 states at ratio >= 1, the flag identical on every one - which is why steady_saturated needs no entry. A population of 5-6 sequences puts one apart at 17% (GLM-5.3 FP16 KV, 3xB300, 2026-11-04)."
   },
   {
-   "quantity": "steady_per_user_tok_s",
-   "where": {
-    "_steady_cap_ratio": {
-     "gte": 1.0
-    }
-   },
-   "observed_rel": 0.101,
-   "max_rel": 0.15,
-   "hypothesis": "aggregate/n at each side's own floor(p95); same cap-draw residual as steady_n"
-  },
-  {
    "quantity": "steady_n",
    "where": {
     "_steady_cap_ratio": {

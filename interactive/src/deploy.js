@@ -31,7 +31,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   // batch that keeps per-user p50 at the floor, within the GPU-resident warm
   // population — beyond it there is nobody warm to admit
   const sug = op.mns;
-  // draft counts mirror the research notes; a model missing here must not
+  // draft counts are the model's spec_tokens; a model without one must not
   // emit num_speculative_tokens:undefined, so it gates specOn too
   // the DeepSeek Flash models draft with DSpark, not MTP — V4.1 has no MTP
   // module at all. Configs as their sources give them: 0731's model card
@@ -44,8 +44,8 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     // Mistral-Large-4's vLLM recipe: depth 3 is fixed by the checkpoint
     "ML4": '{"method":"dspark","num_speculative_tokens":3}',
   };
-  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "DSV4FV":3, "DSV41F":5, "Q38FN":3, "GLM53F":5, "ML4":3}[state.model];
-  const specOn = state.mtp>1 && m0.mtp>1 && specDrafts !== undefined;
+  const specDrafts = m0.spec_tokens;
+  const specOn = state.mtp>1 && m0.mtp>1 && specDrafts > 0;
   const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
   const ramGrp = ramPerCache(topo);
 

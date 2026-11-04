@@ -1,5 +1,5 @@
 import { CONFIG, DECODE_MBU, GIB, PREFILL_MFU, effective_bw, is_moe, kv_pool_tokens,
-         replicated, state_traffic, tpEff, w_decode } from './config.js';
+         replicated, state_traffic, tpEff, unionKink, w_decode } from './config.js';
 import { percentiles } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
@@ -178,13 +178,13 @@ export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   for (const a of [2,3,4,6,8,11,16,22,32,45,64,90])
     if (a < Math.min(firstGap, nMax+1)) ns.push(a);
   if (ns.length > 1) ns.sort((a,b)=>a-b);
-  // The conservative expert union kinks HARD at n_sat = total/pertok (the
-  // batch activates every expert; n_sat = 32 for both MoE models). A wide-
+  // The conservative expert union kinks HARD at n_sat = unionKink (the
+  // batch activates every expert). A wide-
   // step sweep that straddles n_sat interpolates straight through the kink
   // and draws a spurious notch around it — sample the kink point exactly so
   // charts C and D show the true piecewise shape.
   if (is_moe(model)){
-    const nSat = Math.round(model.w_route_total / model.w_route_pertok);
+    const nSat = unionKink(model);
     if (nSat > 1 && nSat < nMax && !ns.includes(nSat))
       ns.push(nSat), ns.sort((a,b)=>a-b);
   }

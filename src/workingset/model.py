@@ -204,11 +204,16 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 #
 # Dense model  => w_decode_shared = w_resident, w_route_* = 0 (reads all weights).
 # MoE model    => decode reads w_decode_shared + routed-expert union bytes:
-#   union="linear"   : min(n*w_route_pertok, w_route_total)   -- no-overlap upper
-#                      bound on bytes (CONSERVATIVE: slow-side; default)
+#   union="linear"   : min(n*(1+s)*w_route_pertok, w_route_total) -- no-overlap
+#                      upper bound on bytes (CONSERVATIVE: slow-side; default).
+#                      s = spec_tokens while speculative decoding is on: the
+#                      verify routes every draft position too (issue #91)
 #   union="coverage" : w_route_total * (1-(1-k/E)^n)          -- expected union
-#                      under uniform independent routing (OPTIMISTIC: real
-#                      routing is correlated, so coverage grows slower)
+#                      of one draw per SEQUENCE under uniform independent
+#                      routing (OPTIMISTIC: a sequence's drafts route like its
+#                      own token, and real routing is correlated)
+# The "kink at n = E/k" in the model comments below is the linear union's
+# saturation with speculation off; on, it moves to E/(k x (1+s)) sequences.
 # The two bracket reality; figures show both.
 #
 # All 35B-A3B constants come from the PUBLISHED Qwen/Qwen3.6-35B-A3B-FP8
@@ -323,6 +328,11 @@ class Model:
     w_route_pertok: float
     w_route_total: float
     mtp: float = 1.7
+    # num_speculative_tokens of the model's serving recipe (0 = no drafter).
+    # While speculative decoding is on (mtp > 1) a decode step verifies
+    # 1 + spec_tokens positions per sequence, and every one routes through
+    # the experts: see w_decode.
+    spec_tokens: int = 0
     weight_dtype: str = "fp8"   # set via with_weight_dtype(); gates GPU choice
     # NVFP4-checkpoint weight bytes (w_resident, w_decode_shared,
     # w_route_pertok, w_route_total), or None if no NVFP4 variant exists.
@@ -436,15 +446,28 @@ class Model:
         return (2.0 * self.deltanet_state if self.state_step_bytes is None
                 else self.state_step_bytes)
 
+    @property
+    def verify_positions(self) -> int:
+        """Positions one sequence routes per decode step: its own token, plus
+        its drafts while speculative decoding is on (mtp > 1)."""
+        return 1 + self.spec_tokens if self.mtp > 1 else 1
+
     def w_decode(self, n: int, union: str = "linear") -> float:
-        """Weight bytes read per decode step with n concurrent decoders."""
+        """Weight bytes read per decode step with n concurrent decoders.
+
+        "linear" counts every verified position, n x verify_positions, as an
+        independent draw: the no-overlap upper bound. A sequence's drafts
+        route much like its own token, so the true union sits between that
+        and one draw per sequence, which is what "coverage" keeps.
+        """
         if not self.is_moe:
             return self.w_decode_shared
         if union == "coverage":
             frac_new = self.w_route_pertok / self.w_route_total   # = k/E
             routed = self.w_route_total * (1.0 - (1.0 - frac_new) ** n)
         else:
-            routed = min(n * self.w_route_pertok, self.w_route_total)
+            routed = min(n * self.verify_positions * self.w_route_pertok,
+                         self.w_route_total)
         return self.w_decode_shared + routed
 
 
@@ -473,6 +496,7 @@ MODELS = {
         # weights, not the architecture. PAIRED WITH MBU_DEFAULT: both were
         # calibrated against the same passes, so moving one without the
         # other breaks the fit (see MBU_DEFAULT).
+        spec_tokens=2,
         mtp=2.94,
         # RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
         # header: 23,417,339,744 B (dense MLPs of 56/64 layers NVFP4;
@@ -502,6 +526,7 @@ MODELS = {
         w_decode_shared=1_940_000_000,   # attn + deltanet + shared expert + router + lm_head / step
         w_route_pertok=1_006_632_960,    # 8 routed experts x 3.146M x 40 layers, FP8
         w_route_total=32_212_254_720,    # 256 routed experts (saturates at exactly n=32 linear)
+        spec_tokens=2,
         mtp=1.7,                         # MTP module, speedup kept equal to baseline's fit
         # RedHatAI/Qwen3.6-35B-A3B-NVFP4 recipe: experts + full-attn NVFP4
         # (0.5625 B/param), but embed/lm_head/DeltaNet/router — AND the MTP
@@ -570,6 +595,7 @@ MODELS = {
         w_decode_shared=18.92e9,         # MLA + indexers + dense MLP + shared exp + lm_head
         w_route_pertok=22_649_241_600,   # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
         w_route_total=724_775_731_200,   # 256 experts (saturates at n=32, like 35BA3B)
+        spec_tokens=5,
         mtp=1.7,                         # MTP module (5 drafts); transplanted fit, unmeasured
         # nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header:
         # routed experts of the 75 main MoE layers NVFP4 (21,233,688 B/expert);
@@ -630,6 +656,7 @@ MODELS = {
                                          # gates/mHC 0.92 + lm_head 1.06 (research note 4)
         w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
         w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+        spec_tokens=7,
         mtp=1.7,                         # DSpark drafts 7 tokens; transplanted fit, unmeasured
         # nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
         # shard header. Routed experts repacked NVFP4 (E4M3 block-16 scales):
@@ -679,6 +706,7 @@ MODELS = {
         w_decode_shared=7.66e9,          # = DSV4F: the tower is never read by a text decode step
         w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
         w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+        spec_tokens=3,
         mtp=1.7,                         # DSpark (the README serves 3 drafts); transplanted fit
         nvfp4_w=None,                    # no official NVFP4 checkpoint; the experts are already 4-bit
         kv_decode_bpt=426,               # = DSV4F: fp4 indexer scan + dense HCA
@@ -718,6 +746,7 @@ MODELS = {
                                          # compressors/indexers/engram-proj 0.71 + lm_head 1.32
         w_route_pertok=4_512_153_600,    # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
         w_route_total=288_777_830_400,   # 384 experts (kink at n = 384/6 = 64)
+        spec_tokens=5,
         mtp=1.7,                         # DSpark drafts 5 tokens; transplanted fit, unmeasured
         # nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
         # shard header. Only the 40 main layers' routed experts change: native
@@ -766,6 +795,7 @@ MODELS = {
                                          # (n-gram/embed lookups excluded)
         w_route_pertok=2_359_584_000,    # 10 experts x 4,915,800 B (FP8 + block scales) x 48
         w_route_total=120_810_700_800,   # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
+        spec_tokens=3,
         mtp=1.7,                         # MTP module (1 hybrid layer, 3 drafts per the vLLM
                                          # recipe); transplanted fit, unmeasured
         # nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
@@ -808,6 +838,7 @@ MODELS = {
                                          # + hyper-conns 0.07 + lm_head 1.27 + norms
         w_route_pertok=8_457_781_248,    # 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
         w_route_total=304_480_124_928,   # 288 experts (kink at n = 288/8 = 36)
+        spec_tokens=5,
         mtp=1.7,                         # MTP draft layer (recipe runs 5 drafts); transplanted fit
         # RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
         # NVFP4 checkpoint), MEASURED from every shard header: routed experts
@@ -858,6 +889,7 @@ MODELS = {
                                          # + indexers 1.20 + dense MLP 0.45 + routers 0.11 + norms
         w_route_pertok=32_169_775_104,   # 4 experts x 113,273,856 B (FP8 + F32 block scales) x 71
         w_route_total=1_029_432_803_328, # 128 experts (kink at n = 128/4 = 32)
+        spec_tokens=3,
         mtp=1.7,                         # DSpark drafter (3 drafts, the recipe's depth); transplanted
                                          # fit, unmeasured — the recipe reports AL 2.79-2.98 on GB300
         # mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from
@@ -4163,10 +4195,11 @@ def _selfcheck():
 
     # DSv4-Flash-Vision-Exp (research/model_dsv4flash_vision.md): the 0731
     # text backbone + a vision tower. Every field but the name, the resident
-    # bytes and the (absent) NVFP4 arm IS DSV4F's — the text config and the
+    # bytes, the (absent) NVFP4 arm and the draft count (its model card
+    # serves 3 DSpark drafts, 0731's 7) IS DSV4F's — the text config and the
     # cache code are unchanged, so a drift here is a copy error
     ds4v = MODELS["DSV4FV"]
-    _same = ("name", "w_resident", "nvfp4_w")
+    _same = ("name", "w_resident", "nvfp4_w", "spec_tokens")
     assert all(getattr(ds4v, f.name) == getattr(ds4, f.name)
                for f in fields(Model) if f.name not in _same)
     # resident delta = ViT 823,685,120 + aligner 109,068,288 + 4 image

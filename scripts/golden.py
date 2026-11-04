@@ -208,6 +208,7 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     o["effective_bw"] = M.effective_bw(topo)
     o["peak_flops"] = M.peak_flops(topo)
     o["tp_efficiency"] = M.tp_efficiency(topo.tp, topo.gpu.nvlink_domain)
+    o["w_decode_n4"] = m.w_decode(4)
     o["w_decode_n64"] = m.w_decode(64)
     o["prefill_overhead_seconds"] = M.prefill_overhead_seconds(m, topo)
     o["mfu_ceiling"] = M.mfu_ceiling(m, topo, mfu_anchor=mfu)
@@ -1253,6 +1254,8 @@ MAPPING = [
     ("effective_bw", "model.effective_bw", "config.js effective_bw", "exact", ""),
     ("peak_flops", "model.peak_flops", "prefill.js peakFlops", "exact", ""),
     ("tp_efficiency", "model.tp_efficiency", "config.js tpEff", "exact", ""),
+    ("w_decode_n4", "model.Model.w_decode", "config.js w_decode", "exact",
+     "below every kink: counts the speculative verify positions (issue #91)"),
     ("w_decode_n64", "model.Model.w_decode", "config.js w_decode", "exact",
      "linear (no-overlap) expert union; JS has no `coverage` arm"),
     ("prefill_overhead_seconds", "model.prefill_overhead_seconds",

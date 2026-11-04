@@ -303,11 +303,11 @@ export function unitChecks(){
     "DSV4F NVFP4 resident delta is the expert delta alone");
   // DSv4-Flash-Vision-Exp (research/model_dsv4flash_vision.md; mirror
   // _selfcheck): 0731's text backbone, so every field but the name, the
-  // resident bytes and the NVFP4 arm is DSV4F's
-  const ds4v = CONFIG.MODELS["DSV4FV"], SAME_V = ["name", "w_resident", "nvfp4_w"];
+  // resident bytes, the NVFP4 arm and the draft count (3 vs 7) is DSV4F's
+  const ds4v = CONFIG.MODELS["DSV4FV"], SAME_V = ["name", "w_resident", "nvfp4_w", "spec_tokens"];
   console.assert(Object.keys(ds4).every(k => SAME_V.includes(k) || ds4v[k] === ds4[k])
                  && Object.keys(ds4v).every(k => k in ds4),
-    "DSV4FV = DSV4F but for the name, the resident bytes and the NVFP4 arm");
+    "DSV4FV = DSV4F but for the name, the resident bytes, the NVFP4 arm and the draft count");
   console.assert(ds4v.w_resident === 166878536440 + (823685120 + 109068288 + 32768 + 46*256*4 + 3*256*4),
     "DSV4FV resident = 0731's measured total + ViT + aligner + image embeddings + fp32 gate biases");
   // DSv4.1-Flash identities (research/model_dsv41flash.md; mirror _selfcheck)

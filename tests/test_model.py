@@ -275,3 +275,23 @@ def test_token_debt_counts_tokens_not_steps():
     v_mixed = v_normal * d_ms / x_ms    # same tokens per step, longer steps
     assert per_user == pytest.approx(drain * (v_normal - v_mixed), rel=1e-9)
     assert total == pytest.approx(64 * per_user)
+
+
+def test_expert_union_counts_speculative_verify_positions():
+    """Issue #91: with speculative decoding each sequence verifies 1 + s
+    positions per step, and each routes through the experts. The linear
+    (upper-bound) union saturates at E/(k(1+s)) sequences, not E/k; the
+    coverage arm keeps one draw per sequence; turning speculation off
+    (mtp = 1) restores the old count."""
+    import dataclasses
+    m = M.MODELS["DSV41F"]                     # 384 experts / 6 routed, 5 drafts
+    assert m.spec_tokens == 5 and m.mtp > 1 and m.verify_positions == 6
+    assert m.w_decode(10) == pytest.approx(m.w_decode_shared + 60 * m.w_route_pertok)
+    assert m.w_decode(11) == pytest.approx(m.w_decode_shared + m.w_route_total)
+    off = dataclasses.replace(m, mtp=1.0)
+    assert off.verify_positions == 1
+    assert off.w_decode(10) == pytest.approx(m.w_decode_shared + 10 * m.w_route_pertok)
+    assert off.w_decode(64) == pytest.approx(m.w_decode_shared + m.w_route_total)
+    assert m.w_decode(10, "coverage") == off.w_decode(10, "coverage")
+    dense = M.MODELS["27B"]                    # no experts: drafts change nothing
+    assert dense.w_decode(1) == dense.w_decode(100) == dense.w_decode_shared

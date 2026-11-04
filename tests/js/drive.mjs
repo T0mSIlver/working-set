@@ -54,6 +54,7 @@ export function driveState(v){
   o.effective_bw = effective_bw(topo);
   o.peak_flops = peakFlops(topo);
   o.tp_efficiency = tpEff(topo.tp, topo.gpu.nvlink_domain);
+  o.w_decode_n4 = w_decode(m, 4);
   o.w_decode_n64 = w_decode(m, 64);
   o.prefill_overhead_seconds = prefillOverheadSeconds(m, topo);
   o.mfu_ceiling = mfuCeil(m, topo);
