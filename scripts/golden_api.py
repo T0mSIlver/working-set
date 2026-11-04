@@ -2,8 +2,9 @@
 """Golden vectors for the API and plan seats: Python prices, the mirror agrees.
 
 workingset.api_cost is the source of truth; interactive/src/apicost.js is
-its hand-written mirror. This writes every API offer and plan in the price
-catalogue, priced at the reference workload and at one knob moved at a time,
+its hand-written mirror. This writes every API offer (its seat) and plan (the
+hours its published limits hold) in the price catalogue, at the reference
+workload and at one knob moved at a time,
 to tests/golden/api_vectors.json; tests/js/api_golden.test.mjs replays them.
 Closed form on both sides (the same erfc polynomial), so the tolerance is
 float rounding, not sampling.
@@ -52,10 +53,17 @@ def price(wl, o):
               active_hours=o["hours"], peak_active_share=o["active"],
               sessions_per_active_user=o["spu"])
     cat = A.catalogue()
-    rows = [A.api_seat_cost(a, wl, **kw) for a in cat["apis"].values()]
-    rows += [A.plan_seat_cost(p, wl, **kw) for p in cat["plans"].values()]
-    return {r.key + ":" + r.kind: {k: sig(v) for k, v in asdict(r).items()
-                                   if k not in ("key", "name", "kind")} for r in rows}
+    out = {r.key + ":api": {k: sig(v) for k, v in asdict(r).items()
+                            if k not in ("key", "name", "kind")}
+           for r in (A.api_seat_cost(a, wl, **kw) for a in cat["apis"].values())}
+    pkw = {k: kw[k] for k in ("think_time_s", "turn_tokens", "out_tokens",
+                              "sessions_per_active_user")}
+    for p in cat["plans"].values():
+        c = A.plan_cover(p, wl, **pkw)
+        out[p.key + ":plan"] = {"published": c.published, "binds": c.binds,
+                                "hours": {w: sig(h) for w, h in c.hours.items()},
+                                "hours_month": sig(c.hours_month) if math.isfinite(c.hours_month) else None}
+    return out
 
 
 def render() -> str:

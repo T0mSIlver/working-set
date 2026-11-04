@@ -9,13 +9,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { API_OFFERS, PLANS, apiSeatCost, planSeatCost } from '../../interactive/src/apicost.js';
+import { API_OFFERS, PLANS, apiSeatCost, planCover } from '../../interactive/src/apicost.js';
 
 const G = JSON.parse(readFileSync(new URL('../golden/api_vectors.json', import.meta.url), 'utf8'));
 const REL = 1e-9;
 const FIELDS = { eur_seat: 'eurSeat', eur_session: 'eurSession', usd_request: 'usdRequest',
-                 requests_month: 'requestsMonth', ttl_s: 'ttl', hit_rate: 'hitRate',
-                 fits: 'fits', plans_per_seat: 'plansPerSeat', overflow_eur: 'overflowEur', binds: 'binds' };
+                 requests_month: 'requestsMonth', ttl_s: 'ttl', hit_rate: 'hitRate' };
 
 function close(a, b){
   if (typeof a !== 'number') return a === b;
@@ -28,13 +27,24 @@ test('every catalogue row has a vector and every vector a row', () => {
 });
 
 for (const v of G.vectors){
-  test(`seat prices agree: ${v.name}`, () => {
+  test(`seat prices and plan hours agree: ${v.name}`, () => {
     for (const [key, want] of Object.entries(v.out)){
       const [k, kind] = key.split(':');
-      const got = kind === 'api' ? apiSeatCost(API_OFFERS[k], v.workload, v.opts)
-                                 : planSeatCost(PLANS[k], v.workload, v.opts);
-      for (const [py, js] of Object.entries(FIELDS))
-        assert.ok(close(want[py], got[js]), `${v.name} ${key} ${py}: python ${want[py]} js ${got[js]}`);
+      if (kind === 'api'){
+        const got = apiSeatCost(API_OFFERS[k], v.workload, v.opts);
+        for (const [py, js] of Object.entries(FIELDS))
+          assert.ok(close(want[py], got[js]), `${v.name} ${key} ${py}: python ${want[py]} js ${got[js]}`);
+      } else {
+        const got = planCover(PLANS[k], v.workload, v.opts);
+        assert.equal(got.published, want.published, `${v.name} ${key} published`);
+        assert.equal(got.binds, want.binds, `${v.name} ${key} binds`);
+        assert.deepEqual(Object.keys(got.hours), Object.keys(want.hours), `${v.name} ${key} windows`);
+        for (const [w, h] of Object.entries(want.hours))
+          assert.ok(close(h, got.hours[w]), `${v.name} ${key} hours.${w}: python ${h} js ${got.hours[w]}`);
+        const gm = isFinite(got.hoursMonth) ? got.hoursMonth : null;
+        assert.ok(want.hours_month === null ? gm === null : close(want.hours_month, gm),
+                  `${v.name} ${key} hours_month: python ${want.hours_month} js ${gm}`);
+      }
     }
   });
 }

@@ -112,36 +112,29 @@ export function apiSeatCost(offer, wl, o){
   const n = requestsPerHour(wl, o.think) * o.hours * o.spu;
   const eur = n * rc.usd / USD_PER_EUR;
   return { key: offer.key, name: offer.name, kind: 'api', eurSeat: eur, eurSession: eur / (o.active * o.spu),
-           usdRequest: rc.usd, requestsMonth: n, ttl: rc.ttl, hitRate: rc.hitRate,
-           fits: true, plansPerSeat: 1, overflowEur: 0, binds: '' };
+           usdRequest: rc.usd, requestsMonth: n, ttl: rc.ttl, hitRate: rc.hitRate };
 }
-export function planSeatCost(plan, wl, o){
+// What a plan's published limits hold of this workload, in active hours
+// (api_cost.plan_cover): not a seat price, since a plan bills its price only
+// while the usage fits, and how much fits is the vendor's to say. A plan whose
+// vendor publishes no limit claims nothing. opts: { think, turn, out, spu }
+export function planCover(plan, wl, o){
   const offer = API_OFFERS[plan.api];
   const lam = requestsPerHour(wl, o.think) * o.spu;
-  const rc = requestCost(offer, wl, o.turn, o.out);
-  const unitReq = (plan.meterOffer ? requestCost(plan.meterOffer, wl, o.turn, o.out).usd : rc.usd) + plan.perRequest;
-  const rateH = lam * unitReq, usdH = lam * rc.usd, hoursDay = o.hours / WORKDAYS_PER_MONTH;
-  const full = Math.floor(hoursDay / 5), rem = hoursDay - 5 * full;
-  const win5 = [...Array(full).fill(5), ...(rem > 1e-12 ? [rem] : [])];
-  const spans = { '5h': [win5, WORKDAYS_PER_MONTH], day: [[hoursDay], WORKDAYS_PER_MONTH],
-                  week: [[o.hours / WEEKS_PER_MONTH], WEEKS_PER_MONTH], month: [[o.hours], 1] };
-  const need = {}, over = {};
-  for (const [w, budget] of Object.entries(plan.budgets || {})){
-    const [hours, times] = spans[w];
-    need[w] = budget > 0 ? Math.max(...hours.map(h => h * rateH)) / budget : Infinity;
-    over[w] = times * hours.reduce((acc, h) => h * rateH > 0
-      ? acc + Math.max(0, h * rateH - budget) / (h * rateH) * h * usdH : acc, 0);
+  const unit = (plan.meterOffer ? requestCost(plan.meterOffer, wl, o.turn, o.out).usd
+                                : requestCost(offer, wl, o.turn, o.out).usd) + plan.perRequest;
+  const rate = lam * unit, published = plan.confidence.startsWith('documented');
+  const hours = {}, month = {};
+  if (published) for (const [w, budget] of Object.entries(plan.budgets || {})){
+    const h = rate > 0 ? budget / rate : Infinity;
+    hours[w] = h;
+    month[w] = { '5h': h >= 5 ? Infinity : h * WORKDAYS_PER_MONTH, day: h * WORKDAYS_PER_MONTH,
+                 week: h * WEEKS_PER_MONTH, month: h }[w];
   }
-  const keys = Object.keys(need);
-  const top = keys.length ? keys.reduce((x, y) => need[y] > need[x] ? y : x) : '';
-  const binds = top && need[top] > 1 ? top : '';
-  let plans = 1, overflowEur = 0;
-  if (binds){
-    if (plan.overage === 'api') overflowEur = Math.max(...Object.values(over)) * (plan.overage_factor ?? 1) / USD_PER_EUR;
-    else plans = Math.ceil(need[binds] - 1e-9);
-  }
-  const eur = plan.usd_month / USD_PER_EUR * plans + overflowEur;
-  return { key: plan.key, name: plan.name, kind: 'plan', eurSeat: eur, eurSession: eur / (o.active * o.spu),
-           usdRequest: rc.usd, requestsMonth: lam * o.hours, ttl: rc.ttl, hitRate: rc.hitRate,
-           fits: !binds, plansPerSeat: plans, overflowEur, binds };
+  const keys = Object.keys(month);
+  const low = keys.length ? keys.reduce((x, y) => month[y] < month[x] ? y : x) : '';
+  const binds = low && isFinite(month[low]) ? low : '';
+  return { key: plan.key, name: plan.name, vendor: plan.vendor, model: offer.name,
+           usdMonth: plan.usd_month, eurMonth: plan.usd_month / USD_PER_EUR, published,
+           hours, hoursMonth: binds ? month[binds] : Infinity, binds };
 }

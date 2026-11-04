@@ -1,6 +1,6 @@
 import { CONFIG, makeGrid } from './config.js';
 import { currentWL, hasHeadcount, peopleFromSessions, state } from './state.js';
-import { API_OFFERS, PLANS, apiSeatCost, planSeatCost } from './apicost.js';
+import { API_OFFERS, apiSeatCost } from './apicost.js';
 import { cssv, esc, fmt, linScale, logScale, logTicks, svgEl } from './svg.js';
 import { CEILING_KEYS, PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
 
@@ -16,38 +16,25 @@ import { CEILING_KEYS, PLANNER_COLORS, PLANNER_LABEL } from './planner.js';
 export let lastFrontierRows = null, lastFrontierCurKey = null;
 const OPTIONAL = { otherBench: false, headroom: false, bstar: false, eur: false, api: true };
 
-/* ---- API and plan rows ----
-   One row per API offer and coding plan in the price catalogue
-   (src/workingset/data/api_prices.toml), priced on YOUR workload by the
-   mirror of workingset.api_cost. They carry `kind` ('api' | 'plan') and no
-   `op`: no ceiling to fill, so every capacity column prints its own reading.
-   eurSeat is per concurrent session at the peak, the self-hosted rows' unit:
-   the seat's monthly bill at state.hours, divided by the peak share. Cheap
-   (closed form), so they are rebuilt on every render rather than cached. */
+/* ---- API rows ----
+   One row per API offer in the price catalogue (src/workingset/data/
+   api_prices.toml), priced on YOUR workload by the mirror of
+   workingset.api_cost. They carry `kind: 'api'` and no `op`: no ceiling to
+   fill, so every capacity column prints its own reading. eurSeat is per
+   concurrent session at the peak, the self-hosted rows' unit: the seat's
+   monthly bill at state.hours, divided by the peak share. Coding plans are
+   not rows: a plan bills its price only while the usage fits, and how much
+   fits is the vendor's to say (planCover). Closed form, so rebuilt on every
+   render rather than cached. */
 export function apiRows(){
   const wl = currentWL();
   const o = { think: state.think, turn: state.turn, out: state.out, hours: state.hours,
               active: hasHeadcount() ? state.active : 1, spu: hasHeadcount() ? state.spu : 1 };
-  const rows = Object.values(API_OFFERS).map(a => {
+  return Object.values(API_OFFERS).map(a => {
     const sc = apiSeatCost(a, wl, o);
     return { kind: 'api', key: 'api:' + a.key, name: a.name, vendor: a.vendor,
              q: { tb40: a.tb40 }, eurSeat: sc.eurSession, sc };
   });
-  for (const p of Object.values(PLANS)){
-    const sc = planSeatCost(p, wl, o), a = API_OFFERS[p.api];
-    rows.push({ kind: 'plan', key: 'plan:' + p.key, name: p.name, vendor: p.vendor, model: a.name,
-                q: { tb40: a.tb40 }, eurSeat: sc.eurSession, sc, plan: p });
-  }
-  return rows;
-}
-const BUDGET_LABEL = { '5h': '5-hour', day: 'daily', week: 'weekly', month: 'monthly' };
-// what a plan row's capacity cells say: fits, or which budget runs out and
-// what that costs
-function planVerdict(r){
-  if (r.sc.fits) return 'fits the plan';
-  const b = BUDGET_LABEL[r.sc.binds] + ' budget';
-  return r.sc.overflowEur > 0 ? `over its ${b}: +€${fmt(r.sc.overflowEur, 0)} at API price`
-                              : `over its ${b}: ${fmt(r.sc.plansPerSeat, 0)} plans' worth`;
 }
 let sortBy = null, sortDir = 1;   // null = the order the rows were handed in (max users)
 function frontierColumns(){
@@ -55,7 +42,7 @@ function frontierColumns(){
   // status colors as var() references, so they track a theme flip without a
   // re-render (the bind column's chart palette still needs the redraw hook)
   const good='var(--good)', warn='var(--warn)', crit='var(--crit)', muted='var(--muted)';
-  const ext = r => !!r.kind;     // an API or plan row: no op, no ceilings
+  const ext = r => !!r.kind;     // an API row: no op, no ceilings
   const viable = r => !ext(r) && r.op.limit >= 1;
   const fits = r => viable(r) && r.op.fits;
   const room = r => viable(r) ? r.op.limit/r.op.users : NaN;
@@ -63,7 +50,7 @@ function frontierColumns(){
   // through every figure derived from it, not just the headline
   const cen = r => !ext(r) && r.op.binding==='decode' && r.censored ? '≥ ' : '';
   const dim = on => on ? '' : ` style="color:${muted}"`;
-  const kindTag = r => ext(r) ? `<span class="kindtag">${r.kind === 'api' ? 'API' : 'plan'}</span> ` : '';
+  const kindTag = r => ext(r) ? `<span class="kindtag">API</span> ` : '';
   const cols = [{ key:'name', head:'configuration', asc:true, sort:r => frontierRowName(r),
                   cell:r => `<td>${kindTag(r)}${esc(frontierRowName(r))}</td>` }];
   // the model's scores, not the row's: every split of a model shares them.
@@ -76,10 +63,7 @@ function frontierColumns(){
   }
   cols.push({ key:'load', head:'your load', sort:room,
     cell:r => ext(r)
-      ? (r.kind === 'api' || r.sc.overflowEur > 0
-          ? `<td class="v" style="color:${good}">✓ any load</td>`
-          : r.sc.fits ? `<td class="v" style="color:${good}">✓ fits plan</td>`
-          : `<td class="v" style="color:${warn}">✗ over plan</td>`)
+      ? `<td class="v" style="color:${good}">✓ any load</td>`
       : viable(r)
       ? `<td class="v" style="color:${fits(r)?good:crit}">${fits(r)?'✓ fits':'✗ over'}</td>`
       : `<td class="v" style="color:${muted}">—</td>` });
@@ -99,11 +83,9 @@ function frontierColumns(){
         : `<td class="num">${c}${fmt(r.op.limit,0)}${r.reps>1?` <span style="color:${muted}">(${c}${fmt(r.op.limit/r.reps,0)}/grp)</span>`:''}</td>`;
     } });
   cols.push({ key:'binds', head:'binds on', asc:true,
-    sort:r => ext(r) ? (r.kind === 'api' ? 'per token' : planVerdict(r)) : PLANNER_LABEL[r.op.binding],
+    sort:r => ext(r) ? 'per token' : PLANNER_LABEL[r.op.binding],
     cell:r => ext(r)
-      ? (r.kind === 'api'
-          ? `<td class="bind" style="color:${muted}">per token</td>`
-          : `<td style="color:${r.sc.fits ? muted : warn};font-size:11px">${esc(planVerdict(r))}</td>`)
+      ? `<td class="bind" style="color:${muted}">per token</td>`
       : `<td class="bind" style="color:${C[r.op.binding]}">${esc(PLANNER_LABEL[r.op.binding])}</td>` });
   if (OPTIONAL.headroom) cols.push({ key:'headroom', head:'headroom', num:true, sort:room,
     cell:r => { const x = room(r);
@@ -132,7 +114,7 @@ function frontierColumns(){
     cell:r => `<td class="num"${dim(fits(r))}>${viable(r) ? fmt(r.eur,0) : '—'}</td>` });
   // chart H's y: the bill with the row full, per user it then carries;
   // priced at a censored limit it is an upper bound, hence '≤'
-  // an API or plan row's seat: its bill at state.hours a month
+  // an API row's seat: its bill at state.hours a month
   const priced = r => (ext(r) || viable(r)) && isFinite(r.eurSeat);
   cols.push({ key:'seat', head:'€/seat', num:true, asc:true,
     sort:r => priced(r) ? r.eurSeat : NaN,
@@ -141,7 +123,7 @@ function frontierColumns(){
 }
 export function renderFrontierTable(rows, curKey){
   lastFrontierRows = rows; lastFrontierCurKey = curKey;
-  // the self-hosted rows in the order handed in, then the API and plan rows
+  // the self-hosted rows in the order handed in, then the API rows
   rows = OPTIONAL.api ? rows.concat(apiRows()) : rows;
   const cols = frontierColumns();
   const sc = cols.find(c => c.key === sortBy);
@@ -153,7 +135,7 @@ export function renderFrontierTable(rows, curKey){
   }).map(([r]) => r) : rows;
   const other = Object.entries(CONFIG.BENCHES).find(([k]) => k !== state.bench);
   const picks = [['otherBench', other ? other[1].label : 'other benchmark'], ['headroom', 'headroom'],
-                 ['ceil', 'the four ceilings'], ['bstar', 'B*'], ['eur', '€/mo'], ['api', 'API and plans']];
+                 ['ceil', 'the four ceilings'], ['bstar', 'B*'], ['eur', '€/mo'], ['api', 'API']];
   const picker = `<div class="colpick"><span class="lbl">columns</span>`
     + picks.map(([k, l]) => `<button type="button" data-col="${k}" aria-pressed="${k === 'ceil' ? state.showCeil : OPTIONAL[k]}">${esc(l)}</button>`).join('')
     + `</div>`;
@@ -219,7 +201,6 @@ const FRONTIER_SHORT = Object.fromEntries(Object.entries(CONFIG.MODELS).map(([k,
 // Python-identical topology name (deploy card, harness, self-checks)
 export function frontierRowName(r){
   if (r.kind === 'api') return `${r.name} · ${r.vendor} API`;
-  if (r.kind === 'plan') return `${r.name} · ${r.model}`;
   // the arm tags modelFor appends ([NVFP4], [FP16 KV], [fp32 state], ...)
   // ride along: a row priced on a non-default arm must say so
   const tags = (r.label.split(' · ')[0].match(/\[[^\]]+\]/g) || []).join(' ');
@@ -229,7 +210,6 @@ export function frontierRowName(r){
 }
 function frontierShortLabel(r){
   if (r.kind === 'api') return `${r.name} API`;
-  if (r.kind === 'plan') return r.name;
   const m = FRONTIER_SHORT[r.mk] || CONFIG.MODELS[r.mk].name.replace(/\s*\(.*\)\s*$/, '');
   const t = r.dp*r.tp === 1 ? '1 GPU' : r.dp === 1 ? `TP${r.tp}`
           : r.tp === 1 ? `DP${r.dp}` : `DP${r.dp}×TP${r.tp}`;
@@ -256,8 +236,8 @@ export function renderFrontierChart(rows, curKey){
   const over = viable.length - carries.length, unscored = carries.length - live.length;
   const notViable = rows.length - viable.length;
   const perUser = r => r.eurSeat;
-  // the API and plan rows: a second population with its own efficient set,
-  // drawn as diamonds (API) and squares (plans) in the text colour
+  // the API rows: a second population with its own efficient set, drawn
+  // as diamonds in the text colour
   const ext = OPTIONAL.api ? apiRows().filter(r => isFinite(frontierScore(r)) && isFinite(r.eurSeat) && r.eurSeat > 0) : [];
   if (!live.length && !ext.length){
     const W=560,H=120;
@@ -358,15 +338,12 @@ export function renderFrontierChart(rows, curKey){
     const hollow = r.op.binding==='decode' && r.censored;
     return `<circle cx="${x}" cy="${y}" r="5" fill="${hollow?surface:col}" stroke="${hollow?col:surface}" stroke-width="2"${on?'':' opacity="0.35"'}/>`;
   };
-  // API: a diamond; plan: a square. Filled in the text colour, so neither
-  // reads as a binding constraint's colour
+  // an API row: a diamond filled in the text colour, so it never reads as a
+  // binding constraint's colour
   const mark = (r, on) => {
     const [x,y] = P(r);
     pts.push({ x, y, color: text, r });
-    const op = on ? '' : ' opacity="0.35"';
-    return r.kind === 'api'
-      ? `<path d="M ${x} ${y-6} L ${x+6} ${y} L ${x} ${y+6} L ${x-6} ${y} Z" fill="${text}" stroke="${surface}" stroke-width="1.5"${op}/>`
-      : `<rect x="${x-4.5}" y="${y-4.5}" width="9" height="9" fill="${surface}" stroke="${text}" stroke-width="2"${op}/>`;
+    return `<path d="M ${x} ${y-6} L ${x+6} ${y} L ${x} ${y+6} L ${x-6} ${y} Z" fill="${text}" stroke="${surface}" stroke-width="1.5"${on ? '' : ' opacity="0.35"'}/>`;
   };
   for (const r of live) if (!par.has(r)) g += dot(r, false);
   for (const r of ext) if (!parX.has(r)) g += mark(r, false);
@@ -429,7 +406,7 @@ export function renderFrontierChart(rows, curKey){
   if (over) notes.push(`${over} row${over>1?'s':''} cannot carry it${curOver?' (yours among them)':''}`);
   if (unscored) notes.push(`${unscored} unscored`);
   if (notViable) notes.push(`${notViable} not viable${curNotViable?' (yours among them)':''}`);
-  if (ext.length) notes.push(`API and plans at ${fmt(state.hours,0)} active h/month`);
+  if (ext.length) notes.push(`API at ${fmt(state.hours,0)} active h/month`);
   if (!rows.some(r => r.key === curKey)) notes.push('your split is not in the grid');
   // a score taken from a vendor card (QUALITY[mk].source[bench]) is not an
   // AA measurement: the source line names it rather than label it AA
@@ -439,7 +416,7 @@ export function renderFrontierChart(rows, curKey){
   g+=`<text class="axtick" x="${mL}" y="${wide ? mT-10 : 12}" text-anchor="start">${esc(axisSrc)}</text>`;
   g+=`<text class="axtick" x="${wide ? mL+pw : mL}" y="${wide ? mT-10 : 26}" text-anchor="${wide ? 'end' : 'start'}">${esc(notes.join(' · '))}</text>`;
   g+=`<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="${axis}" stroke-width="1"/>`;
-  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">${ext.length ? '€ per seat per month: self-hosted configuration full, API and plans at their list price (log)' : '€ per seat per month, configuration full (log)'}</text>`;
+  g+=`<text class="axlbl" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">${ext.length ? '€ per seat per month: self-hosted configuration full, API at its list price (log)' : '€ per seat per month, configuration full (log)'}</text>`;
   g+=`<text class="axlbl" x="${12}" y="${mT+ph/2}" text-anchor="middle" transform="rotate(-90 12 ${mT+ph/2})">${esc(bench.name)}, pass@1</text>`;
   box.innerHTML = svgEl(g, W, H,
     `Every configuration that carries the load as monthly cost per seat at capacity versus ${bench.name} score, with the Pareto-efficient set joined as a staircase`);

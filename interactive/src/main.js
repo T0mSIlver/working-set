@@ -730,20 +730,17 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
       tt.style.opacity=1;
     }
   }
-  // an API or plan row: what the seat is billed and why (frontier.js apiRows)
+  // an API row: what the seat is billed and why (frontier.js apiRows)
   function extTooltip(r, on){
     const sc = r.sc, bench = CONFIG.BENCHES[state.bench], q = frontierScore(r);
-    const plan = r.kind === 'plan' ? r.plan : null;
     const peak = hasHeadcount() && state.active * state.spu !== 1
       ? `<div class="row">per person <b class="tnum">€${fmt(sc.eurSeat,2)}</b>; per session at the peak ÷ ${fmt(state.active*state.spu,2)}</div>` : '';
     return `<div class="tth">${esc(frontierRowName(r))}</div>`
-      + `<div class="row">${r.kind === 'api' ? `${esc(r.vendor)} API, list price` : `${esc(r.vendor)} plan, $${fmt(plan.usd_month, plan.usd_month % 1 ? 2 : 0)}/month`} · ${on ? 'efficient' : 'dominated'}</div>`
+      + `<div class="row">${esc(r.vendor)} API, list price · ${on ? 'efficient' : 'dominated'}</div>`
       + `<div class="row">${esc(bench.name)} <b class="tnum">${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</b></div>`
       + `<div class="row">€/seat/month at ${fmt(state.hours,0)} active h <b class="tnum">${fmt(r.eurSeat,2)}</b></div>`
       + peak
-      + `<div class="row">${fmt(sc.requestsMonth,0)} requests · $${fmt(sc.usdRequest*1000,2)} per 1,000 · cache hit ${fmt(sc.hitRate*100,0)}%</div>`
-      + (plan ? `<div class="row">${sc.fits ? 'fits the plan' : `over its ${sc.binds} budget` + (sc.overflowEur > 0 ? `: +€${fmt(sc.overflowEur,0)} billed at API price` : `: ${fmt(sc.plansPerSeat,0)} plans' worth`)}</div>`
-               + `<div class="row" style="opacity:.75">budget: ${esc(plan.confidence)}</div>` : '');
+      + `<div class="row">${fmt(sc.requestsMonth,0)} requests · $${fmt(sc.usdRequest*1000,2)} per 1,000 · cache hit ${fmt(sc.hitRate*100,0)}%</div>`;
   }
   box.addEventListener('mousemove', handler);
   box.addEventListener('mouseleave', leave);
