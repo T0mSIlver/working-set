@@ -1,9 +1,8 @@
 import { CONFIG, DECODE_COMFORT_RATIO, DECODE_FLOOR_TOKS, effective_bw, tpEff } from './config.js';
-import { clip, percentiles } from './mathlib.js';
+import { clip, interpAt, percentiles } from './mathlib.js';
 import { sampleFull } from './workload.js';
 import { decodeCurves, prefillMfu } from './capacity.js';
 import { state } from './state.js';
-import { interpAt } from './charts.js';
 
 /* ============================================================================
    PREFILL — the compute roofline (mirrors scenario_model.py's prefill section;
