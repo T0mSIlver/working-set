@@ -35,12 +35,6 @@ DECODE_PRICINGS = ("roofline", "latency")
 _LATENCY_KEYS = ("decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens")
 KV_SHARDINGS = M.KV_SHARDS               # ("dcp", "replicate")
 
-# The model with no as-published weight overhead to add: its w_resident is the
-# vendor's stated as-DEPLOYED footprint, and comparing it against the raw
-# checkpoint bytes is where the +15% figure was measured in the first place.
-# Mirrors main.js enforceConstraints (`woverOk = state.model !== "27B"`).
-_NO_WEIGHT_OVERHEAD = ("27B",)
-
 
 def _fp32_state_applies(m: M.Model) -> bool:
     """render.js modelFor()'s gate: a recurrent state exists and is a bf16
@@ -49,7 +43,11 @@ def _fp32_state_applies(m: M.Model) -> bool:
 
 
 def _weight_overhead_applies(model_key: str | None) -> bool:
-    return model_key not in _NO_WEIGHT_OVERHEAD
+    """False for a model whose w_resident is already the as-deployed footprint
+    (Model.weights_as_deployed): the +15% was measured against exactly that
+    figure. Mirrors main.js enforceConstraints (woverOk)."""
+    m = M.MODELS.get(model_key)
+    return not (m is not None and m.weights_as_deployed)
 
 
 @dataclass(frozen=True)
