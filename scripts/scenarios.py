@@ -421,7 +421,7 @@ def fig_cold_spike():
     # -- right: cold-spike tolerance vs miss rate -------------------------
     fs2 = np.linspace(0, 0.5, 151)
     for mk, dp, tp, gk, col, lab in configs:
-        mm, tt = MODELS[mk], M.topology_grid(dp, tp, gk)
+        mm, tt = servable(mk, gk), M.topology_grid(dp, tp, gk)
         b = [M.spike_tolerance(mm, tt, base_workload(invalidation=f), SLA,
                                RATE, CH, TURN) for f in fs2]
         axR.plot(fs2 * 100, np.maximum(b, 1e-3), color=col, lw=2, label=lab)
@@ -449,7 +449,7 @@ def fig_cold_spike():
     fig.tight_layout()
     fig.savefig(out("scenario_cold_spike.png"), bbox_inches="tight")
     plt.close(fig)
-    return {lab: M.spike_tolerance(MODELS[mk], M.topology_grid(dp, tp, gk),
+    return {lab: M.spike_tolerance(servable(mk, gk), M.topology_grid(dp, tp, gk),
                                    wl, SLA, RATE, CH, TURN)
             for mk, dp, tp, gk, _, lab in configs}
 
@@ -531,7 +531,7 @@ def fig_binding_map():
     COLOR = {k: CEIL_STYLE.get(k, (MUTED,))[0] for k in CEIL_STYLE}
     bars = []
     for mk, dp, tp, gk, lab in rows:
-        mm, tt = MODELS[mk], M.topology_grid(dp, tp, gk)
+        mm, tt = servable(mk, gk), M.topology_grid(dp, tp, gk)
         op = M.operating_point(mm, tt, base_workload(), M.REF_USERS, CH, TURN,
                                SLA, n_iter=500)
         bars.append((op["limit"], lab, op["binding"], op["ceilings"]))
