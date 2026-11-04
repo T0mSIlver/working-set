@@ -289,6 +289,26 @@ Vibe-shaped tasks), in Vibe 3.0 (prompting, thinking budget, sampling), or
 both. A run of the release weights in another agent would split it: ≥ 38
 puts the gain in the weights, 25–30 puts it in Vibe. No such run is public.
 
+**The model repo** (`mistralai/Mistral-Large-4-1T-A52B`, discussions and
+`assets/technical_report.pdf`, read 2026-11-04). No discussion raises the
+gap. Two bear on it:
+- #5: Claude Code through LiteLLM fails on every skill load, because the
+  chat template refuses a `tool` message after a `user` message. Mistral's
+  engineer keeps the check: "We have a chat completion protocol that enforces
+  this order on which we train, so … behavior is undefined if we remove it",
+  and recommends "our Vibe Harness". The model is trained on one message
+  protocol and Mistral does not vouch for it outside that protocol.
+- #7 (open, from HF staff): adds Terminal-Bench 4.0 = 41.0 to the Hub
+  leaderboard, sourced to the announcement, with no harness named; the same
+  PR labels its Terminal-Bench-Science row "mini-swe-agent harness".
+
+The technical report's Table 3 labels the row "Terminal-Bench 4.0 (AA Coding
+Agent Index)" and names no agent. § 4.1.2 builds terminal-agent RL tasks
+partly from "internal terminal-agent traces"; § 4.3.2 says RL and evaluation
+run "the same environment code" and that an agentic episode ends when "the
+agent … produces a final message without tool calls". Neither says whether
+that loop is Vibe's.
+
 **For the study:** the axis keeps 24.7. The one-harness rule
 (`terminal_bench.md` § 1) holds, and the Coding Agent Index cannot replace it:
 every model there runs in a different agent, and six of the study's ten
