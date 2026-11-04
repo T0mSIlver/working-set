@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Working Set · Compare</title>
+<meta name="description" content="Self-hosted coding-agent configurations priced per seat and scored on Terminal-Bench.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.ico" sizes="any">
+<style>
+/* Compare: the Ledger direction (WS-16, card d_cancel-inch-bring). Tom's site
+   language: graph paper, white sheets, teal. The chart spans the page; the
+   model list sits to its right, as on slopalytics.com. */
+:root{
+  --page:#fafaf8; --sheet:#ffffff; --ink:#151515; --ink-2:#3a3a36; --muted:#66665f; --line:#e3e3de; --grid:#efefea;
+  --accent:#0d8a7c; --accent-soft:#e7f3f1; --good:#1d7a3a; --crit:#b3261e;
+  --f-body:"Helvetica Neue", Helvetica, Arial, sans-serif;
+  --f-num:ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --m-27B:#0d8a7c; --m-35BA3B:#5fb3a6; --m-Q38FN:#095a50;
+  --m-DSV4F:#3d5bd9; --m-DSV4FV:#8396ec; --m-DSV41F:#1f328c;
+  --m-GLM52:#8a4fc7; --m-GLM53F:#b48ae0;
+  --m-MM35:#c27a12; --m-ML4:#8a520a;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --page:#101211; --sheet:#171918; --ink:#ecece7; --ink-2:#cfcfc9; --muted:#9b9b94; --line:#2a2d2b; --grid:#1c1f1e;
+  --accent:#3cc2b0; --accent-soft:#14302b; --good:#5cc27a; --crit:#ff7b72;
+  --m-27B:#3cc2b0; --m-35BA3B:#8fd9cd; --m-Q38FN:#1f9c8a;
+  --m-DSV4F:#7b93ff; --m-DSV4FV:#b0bdff; --m-DSV41F:#5470f0;
+  --m-GLM52:#b98aef; --m-GLM53F:#d9bdf7; --m-MM35:#eaa64a; --m-ML4:#c98a35;
+  color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --page:#101211; --sheet:#171918; --ink:#ecece7; --ink-2:#cfcfc9; --muted:#9b9b94; --line:#2a2d2b; --grid:#1c1f1e;
+  --accent:#3cc2b0; --accent-soft:#14302b; --good:#5cc27a; --crit:#ff7b72;
+  --m-27B:#3cc2b0; --m-35BA3B:#8fd9cd; --m-Q38FN:#1f9c8a;
+  --m-DSV4F:#7b93ff; --m-DSV4FV:#b0bdff; --m-DSV41F:#5470f0;
+  --m-GLM52:#b98aef; --m-GLM53F:#d9bdf7; --m-MM35:#eaa64a; --m-ML4:#c98a35;
+  color-scheme:dark; }
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--page); color:var(--ink); font:15px/1.5 var(--f-body);
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:24px 24px}
+a{color:var(--accent); text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent); text-underline-offset:3px}
+button{font:inherit; color:inherit}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.num{font-family:var(--f-num); font-variant-numeric:tabular-nums}
+
+.top{background:var(--sheet); border-bottom:1px solid var(--line)}
+.top .in{max-width:1600px; margin:0 auto; padding:12px 24px; display:flex; gap:20px; align-items:baseline; flex-wrap:wrap}
+.brand{font-weight:700; letter-spacing:-.01em; color:var(--ink); text-decoration:none}
+.brand small{font-weight:400; color:var(--muted); margin-left:6px; font-size:13px}
+nav.pages{display:flex; gap:18px; margin-left:auto; font-size:14px; align-items:baseline}
+nav.pages a{color:var(--muted); text-decoration:none}
+nav.pages a[aria-current]{color:var(--ink)}
+.theme{border:1px solid var(--line); background:none; padding:3px 9px; font-size:12.5px; color:var(--muted); cursor:pointer}
+
+main{max-width:1600px; margin:0 auto; padding:20px 24px 64px; display:grid; gap:14px}
+.sheet{background:var(--sheet); border:1px solid var(--line)}
+.lead{padding:20px 24px; display:flex; gap:12px 32px; align-items:end; justify-content:space-between; flex-wrap:wrap}
+h1{font-size:26px; line-height:1.2; letter-spacing:-.015em; margin:0; text-wrap:balance; max-width:30ch}
+.finding{margin:0; max-width:78ch; color:var(--ink-2); font-size:15px}
+.finding b{font-family:var(--f-num); font-weight:600; color:var(--ink)}
+
+/* the chart sheet: chart | model list */
+.board{display:grid; grid-template-columns:minmax(0,1fr) 300px}
+.plot{padding:14px 18px 10px; border-right:1px solid var(--line); min-width:0}
+.bar{display:flex; gap:10px 18px; align-items:center; flex-wrap:wrap; margin-bottom:6px}
+.tabs{display:flex; gap:2px; margin-right:auto}
+.tabs button{border:0; background:none; padding:6px 10px; font-size:14px; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent}
+.tabs button[aria-selected="true"]{color:var(--ink); border-bottom-color:var(--accent)}
+.opt{display:flex; gap:6px; align-items:center; font-size:13px; color:var(--muted)}
+.seg{display:inline-flex; border:1px solid var(--line)}
+.seg button{border:0; background:none; padding:4px 9px; font-size:12.5px; color:var(--muted); cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--ink); color:var(--sheet)}
+.seg button:disabled{opacity:.4; cursor:not-allowed}
+.check{display:inline-flex; gap:6px; align-items:center; cursor:pointer; font-size:13px; color:var(--muted)}
+.check input{accent-color:var(--accent); margin:0}
+#chart{position:relative; height:clamp(420px, 66vh, 680px); touch-action:pan-y}
+#chart svg{display:block; width:100%; height:100%; overflow:visible}
+.keyline{display:flex; gap:4px 16px; flex-wrap:wrap; font-size:12px; color:var(--muted); padding:6px 0 0}
+.keyline svg{vertical-align:-2px; margin-right:5px}
+.status{position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:13px; pointer-events:none}
+.status[hidden]{display:none}
+
+.tip{position:absolute; pointer-events:none; background:var(--sheet); border:1px solid var(--ink); padding:10px 12px; font-size:13px;
+  min-width:220px; max-width:300px; box-shadow:0 6px 24px rgba(0,0,0,.12); z-index:2}
+.tip h4{margin:0 0 2px; font-size:14px}
+.tip .cfg{color:var(--muted); margin-bottom:6px}
+.tip dl{display:grid; grid-template-columns:auto 1fr; gap:2px 12px; margin:0}
+.tip dt{color:var(--muted)} .tip dd{margin:0; text-align:right; font-family:var(--f-num)}
+.tip .hint{margin-top:6px; font-size:12px; color:var(--accent)}
+
+.side{padding:14px 16px; display:grid; gap:14px; align-content:start; font-size:13.5px}
+.side h2{font-size:13px; font-weight:600; margin:0 0 6px; display:flex; justify-content:space-between; align-items:baseline}
+.side h2 span{font-weight:400; color:var(--muted); font-size:12px}
+.load{display:flex; align-items:baseline; gap:8px}
+.load output{font:600 20px var(--f-num)}
+.load small{color:var(--muted)}
+input[type=range]{width:100%; accent-color:var(--accent); margin:4px 0 0}
+.chips{display:flex; flex-wrap:wrap; gap:4px}
+.chips button{border:1px solid var(--line); background:none; padding:3px 9px; font-size:12.5px; color:var(--muted); cursor:pointer}
+.chips button[aria-pressed="true"]{border-color:var(--ink); color:var(--ink); background:var(--accent-soft)}
+.chips button:disabled{opacity:.45; cursor:not-allowed; border-style:dashed}
+.find{width:100%; border:0; border-bottom:1px solid var(--line); background:none; padding:6px 0; font:inherit; color:var(--ink)}
+.find::placeholder{color:var(--muted)}
+.models{list-style:none; margin:0; padding:0}
+.models li button{display:grid; grid-template-columns:12px 1fr auto; gap:8px; align-items:center; width:100%; border:0; background:none;
+  padding:5px 4px; text-align:left; cursor:pointer; color:var(--ink)}
+.models li button:hover, .models li button.hl{background:var(--accent-soft)}
+.models li button[aria-pressed="false"]{color:var(--muted)}
+.models li button[aria-pressed="false"] .sw{background:none !important; border:1.5px solid var(--muted)}
+.models .sw{width:10px; height:10px; border-radius:50%}
+.models .v{font-family:var(--f-num); font-size:12px; color:var(--muted)}
+.mini{display:flex; gap:10px; font-size:12px} .mini button{border:0; background:none; color:var(--accent); cursor:pointer; padding:0}
+
+/* the table */
+.ledger{padding:16px 24px 8px}
+.ledger header{display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap}
+.ledger h2{font-size:17px; margin:0}
+.meta{font-size:12.5px; color:var(--muted)}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse; width:100%; font-size:13.5px; margin-top:8px}
+caption{text-align:left; font-size:12.5px; color:var(--muted); padding-bottom:6px}
+th{font-weight:500; font-size:12px; color:var(--muted); text-align:left; padding:8px 10px; border-bottom:1px solid var(--ink); white-space:nowrap}
+th button{border:0; background:none; padding:0; color:inherit; cursor:pointer; font:inherit}
+th[aria-sort] button{color:var(--ink)}
+td{padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+td.n, th.n{text-align:right; font-family:var(--f-num); font-variant-numeric:tabular-nums}
+tbody tr{cursor:pointer}
+tbody tr:hover, tbody tr.hl{background:var(--accent-soft)}
+tr.over td{color:var(--muted)}
+.mname{font-weight:600} .cfg2{color:var(--muted); font-size:12.5px}
+.sw2{display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; vertical-align:1px}
+.badge{display:inline-block; font:500 10.5px/1 var(--f-num); padding:3px 5px; border:1px solid var(--line); color:var(--muted); margin-left:6px; vertical-align:1px; white-space:nowrap}
+.fit{font-family:var(--f-num); white-space:nowrap} .fit.y{color:var(--good)} .fit.x{color:var(--crit)}
+.zero{color:var(--muted); font-size:11px; margin-left:4px}
+.foot{font-size:12.5px; color:var(--muted); display:flex; gap:6px 18px; flex-wrap:wrap; padding:0 2px}
+
+@media (max-width: 980px){
+  .board{grid-template-columns:1fr}
+  .plot{border-right:0; border-bottom:1px solid var(--line)}
+  .side{grid-template-columns:repeat(auto-fit, minmax(200px, 1fr))}
+  .side .modelsbox{grid-column:1 / -1}
+  .models{display:flex; flex-wrap:wrap; gap:2px 4px}
+  .models li button{grid-template-columns:10px auto auto; padding:3px 6px}
+}
+@media (max-width: 600px){
+  .top .in{padding:10px 16px} main{padding:12px 12px 48px; gap:12px}
+  nav.pages{margin-left:0; width:100%}
+  .lead{padding:16px} h1{font-size:21px}
+  .plot{padding:10px 8px 8px} .side{padding:12px 16px}
+  #chart{height:min(78vh, 560px)}
+  .ledger{padding:14px 16px 4px}
+  /* each row becomes a card: name, then three figures */
+  thead{display:none} table, tbody, tr, td{display:block}
+  tbody tr{padding:10px 0; border-bottom:1px solid var(--line)} td{border:0; padding:0}
+  td.c-name{margin-bottom:6px}
+  td.c-fig{display:inline-block; width:33%; text-align:left}
+  td.c-fig::before{content:attr(data-h); display:block; font:11px var(--f-body); color:var(--muted)}
+  td.c-bind{display:none}
+  td.c-fit{display:inline-block; width:33%; vertical-align:bottom}
+}
+@media (prefers-reduced-motion: no-preference){ #chart .mk, #chart .rail, #chart .lbl{transition:opacity .15s} }
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <a class="brand" href="compare.html">Working Set <small>by Tom Vaucourt</small></a>
+  <nav class="pages" aria-label="Pages">
+    <a href="compare.html" aria-current="page">Compare</a>
+    <a href="index.html">Plan a deployment</a>
+    <a href="method.html">Method</a>
+    <button class="theme" id="theme" type="button">Dark</button>
+  </nav>
+</div></header>
+<main>
+  <section class="sheet lead">
+    <h1>What does a coding-agent seat cost, and how good is the model?</h1>
+    <p class="finding" id="finding">Pricing every configuration…</p>
+  </section>
+
+  <section class="sheet board" aria-label="Chart">
+    <div class="plot">
+      <div class="bar">
+        <div class="tabs" role="tablist" aria-label="Chart">
+          <button role="tab" id="tab-seat" aria-selected="true" data-x="seat">Score against € per seat</button>
+          <button role="tab" id="tab-users" aria-selected="false" data-x="users">Score against max users</button>
+        </div>
+        <label class="check"><input type="checkbox" id="pareto" checked> Best for the money</label>
+        <div class="seg" role="group" aria-label="x scale"><button type="button" aria-pressed="true" data-scale="log">Log</button><button type="button" aria-pressed="false" data-scale="lin">Linear</button></div>
+      </div>
+      <div id="chart" role="img" aria-describedby="ledgerCaption"><div class="status" id="status">Pricing every configuration…</div></div>
+      <div class="keyline" id="keyline"></div>
+    </div>
+    <aside class="side" aria-label="Filters">
+      <div>
+        <h2>Your load <span>concurrent users</span></h2>
+        <div class="load"><output id="usersOut" class="num">64</output><small id="reqOut"></small></div>
+        <input type="range" id="users" min="0" max="8" step="1" value="3" aria-label="Concurrent users">
+      </div>
+      <div>
+        <h2>Benchmark</h2>
+        <div class="seg" role="group" aria-label="Benchmark" id="bench"></div>
+      </div>
+      <div>
+        <h2>GPUs <span>8 per node at most</span></h2>
+        <div class="chips" id="gpus"></div>
+      </div>
+      <div>
+        <h2>Show</h2>
+        <div class="chips"><button type="button" aria-pressed="true" disabled title="The only kind priced today">Self-hosted</button><button type="button" aria-pressed="false" disabled title="WS-5 adds API rows">API</button><button type="button" aria-pressed="false" disabled title="WS-5 adds plans">Subscriptions</button></div>
+      </div>
+      <div class="modelsbox">
+        <h2>Models <span class="mini"><button type="button" id="allOn">All</button><button type="button" id="allOff">None</button></span></h2>
+        <input class="find" id="find" type="search" placeholder="Find a model" aria-label="Find a model">
+        <ul class="models" id="models"></ul>
+      </div>
+    </aside>
+  </section>
+
+  <section class="sheet ledger">
+    <header><h2>Every model at your load</h2><span class="meta" id="count"></span></header>
+    <div class="wrap"><table>
+      <caption id="ledgerCaption"></caption>
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </section>
+  <p class="foot"><span>Prototype of the Compare page, not deployed.</span><span>Scores: Artificial Analysis, read 2026-11-04.</span><span>Capacity and €/seat: the working-set model with default assumptions; open a row in Plan to change them.</span></p>
+</main>
+<script type="module" src="src/compare.js"></script>
+</body>
+</html>
