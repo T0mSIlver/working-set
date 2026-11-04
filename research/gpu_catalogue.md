@@ -270,3 +270,67 @@ golden regeneration.
 | L40S | after `arch` | same, and FP8-only |
 | Rubin NVL72 | not yet | bandwidth and NVLink conflict on Nvidia's own pages, no TDP, no rental price |
 | H20, H100/H200 NVL | no | China-only with conflicting specs; 2-4 card bridges fit neither regime |
+
+## 4. Link fields for a communication cost model
+
+For the parallelism spec (`.scratch/specs/parallelism.md`). NVLink figures
+are per GPU and **bidirectional** (Nvidia's convention); NCCL bus bandwidth
+compares against half of it. Read 2026-11-04.
+
+| Part | NVLink gen | NVLink per GPU | Domain | Host PCIe | Scale-out NIC per GPU |
+|---|---|---|---|---|---|
+| H100 SXM | 4 | 900 GB/s (18 links) | 8 | Gen5 x16, 128 GB/s | ConnectX-7 400G |
+| H100 NVL | 4 | 600 GB/s bridge | 2 | Gen5 x16 | server choice |
+| H200 SXM | 4 | 900 GB/s | 8 | Gen5 x16 | ConnectX-7 400G |
+| H200 NVL | 4 | 900 GB/s bridge | 2 or 4 | Gen5 x16 | server choice |
+| H20 | 4 (S) | 900 GB/s (resellers) | 8 | Gen5 x16 | not found |
+| B200 | 5 | 1.8 TB/s (18 x 100 GB/s) | 8 | Gen5 (not stated by Nvidia) | ConnectX-7 400G |
+| B300 | 5 | 1.8 TB/s | 8 | **Gen6** x16, 256 GB/s | ConnectX-8 800G |
+| GB200 NVL72 | 5 | 1.8 TB/s | 72 (130 TB/s rack) | Grace Gen5; GPU-Grace C2C 900 GB/s (stated for the Ultra part only) | ConnectX-7 400G (S) |
+| GB300 NVL72 | 5 | 1.8 TB/s | 72 | Gen6 x16 | ConnectX-8 800G |
+| Vera Rubin NVL72 | 6 | 3.6 TB/s (Rubin blog, HGX Rubin NVL8 page); the NVLink page's 3.0 TB/s is marked preliminary | 72 | Gen6 x16; Vera C2C 1.8 TB/s | ConnectX-9 1.6 Tb/s (2 x 800G) |
+| RTX PRO 6000 Server | none | – | 1 | Gen5 x16 | server choice |
+| L40S | none | – | 1 | Gen4 x16, 64 GB/s | server choice |
+
+Sources: [NVLink](https://www.nvidia.com/en-us/data-center/nvlink/),
+[HGX](https://www.nvidia.com/en-us/data-center/hgx/), the product pages in §1,
+[Inside Blackwell Ultra](https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/)
+(B300 Gen6, C2C), [Rubin platform blog](https://developer.nvidia.com/blog/inside-the-nvidia-rubin-platform-six-new-chips-one-ai-supercomputer/),
+[RTX PRO 6000 datasheet](https://www.akamai.com/site/en/documents/corporate/nvidia-rtx-pro-6000-blackwell-server-edition-datasheet.pdf),
+[NCCL 2.27 blog](https://developer.nvidia.com/blog/enabling-fast-inference-and-resilient-training-with-nccl-2-27/) (P);
+H20 from [Tom's Hardware](https://www.tomshardware.com/pc-components/gpus/the-tale-of-nvidias-hgx-h20-how-an-ai-gpu-became-a-political-lightning-rod) (S).
+
+### Measured collectives
+
+| System | Collective | Number | Source |
+|---|---|---|---|
+| 4 x GB200 (one tray) | small all-reduce | NCCL ring 11.0 µs; one-shot multicast kernel 2.37 µs; speed-of-light 1.40 µs | [arXiv 2607.16100](https://arxiv.org/pdf/2607.16100) (P) |
+| GB200 NVL72, 2-32 GPUs | barrier | 0.85-1.7 µs | same |
+| 8 x B200 / 8 x H200 | 8 B all-reduce, tuned nccl-tests | ~3 µs / ~2.3 µs | [Nvidia forum](https://forums.developer.nvidia.com/t/inter-gpu-latency-on-b200-higher-than-on-hopper/352473) (S) |
+| 4 x H100 | all-reduce busbw, large | ~366 GB/s with NVLS (77% of 450 GB/s per direction) | [dev.to](https://dev.to/member_2e5ba30f/where-tensor-parallel-inference-hits-the-nvlink-wall-1l8p) (S) |
+| GB200 NVL72, EP8 | MoE all-to-all, 2048 tok/rank | dispatch 753 GB/s, combine 728 GB/s | [TensorRT-LLM blog 18](https://nvidia.github.io/TensorRT-LLM/blogs/tech_blog/blog18_Optimizing_MoE_Communication_with_One_Sided_AlltoAll_Over_NVLink.html) (P) |
+| GB200 NVL72, EP8 | all-to-all, 1 tok/rank | dispatch 19 µs, combine 31 µs (latency-bound) | same |
+| GB200 NVL72, EP64 | all-to-all, 2048 tok/rank | dispatch 588 GB/s, combine 631 GB/s | same |
+| H800, EP8 intranode | DeepEP normal kernels | dispatch 153 GB/s, combine 158 GB/s | [DeepEP README @9eb2f84](https://github.com/deepseek-ai/DeepEP/blob/9eb2f84/README.md) (P) |
+| H800, internode CX-7 400G | DeepEP normal kernels | 43-58 GB/s per NIC | same |
+| H800, EP8 | DeepEP low-latency | dispatch 77 µs, combine 114 µs | same |
+| H800, EP256 | DeepEP low-latency | dispatch ~194 µs, combine ~360 µs, 39-40 GB/s | same |
+| RTX PRO 6000 Server | P2P same PCIe switch | 40 GB/s (45 GB/s via the NIC path) | [Nvidia forum](https://forums.developer.nvidia.com/t/pcie5-p2p-gpu-via-nics-faster-than-pcie-switch/357843) (S) |
+| 8 x H100 NIXL KV write | 1 GiB | 39 GB/s same NUMA, 27.5 GB/s cross-NUMA (NIC unstated) | [dranet NIXL test](https://dranet.sigs.k8s.io/docs/user/nixl-kv-transfer/) (S) |
+
+Not found: 8-GPU all-reduce busbw for H100/H200/B200 from a primary
+source; untuned default small-message latency; 72-GPU all-reduce busbw;
+8-card all-reduce on L40S or RTX PRO 6000; a measured ConnectX-7 or XDR
+`ib_write_lat`; NIXL over a named 400G NIC. InfiniBand NDR switch latency is
+~130 ns per hop (resellers only); a 400G NIC is 50 GB/s per direction at line
+rate.
+
+Two cautions for the cost model:
+- nccl-tests applies the ring correction whatever algorithm ran, so NVLS
+  bus bandwidth can read above the per-direction link rate
+  ([PERFORMANCE.md](https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md)).
+- PCIe P2P on the RTX PRO 6000 is fragile in practice: vLLM on 8 cards
+  needed `--disable-custom-all-reduce` and `NCCL_P2P_DISABLE=1`
+  ([vLLM forum](https://discuss.vllm.ai/t/vllm-hangs-during-worker-initialization-on-blackwell-pcie-gpus-unless-disable-custom-all-reduce-is-used/2540), S).
+  A PCIe server can end up all-reducing through host memory, which belongs in
+  the PCIe parts' link figure, not in the NVLink haircut.
