@@ -309,6 +309,12 @@ run "the same environment code" and that an agentic episode ends when "the
 agent … produces a final message without tool calls". Neither says whether
 that loop is Vibe's.
 
+Asked in discussion #17 (opened 2026-11-04,
+`https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B/discussions/17`):
+whether the RL ran in Vibe, what Vibe 3.0 sets that mini-swe-agent does not,
+and which score other harnesses should expect. Update this section when Mistral
+answers.
+
 **For the study:** the axis keeps 24.7. The one-harness rule
 (`terminal_bench.md` § 1) holds, and the Coding Agent Index cannot replace it:
 every model there runs in a different agent, and six of the study's ten
