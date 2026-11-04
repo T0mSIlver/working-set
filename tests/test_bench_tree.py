@@ -199,3 +199,54 @@ def test_a_dry_run_reads_the_context_cap_from_the_endpoint(
     assert "context cap 4,096 tokens (from /models)" in out
     assert "model=served" in out
     assert "1 sessions start a seat; the other 1 are subagents" in out
+
+
+# ---- the baseline of a tree is that tree alone -----------------------------
+FLAT1 = B.Speed(a=1.0)                 # every request: 1 s alone
+
+
+def _kid(seat, turn, sent, took, child=False):
+    return B.Row(seat, turn, "hit", 1, 1, 1, sent=sent, ttft=took,
+                 service=took, done=True, ended=sent + took, child=child)
+
+
+def test_a_trees_concurrency_counts_by_alone_time_not_load():
+    # three requests of one tree sent together: each sees the other two. A
+    # fourth sent long after sees none, however slow the first three were.
+    rows = [_kid(0, 0, 0.0, 9.0), _kid(0, 0, 0.1, 9.0, True),
+            _kid(0, 0, 0.2, 9.0, True), _kid(0, 0, 5.0, 1.0)]
+    k = B.tree_k(rows, FLAT1)
+    assert [k[id(r)] for r in rows] == [2, 2, 2, 0]
+
+
+def test_the_per_stream_slowdown_is_fitted_on_a_tree_alone():
+    # each request took (1 + 0.25 k) s alone, k the others in flight
+    rows = [_kid(0, 0, 0.0, 1.5), _kid(0, 0, 0.1, 1.5, True),
+            _kid(0, 0, 0.2, 1.5, True), _kid(0, 0, 5.0, 1.0)]
+    # (k = 2 for the first three: 1.5 s is 1 + 0.25 * 2)
+    beta, n = B.fit_tree_beta(rows, FLAT1)
+    assert beta == pytest.approx(0.25) and n == 3
+
+
+def test_a_trees_turn_is_judged_against_the_tree_alone():
+    rows = [_kid(0, 0, 0.0, 1.5), _kid(0, 0, 0.1, 1.5, True),
+            _kid(0, 0, 0.2, 1.5, True)]
+    speed = B.Speed(a=1.0, tree_beta=0.25)
+    s = B.judge(B.Step(1, rows, window=(0.0, 10.0)), speed, 1.5)
+    assert s.slowdown_p90 == pytest.approx(1.0)      # as slow as it is alone
+    assert s.raw_p90 == pytest.approx(1.5)           # vs one stream: kept
+    assert s.passed
+
+
+def test_the_cap_is_reported_with_its_share():
+    tr = AgentTrace("pi", ((TraceRequest(900, 50, None, "start"),
+                            TraceRequest(2_000, 100, 1.0, "tool"),
+                            TraceRequest(960, 50, 1.0, "tool"),
+                            TraceRequest(100, 5, 1.0, "tool")),))
+    cp = B.capped_requests(tr, 1_000)
+    assert cp["requests"] == 2 and cp["share"] == 0.5     # 2000 and 960+50
+
+
+def test_the_speed_line_names_the_cap_not_40k():
+    assert "at 32k context" in B._rates(B.Speed(a=1.0), cap=32_768)
+    assert "at 40k context" in B._rates(B.Speed(a=1.0), cap=200_000)

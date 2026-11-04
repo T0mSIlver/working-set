@@ -33,7 +33,7 @@ import math
 import random
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -101,6 +101,11 @@ class Speed:
     n: int = 0
     ttft_rms_s: float = float("nan")
     decode_rms_s: float = float("nan")
+    # a tree's own streams slow each other: one request takes
+    # (1 + tree_beta * k) times its single-stream time, k the other requests
+    # of its tree in flight (`tree_k`), fitted on whole trees replayed alone
+    tree_beta: float = 0.0
+    tree_n: int = 0             # requests the fit used
 
     def ttft(self, u: float, ctx: float) -> float:
         return self.a + self.b * u + self.c * u * ctx
@@ -139,6 +144,43 @@ def fit_speed(rows: list["Row"]) -> Speed:
         d = e = 0.0
         d_rms = float("nan")
     return Speed(a, b, c, d, e, len(ok), t_rms, d_rms)
+
+
+def tree_k(rows: list, speed: Speed) -> dict[int, int]:
+    """For each request, how many other requests of its tree overlap it in time,
+    with every request lasting its single-stream time
+    (`Speed.service`). Counting by the time a request would take alone, not the
+    time it took, keeps load from inflating the count: the tree's own
+    concurrency is what its recording does on an idle server."""
+    by_tree: dict[int, list] = {}
+    for r in rows:
+        by_tree.setdefault(r.seat, []).append(r)
+    k: dict[int, int] = {}
+    for rs in by_tree.values():
+        spans = [(r.sent, r.sent + speed.service(r.uncached, r.prompt,
+                                                 r.generated)) for r in rs]
+        for i, r in enumerate(rs):
+            a_i, b_i = spans[i]
+            k[id(r)] = sum(1 for j, (a, b) in enumerate(spans)
+                           if j != i and a < b_i and a_i < b)
+    return k
+
+
+def fit_tree_beta(rows: list, speed: Speed) -> tuple[float, int]:
+    """The per-stream slowdown of a tree alone: (took / single-stream time - 1)
+    against the other requests of its tree in flight, through the origin."""
+    ok = [r for r in rows if r.ok]
+    ks = tree_k(ok, speed)
+    num = den = 0.0
+    n = 0
+    for r in ok:
+        k = ks[id(r)]
+        base = speed.service(r.uncached, r.prompt, r.generated)
+        if k and base > 0:
+            num += k * (r.service / base - 1.0)
+            den += k * k
+            n += 1
+    return (max(0.0, num / den) if den else 0.0), n
 
 
 # ============================================================================
@@ -299,6 +341,8 @@ class Step:
     ran_out: str = ""
     slowdown_p90: float = float("nan")
     slowdown_mean: float = float("nan")
+    raw_p90: float = float("nan")       # vs one stream alone, not the tree
+    raw_mean: float = float("nan")
     turn_s_p50: float = float("nan")
     turn_s_p90: float = float("nan")
     passed: bool = False
@@ -353,17 +397,20 @@ def judge(step: Step, speed: Speed, max_slowdown: float) -> Step:
     step.unfinished = sum(1 for r in rows if not r.done)
     took: dict[tuple, float] = {}
     alone: dict[tuple, float] = {}
-    for r in rows:
-        if r.done and r.error:
-            continue
+    single: dict[tuple, float] = {}
+    live = [r for r in rows if not (r.done and r.error)]
+    ks = tree_k(live, speed) if speed.tree_beta else {}
+    for r in live:
         if r.ok:
             t = r.service if math.isfinite(r.service) else r.ttft
         else:
             t = max(end_all - r.sent, 0.0)
         key = (r.seat, r.turn)
+        base = speed.service(r.uncached, r.prompt, r.generated)
         took[key] = took.get(key, 0.0) + t
-        alone[key] = alone.get(key, 0.0) + speed.service(r.uncached, r.prompt,
-                                                        r.generated)
+        single[key] = single.get(key, 0.0) + base
+        alone[key] = alone.get(key, 0.0) + base * (
+            1.0 + speed.tree_beta * ks.get(id(r), 0))
     keys = [k for k in took if alone[k] > 0]
     step.turns = len(keys)
     slow = [took[k] / alone[k] for k in keys]
@@ -371,6 +418,11 @@ def judge(step: Step, speed: Speed, max_slowdown: float) -> Step:
     tot_alone = sum(alone[k] for k in keys)
     step.slowdown_mean = (sum(took[k] for k in keys) / tot_alone
                           if tot_alone else float("nan"))
+    raw = [took[k] / single[k] for k in keys if single[k] > 0]
+    step.raw_p90 = _pct(raw, PERCENTILE)
+    tot_single = sum(single[k] for k in keys)
+    step.raw_mean = (sum(took[k] for k in keys) / tot_single
+                     if tot_single else float("nan"))
     step.turn_s_p50 = _pct([took[k] for k in keys], 50)
     step.turn_s_p90 = _pct([took[k] for k in keys], PERCENTILE)
     span = max(w1 - w0, 1e-9)
@@ -628,7 +680,52 @@ async def calibrate(client, ep, plan: Plan, trace: AgentTrace,
         raise ValueError(
             f"{len(failed)} of {len(rows)} requests failed while measuring "
             f"the endpoint alone; the first: {failed[0].error[:300]}")
-    return fit_speed(rows), rows
+    speed = fit_speed(rows)
+    if spawn_points(trace):
+        tree_rows = await calibrate_trees(client, ep, plan, trace,
+                                          prefix_text, run_nonce)
+        rows += tree_rows
+        beta, n = fit_tree_beta(tree_rows, speed)
+        speed = replace(speed, tree_beta=beta, tree_n=n)
+    return speed, rows
+
+
+CALIBRATE_TREES = 3
+CALIBRATE_TREE_S = 90.0
+
+
+async def calibrate_trees(client, ep, plan: Plan, trace: AgentTrace,
+                          prefix_text: str, run_nonce: str) -> list:
+    """Whole trees replayed alone, one at a time, from their first request,
+    for `CALIBRATE_TREE_S` each: the recordings with the most subagents
+    spawned early. Their requests show how much a tree's own streams slow
+    each other (`fit_tree_beta`)."""
+    points = spawn_points(trace)
+    roots = [i for i in root_sessions(trace) if i in points]
+    roots.sort(key=lambda i: (-len(points[i]), len(trace.sessions[i])))
+    rows: list[Row] = []
+    for n, root in enumerate(roots[:CALIBRATE_TREES]):
+        stop = asyncio.Event()
+        t0 = time.monotonic()
+        uid = 900_000 + n * 1_000
+        forest = _Forest(client, ep, plan, trace, prefix_text, run_nonce,
+                         rows, t0, stop, None, uid_base=uid + 500)
+        seat = _seat(trace, plan, prefix_text, uid, run_nonce, start=(root, 0))
+        task = asyncio.create_task(_seat_loop(
+            client, ep, plan.options(), seat, rows, t0, stop, 0.0, gaps=True,
+            limit=len(trace.sessions[root]), spawn=forest.spawner(uid)))
+        try:
+            await asyncio.wait_for(asyncio.shield(task), CALIBRATE_TREE_S)
+        except asyncio.TimeoutError:
+            stop.set()
+        await task
+        pending = [t for t in forest.tasks if not t.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=CALIBRATE_TREE_S)
+            for t in pending:
+                t.cancel()
+        await asyncio.gather(*forest.tasks, return_exceptions=True)
+    return rows
 
 
 CPT_PROBE_TOKENS = (1_500, 3_000, 6_000)
@@ -797,7 +894,8 @@ def _turns_alone(trace: AgentTrace, speed: Speed, plan: Plan) -> float:
     return total / turns if turns else float("nan")
 
 
-def _rates(speed: Speed, ctx: int = 40_000) -> str:
+def _rates(speed: Speed, ctx: int = 40_000, cap: int = 0) -> str:
+    ctx = min(ctx, cap) if cap else ctx
     pre = speed.b + speed.c * ctx
     tok = speed.per_token(ctx)
     pf = f"{1 / pre:,.0f}" if pre > 0 else "n/a"
@@ -807,7 +905,11 @@ def _rates(speed: Speed, ctx: int = 40_000) -> str:
 
 
 def describe_speed(speed: Speed, trace: AgentTrace, plan: Plan) -> str:
-    return (f"alone ({speed.n} requests): {_rates(speed)}\n"
+    return (f"alone ({speed.n} requests): "
+            f"{_rates(speed, cap=plan.context_cap_tokens)}"
+            + (f"; a tree's own streams add {speed.tree_beta:.2f} per other "
+               f"stream in flight ({speed.tree_n} requests)"
+               if speed.tree_n else "") + "\n"
             f"  1.0x = a mean turn of {_turns_alone(trace, speed, plan):.0f} s "
             "of model time")
 
@@ -818,6 +920,7 @@ def step_line(s: Step) -> str:
     failed = s.errors + s.unfinished
     return (f"  {s.turns} turns, {s.requests} requests, {failed} failed | "
             f"turn p90 {_x(s.slowdown_p90)} alone, mean {_x(s.slowdown_mean)} "
+            f"(vs one stream: p90 {_x(s.raw_p90)}, mean {_x(s.raw_mean)}) "
             f"| turn time p50 {_s(s.turn_s_p50)} p90 {_s(s.turn_s_p90)} | "
             f"{_f1(s.streams_mean)} requests in flight | {v}"
             + (f"\n  server: {sig}" if sig else "")
@@ -872,9 +975,22 @@ def print_report(rec: dict, out=None) -> None:
       f"{rec['endpoint']['model'] or '<server default>'}")
     w("=" * 78)
     sp = Speed.from_dict(rec["speed"])
-    w(f"alone ({sp.n} requests): {_rates(sp)}; a mean turn takes "
-      f"{rec['turn_alone_s']:.0f} s of model time")
     pl = rec["plan"]
+    w(f"alone ({sp.n} requests): "
+      f"{_rates(sp, cap=pl.get('context_cap_tokens') or 0)}; a mean turn "
+      f"takes {rec['turn_alone_s']:.0f} s of model time")
+    if sp.tree_n:
+        w(f"a session tree alone: each other stream of the tree in flight "
+          f"adds {sp.tree_beta:.2f} to a request's time (fitted on "
+          f"{sp.tree_n} requests of whole trees replayed alone). Turns are "
+          "judged against that, so a tree's own concurrency is not held "
+          "against the endpoint; the 'vs one stream' column is not corrected")
+    cp = rec.get("capped")
+    if cp and cp["requests"]:
+        w(f"capped: {cp['requests']:,} of {cp['of']:,} recorded requests "
+          f"({cp['share']:.0%}) are longer than the {cp['cap']:,}-token "
+          "context cap and were cut to it. A capped request is cold at the "
+          "cap, so this run understates prefix cache hits")
     src = {"measured": "measured from the server's prompt token counts",
            "default": "the default, never measured",
            "given": "given"}.get(pl.get("cpt_source", "given"), "given")
@@ -883,13 +999,13 @@ def print_report(rec: dict, out=None) -> None:
       "count in the turn that spawned them")
     w()
     w(f"{'sessions':>8} {'turns':>6} {'req':>6} {'fail':>5} "
-      f"{'turn p90':>9} {'mean':>6} {'turn s p50/p90':>15} {'in flight':>9}"
-      "  verdict")
+      f"{'turn p90':>9} {'mean':>6} {'vs 1 stream':>12} "
+      f"{'turn s p50/p90':>15} {'in flight':>9}  verdict")
     for s in steps:
         v = "PASS" if s.passed else "FAIL: " + "; ".join(s.reasons)
         w(f"{s.sessions:>8} {s.turns:>6} {s.requests:>6} {s.errors:>5} "
           f"{_x(s.slowdown_p90):>9} {_x(s.slowdown_mean):>6} "
-          f"{_s(s.turn_s_p50):>7}/{_s(s.turn_s_p90):<7} "
+          f"{_x(s.raw_p90):>12} {_s(s.turn_s_p50):>7}/{_s(s.turn_s_p90):<7} "
           f"{_f1(s.streams_mean):>9}  {v}")
     sig = [(s.sessions, signals(s.server)) for s in steps if s.server]
     if sig:
@@ -979,6 +1095,16 @@ def metrics_headers(given: list[str], key: str, base_url: str,
     return h
 
 
+def capped_requests(trace: AgentTrace, cap: int) -> dict:
+    """Recorded requests whose prompt plus reply passes the context cap: the
+    replay cuts them to it, and they are cold there."""
+    n = sum(1 for s in trace.sessions for r in s
+            if cap and r.prompt_tokens > cap - max(1, r.output_tokens))
+    total = trace.n_requests
+    return {"requests": n, "of": total, "cap": cap,
+            "share": n / total if total else 0.0}
+
+
 def cmd_replay(args) -> int:
     import os
     from . import __version__
@@ -1028,6 +1154,11 @@ def cmd_replay(args) -> int:
           f"{plan.chars_per_token:.3g} chars per token"
           + (" (until measured from the server's prompt token counts)"
              if cpt_source == "default" else ""))
+    cp = capped_requests(trace, plan.context_cap_tokens)
+    if cp["requests"]:
+        print(f"  {cp['requests']:,} of {cp['of']:,} recorded requests "
+              f"({cp['share']:.0%}) are longer than the cap: they are cut "
+              "to it and cold there, so the run understates cache hits")
     kids = sum(1 for l in trace.links if l)
     if kids:
         print(f"  {len(root_sessions(trace))} sessions start a seat; the "
@@ -1081,6 +1212,7 @@ def cmd_replay(args) -> int:
            "run_nonce": res["nonce"],
            "speed": res["speed"].to_dict(),
            "turn_alone_s": _turns_alone(trace, res["speed"], plan),
+           "capped": capped_requests(trace, plan.context_cap_tokens),
            "calibration": [r.to_dict() for r in res["calibration"]],
            "steps": [s.to_dict() for s in res["steps"]],
            "answer": res["answer"],
