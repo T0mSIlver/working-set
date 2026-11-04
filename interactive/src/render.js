@@ -1,4 +1,4 @@
-import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeTopo,
+import { CONFIG, tokensPerStep, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeTopo,
          minTpFor, servableKv, unionKink, withGpu, withKvDtype } from './config.js';
 import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
          decodeFloor, capDecodeUsers, decodePowerUsers, decodeSlotMean, decodeSlotUsers, effectiveMns, maxUsersDecode, p50AtCap, recommendedMns, missContextSeconds, missShareAt, operatingPoint, prefillChunk,
@@ -7,7 +7,7 @@ import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
          SPIKE_SLA_S, slowedShare, slowedStretch, coldWait, stretchPct, ttftMoments } from './prefill.js';
 import { samplingSig, seedFor } from './mathlib.js';
 import { p_sub } from './workload.js';
-import { decodeCurves, decodeLatency, decodeMbu, decodePlan, warmCapacity } from './capacity.js';
+import { decodeCurves, decodePlan, decodeState, warmCapacity } from './capacity.js';
 import { currentTopo, currentWL, ramPerCache, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartEData, clearChartGeomCD, interpAt, renderChartA, renderChartB,
@@ -53,10 +53,10 @@ export function activeModel(){ return modelFor(state.model); }
 // slider stays a SENSITIVITY control on the selected configuration, which is
 // what its own tooltip says it is.
 export function modelForCompare(key){
-  const own = CONFIG.MODELS[key].mtp;
-  const saved = state.mtp;
-  state.mtp = own;
-  try { return modelFor(key); } finally { state.mtp = saved; }
+  const { acceptance, spec_tokens } = CONFIG.MODELS[key];
+  const saved = [state.acc, state.dspec];
+  state.acc = acceptance; state.dspec = spec_tokens;
+  try { return modelFor(key); } finally { [state.acc, state.dspec] = saved; }
 }
 function modelFor(key){
   let m = CONFIG.MODELS[key];
@@ -84,16 +84,14 @@ function modelFor(key){
   // UI disables the control on that model.
   if (state.wover === "p15" && !CONFIG.MODELS[state.model].weights_as_deployed)
     m = { ...m, w_resident: m.w_resident*1.15, name: m.name + " [+15% weights]" };
-  m = { ...m, mtp: state.mtp };   // MTP speedup knob (1.0 = off)
-  // ...and the decode-efficiency knob, baked onto the model so decodeCurves
-  // and decodeUsersApprox read one field whichever path built the model.
-  // Deliberately the SLIDER for every row, the frontier included (see
-  // DECODE_MBU); frontierDecSig carries state.mbu so the cached decode
-  // ceilings rebuild when it moves.
-  m = { ...m, decode_mbu: decodeMbu() };
-  // ...and the opt-in latency pricing, null under the default roofline
-  const lat = decodeLatency();
-  if (lat) m = { ...m, decode_lat: lat };
+  // draft acceptance and depth (the selected model's own unless moved), and
+  // the step equation's constants, baked onto the model so decodeCurves and
+  // decodeUsersApprox read one field whichever path built the model; the
+  // constants are the SLIDERS for every row, the frontier included, and
+  // frontierDecSig carries them so cached decode ceilings rebuild
+  m = { ...m, acceptance: state.acc, spec_tokens: state.dspec };
+  m = { ...m, tokens_per_step: tokensPerStep(m.acceptance, m.spec_tokens),
+        decode: decodeState() };
   return m;
 }
 
@@ -334,7 +332,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
     // every step carries mtp tokens per user: steps lost x mtp (model.py
     // spike_token_debt)
     tokensLost: (sp.rho >= 1 || !(dm.ratio > 1)) ? 0
-              : drain * model.mtp * (1/dm.decodeS - 1/dm.mixedS),
+              : drain * model.tokens_per_step * (1/dm.decodeS - 1/dm.mixedS),
     ttftMiss:    ttft.miss,
     ttftHitFcfs: ttft.hitFcfs,
     ttftHitPs:   ttft.hitPs,
@@ -417,9 +415,8 @@ function frontierWarmSig(wl){
 // ...and with the decode pricing (whose compute leg reads the MFU) and the
 // max_num_seqs cap
 function frontierDecSig(wl){
-  return `${frontierWarmSig(wl)}|${state.decode_floor}|${state.mbu}|${state.mns}|`
-       + (state.dprice === 'latency'
-          ? `lat|${state.dbw}|${state.dfixed}|${state.dspec}|${state.mfu}` : 'roofline');
+  return `${frontierWarmSig(wl)}|${state.decode_floor}|${state.mns}|${state.mfu}|`
+       + `${state.eta}|${state.t0}|${state.tar}|${state.trec}|${state.union}`;
 }
 /* Chunked rebuild: a settle used to recompute every stale row in ONE task —
    measured at 500–900 ms of main-thread block once the table reached 27 rows
@@ -658,7 +655,7 @@ function itlSpikeRatio(model, topo, wl, cs){
   const st = lastStress;
   const pu = st && st.pu > 0 ? st.pu : 0;
   if (!(pu > 0)) return { decodeS: 0, mixedS: 0, ratio: 0 };
-  const decodeS = model.mtp / pu;     // one decode step, mtp tokens per user
+  const decodeS = model.tokens_per_step / pu;     // one decode step, mtp tokens per user
   // priced mid-re-prefill: prior = E[L]/2, the average cache a chunk attends
   // over during a full cold re-prefill. A chunk larger than the mean context
   // is a single whole-context pass with no cache behind it.
@@ -743,7 +740,7 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   // and every decoder at the stress point sees one inter-token gap of
   // step-time + chunk-time instead of step-time (a forward pass yields ~mtp
   // tokens, so step-time = mtp / per-user speed)
-  const stepS = (noFit || !(puOp > 0)) ? 0 : model.mtp / puOp;
+  const stepS = (noFit || !(puOp > 0)) ? 0 : model.tokens_per_step / puOp;
   // the chunk is priced mid-re-prefill (prior = E[L]/2, the average cache it
   // attends over); the LAST chunk of a mean context carries ~2x this cross
   // term. A chunk larger than the mean context is one whole-context pass.

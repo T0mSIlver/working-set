@@ -134,20 +134,19 @@ export function workingsetConfig(state, model, topo, wl){
                 + `${state.wdt === 'nvfp4' ? 'NVFP4' : 'FP8'} checkpoint>`],
       ['api_key_env', 'VLLM_API_KEY'],              // env var NAME, never the key
     ]],
-    // the study's measured-efficiency constants, as the sliders have them.
-    // mtp is written explicitly rather than left to the model's own default:
-    // the slider seeds from CONFIG.MODELS[model].mtp but does not follow it
-    // afterwards, so only the number on screen can reproduce the page.
+    // the constants as the page prices them. acceptance and spec_tokens are
+    // written explicitly rather than left to the model's own: the controls
+    // seed from the model but do not follow it afterwards, so only the
+    // numbers on screen reproduce the page. The taus and the union arm are
+    // written only off their priors (RunConfig.dumps drops unset ones).
     ['calibration', [
       ['mfu', flt(state.mfu)],
-      ['mbu', flt(state.mbu)],
-      ['mtp', flt(state.mtp)],
-      // the opt-in latency pricing's keys, written only when selected (as
-      // RunConfig.dumps does): under roofline they price nothing
-      ...(state.dprice === 'latency'
-        ? [['decode_pricing', 'latency'], ['decode_bw_eff', flt(state.dbw)],
-           ['decode_fixed_ms', flt(state.dfixed)], ['spec_tokens', int(state.dspec)]]
-        : []),
+      ['eta', flt(state.eta)],
+      ...[['tau_0_us', state.t0], ['tau_ar_us', state.tar], ['tau_rec_us', state.trec]]
+        .filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => [k, flt(v)]),
+      ...(state.union !== 'coverage' ? [['union', state.union]] : []),
+      ['acceptance', flt(state.acc)],
+      ['spec_tokens', int(state.dspec)],
     ]],
   ];
   return head.join('\n') + '\n\nschema_version = 1\n\n'
@@ -165,7 +164,7 @@ function freezeMs(model, topo, wl, C, pu, mfu){
   // a chunk larger than the whole context is one cap-sized pass with no
   // cache behind it — never a full C with a negative prior
   const step = Math.min(C, wl.cap);
-  return 1000 * (model.mtp / pu + prefillSeconds(model, topo, step, wl.cap - step, mfu));
+  return 1000 * (model.tokens_per_step / pu + prefillSeconds(model, topo, step, wl.cap - step, mfu));
 }
 function harnessPredictions(op, model, wl, topo){
   const reps = topo.replicas || 1, perG = x => Math.round(x / reps);
@@ -208,7 +207,7 @@ function harnessPredictions(op, model, wl, topo){
     const C = prefillChunk();
     P.steady_decode_seqs = Math.round(lastSteady.n * 100) / 100;
     P.steady_decode_tok_s = Math.round(lastSteady.pu);
-    P.itl_normal_ms = Math.round(1000 * model.mtp / lastSteady.pu * 10) / 10;
+    P.itl_normal_ms = Math.round(1000 * model.tokens_per_step / lastSteady.pu * 10) / 10;
     P.itl_worst_freeze_ms = Math.round(freezeMs(model, topo, wl, C, lastSteady.pu));
   }
   return P;

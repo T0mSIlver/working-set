@@ -442,7 +442,7 @@ def ceilings(model, topo, t0, eta, bw_adv, accepted_len, args):
         return accepted_len / (t0 + bytes_at(n) / (eta * bw_adv))
 
     def v_model(n):
-        return model.mtp * S.effective_bw(topo) / bytes_at(n)
+        return model.tokens_per_step * S.effective_bw(topo) / bytes_at(n)
 
     def cross(f, floor=S.DECODE_FLOOR_TOKS):
         if f(1) < floor:

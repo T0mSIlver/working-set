@@ -341,7 +341,7 @@ export let chartEGeom=null, lastChartE=null;
 // so the sweep costs ~41 closed forms + 41 mean-pass scans per render.
 export function chartEData(model, topo, wl, cs, stress){
   const Cs=[], mfu=[], cold=[], spike=[];
-  const stepS = (stress && stress.pu > 0) ? model.mtp / stress.pu : 0;
+  const stepS = (stress && stress.pu > 0) ? model.tokens_per_step / stress.pu : 0;
   for(let i=0;i<=40;i++){
     const C = Math.round(Math.pow(2, 11 + i/8));
     Cs.push(C);
@@ -808,7 +808,7 @@ export function renderChartECompanions(model, topo, wl, cs, stress, noFit, draft
   const d3=chartE3Data(topo, wl, cs);
   const sig3=d3.models.map(m=>m.key+(m.sel?'*':'')+m.rel.map(v=>v.toFixed(4)).join(',')).join(';');
   if(sig3!==companionSig.E3){ companionSig.E3=sig3; renderChartE3(d3); }
-  const stepS=(stress && stress.pu>0) ? model.mtp/stress.pu : 0;   // chart E's own gap
+  const stepS=(stress && stress.pu>0) ? model.tokens_per_step/stress.pu : 0;   // chart E's own gap
   const sig4=[model.name, cs.mean, stepS, prefillSeconds(model, topo, 2048, 0),
               prefillSeconds(model, topo, 2048, cs.mean)].join('|');
   if(sig4!==companionSig.E4){

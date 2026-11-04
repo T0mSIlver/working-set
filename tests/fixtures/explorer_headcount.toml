@@ -50,5 +50,6 @@ api_key_env = "VLLM_API_KEY"
 
 [calibration]
 mfu = 0.45
-mbu = 0.22
-mtp = 1.7
+eta = 0.29
+acceptance = 0.971
+spec_tokens = 2

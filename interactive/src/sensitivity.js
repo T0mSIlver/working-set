@@ -1,10 +1,9 @@
-import { DECODE_MBU, GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, effective_bw,
-         kv_pool_tokens, replicated, state_traffic, w_decode } from './config.js';
+import { GIB, PREFILL_MFU, PREFILL_MFU_HI, PREFILL_MFU_LO, decodeConstants, decodeStepSeconds,
+         kv_pool_tokens, replicated, state_traffic, tokensPerStep } from './config.js';
 import { capDecodeUsers, capacityLimit, contextStats, decodeFloor, decodeSlotUsers, liveTurn, maxUsersColdWait,
          maxUsersSaturation, maxUsersSlowed, prefillChunk, prefillServiceMoments, setLiveTurn,
          slowedSteps } from './prefill.js';
 import { clip, seedFor } from './mathlib.js';
-import { decodeTokenSeconds } from './capacity.js';
 import { p_sub, sampleReqInto } from './workload.js';
 import { ramPerCache, state } from './state.js';
 import { cssv, esc, fmt, linScale, svgEl } from './svg.js';
@@ -63,7 +62,8 @@ function decodeUsersApprox(model, topo, samples, floor){
   // different threshold from the MC ceiling it is calibrated against — calD
   // would silently absorb the mismatch at the anchor and be wrong everywhere else
   model = replicated(model, topo);   // per-step KV/state reads per stored copy
-  const F = floor || decodeFloor(), bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU);
+  const F = floor || decodeFloor(), dc = model.decode || decodeConstants();
+  const mTok = tokensPerStep(model.acceptance, model.spec_tokens);
   const tk = (model.kv_decode_const && model.kv_decode_topk) ? model.kv_decode_topk : 0;
   let mL = 0, mT = 0;
   for (let i = 0; i < samples.length; i++){
@@ -75,14 +75,8 @@ function decodeUsersApprox(model, topo, samples, floor){
   const perSeq = mL * kvReadBpt + state_traffic(model)
     + (model.kv_decode_const ? (tk ? mT * (model.kv_decode_const / tk)
                                    : model.kv_decode_const) : 0);
-  // the opt-in latency pricing, mean-field like the roofline line above
-  const lat = model.decode_lat || null;
-  const bwLat = lat ? effective_bw(topo) * lat.bw_eff : 0;
-  const tTok = lat ? decodeTokenSeconds(model, topo, lat.mfu) : 0;
-  const speed = lat
-    ? n => model.mtp / ((w_decode(model, n) + n * perSeq) / bwLat
-                        + n * (1 + lat.spec_tokens) * tTok + lat.fixed_s)
-    : n => model.mtp * bw / (w_decode(model, n) + n * perSeq);
+  // the step equation at the mean context (mean-field)
+  const speed = n => mTok / decodeStepSeconds(model, topo, n, n * perSeq, dc);
   if (speed(1) < F) return 0;
   let lo = 1, hi = 2;
   while (speed(hi) >= F && hi < 1e7){ lo = hi; hi *= 2; }
@@ -197,36 +191,34 @@ export function computeFlipData(model, topo, wl, cs, mo, warmFn, op, reps){
   //     unknown, so the sweep runs over the whole stated [30%, 55%] bracket
   //     Under the latency pricing decode is calibrated at the MFU slider, so
   //     the marker sits there and the sweep widens to contain it
-  const mfuCur = model.decode_lat ? state.mfu : PREFILL_MFU;
+  const mfuCur = state.mfu;
   const mfuLo = Math.min(PREFILL_MFU_LO, mfuCur), mfuHi = Math.max(PREFILL_MFU_HI, mfuCur);
   axes.push({ label: 'Prefill MFU', cur: mfuCur, lo: mfuLo, hi: mfuHi,
     fmt: v => fmt(v * 100, 0) + '%', approx: false,
     pts: sweep(16, mfuLo, mfuHi, v => {
       const mo2 = prefillServiceMoments(model, topo, wl, cs, prefillChunk(), v);
-      // under the latency pricing the verify compute runs at this MFU too
-      const decU = model.decode_lat && calD > 0
-        ? decodeUsersApprox({ ...model, decode_lat: { ...model.decode_lat, mfu: v } },
+      // the verify compute runs at this MFU too
+      const decU = calD > 0
+        ? decodeUsersApprox({ ...model, decode: { ...model.decode, mfu: v } },
                             topo, cs.samples) * calD * reps
         : decodeNow;
       return evalAt(mo2, f0, state.cold_wait, state.think, cacheNow, decU, vRatio(decU),
                     slowedSteps(model, topo, cs, prefillChunk(), undefined, v));
     }, mfuCur) });
-  // 6 · speculative-decode speedup — decode speed is exactly linear in it,
-  //     so the mean-context stand-in only has to move the crossing point
+  // 6 · draft acceptance — tokens per step move decode speed linearly, so
+  //     the mean-context stand-in only has to move the crossing point
+  if (calD > 0 && model.spec_tokens > 0)
+    axes.push({ label: 'Draft acceptance', cur: state.acc, lo: 0.0, hi: 1.0,
+      fmt: v => v.toFixed(2), approx: true,
+      pts: sweep(21, 0.0, 1.0, v =>
+        speedAt(decodeUsersApprox({ ...model, acceptance: v }, topo, cs.samples) * calD * reps), state.acc) });
+  // 6a · decode bandwidth efficiency (eta) — one constant for every row,
+  //      read on one deployment
   if (calD > 0)
-    axes.push({ label: 'Speculative speedup', cur: state.mtp, lo: 1.0, hi: 3.0,
-      fmt: v => '×' + v.toFixed(2), approx: true,
-      pts: sweep(21, 1.0, 3.0, v =>
-        speedAt(decodeUsersApprox({ ...model, mtp: v }, topo, cs.samples) * calD * reps), state.mtp) });
-  // 6a · decode efficiency (MBU) — one constant for every row, measured on
-  //      one deployment; decode speed is exactly linear in it, like the
-  //      speedup, so the same mean-context stand-in serves. The latency
-  //      pricing does not read it, so the row is dropped there
-  if (calD > 0 && !model.decode_lat)
-    axes.push({ label: 'Decode MBU', cur: state.mbu, lo: 0.10, hi: 1.00,
+    axes.push({ label: 'Decode η', cur: state.eta, lo: 0.10, hi: 1.00,
       fmt: v => fmt(v * 100, 0) + '%', approx: true,
       pts: sweep(19, 0.10, 1.00, v =>
-        speedAt(decodeUsersApprox({ ...model, decode_mbu: v }, topo, cs.samples) * calD * reps), state.mbu) });
+        speedAt(decodeUsersApprox({ ...model, decode: { ...model.decode, eta: v } }, topo, cs.samples) * calD * reps), state.eta) });
   // 6b · per-user decode floor — moves the DECODE ceiling only, and steeply
   //      (the ceiling is the reciprocal of per-user speed). This is the row
   //      that answers "is my deployment actually decode-bound, or just judged

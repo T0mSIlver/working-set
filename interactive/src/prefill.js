@@ -668,10 +668,10 @@ function pctOf(pct){ return (!pct || pct === 'mean') ? null : parseFloat(pct); }
 // stream gets in a step that carries the chunk.
 export function slowedSteps(m, topo, cs, chunk, floor, mfu){
   const C = chunk || PREFILL_CHUNK;
-  const decodeS = m.mtp / (floor || state.decode_floor);
+  const decodeS = m.tokens_per_step / (floor || state.decode_floor);
   const chunkS = prefillSeconds(m, topo, C, cs.mean/2, mfu);
   const mixedS = decodeS + chunkS;
-  return { decodeS, chunkS, mixedS, speed: m.mtp / mixedS };
+  return { decodeS, chunkS, mixedS, speed: m.tokens_per_step / mixedS };
 }
 // Twin of model.slowed_share: min(1, rate f E[S|miss] x mixed / chunk).
 export function slowedShare(mo, steps, f, rate){

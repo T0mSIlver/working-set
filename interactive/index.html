@@ -589,8 +589,12 @@ details.more .more-body{padding:0 0 16px}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
-          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.01" value="2.94">
+          <label class="flabel"><span class="tip" id="acc-tip" data-tip="">Draft acceptance</span> <span class="val"><span id="v-acc">0.971</span> · <span id="v-tps">3.83</span> tok/step</span></label>
+          <input type="range" id="s-acc" min="0" max="1" step="0.001" value="0.971">
+          <div class="latrow">
+            <label><span class="tip" data-tip="Draft tokens verified per sequence per step (vLLM num_speculative_tokens; 0 is off). Each one adds a draft pass, a verify position per sequence and, on a MoE, more experts read. Defaults to the model's recipe. Mirrors [calibration] spec_tokens.">Draft tokens</span>
+              <input type="number" id="i-dspec" min="0" max="16" step="1" value="3"></label>
+          </div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Host RAM for evicted sessions&#x27; KV and state. It raises warm capacity but not decode speed: an offloaded session is restored over PCIe first, and that time is not priced. Split across replicas under DP.">CPU offload</span> <span class="val"><span id="v-ram">0</span> GiB</span></label>
@@ -714,23 +718,8 @@ details.more .more-body{padding:0 0 16px}
           <input type="range" id="s-mfu" min="0.10" max="1.00" step="0.01" value="0.45">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mbu-tip" data-tip="">Decode efficiency (MBU)</span> <span class="val"><span id="v-mbu">0.22</span></span></label>
-          <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
-        </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How a decode step is priced. Roofline, the default and every published figure: step bytes over the group's bandwidth times the MBU. Latency, opt-in: every byte at one bandwidth efficiency, plus the speculative verify as (1 + draft tokens) tokens of compute per sequence at the prefill MFU, plus a fixed time per step. Its three constants come from one deployment (TP4, MTP depth 3); set draft tokens to your server's num_speculative_tokens first. Under Latency the MBU slider is unused and the MFU slider moves decode too. Above about 64 sequences the step jumps for an unknown reason, which this form does not price. Mirrors [calibration] decode_pricing.">Decode pricing</span></label>
-          <div class="seg" id="seg-dprice" data-key="dprice">
-            <button data-v="roofline" aria-pressed="true">Roofline (MBU)</button>
-            <button data-v="latency" aria-pressed="false">Latency</button>
-          </div>
-          <div class="latrow" id="dprice-lat" hidden>
-            <label><span class="tip" data-tip="Share of the group's advertised bandwidth every decode byte streams at under the latency pricing. 0.36 on one TP4 deployment. Mirrors decode_bw_eff.">BW eff</span>
-              <input type="number" id="i-dbw" min="0.05" max="1" step="0.01" value="0.36"></label>
-            <label><span class="tip" data-tip="Per-step time that bytes and compute leave over: TP all-reduces, draft-head passes, kernel launches. 2.7 ms at TP4, 64 layers, MTP depth 3. Mirrors decode_fixed_ms.">Fixed ms</span>
-              <input type="number" id="i-dfixed" min="0" max="50" step="0.1" value="2.7"></label>
-            <label><span class="tip" data-tip="Speculative tokens verified per sequence per step (vLLM num_speculative_tokens; 0 is off). Each costs one token of compute per sequence. Mirrors spec_tokens.">Draft tokens</span>
-              <input type="number" id="i-dspec" min="0" max="16" step="1" value="3"></label>
-          </div>
+          <label class="flabel"><span class="tip" id="eta-tip" data-tip="">Decode bandwidth efficiency (η)</span> <span class="val"><span id="v-eta">0.29</span></span></label>
+          <input type="range" id="s-eta" min="0.10" max="1.00" step="0.01" value="0.29">
         </div>
         <div class="field">
           <label class="flabel" for="i-mns"><span class="tip" data-tip="vLLM --max-num-seqs, per replica group. The scheduler never runs more sequences at once, so past it a request queues instead of slowing the batch. Empty means the recommended value: the largest batch whose per-user decode meets the floor, within the GPU-resident sessions. It binds where the 99th-percentile batch decoding at your load reaches it, which takes far more users than sequences. Mirrors deployment.max_num_seqs.">max_num_seqs</span> <span class="val" id="v-mns">unset</span></label>

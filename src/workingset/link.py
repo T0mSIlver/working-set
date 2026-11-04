@@ -130,19 +130,20 @@ KNOBS: tuple[Knob, ...] = (
     Knob("decode_floor", S + "itl_floor_tok_s", lambda c: c.slo.itl_floor_tok_s, 40,
          5, 100, True, " tok/s"),
     Knob("mfu", C + "mfu", lambda c: c.calibration.mfu, 0.45, 0.10, 1.00),
-    Knob("mbu", C + "mbu", lambda c: c.calibration.mbu, 0.22, 0.10, 1.00),
     # per replica group on both sides, so no replica multiply
     Knob("mns", D + "max_num_seqs", lambda c: c.deployment.max_num_seqs, None, 1, 4096, True),
-    Knob("dprice", C + "decode_pricing", lambda c: c.calibration.decode_pricing, "roofline"),
-    Knob("dbw", C + "decode_bw_eff", lambda c: c.calibration.decode_bw_eff, M.DECODE_BW_EFF,
-         0.01, 1),
-    Knob("dfixed", C + "decode_fixed_ms", lambda c: c.calibration.decode_fixed_ms,
-         M.DECODE_FIXED_S * 1e3, 0, 50, unit=" ms"),
-    Knob("dspec", C + "spec_tokens", lambda c: c.calibration.spec_tokens, M.DECODE_SPEC_TOKENS,
-         0, 16, True),
-    # an unset mtp is the model's own, which the page applies on its own when
-    # the link names the model; encodeStateURL diffs mtp against it likewise
-    Knob("mtp", C + "mtp", lambda c: c.calibration.mtp, None, 1.0, 3.0),
+    # the decode step equation's constants (model.DecodeConstants). The taus
+    # have no control: an unset one is the prior, which the page applies on
+    # its own; a calibrated one rides the URL in microseconds
+    Knob("eta", C + "eta", lambda c: c.calibration.eta, M.DECODE_ETA, 0.10, 1.00),
+    Knob("t0", C + "tau_0_us", lambda c: c.calibration.tau_0_us, None, 0, 1000),
+    Knob("tar", C + "tau_ar_us", lambda c: c.calibration.tau_ar_us, None, 0, 1000),
+    Knob("trec", C + "tau_rec_us", lambda c: c.calibration.tau_rec_us, None, 0, 1000),
+    Knob("union", C + "union", lambda c: c.calibration.union, "coverage"),
+    # an unset acceptance / draft depth is the model's own, which the page
+    # applies when the link names the model; encodeStateURL diffs against it
+    Knob("acc", C + "acceptance", lambda c: c.calibration.acceptance, None, 0.0, 1.0),
+    Knob("dspec", C + "spec_tokens", lambda c: c.calibration.spec_tokens, None, 0, 16, True),
 )
 
 
@@ -188,6 +189,9 @@ def _unmapped(cfg: RunConfig) -> list[str]:
         near = min(TTFT_PCTS, key=lambda p: abs(p - s.percentile))
         out.append(f"slo.percentile = {s.percentile}: the explorer offers p90, p95 and p99; "
                    f"the link sets p{near}")
+    if c.reserve_gib is not None:
+        out.append(f"calibration.reserve_gib = {c.reserve_gib:g}: the explorer prices the "
+                   "default reserve, so its KV pool differs from ws predict's")
     if d.weight_overhead not in WOVER:
         near = _nearest_wover(d.weight_overhead)
         out.append(f"deployment.weight_overhead = {d.weight_overhead:g}: the explorer "
@@ -276,10 +280,11 @@ def explorer_link(cfg: RunConfig, base: str = DEFAULT_BASE) -> tuple[str, list[s
                             f"{page} (its users slider takes multiples of 4 in "
                             "[4, 1024]); ws predict prices the exact load")
     # encodeStateURL's own diffing: a value at the page's default is not
-    # written, and mtp / gpuh diff against the selected model / GPU
+    # written, and acc / dspec / gpuh diff against the selected model / GPU
     model = params["model"]
     defaults = {k.key: k.default for k in KNOBS}
-    defaults["mtp"] = M.MODELS[model].mtp
+    defaults["acc"] = M.MODELS[model].acceptance
+    defaults["dspec"] = M.MODELS[model].spec_tokens
     frag = {k: v for k, v in params.items() if v != _js(defaults[k])}
     # main.js stampTtftPct: a non-bare link without ttft_pct predates the
     # control and decodes as a miss's mean, so every non-bare link names its

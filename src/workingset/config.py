@@ -13,7 +13,8 @@ Blocks (TOML tables) and their model counterparts:
   [workload]    the closed-loop agentic workload             [model.Workload + turn/think/out]
   [slo]         what "served" means                          [operating_point kwargs]
   [endpoint]    where to send requests (measurement only)
-  [calibration] mfu / mbu overrides (defaults = the study's calibrated values)
+  [calibration] decode and prefill constants, draft acceptance and depth
+                (defaults = the model's priors; `ws calibrate` fits them)
 
 Field names follow the explorer's generated CONFIG block one-for-one (the
 harness's `workload` keys), so a CONFIG block from a harness downloaded
@@ -31,8 +32,9 @@ from . import model as M
 
 SCHEMA_VERSION = 1
 STATE_DTYPES = ("bf16", "fp32")
-DECODE_PRICINGS = ("roofline", "latency")
-_LATENCY_KEYS = ("decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens")
+# [calibration] keys of the two decode pricings retired in 0.4 (one step
+# equation replaced the MBU fold and the opt-in latency form)
+_RETIRED_CALIBRATION = ("mbu", "mtp", "decode_pricing", "decode_bw_eff", "decode_fixed_ms")
 KV_SHARDINGS = M.KV_SHARDS               # ("dcp", "replicate")
 
 
@@ -176,27 +178,28 @@ class SLO:
 
 @dataclass(frozen=True)
 class Calibration:
-    mfu: float = M.MFU_DEFAULT
-    mbu: float = M.MBU_DEFAULT
-    # Effective decode speedup from speculative decoding / MTP. Multiplies
-    # per-user decode tok/s directly, so it moves the decode ceiling and the
-    # steady point. None = the model's own value (M.MODELS[key].mtp), which is
-    # measured for the 27B and transplanted everywhere else; the explorer
-    # exposes it as a slider for exactly that reason. It travels with the MBU
-    # it was fitted against — moving one without the other breaks the fit.
-    mtp: float | None = None
-    # How decode is priced. "roofline" (default, and what every published
-    # figure uses): step bytes over one folded efficiency, `mbu`. "latency":
-    # the opt-in three-leg form of model.DecodeLatency — every byte at
-    # `decode_bw_eff`, the speculative verify as (1 + spec_tokens) tokens of
-    # compute per sequence at `mfu`, plus `decode_fixed_ms` per step. `mbu` is
-    # then unused. Its defaults were read on ONE deployment (TP4, MTP depth 3);
-    # set spec_tokens to the server's num_speculative_tokens (0 = off) and
-    # `mfu` to a measured value before trusting it elsewhere.
-    decode_pricing: str = "roofline"      # roofline | latency
-    decode_bw_eff: float = M.DECODE_BW_EFF
-    decode_fixed_ms: float = M.DECODE_FIXED_S * 1e3
-    spec_tokens: int = M.DECODE_SPEC_TOKENS
+    """Overrides of the model's constants. Every decode figure comes from one
+    step equation (model.decode_step_seconds); its constants default to the
+    priors in workingset.model, which `ws calibrate` replaces with fits."""
+    mfu: float = M.MFU_DEFAULT          # prefill kernel MFU; also prices c_tok
+    eta: float = M.DECODE_ETA           # achieved fraction of raw HBM bandwidth
+    tau_0_us: float | None = None       # per-layer launch cost; None = prior
+    tau_ar_us: float | None = None      # per-layer TP all-reduce cost; None = prior
+    tau_rec_us: float | None = None     # per recurrent update; None = prior
+    union: str = "coverage"             # expert union: coverage | linear (upper bound)
+    # Draft speculation: per-draft acceptance and depth (num_speculative_tokens).
+    # None = the model's own (catalog.toml); spec_tokens 0 = speculation off.
+    acceptance: float | None = None
+    spec_tokens: int | None = None
+    # Per-GPU bytes held back from the KV pool, in GiB, as the pool vLLM
+    # reported implies (`ws calibrate`); None = the model's H200-solved
+    # reserve. One read number for activations, workspace and any weight
+    # overhead.
+    reserve_gib: float | None = None
+    # Provenance of each fitted value, keyed like the scalars above:
+    # {value, stderr, n, status, source, date, note}. Written by
+    # `ws calibrate --write`; [calibration.fit.<key>] in TOML.
+    fit: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -237,15 +240,20 @@ class RunConfig:
         if d.weight_overhead and _weight_overhead_applies(d.model):
             m = replace(m, w_resident=m.w_resident * (1 + d.weight_overhead),
                         name=m.name + f" [+{d.weight_overhead:.0%} weights]")
-        if self.calibration.mtp is not None:
-            m = replace(m, mtp=self.calibration.mtp)
+        c = self.calibration
+        if c.acceptance is not None:
+            m = replace(m, acceptance=c.acceptance)
+        if c.spec_tokens is not None:
+            m = replace(m, spec_tokens=c.spec_tokens)
         return m
 
     def to_topology(self) -> M.Topology:
         d = self.deployment
         if d.gpu not in M.GPUS:
             raise KeyError(f"unknown GPU {d.gpu!r}; known: {sorted(M.GPUS)}")
-        return M.topology_grid(d.replicas, d.tensor_parallel, d.gpu, d.kv_sharding)
+        t = M.topology_grid(d.replicas, d.tensor_parallel, d.gpu, d.kv_sharding)
+        r = self.calibration.reserve_gib
+        return t if r is None else replace(t, reserve=r * (1024 ** 3))
 
     def to_workload(self) -> M.Workload:
         w = self.workload
@@ -267,15 +275,13 @@ class RunConfig:
             raise ValueError("workload must set either users or headcount")
         return w.users
 
-    def decode_latency(self) -> "M.DecodeLatency | None":
-        """The opt-in decode pricing's constants, or None under the default
-        roofline pricing."""
+    def decode_constants(self) -> M.DecodeConstants:
+        """The step equation's constants this config prices decode with."""
         c = self.calibration
-        if c.decode_pricing != "latency":
-            return None
-        return M.DecodeLatency(bw_eff=c.decode_bw_eff,
-                               fixed_s=c.decode_fixed_ms / 1e3,
-                               spec_tokens=c.spec_tokens, mfu=c.mfu)
+        us = lambda v: None if v is None else v * 1e-6
+        return M.DecodeConstants(eta=c.eta, tau_0=us(c.tau_0_us),
+                                 tau_ar=us(c.tau_ar_us), tau_rec=us(c.tau_rec_us),
+                                 mfu=c.mfu, union=c.union)
 
     def validate(self) -> None:
         """Raise on anything the model refuses to price."""
@@ -351,13 +357,17 @@ class RunConfig:
                 f"{d.model}: weight_overhead does not apply — its w_resident "
                 "is already the as-deployed footprint, which is where the 15% "
                 "figure came from")
-        if self.calibration.mtp is not None and self.calibration.mtp <= 0:
-            raise ValueError("calibration.mtp must be > 0")
-        if self.calibration.decode_pricing not in DECODE_PRICINGS:
-            raise ValueError(f"calibration.decode_pricing must be one of "
-                             f"{DECODE_PRICINGS}, got "
-                             f"{self.calibration.decode_pricing!r}")
-        self.decode_latency()       # raises on a constant out of range
+        c = self.calibration
+        if c.acceptance is not None and not 0 <= c.acceptance <= 1:
+            raise ValueError("calibration.acceptance must be in [0, 1]")
+        if c.spec_tokens is not None and c.spec_tokens < 0:
+            raise ValueError("calibration.spec_tokens must be >= 0")
+        if c.reserve_gib is not None and c.reserve_gib < 0:
+            raise ValueError("calibration.reserve_gib must be >= 0")
+        for k, v in c.fit.items():
+            if not isinstance(v, dict) or "value" not in v:
+                raise ValueError(f"calibration.fit.{k} must be a table with a value")
+        self.decode_constants()     # raises on a constant out of range
 
     # ---- (de)serialisation --------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -387,6 +397,12 @@ class RunConfig:
         kw: dict[str, Any] = {}
         for name, typ in blocks.items():
             block = dict(raw.pop(name, {}) or {})
+            if name == "calibration" and (old := sorted(set(block) & set(_RETIRED_CALIBRATION))):
+                raise ValueError(
+                    f"[calibration] {', '.join(old)}: retired in workingset 0.4. Decode "
+                    "is one step equation now: set eta, tau_0_us, tau_ar_us, "
+                    "tau_rec_us, acceptance or spec_tokens instead, or run "
+                    "`ws calibrate` on a decode sweep")
             _reject_unknown(block, typ, name)
             # The dataclass default keeps legacy direct-load configs at 64.
             # A headcount-only file selects the other representation, so make
@@ -400,14 +416,10 @@ class RunConfig:
 
     def dumps(self, fmt: str = "toml") -> str:
         d = self.to_dict()
-        # Under the default roofline pricing the latency constants price
-        # nothing, and writing them would change every schema-1 file this
-        # version emits: an older reader rejects keys it does not know. They
-        # are written only when selected (to_dict(), and so the run record,
-        # always carries them).
-        if d["calibration"].get("decode_pricing") == "roofline":
-            for k in _LATENCY_KEYS:
-                d["calibration"].pop(k, None)
+        # an unset override (None) means "the model's own": TOML has no null;
+        # an empty provenance table is not written
+        d["calibration"] = {k: v for k, v in d["calibration"].items()
+                            if v is not None and v != {}}
         if fmt == "json":
             return json.dumps(d, indent=2) + "\n"
         if fmt == "toml":
@@ -465,8 +477,17 @@ def _dump_toml(d: dict[str, Any]) -> str:
                     continue
                 if k == "users" and has_headcount:
                     continue
+            if isinstance(v, dict):
+                continue                     # sub-tables follow the block
             out.append(f"{k} = {_toml_scalar(v)}")
         out.append("")
+        for k, v in d[block].items():
+            if isinstance(v, dict):
+                for name, row in v.items():
+                    out.append(f"[{block}.{k}.{name}]")
+                    out.extend(f"{rk} = {_toml_scalar(rv)}" for rk, rv in row.items()
+                               if rv is not None)
+                    out.append("")
     return "\n".join(out)
 
 
