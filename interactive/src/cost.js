@@ -46,18 +46,32 @@ function powerDraw(topo, mo, f, rateGroup, decodeUsersGroup){
 function gpuHourPrice(g){
   return g.eur_gpu_h * state.gpuh / CONFIG.GPUS[state.gpu].eur_gpu_h;
 }
-// € figures on top of the draw. 720 h/month. eurMonth is the ELECTRICITY
-// alone (the power model's own output); hwMonth is GPU-hours at the rental
-// rate; totalMonth their sum, and the per-user / per-token figures divide the
-// TOTAL — a €/Mtok that priced the watts but not the silicon would read an
-// order of magnitude too cheap.
+// Months an owned server is written off over (model.AMORT_MONTHS_DEFAULT)
+export const AMORT_MONTHS = 36;
+// The monthly bill, power counted once (model.energy_cost). state.pay:
+//   'rent'  the GPU-hour price x n_gpu x state.work: GPUs up, and billed,
+//           only the hours the team works; power is in the rent, so no
+//           electricity line (eurMonth 0).
+//   'own'   the purchase price x n_gpu / AMORT_MONTHS, plus electricity at
+//           the meter: the load's draw for state.work hours, the idle draw
+//           for the rest of the 720-hour month.
+// The per-user and per-token figures divide the TOTAL; the token rate is
+// the load's, over the hours it runs.
 export function energyCost(topo, mo, f, rateGroup, decodeUsersGroup){
   const p = powerDraw(topo, mo, f, rateGroup, decodeUsersGroup);
-  const eurMonth = p.kw * 720 * state.ekwh;
-  const hwMonth = topo.n_gpu * gpuHourPrice(topo.gpu || CONFIG.GPUS["H200"]) * 720;
+  const g = topo.gpu || CONFIG.GPUS["H200"], work = state.work;
+  let eurMonth, hwMonth;
+  if (state.pay === 'own'){
+    const kwIdle = topo.n_gpu * (g.idle_w + g.host_w) * p.pue / 1000;
+    eurMonth = (p.kw * work + kwIdle * (720 - work)) * state.ekwh;
+    hwMonth = topo.n_gpu * g.eur_capex_gpu / AMORT_MONTHS;
+  } else {
+    eurMonth = 0;
+    hwMonth = topo.n_gpu * gpuHourPrice(g) * work;
+  }
   const totalMonth = eurMonth + hwMonth;
   const outTokS = rateGroup * (topo.replicas || 1) * state.out;
-  const eurMtok = outTokS > 0 ? (totalMonth / 720 / 3600) / outTokS * 1e6 : Infinity;
+  const eurMtok = outTokS > 0 ? (totalMonth / work / 3600) / outTokS * 1e6 : Infinity;
   return { ...p, eurMonth, hwMonth, totalMonth,
            eurUser: totalMonth / Math.max(1, state.users), eurMtok };
 }
@@ -79,16 +93,16 @@ export function renderCostCard(op, model, topo, wl, mo, decodeUsersGroup){
     ['Time split', `${fmt(c.dP * 100, 0)}% prefill · ${fmt(c.dD * 100, 0)}% decode · ${fmt(idleFrac * 100, 0)}% idle`],
     ['Host + PUE', `${fmt(g.host_w, 0)} W/GPU · ×${c.pue}`],
   ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
-  // the idle floor keeps the hardware line: a rented GPU bills whether or
-  // not it decodes, and an owned one depreciates just the same
-  const idleMonth = topo.n_gpu * (g.idle_w + g.host_w) * c.pue / 1000 * 720 * state.ekwh + c.hwMonth;
+  const muted = cssv('--muted');
+  const hw = state.pay === 'own'
+    ? ['Hardware write-off / month', `€${fmt(c.hwMonth, 0)} <span style="color:${muted};font-weight:400">(${topo.n_gpu} × €${fmt(g.eur_capex_gpu, 0)} ÷ ${AMORT_MONTHS} months)</span>`]
+    : ['Rent / month', `€${fmt(c.hwMonth, 0)} <span style="color:${muted};font-weight:400">(${topo.n_gpu} × €${fmt(gpuHourPrice(g), 2)}/h × ${fmt(state.work, 0)} h)</span>`];
   const bill = [
-    ['Hardware / month', `€${fmt(c.hwMonth, 0)} <span style="color:${cssv('--muted')};font-weight:400">(${topo.n_gpu} × €${fmt(gpuHourPrice(g), 2)}/h)</span>`],
-    ['Electricity / month', `€${fmt(c.eurMonth, 0)}`],
+    hw,
+    ['Electricity / month', state.pay === 'own' ? `€${fmt(c.eurMonth, 0)}` : `<span style="color:${muted};font-weight:400">in the rent</span>`],
     ['Total / month', `€${fmt(c.totalMonth, 0)}`],
     ['Per user / month', `€${fmt(c.eurUser, 2)}`],
     ['Per 1M output tokens', isFinite(c.eurMtok) ? `€${fmt(c.eurMtok, 2)}` : '—'],
-    ['At idle (floor)', `€${fmt(idleMonth, 0)} /mo`],
   ].map(([k, v]) => `<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
   box.innerHTML =
     `<div class="deploy">`

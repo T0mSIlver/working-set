@@ -12,58 +12,58 @@ that day, €1 = $1.1267.
 
 ## What the comparison assumes
 
-Self-hosting and an API bill different things. A GPU costs the same every
-hour whether it works or idles; an API costs per token sent. Comparing them
+Self-hosting and an API bill different things. An owned GPU costs the same
+every hour whether it works or idles, a rented one costs while it is up, and
+an API costs per token sent. Comparing them
 needs the assumptions below, each of which moves the answer. The explorer
 sets every one of them with a control; this list is where they are written
 down together.
 
-Self-hosted (`model.energy_cost`, `research/power.md`):
+Self-hosted (`model.energy_cost`, `research/power.md`), power counted once:
 
-1. **GPUs are rented by the hour**, €3.80 per H200-hour by default (the
-   cross-provider median of September 2026). Owned hardware enters as its
-   amortised cost per GPU-hour. Purchase, depreciation period and resale
-   value are not modelled separately.
-2. **The bill runs 720 hours a month**, busy or idle. Idle GPUs are paid
-   for and do nothing else: batch jobs at night are not credited.
-3. **Electricity** €0.19/kWh at a PUE of 1.5, from the duty cycle the load
-   implies. On a rented GPU this double-counts power the rent already
-   includes, about 7% at the defaults.
-4. **The hardware is sized for the peak**: every seat live at once unless
+1. **Rent**: the GPU-hour price, €3.80 per H200-hour by default (the
+   cross-provider on-demand median of September 2026), for the hours the
+   team works, 210 a month by default (10 h a day, 21 days). Power, cooling
+   and the host are in the rent. A monthly reservation is rent at 720 h and
+   its own price (H200, 1 year: $7.3 to 7.6 at the hyperscalers, $3.99 for
+   91 to 180 days at Together). Releasing GPUs each evening assumes hourly
+   billing without commitment, which Crusoe and RunPod state and most
+   providers do not.
+2. **Own**: the 8-GPU server's purchase price over 8 (Supermicro store,
+   November 2026: H200 $328k, B300 about $663k) written off over 36 months,
+   plus electricity at €0.19/kWh and a PUE of 1.5: the load's draw for the
+   working hours, the idle draw for the rest of the month. Hyperscalers
+   write servers off over 5 to 6 years; 3 is the cautious end.
+3. **The hardware is sized for the peak**: every seat live at once unless
    the population layer says otherwise (`peak_active_share`).
-5. **Not counted:** staff, networking, storage, the engineering to run it,
-   and what self-hosting buys outside the bill (data control, no rate limits).
+4. **Not counted:** staff, networking, storage, data-centre space beyond
+   the PUE, resale value, and what self-hosting buys outside the bill (data
+   control, no rate limits).
 
 API (this file, § 1 to 3):
 
-6. **A seat is live H hours a month**, 84 by default (4 h a day, 21 days).
+5. **A seat is live H hours a month**, 84 by default (4 h a day, 21 days).
    This is the softest number on either side; Requesty's public data puts
    the median Claude Code user near 11 h and the 95th percentile near 137 h.
-7. **List prices before tax**, read 2026-11-04, at the cheapest cache
+6. **List prices before tax**, read 2026-11-04, at the cheapest cache
    option for this workload, the cache lapsing on gaps longer than its TTL.
-8. **No volume discount, committed-use price or rate limit.**
+7. **No volume discount, committed-use price or rate limit.**
 
 Both:
 
-9. **The same workload**: a request every 30 s per live session plus
+8. **The same workload**: a request every 30 s per live session plus
    subagents, the prompt lengths of the traced agent, 2,000 fresh tokens and
    400 output tokens a request.
-10. **The same score**: Artificial Analysis's Terminal-Bench 4.0 at each
+9. **The same score**: Artificial Analysis's Terminal-Bench 4.0 at each
     model's index effort. Quantised self-hosted arms inherit the full model's
     score.
 
-**The assumption-light comparison is the break-even.** The self-hosted bill
-is flat in usage; the API bill is linear in it. So the question "which is
-cheaper" has one free variable, the hours a seat runs, and the comparison
-that needs no value for H is the H at which they cross:
-
-    H* = self-hosted €/seat-month ÷ API €/active hour
-
-At 64 seats on H200 and the defaults above: GLM-5.3-Flash 1,725 h (more than
-the 720 h in a month, so the API is cheaper at any use), DeepSeek V4.1 Flash
-3,521 h (the API serves the later 1017 checkpoint), Qwen3.8-27B 76 h,
-Qwen3.6-35B-A3B 25 h (Alibaba serves it without a cache). Above H*
-self-hosting wins; below it the API does.
+**Rent compares with an API hour for hour.** Rented GPUs and an API both
+bill by the hour of use, so their ratio barely depends on the hours worked:
+the rented bill grows with the hours the GPUs are up, the API bill with the
+hours a seat is live. **Owning is flat**, so it has a break-even: the hours a
+seat must run each month before the write-off beats paying per token,
+H* = owned €/seat-month ÷ API €/active hour.
 
 ## 1. What a seat is
 

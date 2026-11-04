@@ -87,23 +87,6 @@
    "hypothesis": "the same integer-bisection noise, at the floors the slider reaches away from 40, where it is far larger: a low floor puts the decode ceiling in the single digits, and one step of three is a third of the capacity. Gated on the ceiling as well as the floor, since the ceiling is the cause and the floor only selects for it; 45 is the largest ceiling that exhibits it, and above that the quantity is inside its band everywhere. Replaces the pre-fix `decode_floor != 40` entry, which licensed 87.5% on any state at any ceiling: the floor is a power_draw parameter now, so the two sides price the same cap and only the ceiling's own noise is left. 14 states, worst 33%."
   },
   {
-   "quantity": "energy_eur_month",
-   "where": {
-    "decode_floor": {
-     "ne": 40
-    },
-    "_decode_ceiling": {
-     "lte": 45
-    },
-    "_duty": {
-     "lte": 0.85
-    }
-   },
-   "observed_rel": 0.104,
-   "max_rel": 0.15,
-   "hypothesis": "the electricity line is power_kw x 720 x eur_kwh, so it inherits the small-ceiling noise above one-for-one, diluted by the flat host_w adder. energy_total_month does not fail: the hardware line dominates the bill. 2 states, worst 10.4%."
-  },
-  {
    "quantity": "power_d_d",
    "where": {
     "_duty": {
@@ -412,17 +395,6 @@
    "observed_rel": 0.491,
    "max_rel": 0.7,
    "hypothesis": "just past the knee W / (1 - f0) the at-load miss share is 1 - W/U, a difference of two near numbers, and each side prices it on its own W (issue #117): a 2% difference in W moves the share by 2% x (W/U)/f, 30% at a swing of 1.5. d_p is the duty clamped at 1, and d_d is what 1 - d_p leaves, so a duty near 0.8 moves d_d by four times its own error. worst 27B/1xH200 at 64 users on W = 60"
-  },
-  {
-   "quantity": "energy_eur_month",
-   "where": {
-    "_miss_share_swing": {
-     "gte": 0.5
-    }
-   },
-   "observed_rel": 0.043,
-   "max_rel": 0.08,
-   "hypothesis": "just past the knee W / (1 - f0) the at-load miss share is 1 - W/U, a difference of two near numbers, and each side prices it on its own W (issue #117): a 2% difference in W moves the share by 2% x (W/U)/f, 30% at a swing of 1.5. the electricity line follows the GPU watts, damped by the idle and host terms. 2 states"
   },
   {
    "quantity": "slowed_share",

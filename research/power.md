@@ -109,6 +109,15 @@ B300 rows: add "entirely extrapolated" on top (§3). Double-counting trap
 for the integrator: during mixed continuous batching a chunked-prefill pass
 is *prefill*-priced — `d_p` and `d_d` must partition time, not overlap.
 
+**Where the electricity enters the bill (2026-11-04).** Only for owned GPUs.
+A rental rate is the provider's all-in price, power, cooling and host
+included, so a rented deployment's bill is the rent alone and adding this
+line would count power twice. For owned GPUs `model.energy_cost(pay="own")`
+prices `P_total` at load for the hours the team works and the idle draw
+(`d_p = d_d = 0`) for the rest of the 720-hour month, next to the server's
+purchase price written off over 36 months. `research/api_prices.md` lists
+every assumption of the bill in one place.
+
 ## 5. What this establishes / does not establish
 
 **Establishes:** spec-grade TDP and system-max anchors for both parts; a

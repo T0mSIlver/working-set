@@ -134,10 +134,14 @@ class GPU:
     # explorer slider's 0.10 step. A market snapshot, not a measurement and not
     # a cost of ownership. NVIDIA publishes no list price for either part.
     # Mirrors CONFIG.GPUS[].eur_gpu_h in the explorer, where a slider overrides
-    # it. Convention: a rental rate is all-in (power included), so for a rented
-    # GPU the electricity line double-counts; for owned hardware substitute an
-    # amortised figure and both lines apply.
+    # it. A rental rate is all-in: power, cooling and the host are in the rent,
+    # so a rented GPU carries no electricity line (energy_cost, pay="rent").
     eur_gpu_h: float = 0.0
+    # ---- PURCHASE price, EUR per GPU -- used ONLY by energy_cost(pay="own") ----
+    # A complete 8-GPU server's price over 8 (the host, CPUs, memory and NICs
+    # included), at the ECB rate of the day it was read. NVIDIA publishes none;
+    # research/gpu_costs in catalog.toml's comments has the sources.
+    eur_capex_gpu: float = 0.0
 
 
 GPUS = {k: GPU(**row) for k, row in CATALOG["gpus"].items()}
@@ -3297,6 +3301,15 @@ EUR_PER_KWH_DEFAULT = 0.19   # Eurostat non-household EU average €0.1902/kWh
                              # H1-2025; country spread €0.08 (FI) - €0.26 (CY).
                              # STATISTICAL (HIGH), user-chosen multiplier.
 HOURS_PER_MONTH = 720.0      # the explorer's flat billing month (30 x 24 h)
+# The hours a month the team works, and so the hours the GPUs carry load:
+# 10 h a day, 21 working days. Rented GPUs are up (and billed) only then;
+# owned GPUs idle the rest of the month. A monthly reservation is rent at 720.
+WORK_HOURS_DEFAULT = 210.0
+# Months an owned server is written off over. Hyperscalers book 5 to 6 years
+# (Amazon 5, Meta 5.5, CoreWeave 6, press reports); a GPU generation lasts
+# about 2, so the planner takes 3 years, the cautious end.
+AMORT_MONTHS_DEFAULT = 36.0
+PAY_MODES = ("rent", "own")
 
 # Output tokens ONE REQUEST decodes (applied to every request, subagents
 # included) — ~400 mean, from a trace not published in this repo; was
@@ -3386,24 +3399,30 @@ def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
                 mfu: float = MFU_DEFAULT, out_tokens: float = AVG_OUT_TOK,
                 per_pass_overhead: bool = False,
                 eur_gpu_h: float = None,
-                decode_floor: float = DECODE_FLOOR_TOKS) -> dict:
-    """€ figures on top of power_draw() — the explorer's energyCost().
+                decode_floor: float = DECODE_FLOOR_TOKS,
+                pay: str = "rent", work_hours: float = WORK_HOURS_DEFAULT,
+                eur_capex_gpu: float = None,
+                amort_months: float = AMORT_MONTHS_DEFAULT) -> dict:
+    """The monthly bill of a deployment, power counted once — the
+    explorer's energyCost().
 
-    720 h/month flat. Two lines: eur_month is the ELECTRICITY (the power
-    model's own output); hw_month is GPU-hours at the rental rate
-    (eur_gpu_h, default the part's list price; the explorer's slider);
-    total_month their sum, and eur_user / eur_mtok divide the TOTAL — a
-    €/Mtok that priced the watts but not the silicon read an order of
-    magnitude too cheap. The €/1M-output-tokens figure divides the whole
-    system's cost rate by the output-token rate the load implies
-    (rate_group x replicas x out_tokens — every group assumed equally
-    loaded, the same symmetry the rest of the study uses), and is Infinity
-    at zero output rather than a silent zero. eur_user divides the monthly
-    total across `users` (floored at 1, matching the explorer). pue and
-    eur_kwh are exact user-chosen multipliers on the ELECTRICITY line —
-    linear in each, asserted in _selfcheck — so tariff/facility scenarios
-    are one multiply, never a re-model. The €-per-token figure inherits
-    out_tokens' ASSUMED status linearly.
+    Two ways to pay for the GPUs (`pay`):
+
+      rent   eur_gpu_h x n_gpu x work_hours: the GPUs are up, and billed,
+             only the hours the team works. The rent includes power,
+             cooling and the host, so there is no electricity line
+             (eur_month 0). A monthly reservation is work_hours = 720 at
+             its own lower eur_gpu_h.
+      own    eur_capex_gpu x n_gpu / amort_months, plus the electricity at
+             the meter: the load's draw (power_draw) for work_hours and the
+             idle draw for the rest of the 720-hour month. pue and eur_kwh
+             are exact multipliers on that line.
+
+    hw_month is the rent or the write-off, eur_month the electricity,
+    total_month their sum; eur_user divides the total across `users`
+    (floored at 1, matching the explorer). eur_mtok divides it by the output
+    tokens the load produces in work_hours (rate_group x replicas x
+    out_tokens, every group equally loaded), Infinity at zero output.
     """
     if users < 0:
         raise ValueError(f"users must be >= 0, got {users!r}")
@@ -3413,19 +3432,34 @@ def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
         eur_gpu_h = topo.gpu.eur_gpu_h
     if eur_gpu_h < 0:
         raise ValueError(f"eur_gpu_h must be >= 0, got {eur_gpu_h!r}")
+    if pay not in PAY_MODES:
+        raise ValueError(f"pay must be one of {PAY_MODES}, got {pay!r}")
+    if not 0 < work_hours <= HOURS_PER_MONTH:
+        raise ValueError(f"work_hours must be in (0, {HOURS_PER_MONTH:g}], got {work_hours!r}")
+    if eur_capex_gpu is None:
+        eur_capex_gpu = topo.gpu.eur_capex_gpu
+    if eur_capex_gpu < 0 or amort_months <= 0:
+        raise ValueError("eur_capex_gpu must be >= 0 and amort_months > 0")
     # keywords past `chunk`: power_draw grew an out_tokens parameter, and a
     # positional tail would silently feed per_pass_overhead into it
     p = power_draw(model, topo, wl, rate_group, decode_users_group, chunk,
                    turn_tokens=turn_tokens, pue=pue, mfu=mfu,
                    out_tokens=out_tokens, per_pass_overhead=per_pass_overhead,
                    decode_floor=decode_floor)
-    eur_month = p["kw"] * HOURS_PER_MONTH * eur_kwh
-    hw_month = topo.n_gpu * eur_gpu_h * HOURS_PER_MONTH
+    if pay == "rent":
+        eur_month = 0.0
+        hw_month = topo.n_gpu * eur_gpu_h * work_hours
+    else:
+        g = topo.gpu
+        kw_idle = topo.n_gpu * (g.idle_w + g.host_w) * pue / 1000.0
+        eur_month = (p["kw"] * work_hours
+                     + kw_idle * (HOURS_PER_MONTH - work_hours)) * eur_kwh
+        hw_month = topo.n_gpu * eur_capex_gpu / amort_months
     total_month = eur_month + hw_month
     out_tok_s = rate_group * topo.replicas * out_tokens
-    eur_mtok = ((total_month / HOURS_PER_MONTH / 3600.0) / out_tok_s * 1e6
+    eur_mtok = ((total_month / work_hours / 3600.0) / out_tok_s * 1e6
                 if out_tok_s > 0 else float("inf"))
-    return {**p, "eur_month": eur_month, "hw_month": hw_month,
+    return {**p, "pay": pay, "eur_month": eur_month, "hw_month": hw_month,
             "total_month": total_month,
             "eur_user": total_month / max(1.0, users),
             "eur_mtok": eur_mtok}
@@ -4633,35 +4667,40 @@ def _selfcheck():
         "decode_floor must default to DECODE_FLOOR_TOKS"
     assert abs(p_f20["d_d"] - 2 * p_f40["d_d"]) < 1e-12, \
         "d_d must scale as 1/decode_floor below the 1 - d_p clip"
-    # the bill is LINEAR in the tariff and in PUE — both are user-chosen
-    # multipliers, not model error, and must behave like it
+    # rent: the rent alone, power inside it, for the hours the team works
     cost_ref = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
                            turn_tokens=TURN)
-    cost_2e = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
-                          turn_tokens=TURN, eur_kwh=2 * EUR_PER_KWH_DEFAULT)
-    cost_2p = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
-                          turn_tokens=TURN, pue=2 * PUE_DEFAULT)
-    assert abs(cost_2e["eur_month"] / cost_ref["eur_month"] - 2) < 1e-12, \
-        "eur_month must be linear in eur_kwh"
-    assert abs(cost_2p["eur_month"] / cost_ref["eur_month"] - 2) < 1e-12 \
-        and abs(cost_2p["kw"] / cost_ref["kw"] - 2) < 1e-12, \
-        "eur_month (via kw) must be linear in pue"
-    # the hardware line is the part's list price x GPUs x hours, untouched by
-    # the tariff and PUE; the per-user figure divides the TOTAL
+    assert cost_ref["eur_month"] == 0.0 and cost_ref["total_month"] == cost_ref["hw_month"]
     assert abs(cost_ref["hw_month"]
-               - tp2.n_gpu * GPUS["H200"].eur_gpu_h * HOURS_PER_MONTH) < 1e-6
-    assert cost_2e["hw_month"] == cost_ref["hw_month"] \
-        and cost_2p["hw_month"] == cost_ref["hw_month"]
-    assert cost_ref["total_month"] == cost_ref["eur_month"] + cost_ref["hw_month"]
-    # every part must carry a price: the dataclass default is 0.0 so that an
-    # unpriced GPU cannot pass as free by accident
+               - tp2.n_gpu * GPUS["H200"].eur_gpu_h * WORK_HOURS_DEFAULT) < 1e-6
+    assert energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, turn_tokens=TURN,
+                       eur_kwh=2 * EUR_PER_KWH_DEFAULT)["total_month"] == cost_ref["total_month"], \
+        "a rented GPU's bill must not move with the tariff"
+    # own: the write-off plus electricity, the electricity LINEAR in the
+    # tariff and in PUE (user-chosen multipliers, not model error)
+    own = dict(turn_tokens=TURN, pay="own")
+    own_ref = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **own)
+    own_2e = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **own,
+                         eur_kwh=2 * EUR_PER_KWH_DEFAULT)
+    own_2p = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **own, pue=2 * PUE_DEFAULT)
+    assert abs(own_2e["eur_month"] / own_ref["eur_month"] - 2) < 1e-12, \
+        "eur_month must be linear in eur_kwh"
+    assert abs(own_2p["eur_month"] / own_ref["eur_month"] - 2) < 1e-12, \
+        "eur_month must be linear in pue"
+    assert abs(own_ref["hw_month"]
+               - tp2.n_gpu * GPUS["H200"].eur_capex_gpu / AMORT_MONTHS_DEFAULT) < 1e-6
+    assert own_2e["hw_month"] == own_ref["hw_month"] == own_2p["hw_month"]
+    assert own_ref["total_month"] == own_ref["eur_month"] + own_ref["hw_month"]
+    # a month of work at full load draws more than a month of mostly idle
+    assert energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **{**own, "work_hours": 720.0}
+                       )["eur_month"] > own_ref["eur_month"]
+    # every part must carry both prices: the dataclass defaults are 0.0 so
+    # that an unpriced GPU cannot pass as free by accident
     for _gk, _g in GPUS.items():
         assert _g.eur_gpu_h > 0, f"GPUS[{_gk!r}] has no eur_gpu_h"
+        assert _g.eur_capex_gpu > 0, f"GPUS[{_gk!r}] has no eur_capex_gpu"
 
     assert cost_ref["eur_user"] == cost_ref["total_month"] / REF_USERS
-    assert energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, turn_tokens=TURN,
-                       eur_gpu_h=0.0)["total_month"] == cost_ref["eur_month"], \
-        "eur_gpu_h = 0 must recover the electricity-only bill"
     assert 0 < cost_ref["eur_mtok"] < float("inf")
     # zero output rate: €/1M tokens is undefined (inf), never a silent zero
     assert energy_cost(m27, tp2, wl, 0.0, du, REF_USERS,
