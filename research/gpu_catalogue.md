@@ -334,3 +334,45 @@ Two cautions for the cost model:
   ([vLLM forum](https://discuss.vllm.ai/t/vllm-hangs-during-worker-initialization-on-blackwell-pcie-gpus-unless-disable-custom-all-reduce-is-used/2540), S).
   A PCIe server can end up all-reducing through host memory, which belongs in
   the PCIe parts' link figure, not in the NVLink haircut.
+
+## 5. Link rows (per direction, for `t_coll`)
+
+The architecture spec (`.scratch/specs/architecture.md`) prices every
+collective as `t_coll = n_hop(p)·δ_link + g(p)·M/β_link` and retires
+`nvlink_domain`, `TP_EFFICIENCY` and `CROSS_DOMAIN_EFFICIENCY`. Each part
+then carries a scale-up `Link(kind, β, δ, domain)` and a scale-out `nic`
+Link. β below is **per GPU, per direction**: half of Nvidia's bidirectional
+figure in §4, or the NIC line rate / 8. δ is filled only where something was
+measured; elsewhere the spec's prior stands until one `nccl-tests` + DeepEP
+run per box.
+
+| Part | Scale-up kind | β spec (GB/s) | β measured | domain | δ measured (µs) | NIC | β_nic (GB/s) |
+|---|---|---|---|---|---|---|---|
+| H100 SXM | NVLink 4 | 450 | 4 x H100: 366 busbw with NVLS (S) | 8 | – | CX-7 400G | 50 |
+| H200 SXM | NVLink 4 | 450 | – | 8 | 8 B all-reduce, tuned: ~2.3 (8 GPUs, S) | CX-7 400G | 50 |
+| H20 | NVLink 4 (S, conflicting) | 450 | – | 8 | – | not found | – |
+| B200 | NVLink 5 | 900 | – | 8 | 8 B all-reduce, tuned: ~3 (8 GPUs, S) | CX-7 400G | 50 |
+| B300 | NVLink 5 | 900 | – | 8 | – | **CX-8 800G** | **100** |
+| GB200 NVL72 | NVLink 5, 2 switch hops | 900 | EP8 all-to-all 753 / 728 GB/s at 2048 tok/rank (P) | 72 | all-reduce, 4 GPUs: NCCL ring 11.0, one-shot 2.37, floor 1.40; all-to-all at 1 tok/rank 19 dispatch / 31 combine (P) | CX-7 400G (S) | 50 |
+| GB300 NVL72 | NVLink 5 | 900 | – | 72 | – | CX-8 800G | 100 |
+| Vera Rubin NVL72 | NVLink 6 | 1,800 (3.6 TB/s bidirectional; 1,500 if the preliminary 3.0 holds) | – | 72 | – | CX-9 1.6T | 200 |
+| RTX PRO 6000 Server | PCIe 5.0 x16 | 64 | P2P 40 on one PCIe switch, 45 via the NIC path (S) | 1 | – | server choice | – |
+| L40S | PCIe 4.0 x16 | 32 | – | 1 | – | server choice | – |
+
+All-to-all latency for the `δ_a2a` prior: DeepEP's low-latency kernels on
+H800 read 77 µs dispatch / 114 µs combine at EP8 and ~194 / ~360 µs at
+EP256 over 400G RDMA (DeepEP README @9eb2f84, P). The GB200 NVL72 figure
+above (19 / 31 µs) is the in-domain one. Sources for every cell: §4.
+
+Corrections to the spec's link table (§1.2 of `parallelism.md`):
+- **HGX B300 scale-out is ConnectX-8 at 800G** (DGX B300 page), so
+  β_nic = 100 GB/s, not the 50 GB/s of the NDR row. Only H100, H200 and B200
+  boxes sit on 400G.
+- **PCIe β should be the measured ~40 GB/s**, not the 64 GB/s line rate, and
+  on RTX PRO 6000 boxes P2P is often disabled (`NCCL_P2P_DISABLE=1`), which
+  sends the ring through host memory. Both argue for the PCIe parts taking a
+  measured β, not the vendor one.
+- **Rubin's NVLink 6** is 1,800 GB/s per direction on the later Nvidia
+  sources, 1,500 on the preliminary NVLink page.
+- GB200's NIC (CX-7 400G) is from secondary sources only; Grace-Blackwell
+  trays also ship a "Direct NIC" CX-8 option.
