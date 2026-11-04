@@ -70,7 +70,7 @@ function readout(){
   lastVerdict = text;
   const d = STATE_DEFAULTS;
   $('calDefaults').textContent =
-    `defaults: prefill ${Number(d.mfu).toFixed(2)} · decode ${Number(d.mbu).toFixed(2)}`;
+    `defaults: prefill ${Number(d.mfu).toFixed(2)} · decode η ${Number(d.eta).toFixed(2)}`;
 }
 
 function refresh(){ hypothesis(); predictions(); readout(); }

@@ -200,7 +200,7 @@ export function unitChecks(){
   }
   console.assert(Object.keys(CONFIG.MODELS).every(k => k === "GLM52" || !CONFIG.MODELS[k].kv_hopper_fp8),
     "only GLM-5.3's FP8 row depends on the GPU");
-  console.assert(mm.mtp === 1.0, "MM35 has no MTP module");
+  console.assert(mm.spec_tokens === 0, "MM35 has no MTP module");
   console.assert(Math.abs(glm.w_route_total/glm.w_route_pertok - 32) < 1e-9, "GLM kink n=32");
   // B300 + NVFP4: pool ordering, gate, and the ~465 GB GLM checkpoint check
   const b1 = makeTopo("tp",1,"B300");
@@ -645,8 +645,10 @@ export function steadyChecks(){
   // decode holds each request in the batch longer, so the steady batch GROWS
   // and each member runs slower. 2.2 at 430 -> ~6.5 at ~135. Mirrors the
   // same re-pin in scenario_model.py's _selfcheck.
-  console.assert(approx(sd.n, 6.8, 0.08) && approx(sd.pu, 138, 0.09),
-    "27B/TP2 at the reference load: ~6.8 sequences decoding, ~138 tok/s each");
+  // Re-pinned for the decode step equation (k = 3 at acceptance 0.971):
+  // 6.8 at 138 -> ~4.2 at ~221, the same re-pin as model.py's _selfcheck.
+  console.assert(approx(sd.n, 4.2, 0.08) && approx(sd.pu, 221, 0.09),
+    "27B/TP2 at the reference load: ~4.2 sequences decoding, ~221 tok/s each");
   console.assert(sd.n < 480/5 && sd.pu > 4*interpAt(dc,'p50',480,true),
     "the steady batch must sit far left of the sweep, and far above its speed");
   // 4. monotone and linear in the load, exactly (demand is linear, and the

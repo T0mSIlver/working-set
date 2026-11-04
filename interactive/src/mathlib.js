@@ -36,7 +36,7 @@ export function samplingSig(){
   // in it would reseed all 800 of them (a fixture re-tune, not a finding).
   // The replicated arm still gets its own seed and its own cache key.
   return [state.model,state.gpu,state.wdt,state.kv,state.state_dt,state.wover,
-          state.mtp,state.mbu,state.mfu,state.ngpu,state.tp,state.ram,state.cap,
+          state.acc,state.dspec,state.eta,state.t0,state.tar,state.trec,state.union,state.mfu,state.ngpu,state.tp,state.ram,state.cap,
           state.user_median,state.user_sigma,state.sub_median,state.sub_sigma,
           state.sub_ratio,state.sub_shares_prefix,state.sys,state.inval,
           ...(state.kvshard && state.kvshard !== "dcp" ? [state.kvshard] : [])].join('|');

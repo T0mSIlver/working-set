@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js';
+import { CONFIG, tokensPerStep } from './config.js';
 import { prefillChunk } from './prefill.js';
 import { p_sub } from './workload.js';
 import { currentTopo, ramPerCache, state } from './state.js';
@@ -34,10 +34,13 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   // the draft count, method and any non-default speculative config come
   // from the catalogue; a model without drafts emits no speculative flags
   const ex = m0.explorer;
-  const specDrafts = m0.spec_tokens;
+  // the page's draft depth (the model's recipe unless moved) is the one the
+  // command starts the server with
+  const specDrafts = state.dspec;
   const dspark = m0.draft_method === "dspark";
-  const specOn = state.mtp>1 && m0.mtp>1 && specDrafts > 0;
-  const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
+  const specOn = specDrafts > 0 && m0.spec_tokens > 0;
+  const eagle = specDrafts > 0 && m0.spec_tokens === 0;   // Mistral-Medium: an external draft
+  const tps = tokensPerStep(state.acc, specDrafts).toFixed(2);
   const ramGrp = ramPerCache(topo);
   // the catalogue's recipe rules that hold for this GPU and TP width
   const rules = (ex.recipe || []).filter(({ when = {} }) =>
@@ -87,6 +90,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const specBlocked = specOn && dcp > 1 && !ex.spec_with_dcp;
   if (specOn && !specBlocked)
     lines.push(`  --speculative-config '${ex.speculative_config
+        ?.replace(/"num_speculative_tokens":\d+/, `"num_speculative_tokens":${specDrafts}`)
       ?? `{"method":"mtp","num_speculative_tokens":${specDrafts}}`}'`);
   if (state.ram>0)
     lines.push(`  --kv-offloading-size ${fmt(ramGrp,0)}`);
@@ -96,16 +100,11 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   if (state.kv==='fp16' && kvFlag==='auto') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
   if (dcp > 1) cmts.push(`# DCP ${dcp}: ${m0.kv_heads===1?'a single-latent (MQA/MLA) cache':`${m0.kv_heads} KV heads`} would replicate on ${dcp}× the ranks under plain TP${topo.tp}; the page prices ONE copy${ex.spec_with_dcp ? '' : ' (speculative decoding under DCP is still in development in vLLM, 2026-08)'}`);
   if (rKv > 1) cmts.push(`# KV REPLICATED: plain TP${topo.tp} keeps ${rKv}× copies of every session's cache — the page prices the pool ÷ ${rKv} and ${rKv}× per-step cache reads; --decode-context-parallel-size ${Math.max(1, Math.floor(topo.tp/(m0.kv_heads||1)))} would remove them`);
-  if (specOn && !specBlocked) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${dspark?' (DSpark drafts)':''}`);
+  if (specOn && !specBlocked) cmts.push(`# speculative decoding modelled at ${tps} tokens per step (${specDrafts} drafts at acceptance ${state.acc.toFixed(3)}${dspark?', DSpark':''})`);
   for (const r of rules) if (r.note && r.after_spec) cmts.push(`# ${r.note}`);
-  if (specBlocked) cmts.push(`# NOT EMITTED: --speculative-config — the page prices ${state.mtp.toFixed(2)}× speculative decoding, but vLLM's DCP path had no speculative-decoding support as of 2026-08; set the MTP slider to 1.0 for a recipe that matches, or choose Replicated`);
+  if (specBlocked) cmts.push(`# NOT EMITTED: --speculative-config — the page prices ${specDrafts} draft tokens, but vLLM's DCP path had no speculative-decoding support as of 2026-08; set Draft tokens to 0 for a recipe that matches, or choose Replicated`);
   if (illegalTp) cmts.push(`# TP${topo.tp} is not a width vLLM accepts for ${heads} KV heads (tp must divide the heads or the heads divide tp): the page prices this as if the cache sharded — an extrapolation no command realizes`);
-  if (eagle) cmts.push(`# the modelled ${state.mtp.toFixed(2)}× speedup assumes an EXTERNAL EAGLE-style draft (no MTP module; unmeasured)`);
-  // the latency pricing charges each verified draft token as compute: its
-  // draft count should be the one this command starts the server with
-  const recipeDrafts = specOn && !specBlocked ? specDrafts : 0;
-  if (state.dprice === 'latency' && state.dspec !== recipeDrafts)
-    cmts.push(`# decode is priced (latency pricing) at ${state.dspec} draft tokens per step; this command drafts ${recipeDrafts} — set Draft tokens to ${recipeDrafts} to price this server`);
+  if (eagle) cmts.push(`# the modelled ${tps} tokens per step assume an EXTERNAL EAGLE-style draft (no MTP module; its bytes are unpriced)`);
   if (state.ram>0) cmts.push(`# --kv-offloading-size is GiB per group${dp>1?` (${fmt(state.ram,0)} GiB total across ${dp} groups)`:''}; a storage tier — restore latency unpriced`);
   deployCmdText = lines.join(' \\\n') + (cmts.length ? '\n'+cmts.join('\n') : '');
 
@@ -119,8 +118,8 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
        ? `${fmt(state.mns,0)}${reps>1?' per group':''} (set; ${op.decodeCapped?'sets the decode ceiling':'does not set the decode ceiling'})`
        : `${fmt(sug,0)}${reps>1?' per group':''} (recommended)`],
     ['CPU offload', state.ram>0?`${fmt(state.ram,0)} GiB${dp>1?` (${fmt(ramGrp,0)}/group)`:''}`:'off'],
-    ['Speculative', specOn?`${dspark ? 'DSpark' : 'MTP'} ${state.mtp.toFixed(2)}× (${specDrafts} drafts)`
-                   :(eagle?`EAGLE-style ${state.mtp.toFixed(2)}× (external, unmeasured)`:'off')],
+    ['Speculative', specOn?`${dspark ? 'DSpark' : 'MTP'} ${specDrafts} drafts · ${tps} tok/step`
+                   :(eagle?`EAGLE-style ${specDrafts} drafts · ${tps} tok/step (external, unmeasured)`:'off')],
   ].map(([k,v])=>`<dt>${k}</dt><dd class="tnum">${v}</dd>`).join('');
   const out = [
     ['Warm sessions (p5)', `${fmt(warmSys,0)} · ≈ ${fmt(userSys,0)} users`],

@@ -20,41 +20,17 @@ const CATALOG_QUALITY = Object.fromEntries(Object.entries(CATALOG.models)
       quality[b] === undefined ? null
       : Array.isArray(quality[b]) ? quality[b][0] / quality[b][1] : quality[b]])) }]));
 
-// DECODE efficiency -- MFU's counterpart, and the newest constant here.
-// Decode was first a PURE roofline (bytes / effective_bw, no efficiency term
-// at all) while prefill carried an anchor. A measurement not published in
-// this repo found it optimistic on the reference row, and ONE constant fits
-// it across n = 1-25.
-// MODEL CONVENTION (already divided by tp_efficiency), so it multiplies
-// effective_bw directly.
-// It is fitted on a HYBRID model running speculative decode at k=2, so it
-// absorbs both streaming inefficiency and whatever the speculative verify
-// costs on a sequential recurrence. It therefore travels WITH the model's
-// mtp: change one and the fit breaks. Mirrors MBU_DEFAULT in scenario_model.py.
-// EXTRAPOLATION BIAS: fitted over n = 1-25, where weights are 80-95% of the
-// step. The decode ceiling lives at n ~ 100-250, where KV dominates and a
-// whole-ledger multiplier over-charges. The 27B/TP4 ceiling reads 108 here,
-// 238 under reading A (the verify multiplies the weight reads) and 154 under
-// reading B (it serialises as latency) -- against a
-// cache ceiling of 249, so the BINDING ORDER is not identified. Per-user
-// speed near the fitted mix is; the ceiling is not. See MBU_DEFAULT.
-// ONE value for EVERY row, from the slider. A dense or MLA model has no
-// recurrence to serialise and should sit higher, but nothing in this study
-// measures one, and a per-model guess would rank the frontier on the guess.
-// So the slider is a GLOBAL sensitivity knob: drag it and watch which
-// configurations survive. (Not the MTP rule -- own capability per row --
-// because MTP is a shipped feature and MBU is an unmeasured efficiency.)
-// Per-row values come back the day a second architecture is measured.
-export const DECODE_MBU    = 0.22;
-
-// OPT-IN decode pricing. Mirrors DECODE_BW_EFF,
-// DECODE_FIXED_S and DECODE_SPEC_TOKENS in workingset.model: a decode step is
-//   step_bytes / (effective_bw x bw_eff) + n x (1 + spec) x t_token + fixed
-// with t_token = 2 x params_prefill / (peak x mfu). Read on ONE deployment
-// (TP4, MTP depth 3); the default pricing stays the single DECODE_MBU fold.
-export const DECODE_BW_EFF      = 0.36;
-export const DECODE_FIXED_MS    = 2.7;
-export const DECODE_SPEC_TOKENS = 3;
+// DECODE: one step-time equation (mirrors workingset.model DECODE_ETA and
+// decode_step_seconds):
+//   t_step = B / (eta x tp x hbm_bw) + n (1 + k) c_tok
+//          + (tau_0 + [tp > 1] tau_ar)(L + k L_d) + tau_rec L_rec (1 + k)
+// eta is the achieved fraction of RAW HBM bandwidth; tau_0 and tau_ar are
+// priors and tau_rec is solved from the 27B anchor's measured 2.7 ms
+// intercept (decodePriors). Each sequence advances tokensPerStep(acceptance,
+// k) tokens per step.
+export const DECODE_ETA = 0.29;
+export const TAU_0 = 5e-6, TAU_AR = 10e-6;
+const ANCHOR_FIXED_S = 2.7e-3, ANCHOR_SPEC_TOKENS = 3;
 
 export const CONFIG = {
   // ---- HARDWARE ----
@@ -155,12 +131,74 @@ for (const t of Object.values(CONFIG.TOPOLOGIES)) t.gpu = CONFIG.GPUS["H200"];
 
 /* ---- model helpers ---- */
 export function is_moe(m){ return m.w_route_total > 0; }
-// concurrency at which the conservative expert union saturates (every routed
-// expert read each step): n_sat = total/pertok = E/k = 32 for both MoE models
+// concurrency at which the no-overlap expert union saturates (every routed
+// expert read each step): n_sat = total/pertok = E/k_e routed positions
 export function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / m.w_route_pertok) : null; }
-// Conservative (no-overlap) expert-union bound, the study's planning default;
-// the expected-union "coverage" model is the optimistic bracket (see docs).
-export function w_decode(m, n){ return m.w_decode_shared + Math.min(n * m.w_route_pertok, m.w_route_total); }
+// routed-expert bytes `positions` routed tokens read (mirrors Model._union):
+// coverage = the expectation under independent routing (the default),
+// linear = the no-overlap upper bound
+function routedUnion(m, positions, perTok, union){
+  if (!(perTok > 0) || !is_moe(m)) return 0;
+  const total = perTok * m.w_route_total / m.w_route_pertok;
+  return union === "linear" ? Math.min(positions * perTok, total)
+                            : total * (1 - Math.pow(1 - perTok / total, positions));
+}
+// target weight bytes one step reads for `positions` routed tokens
+export function w_decode(m, positions, union = "coverage"){
+  return m.w_decode_shared + routedUnion(m, positions, m.w_route_pertok, union);
+}
+// bytes one draft pass streams for n sequences (mirrors Model.draft_pass_bytes)
+export function draftPassBytes(m, n, union = "coverage"){
+  return (m.w_draft || 0) + routedUnion(m, n, m.w_draft_route_pertok || 0, union);
+}
+// tokens a sequence advances per step: 1 + a + a.a + ... over k drafts
+// (mirrors tokens_per_step; a scalar or one acceptance per position)
+export function tokensPerStep(acceptance, k){
+  const per = Array.isArray(acceptance) ? acceptance : Array(k).fill(acceptance);
+  let m = 1, run = 1;
+  for (let j = 0; j < k; j++){ run *= (j < per.length ? per[j] : per[per.length-1] ?? 0); m += run; }
+  return m;
+}
+function fixedSeconds(m, tp, k, [t0, tar, trec]){
+  return (t0 + (tp > 1 ? tar : 0)) * ((m.layers || 0) + k * (m.draft_layers || 0))
+       + trec * (m.rec_layers || 0) * (1 + k);
+}
+let PRIORS = null;
+// (tau_0, tau_ar, tau_rec) in seconds: mirrors decode_priors
+export function decodePriors(){
+  if (!PRIORS){
+    const m = CONFIG.MODELS["27B"], k = ANCHOR_SPEC_TOKENS;
+    const draftS = k * draftPassBytes(m, 0) / (4 * CONFIG.GPUS["H200"].hbm_bw * DECODE_ETA);
+    const left = ANCHOR_FIXED_S - draftS - fixedSeconds(m, 4, k, [TAU_0, TAU_AR, 0]);
+    PRIORS = [TAU_0, TAU_AR, left / (m.rec_layers * (1 + k))];
+  }
+  return PRIORS;
+}
+// c_tok: GEMM time of one position at the group's RAW peak (mirrors
+// decode_token_seconds)
+export function decodeTokenSeconds(model, topo, mfu){
+  if (!(model.params_prefill > 0))
+    throw new Error(`${model.name}: no prefill constants (params_prefill unset)`);
+  const gpu = topo.gpu || CONFIG.GPUS["H200"];
+  return 2 * model.params_prefill / (topo.tp * gpu.peak_flops_fp8 * mfu);
+}
+// the constants a step is priced with: {eta, taus: [t0, tar, trec], mfu,
+// union}; null taus fall back to the priors (mirrors DecodeConstants)
+export function decodeConstants({ eta = DECODE_ETA, t0 = null, tar = null, trec = null,
+                                  mfu = 0.45, union = "coverage" } = {}){
+  const [p0, par, prec] = decodePriors();
+  return { eta, mfu, union, taus: [t0 ?? p0, tar ?? par, trec ?? prec] };
+}
+// seconds of one step for n sequences whose KV + state reads total kvBytes
+// (mirrors decode_step_seconds); k defaults to the model's spec_tokens
+export function decodeStepSeconds(m, topo, n, kvBytes, dc, k = m.spec_tokens){
+  const gpu = topo.gpu || CONFIG.GPUS["H200"];
+  const pos = n * (1 + k);
+  const bytes = w_decode(m, pos, dc.union) + k * draftPassBytes(m, n, dc.union) + kvBytes;
+  return bytes / (dc.eta * topo.tp * gpu.hbm_bw)
+       + pos * decodeTokenSeconds(m, topo, dc.mfu)
+       + fixedSeconds(m, topo.tp, k, dc.taus);
+}
 // recurrent / fixed-state bytes moved per active sequence per decode step:
 // read + write of the whole state unless the model says otherwise (mirrors
 // Model.state_traffic — the DeepSeek Flash models' windows are read inside kv_decode_const)

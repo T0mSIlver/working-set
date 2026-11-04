@@ -139,6 +139,13 @@ cannot decode until it is restored).
 
 ### Decode speed (bandwidth-bound, MoE-aware)
 
+> **2026-11-04:** the code no longer prices decode this way. One step
+> equation (bytes at η of raw bandwidth, verify compute, per-layer and
+> recurrent fixed costs, draft passes as bytes) replaced this roofline, the
+> MBU fold and the per-model `mtp`; tokens per step come from acceptance and
+> draft depth. The decode figures in this document predate it.
+> `research/decode-model.md` has the equation and what moved.
+
 ```
 step_bytes(n) = w_decode(n) + (Σ active-context tokens)·KV_bpt + 2·n·state
 w_decode(n)   = w_shared + min(n·w_pertok, w_total)      # conservative default

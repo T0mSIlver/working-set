@@ -495,6 +495,7 @@ async def sweep(args) -> dict:
                 "hold_s": args.hold, "settle_s": args.settle, "seed": args.seed,
                 "chars_per_token": cpt, "kv_pool_tokens": pool, "max_model_len": max_len,
                 "engine": args.engine, "adapter": ep.ad.resolution().version_hint,
+                "tensor_parallel": args.tensor_parallel,
                 "rungs": rungs}
 
 
@@ -557,6 +558,9 @@ def add_subparser(sub) -> None:
                    help="per-sequence tok/s ceiling used to size max_tokens for the first "
                         "rung; later rungs use the last clean rung's measured rate (default 300)")
     p.add_argument("--kv-tokens", type=int, help="KV pool size in tokens, when /metrics lacks it")
+    p.add_argument("--tensor-parallel", type=int, metavar="TP",
+                   help="the server's --tensor-parallel-size, recorded so `ws calibrate` "
+                        "can tell runs at two widths apart (default: the config's)")
     p.add_argument("--kv-fill", type=float, default=0.9,
                    help="skip a rung needing more than this share of the pool (default 0.9)")
     p.add_argument("--warm-concurrency", type=int, default=8,

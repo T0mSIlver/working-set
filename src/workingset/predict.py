@@ -135,6 +135,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     w, slo, cal, dep = cfg.workload, cfg.slo, cfg.calibration, cfg.deployment
     chunk = dep.max_num_batched_tokens
     users = cfg.users_per_group()
+    dc = cfg.decode_constants()
 
     ram = dep.ram_gib
     pct = None if slo.ttft_statistic == "miss_mean" else slo.percentile
@@ -143,25 +144,13 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
         sla_seconds=slo.ttft_budget_s, think_time_s=w.think_time_s,
         decode_floor=slo.itl_floor_tok_s, mfu=cal.mfu, ram_gib=ram,
         per_pass_overhead=True, closed=closed, z_think_s=w.think_time_s,
+        decode=dc,
         out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
         # the SLO is a percentile, so the TTFT ceiling and the cold wait
         # check that percentile, not the mean (model.max_users_latency)
         ttft_percentile=pct,
         slowed_share_max=slo.slowed_share_max,
         cold_wait_budget_s=slo.cold_wait_budget_s)
-    # operating_point prices decode at the study default MBU; re-price at the
-    # configured one so the calibration block is honoured
-    lat = cfg.decode_latency()
-    if cal.mbu != M.MBU_DEFAULT or lat is not None:
-        dec, op["decode_censored"] = M.max_users_decode_bounded(
-            m, t, wl, floor=slo.itl_floor_tok_s, n_iter=n_iter, seed=seed,
-            mbu=cal.mbu, latency=lat)
-        op["ceilings"]["decode"] = dec
-        op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
-        op["limit"] = op["ceilings"][op["binding"]]
-        op["headroom"] = users / op["limit"] if op["limit"] > 0 else math.inf
-        op["fits"] = users <= op["limit"]
-
     # op["warm_users"] is the user-class warm p5 (the plan column); the
     # all-classes count is what the pool physically holds
     draw = int(4000 + M.kv_pool_tokens(m, t) / 8000)
@@ -192,7 +181,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     slots = M.max_users_decode_slots(
         m, t, wl, mns, think_time_s=w.think_time_s,
         out_tokens=w.max_output_tokens, n_iter=n_iter, seed=seed,
-        mbu=cal.mbu, latency=lat)
+        decode=dc)
     op["ceilings"]["decode"], capped = M.cap_decode_ceiling(bw, mns, slots)
     op["binding"] = min(op["ceilings"], key=op["ceilings"].get)
     op["limit"] = op["ceilings"][op["binding"]]
@@ -233,7 +222,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 
     steady = _steady_block(m, t, wl, rate_total, w.max_output_tokens,
                            dep.max_model_len, chunk, cal.mfu, duty,
-                           mbu=cal.mbu, latency=lat, n_iter=n_iter, seed=seed,
+                           decode=dc, n_iter=n_iter, seed=seed,
                            # ...nor the scheduler's cap: a steady batch above
                            # max_num_seqs is a machine that does not exist, so
                            # the point saturates there and the block goes empty
@@ -284,9 +273,9 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
 #
 #   steady_decode_seqs   steady_decode_point(...)["n"]
 #   steady_decode_tok_s  steady_decode_point(...)["per_user_tok_s"]  (= pu)
-#   itl_normal_ms        1000 x model.mtp / pu
+#   itl_normal_ms        1000 x model.tokens_per_step / pu
 #                        one decode step, per user, with no prefill in the pass
-#   itl_worst_freeze_ms  1000 x (model.mtp / pu
+#   itl_worst_freeze_ms  1000 x (model.tokens_per_step / pu
 #                                + prefill_seconds(step, mfu, prior=cap - step))
 #                        with step = min(chunk, cap). The LAST chunk of a
 #                        full-context cold re-prefill joins the decode batch,
@@ -310,30 +299,29 @@ def freeze_ms(model: M.Model, topo: M.Topology, cap: float, chunk: float,
     # a chunk larger than the whole context is one cap-sized pass with no
     # cache behind it — never a full chunk with a negative prior
     step = min(chunk, cap)
-    return 1e3 * (model.mtp / per_user_tok_s
+    return 1e3 * (model.tokens_per_step / per_user_tok_s
                   + M.prefill_seconds(model, topo, step, mfu, prior=cap - step))
 
 
 def _steady_block(m, t, wl, rate_total: float, out_tokens: float, cap: float,
-                  chunk: float, mfu: float, duty: float, mbu: float,
-                  n_iter: int, seed: int, resident: float,
-                  latency=None) -> dict:
+                  chunk: float, mfu: float, duty: float, decode,
+                  n_iter: int, seed: int, resident: float) -> dict:
     empty = {"steady_decode_seqs": None, "steady_decode_tok_s": None,
              "itl_normal_ms": None, "itl_worst_freeze_ms": None,
              "itl_freeze_lo_ms": None, "itl_freeze_hi_ms": None}
     if duty >= 1.0:
         return empty
-    # the calibration block's MBU, the same one max_users_decode is priced at
+    # the calibration block's constants, the ones max_users_decode is priced at
     sp = M.steady_decode_point(m, t, wl, rate_total, out_tokens=out_tokens,
-                               mbu=mbu, n_iter=n_iter, seed=seed,
-                               resident=resident, latency=latency)
+                               decode=decode, n_iter=n_iter, seed=seed,
+                               resident=resident)
     pu = sp["per_user_tok_s"]
     if sp["saturated"] or not (pu > 0):
         return empty
     return {
         "steady_decode_seqs": round(sp["n"], 2),
         "steady_decode_tok_s": round(pu),
-        "itl_normal_ms": round(1e3 * m.mtp / pu, 1),
+        "itl_normal_ms": round(1e3 * m.tokens_per_step / pu, 1),
         "itl_worst_freeze_ms": round(freeze_ms(m, t, cap, chunk, pu, mfu)),
         # higher MFU = shorter freeze, so the HI anchor is the low edge
         "itl_freeze_lo_ms": round(freeze_ms(m, t, cap, chunk, pu, M.MFU_HIGH)),

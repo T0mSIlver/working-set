@@ -263,10 +263,10 @@ def test_slowed_ceiling_solves_its_limit():
 def test_token_debt_counts_tokens_not_steps():
     """A drain costs each warm user the tokens it would have decoded: its
     per-user speed normally minus its speed while every step carries a chunk,
-    over the drain. Each step hands out `mtp` tokens, so counting steps
+    over the drain. Each step hands out `tokens_per_step` tokens, so counting steps
     undercounts by the accepted length (the 27B's 2.94)."""
     m, t, wl = M.MODELS["27B"], M.topology_grid(1, 2, "H200"), M.Workload()
-    assert m.mtp > 1                    # the case the step count got wrong
+    assert m.tokens_per_step > 1                    # the case the step count got wrong
     drain, _, per_user, total = M.spike_token_debt(
         m, t, wl, 32, 64, 2.0, 32_768, 2_000, n_iter=200)
     _, p50, _, _ = M.decode_curves(m, t, wl, [64], n_iter=200, seed=0)

@@ -74,12 +74,17 @@ def cmd_predict(args) -> int:
           + f", max_num_seqs {p.max_num_seqs}"
           + (" (recommended, lower bound)" if p.max_num_seqs_lower_bound
              else " (recommended)" if p.max_num_seqs_recommended else ""))
-    lat = cfg.decode_latency()
-    if lat is not None:
-        print(f"decode pricing: latency (bytes at {lat.bw_eff:g} of bandwidth + "
-              f"{1 + lat.spec_tokens} tokens of compute per sequence at MFU "
-              f"{cfg.calibration.mfu:g} + {lat.fixed_s * 1e3:g} ms per step) — "
-              "opt-in, one deployment's constants")
+    dc, mdl = cfg.decode_constants(), cfg.to_model()
+    t0, tar, trec = dc.taus()
+    print(f"decode: {mdl.spec_tokens} draft tokens at acceptance "
+          f"{mdl.acceptance if not isinstance(mdl.acceptance, tuple) else list(mdl.acceptance)}"
+          f"{'' if mdl.acceptance_measured or cfg.calibration.acceptance is not None else ' (unmeasured)'}"
+          f" -> {mdl.tokens_per_step:.2f} tokens/step; eta {dc.eta:g}, tau "
+          f"{t0 * 1e6:.1f} / {tar * 1e6:.1f} / {trec * 1e6:.1f} us, {dc.union} expert union")
+    for key, f in cfg.calibration.fit.items():
+        se = f" ± {f['stderr']:g}" if f.get("stderr") else ""
+        print(f"  calibrated {key} {f['value']:g}{se} ({f.get('status', 'measured')}, "
+              f"{f.get('date', '?')}, {f.get('source', '?')})")
     users = cfg.users_per_group()
     print(f"operating point: {users:g} users/group, think {w.think_time_s} s, "
           f"miss {w.miss_rate:.1%}, {'closed' if args.closed else 'open'} loop")
@@ -515,6 +520,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_replay(sub)
     from .decode_sweep import add_subparser as _add_decode
     _add_decode(sub)
+    from .calibrate import add_subparser as _add_calibrate
+    _add_calibrate(sub)
     from .api_cost import add_subparser as _add_api
     _add_api(sub)
     return ap

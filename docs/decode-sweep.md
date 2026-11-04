@@ -66,3 +66,24 @@ skipped.
 
 Local check (Qwen3-4B on one RTX 3090, 3k context, 88k-token pool): step time
 13.7, 19.3, 26.2, 36.2 ms at n = 1, 8, 16, 32; client and server agree to 1%.
+
+## Fitting the model: `ws calibrate`
+
+```bash
+uv run ws decode-sweep --base-url http://host:8000/v1 --model M --tensor-parallel 2 \
+    --prompt-file coding.txt --out sweep_tp2.json
+uv run ws calibrate sweep_tp2.json [sweep_tp1.json sweep_k0.json ...] \
+    --config workingset.toml [--vllm-log server.log] --write
+uv run ws predict workingset.toml
+```
+
+`ws calibrate` fits what the runs identify and keeps every other constant at
+its prior: η from the step's bytes (more batch sizes or two contexts), the
+per-layer cost from the intercept, τ_ar only when one run is at TP1 and one
+above, τ_rec only when one run changes the draft depth (`--speculative-config`
+with fewer drafts, or none), acceptance from the spec-decode counters, the
+per-GPU reserve from the KV pool vLLM reports, and prefill MFU from `ws replay`
+records. Each fit prints with its standard error and the reason when it is not
+identified. `--write` stores the values in `[calibration]` and their provenance
+under `[calibration.fit.<key>]`; `ws predict` prices with them and prints where
+each came from. The equation and its priors: `research/decode-model.md`.

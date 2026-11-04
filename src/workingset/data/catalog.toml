@@ -86,15 +86,22 @@ w_resident = 30923764531.2       # = 28.8 * GIB: baseline's stated as-deployed F
 w_decode_shared = 30923764531.2  # = 28.8 * GIB: dense: every step reads all weights
 w_route_pertok = 0.0
 w_route_total = 0.0
-# Accepted length at num_speculative_tokens=2 on Qwen3.6-27B, from a
-# measurement not published in this repo (1 + a + a^2 = 2.94 gives a
-# per-draft acceptance a ~ 0.98). Was 1.7, the baseline's fit. NOT
-# re-measured on Qwen3.8-27B: acceptance is a property of the draft head's
-# weights, not the architecture. PAIRED WITH MBU_DEFAULT: both were
-# calibrated against the same passes, so moving one without the
-# other breaks the fit (see MBU_DEFAULT).
-mtp = 2.94
-spec_tokens = 2                  # num_speculative_tokens: the 27B's measured run
+layers = 64
+rec_layers = 48
+draft_layers = 1
+# draft pass: the MTP layer (~0.5e9 B) + the untied lm_head it re-reads for
+# the draft logits (248,320 x 5,120 = 1.27e9 B), both taken as FP8:
+# ESTIMATED, no ledger itemises them. A BF16 lm_head (2.54e9) would leave the
+# anchor's measured 2.7 ms intercept no room for the all-reduce floor, so the
+# FP8 reading is the one the measurement allows. It sets tau_rec through that
+# anchor (model.decode_priors): re-measure before trusting either.
+w_draft = 1.77e9
+w_draft_route_pertok = 0.0
+# per-draft acceptance MEASURED on Qwen3.6-27B at k = 2 (1 + a + a^2 = 2.94;
+# geometric to three decimals, #74); carried to 3.8, same draft head shape
+acceptance = 0.971
+acceptance_measured = true
+spec_tokens = 3                  # num_speculative_tokens: the reference server's depth
 weights_as_deployed = true        # w_resident is the measured as-deployed footprint (no +15%)
 # RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
 # header: 23,417,339,744 B (dense MLPs of 56/64 layers NVFP4;
@@ -139,7 +146,16 @@ w_resident = 35_500_000_000      # ~35.5B params x 1B FP8: full model (embedding
 w_decode_shared = 1_940_000_000  # attn + deltanet + shared expert + router + lm_head / step
 w_route_pertok = 1_006_632_960   # 8 routed experts x 3.146M x 40 layers, FP8
 w_route_total = 32_212_254_720   # 256 routed experts (saturates at exactly n=32 linear)
-mtp = 1.7                        # MTP module, speedup kept equal to baseline's fit
+layers = 40
+rec_layers = 30
+draft_layers = 1
+# draft pass: MTP layer always-active ~3.5e7 (0.84e9 module less 256
+# experts x 3.146e6) + lm_head 0.509e9 FP8; 8 routed experts x 3.146e6
+# per position (research/model_35ba3b.md:108,122)
+w_draft = 5.44e8
+w_draft_route_pertok = 25_165_824
+# acceptance: the 27B's measured 0.971, carried to its Qwen MTP-head sibling; unmeasured
+acceptance = 0.971
 spec_tokens = 2                  # num_speculative_tokens: MTP module
 # RedHatAI/Qwen3.6-35B-A3B-NVFP4 recipe: experts + full-attn NVFP4
 # (0.5625 B/param), but embed/lm_head/DeltaNet/router — AND the MTP
@@ -187,7 +203,12 @@ w_resident = 133.6e9             # 124.43 GiB as-shipped FP8 checkpoint
 w_decode_shared = 125.0e9        # 88 FP8 layers + BF16 lm_head; vision tower not read
 w_route_pertok = 0.0
 w_route_total = 0.0
-mtp = 1.0                        # no MTP module (EAGLE draft is external)
+layers = 88
+rec_layers = 0
+draft_layers = 0
+# no draft model ships with it (the external EAGLE-v1 draft is unsized)
+w_draft = 0.0
+w_draft_route_pertok = 0.0
 spec_tokens = 0                  # num_speculative_tokens: no MTP module; the explorer's slider models an external EAGLE-style draft
 draft_method = "eagle"
 # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
@@ -239,7 +260,19 @@ w_resident = 755.5e9             # official FP8 ckpt: 753.3e9 params + BF16 exce
 w_decode_shared = 18.92e9        # MLA + indexers + dense MLP + shared exp + lm_head
 w_route_pertok = 22_649_241_600  # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
 w_route_total = 724_775_731_200  # 256 experts (saturates at n=32, like 35BA3B)
-mtp = 1.7                        # MTP module (5 drafts); transplanted fit, unmeasured
+layers = 78
+rec_layers = 0
+draft_layers = 1
+# draft pass: MTP layer always-active 3.69e8 (10,032,632,960 B less 256
+# experts x 37,748,736) + lm_head 1.903e9 BF16; 8 routed experts x
+# 37,748,736 per position (research/nvfp4_2026-10.md:40, model_glm52.md:126)
+w_draft = 2.272e9
+w_draft_route_pertok = 301_989_888
+# acceptance MEASURED (outside): InferenceX pins GLM-5.3 NVFP4's accepted
+# length at 2.94 tokens per step with 3 drafts (inferencex/golden-al-glm-5.3-nvfp4,
+# research/sources/inferencex.md) -> geometric a = 0.797
+acceptance = 0.797
+acceptance_measured = true
 spec_tokens = 5                  # num_speculative_tokens: MTP module
 # nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header:
 # routed experts of the 75 main MoE layers NVFP4 (21,233,688 B/expert);
@@ -321,7 +354,17 @@ w_decode_shared = 7.66e9         # attn 4.60 + shared exp 1.08 + compressors/ind
                                  # gates/mHC 0.92 + lm_head 1.06 (research note 4)
 w_route_pertok = 3_449_290_752   # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
 w_route_total = 147_169_738_752  # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
-mtp = 1.7                        # DSpark drafts 7 tokens; transplanted fit, unmeasured
+layers = 43
+rec_layers = 0
+draft_layers = 3
+# draft pass: 3 DSpark stages, always-active ~6e8 ESTIMATED (10.86e9 B of
+# stages less an assumed 256 x 13,369,344 B of experts each) + lm_head
+# 1.059e9 BF16; routed 3 stages x 6 x 13,369,344 per position, ESTIMATED
+w_draft = 1.659e9
+w_draft_route_pertok = 240_648_192
+# acceptance: Mistral-Large-4's outside-measured DSpark 0.777, carried to the
+# other DSpark drafter; unmeasured
+acceptance = 0.777
 spec_tokens = 7                  # num_speculative_tokens: DSpark, 0731's model card (greedy drafts)
 draft_method = "dspark"
 # nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
@@ -390,7 +433,14 @@ w_resident = 167_811_372_792     # measured safetensors total: DSV4F + 932,836,3
 w_decode_shared = 7.66e9         # = DSV4F: the tower is never read by a text decode step
 w_route_pertok = 3_449_290_752   # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
 w_route_total = 147_169_738_752  # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
-mtp = 1.7                        # DSpark (the README serves 3 drafts); transplanted fit
+layers = 43
+rec_layers = 0
+draft_layers = 3
+# draft pass: = DSV4F (same DSpark stages; ESTIMATED split)
+w_draft = 1.659e9
+w_draft_route_pertok = 240_648_192
+# acceptance: as DSV4F (DSpark); unmeasured
+acceptance = 0.777
 spec_tokens = 3                  # num_speculative_tokens: DSpark, its model card
 draft_method = "dspark"
 # nvfp4_w: none  # no official NVFP4 checkpoint; the experts are already 4-bit
@@ -450,7 +500,16 @@ w_decode_shared = 8_522_921_408  # exact ledger: attn 5.07 + shared exp 1.42 + g
                                  # compressors/indexers/engram-proj 0.71 + lm_head 1.32
 w_route_pertok = 4_512_153_600   # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
 w_route_total = 288_777_830_400  # 384 experts (kink at n = 384/6 = 64)
-mtp = 1.7                        # DSpark drafts 5 tokens; transplanted fit, unmeasured
+layers = 40
+rec_layers = 0
+draft_layers = 3
+# draft pass: 3 DSpark stages always-active 7.13e8 (7,932,874,632 B less
+# 3 x 128 x 18,800,640 of experts) + lm_head 1.324e9 BF16; routed
+# 3 stages x 3 x 18,800,640 per position (research/model_dsv41flash.md:176)
+w_draft = 2.037e9
+w_draft_route_pertok = 169_205_760
+# acceptance: as DSV4F (DSpark); unmeasured
+acceptance = 0.777
 spec_tokens = 5                  # num_speculative_tokens: DSpark, the vLLM recipe on NVIDIA
 draft_method = "dspark"
 # nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
@@ -519,8 +578,16 @@ w_decode_shared = 8_623_999_000  # exact per-tensor ledger sum — BF16 always-a
                                  # (n-gram/embed lookups excluded)
 w_route_pertok = 2_359_584_000   # 10 experts x 4,915,800 B (FP8 + block scales) x 48
 w_route_total = 120_810_700_800  # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
-mtp = 1.7                        # MTP module (1 hybrid layer, 3 drafts per the vLLM
-                                 # recipe); transplanted fit, unmeasured
+layers = 48
+rec_layers = 36
+draft_layers = 1
+# draft pass: MTP layer always-active 1.81e8 (2,698,026,496 B less 512
+# experts x 4,915,800) + lm_head 1.271e9 BF16; 10 routed experts x
+# 4,915,800 per position (research/model_qwen38flashnext.md:119)
+w_draft = 1.452e9
+w_draft_route_pertok = 49_158_000
+# acceptance: the 27B's measured 0.971, carried to its Qwen MTP-head sibling; unmeasured
+acceptance = 0.971
 spec_tokens = 3                  # num_speculative_tokens: vLLM recipe
 # nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
 # shard header: routed experts of the 48 main layers NVFP4
@@ -591,7 +658,16 @@ w_decode_shared = 13_957_216_504 # exact ledger sum — KDA 9.37 (BF16!) + DSA a
                                  # + hyper-conns 0.07 + lm_head 1.27 + norms
 w_route_pertok = 8_457_781_248   # 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
 w_route_total = 304_480_124_928  # 288 experts (kink at n = 288/8 = 36)
-mtp = 1.7                        # MTP draft layer (recipe runs 5 drafts); transplanted fit
+layers = 45
+rec_layers = 34
+draft_layers = 1
+# draft pass: MTP layer always-active 2.44e8 (7,493,399,168 B less 288
+# experts x 25,171,968) + lm_head 1.269e9 BF16; 8 routed experts x
+# 25,171,968 per position (research/model_glm53flash.md:118)
+w_draft = 1.513e9
+w_draft_route_pertok = 201_375_744
+# acceptance: GLM-5.3's outside-measured 0.797, carried to its GLM sibling; unmeasured
+acceptance = 0.797
 spec_tokens = 5                  # num_speculative_tokens: vLLM recipe
 # RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
 # NVFP4 checkpoint), MEASURED from every shard header: routed experts
@@ -664,8 +740,18 @@ w_decode_shared = 20_990_666_304 # exact ledger: MLA 8.67 + shared exp 8.04 + lm
                                  # + indexers 1.20 + dense MLP 0.45 + routers 0.11 + norms
 w_route_pertok = 32_169_775_104  # 4 experts x 113,273,856 B (FP8 + F32 block scales) x 71
 w_route_total = 1_029_432_803_328 # 128 experts (kink at n = 128/4 = 32)
-mtp = 1.7                        # DSpark drafter (3 drafts, the recipe's depth); transplanted
-                                 # fit, unmeasured — the recipe reports AL 2.79-2.98 on GB300
+layers = 72
+rec_layers = 0
+draft_layers = 3
+# draft pass: the 3-layer dense DSpark drafter 4,199,938,048 B BF16
+# (MEASURED) + lm_head 2.517e9 BF16 (research/model_mistral_large4.md:113)
+w_draft = 6.717e9
+w_draft_route_pertok = 0.0
+# acceptance MEASURED (outside): the vLLM recipe's DSpark accepted lengths
+# 2.98 / 2.85 / 2.79 at 8k / 32k / 60k input, 3 drafts, on GB300 -> geometric
+# a = 0.777 at 32k (research/model_mistral_large4.md #5)
+acceptance = 0.777
+acceptance_measured = true
 spec_tokens = 3                  # num_speculative_tokens: DSpark, fixed by the checkpoint (vLLM recipe)
 draft_method = "dspark"
 # mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from

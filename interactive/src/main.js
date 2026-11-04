@@ -27,7 +27,7 @@
    nothing but state.js reads another module at evaluation time), but a module
    that state.js depends on must never depend on state.js.
    ========================================================================== */
-import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, unionKink } from './config.js';
+import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, tokensPerStep, unionKink } from './config.js';
 import { TTFT_PCTS, requestRate, steadyResident } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
@@ -217,13 +217,13 @@ document.querySelectorAll('.seg').forEach(seg=>{
       if (btn.disabled) return;
       seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===btn?'true':'false'));
       state[key]=btn.dataset.v;
-      // switching model adopts ITS speculative-decode default (1.7x = the
-      // Qwen fit / GLM transplant; 1.0x = Mistral, which has no MTP module) —
-      // the label's value readout changes visibly, and the MTP tooltip
-      // documents the reset behaviour
+      // switching model adopts ITS draft acceptance and depth (the recipe's
+      // num_speculative_tokens; 0 on Mistral-Medium-3.5, which ships no
+      // draft model) — the readouts change visibly, the tooltip says so
       if (key==='model'){
-        state.mtp = CONFIG.MODELS[state.model].mtp;
-        document.getElementById('s-mtp').value = state.mtp;
+        state.acc = CONFIG.MODELS[state.model].acceptance;
+        state.dspec = CONFIG.MODELS[state.model].spec_tokens;
+        document.getElementById('s-acc').value = state.acc;
       }
       // switching GPU adopts ITS on-demand price the same way — the slider
       // names the selected part's price, so leaving it at the old part's
@@ -242,8 +242,8 @@ document.querySelectorAll('.seg').forEach(seg=>{
 // sliders
 const sliderMap=[
   ['s-ngpu','ngpu',v=>parseInt(v,10)],
-  ['s-mtp','mtp',v=>parseFloat(v)],
-  ['s-mbu','mbu',v=>parseFloat(v)],
+  ['s-acc','acc',v=>parseFloat(v)],
+  ['s-eta','eta',v=>parseFloat(v)],
   ['s-mfu','mfu',v=>parseFloat(v)],
   ['s-ram','ram',v=>parseInt(v,10)],
   ['s-cap','cap',v=>parseInt(v,10)],
@@ -298,11 +298,9 @@ document.getElementById('i-mns').addEventListener('input', e=>{
   state.mns = raw === '' ? null : n;
   onInput();
 });
-// the latency pricing's constants; an out-of-range entry is ignored (the
-// state keeps its last legal value), as workingset refuses to price it
-for (const [id, key, lo, hi, int] of [['i-dbw','dbw',0.01,1,false],
-                                      ['i-dfixed','dfixed',0,50,false],
-                                      ['i-dspec','dspec',0,16,true]]){
+// draft tokens; an out-of-range entry is ignored (the state keeps its last
+// legal value), as workingset refuses to price it
+for (const [id, key, lo, hi, int] of [['i-dspec','dspec',0,16,true]]){
   document.getElementById(id).addEventListener('input', e=>{
     const n = Number(e.target.value);
     if (e.target.value.trim() === '' || !Number.isFinite(n) || n < lo || n > hi) return;
@@ -416,16 +414,11 @@ function syncLabels(){
     requestRate(state.users, state.think).toFixed(2);
   document.getElementById('v-ngpu').textContent=fmt(state.ngpu,0);
   document.getElementById('v-gpuname').textContent=CONFIG.GPUS[state.gpu].name;
-  document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);
-  document.getElementById('v-mbu').textContent=state.mbu.toFixed(2);
-  // the latency pricing does not read the MBU; its own constants show instead
-  const lat = state.dprice === 'latency';
-  document.getElementById('s-mbu').disabled = lat;
-  document.getElementById('dprice-lat').hidden = !lat;
-  for (const [id, key] of [['i-dbw','dbw'],['i-dfixed','dfixed'],['i-dspec','dspec']]){
-    const el = document.getElementById(id);
-    if (document.activeElement !== el && Number(el.value) !== state[key]) el.value = state[key];
-  }
+  document.getElementById('v-acc').textContent=state.acc.toFixed(3);
+  document.getElementById('v-tps').textContent=tokensPerStep(state.acc, state.dspec).toFixed(2);
+  document.getElementById('v-eta').textContent=state.eta.toFixed(2);
+  { const el = document.getElementById('i-dspec');
+    if (document.activeElement !== el && Number(el.value) !== state.dspec) el.value = state.dspec; }
   document.getElementById('v-mns').textContent = state.mns === null ? 'unset' : 'cap ' + fmt(state.mns, 0);
   const mnsEl = document.getElementById('i-mns');
   const mnsText = state.mns === null ? '' : String(state.mns);
@@ -433,33 +426,14 @@ function syncLabels(){
     mnsEl.value = mnsText; mnsEl.setAttribute('aria-invalid', 'false');
   }
   document.getElementById('v-mfu').textContent=state.mfu.toFixed(2);
-  // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
-  // per-draft acceptance — the base quantity the speedup is computed from
-  const acc = state.mtp<=1 ? 0 : (Math.sqrt(4*state.mtp-3)-1)/2;
-  // α inverts the 2-draft MTP model — exact for the two 2-draft Qwen models only.
-  // GLM-5.3 drafts 5 tokens, DSv4-Flash 7, DSv4-Flash-Vision 3, DSv4.1-Flash 5 and Mistral-Large-4 3 (DSpark),
-  // Q3.8-Flash-Next 3, and Mistral-Medium-3.5 has no MTP module (its slider models EAGLE) — indicative on all of those.
-  const aNote = state.model==="GLM52" ? ' GLM-5.3 drafts 5 tokens — α is indicative only.'
-              : state.model==="DSV4F" ? ' DSv4-Flash drafts 7 tokens (DSpark) — α is indicative only.'
-              : state.model==="DSV4FV" ? ' DSv4-Flash-Vision drafts 3 tokens (DSpark, its model card) — α is indicative only.'
-              : state.model==="DSV41F" ? ' DSv4.1-Flash drafts 5 tokens (DSpark) — α is indicative only.'
-              : state.model==="Q38FN" ? ' Q3.8-Flash-Next drafts 3 tokens (vLLM recipe) — α is indicative only.'
-              : state.model==="GLM53F" ? ' GLM-5.3-Flash drafts 5 tokens (vLLM recipe) — α is indicative only.'
-              : state.model==="ML4" ? ' Mistral-Large-4 drafts 3 tokens (DSpark, fixed by the checkpoint) — α is indicative only.'
-              : state.model==="MM35" ? ' Mistral has no MTP module — the slider models an EAGLE-style speedup; α does not apply.' : '';
-  const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
-    : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
-  document.getElementById('mtp-tip').setAttribute('data-tip',
-    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — an accepted length calibrated on Qwen3.6-27B from a measurement not published here, carried over unmeasured on 3.8 (1.7× ⇔ α ≈ 47% was the earlier fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
-  // MBU provenance, stated on the control: one measurement, applied to every
-  // row, the frontier included -- the slider is how a reader argues with it.
-  const mbuProv = state.model === "27B"
-    ? 'Calibrated on Qwen3.6-27B from a measurement not published here, and carried over with its paired MTP fit, unmeasured on 3.8.'
-    : (is_moe(CONFIG.MODELS[state.model]) || CONFIG.MODELS[state.model].deltanet_state > 0
-        ? 'Measured on the 27B and applied here unchanged; unmeasured on this model.'
-        : 'Measured on a recurrent hybrid and applied here unchanged; this model has no recurrence to serialise and may well sit higher, but nothing in this study measures a dense one.');
-  document.getElementById('mbu-tip').setAttribute('data-tip',
-    'Memory Bandwidth Utilisation — the fraction of the group\'s advertised HBM bandwidth a decode pass achieves. Decode\'s counterpart to the prefill MFU below, and the study\'s newest constant: decode was first priced at 1.00, a pure roofline. MODEL CONVENTION (already divided by tp_efficiency). ONE value for every row, the frontier included: a global sensitivity knob, not a per-model property — drag it and watch which configurations survive. It absorbs both streaming inefficiency and whatever speculative verification costs on a sequential recurrence, so on the 27B it TRAVELS WITH the MTP slider. ' + mbuProv);
+  const m0 = CONFIG.MODELS[state.model];
+  const ownAcc = m0.acceptance_measured
+    ? `${m0.acceptance} is measured on this model's draft head.`
+    : `${m0.acceptance} is Qwen3.6-27B's measured value, carried here unmeasured: no public figure exists for this draft head.`;
+  document.getElementById('acc-tip').setAttribute('data-tip',
+    `Share of draft tokens the target model accepts, each one given the previous were (accept until the first rejection). With k draft tokens a sequence advances 1 + α + α² + … + α^k tokens per step: ${tokensPerStep(state.acc, state.dspec).toFixed(2)} at α ${state.acc.toFixed(3)}, k ${state.dspec}. ${ownAcc} Switching model resets both to its own. Mirrors [calibration] acceptance; \`ws calibrate\` reads it from vLLM's /metrics.`);
+  document.getElementById('eta-tip').setAttribute('data-tip',
+    'Share of the group\'s raw HBM bandwidth a decode step streams its bytes at (weights, draft passes, KV, recurrent state). One of four constants of the decode step, with the verify compute at the prefill MFU and per-layer launch, all-reduce and recurrent-update times. 0.29 is read off one held-batch sweep (Qwen3.6-27B, 4×H200 TP4); the same value prices every row, the frontier included. Mirrors [calibration] eta; `ws calibrate` fits it from a decode sweep.');
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
   // the 0.1k step is only reachable at the chat end of the range, so show the
@@ -501,12 +475,12 @@ const URL_ENUMS = {
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
   bench: () => Object.keys(CONFIG.BENCHES),
   ttft_pct: () => TTFT_PCTS,
-  dprice: () => ["roofline","latency"],
+  union: () => ["coverage","linear"],
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
 const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000], mns: [1, 4096],
-                        dbw: [0.01, 1], dfixed: [0, 50], dspec: [0, 16] };
+                        dspec: [0, 16], t0: [0, 1000], tar: [0, 1000], trec: [0, 1000] };
 const URL_INT = new Set(['tp', 'headcount', 'mns', 'dspec']);
 export function encodeStateURL(){
   const p = new URLSearchParams();
@@ -514,11 +488,13 @@ export function encodeStateURL(){
   for (const k of Object.keys(URL_ENUMS)) put(k, state[k]);
   // a headcount link re-derives users on load, so the derived value is noise
   for (const [, k] of sliderMap) if (!(k === 'users' && hasHeadcount())) put(k, state[k]);
-  // mtp diffs against the SELECTED model's own default, not the global one:
-  // the decoder resets an absent mtp to CONFIG.MODELS[model].mtp, so diffing
-  // globally silently flipped a 1.7x Mistral link back to that model's 1.0x
-  if (String(state.mtp) !== String(CONFIG.MODELS[state.model].mtp)) p.set('mtp', String(state.mtp));
-  else p.delete('mtp');
+  // acc and dspec diff against the SELECTED model's own values, not the
+  // global ones: the decoder resets an absent one to the model's
+  for (const [k, own] of [['acc', CONFIG.MODELS[state.model].acceptance],
+                          ['dspec', CONFIG.MODELS[state.model].spec_tokens]]){
+    if (String(state[k]) !== String(own)) p.set(k, String(state[k]));
+    else p.delete(k);
+  }
   // gpuh likewise diffs against the SELECTED part's list price: the decoder
   // re-seeds an absent gpuh from CONFIG.GPUS[gpu], so a B300 link at the
   // B300 median must stay a bare link
@@ -548,10 +524,12 @@ function applyURLState(){
   // a link without ttft_pct predates the control: those pages checked a
   // miss's mean TTFT, so that is what it reproduces
   state.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);
-  // a shared model carries its own MTP default unless the link pins one —
-  // the same reset the model buttons apply on click
-  if (p.get('model') !== null && p.get('mtp') === null)
-    state.mtp = CONFIG.MODELS[state.model].mtp;
+  // a shared model carries its own acceptance and draft depth unless the
+  // link pins them — the same reset the model buttons apply on click
+  if (p.get('model') !== null && p.get('acc') === null)
+    state.acc = CONFIG.MODELS[state.model].acceptance;
+  if (p.get('model') !== null && p.get('dspec') === null)
+    state.dspec = CONFIG.MODELS[state.model].spec_tokens;
   // and a shared GPU carries its own price unless the link pins one
   if (p.get('gpu') !== null && p.get('gpuh') === null)
     state.gpuh = CONFIG.GPUS[state.gpu].eur_gpu_h;
@@ -583,7 +561,7 @@ function applyURLState(){
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
   for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'],
-                                  ['seg-dprice','dprice'], ['seg-ttft_pct','ttft_pct']])
+                                  ['seg-ttft_pct','ttft_pct']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;

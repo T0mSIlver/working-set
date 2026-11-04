@@ -103,8 +103,8 @@ CHUNKS = (2048, 4096, 8192, 16384, 32768, 65536)
 # state.js defaults, verbatim — the published reference configuration
 DEFAULT_STATE = {
     "model": "27B", "gpu": "H200", "wdt": "fp8", "ngpu": 1, "tp": 1, "ram": 0,
-    "kv": "fp8", "cap": 180, "mtp": 2.94, "kvshard": "dcp",
-    "mbu": M.MBU_DEFAULT, "mfu": M.MFU_DEFAULT, "chunk": "32768",
+    "kv": "fp8", "cap": 180, "kvshard": "dcp",
+    "mfu": M.MFU_DEFAULT, "chunk": "32768",
     "user_median": 31, "user_sigma": 0.81, "sub_median": 8, "sub_sigma": 0.90,
     "sub_ratio": 0.10, "sub_shares_prefix": False, "sys": 15, "inval": 1.0,
     "users": 64, "think": 30, "sla": 10, "ttft_pct": "95", "turn": 2000,
@@ -112,10 +112,13 @@ DEFAULT_STATE = {
     "burst": 32,
     "out": M.AVG_OUT_TOK, "decode_floor": M.DECODE_FLOOR_TOKS,
     "ekwh": 0.19, "pue": "1.5", "gpuh": M.GPUS["H200"].eur_gpu_h,
-    # decode pricing ([calibration] decode_pricing and its three constants)
-    # and deployment.max_num_seqs, per replica group; None = unset
-    "dprice": "roofline", "dbw": M.DECODE_BW_EFF, "dfixed": 2.7,
-    "dspec": M.DECODE_SPEC_TOKENS, "mns": None,
+    # the decode step equation's constants ([calibration] eta, tau_*_us,
+    # union; None = the prior), the draft acceptance and depth (the model's
+    # own, set by base_state) and deployment.max_num_seqs, per replica group
+    "eta": M.DECODE_ETA, "t0": None, "tar": None, "trec": None,
+    "union": "coverage",
+    "acc": M.MODELS["27B"].acceptance, "dspec": M.MODELS["27B"].spec_tokens,
+    "mns": None,
 }
 
 # The reference burst prefill.js's spikeMetrics() hard-wires as SPIKE_BURST.
@@ -149,9 +152,7 @@ def state_model(st: dict) -> M.Model:
         m = M.with_weight_dtype(m, st["wdt"])
     m = M.with_kv_dtype(m, st["kv"])
     m = M.with_gpu(m, st["gpu"])         # GLM-5.3's Hopper FP8 row
-    if st["mtp"] is not None:
-        m = replace(m, mtp=float(st["mtp"]))
-    return m
+    return replace(m, acceptance=float(st["acc"]), spec_tokens=int(st["dspec"]))
 
 
 def state_topo(st: dict) -> M.Topology:
@@ -209,6 +210,8 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     o["peak_flops"] = M.peak_flops(topo)
     o["tp_efficiency"] = M.tp_efficiency(topo.tp, topo.gpu.nvlink_domain)
     o["w_decode_n64"] = m.w_decode(64)
+    kv8 = 8 * 20_000 * (m.kv_bpt if m.kv_decode_bpt is None else m.kv_decode_bpt)
+    o["decode_step_n8_ms"] = 1e3 * M.decode_step_seconds(m, topo, 8, kv8, _decode(st))
     o["prefill_overhead_seconds"] = M.prefill_overhead_seconds(m, topo)
     o["mfu_ceiling"] = M.mfu_ceiling(m, topo, mfu_anchor=mfu)
     o["mfu_effective_at_chunk"] = M.mfu_effective(m, topo, chunk, mfu_anchor=mfu)
@@ -337,7 +340,6 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # the GPU-resident p95 now CAPS the steady point on both sides (it used
     # to be a diagnostic only), so it runs at the full warm iteration count
     warm_gpu95 = _warm_all(m, topo, wl, ram, draw, seed, "gpu", pct=2)
-    lat = _latency(st)
     dec, cens = _decode_ceiling(m, topo, wl, st, seed)
     o["max_users_decode"] = dec
     o["max_users_decode_censored"] = cens
@@ -350,12 +352,10 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     mns = (st["mns"] if st["mns"] is not None
            else M.recommended_max_num_seqs(dec, warm_gpu5))
     p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
-                                    seed=seed, mbu=st["mbu"],
-                                    latency=lat)[1][0])
+                                    seed=seed, decode=_decode(st))[1][0])
     k_slot = max(1, math.ceil(M.decode_slot_mean(mns)))
     p50_slot = float(M.decode_curves(m, topo, wl, [k_slot], n_iter=DECODE_ITER,
-                                     seed=seed, mbu=st["mbu"],
-                                     latency=lat)[1][0])
+                                     seed=seed, decode=_decode(st))[1][0])
     slots = M.max_users_decode_slots(m, topo, wl, mns,
                                      think_time_s=st["think"],
                                      out_tokens=st["out"],
@@ -365,17 +365,16 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     o["decode_ceiling"] = float(ceil)
     o["decode_capped"] = bool(capped)
     curve = M.decode_curves(m, topo, wl, [1, 8, 64], n_iter=DECODE_ITER,
-                            seed=seed, mbu=st["mbu"], latency=lat)
+                            seed=seed, decode=_decode(st))
     for i, n in enumerate((1, 8, 64)):
         o[f"decode_p50_n{n}"] = float(curve[1][i])
     # capped at the GPU-resident population, the same figure the mirror's
     # steadyDecodePoint is handed (render.js lastWarmCur.g95), and at
     # max_num_seqs when set (predict's resident = min(p95, max_num_seqs))
     sd = M.steady_decode_point(m, topo, wl, rate, out_tokens=st["out"],
-                               n_iter=DECODE_ITER, seed=seed, mbu=st["mbu"],
+                               n_iter=DECODE_ITER, seed=seed, decode=_decode(st),
                                resident=(warm_gpu95 if st["mns"] is None
-                                         else min(warm_gpu95, st["mns"])),
-                               latency=lat)
+                                         else min(warm_gpu95, st["mns"])))
     o["steady_n"] = sd["n"]
     o["steady_per_user_tok_s"] = sd["per_user_tok_s"]
     o["steady_saturated"] = bool(sd["saturated"])
@@ -511,8 +510,7 @@ def _steady_cap_ratio(m, topo, wl, st, rate, warm_gpu_p95, seed) -> float:
         return 0.0
     n = max(1, int(math.floor(warm_gpu_p95)))
     p50 = float(M.decode_curves(m, topo, wl, [n], n_iter=COND_DECODE_ITER,
-                                seed=seed, mbu=st["mbu"],
-                                latency=_latency(st))[1][0])
+                                seed=seed, decode=_decode(st))[1][0])
     agg = n * p50
     return demand / agg if agg > 0 else float("inf")
 
@@ -559,13 +557,12 @@ def _warm_all(m, topo, wl, ram, draw, seed, which, pct: int = 0,
                                         which=which)[pct]), draw)
 
 
-def _latency(st) -> "M.DecodeLatency | None":
-    """The opt-in decode pricing, built as RunConfig.decode_latency() builds
-    it; None under the default roofline."""
-    if st["dprice"] != "latency":
-        return None
-    return M.DecodeLatency(bw_eff=st["dbw"], fixed_s=st["dfixed"] / 1e3,
-                           spec_tokens=st["dspec"], mfu=st["mfu"])
+def _decode(st) -> "M.DecodeConstants":
+    """The step equation's constants, built as RunConfig.decode_constants()
+    builds them."""
+    us = lambda v: None if v is None else v * 1e-6
+    return M.DecodeConstants(eta=st["eta"], tau_0=us(st["t0"]), tau_ar=us(st["tar"]),
+                             tau_rec=us(st["trec"]), mfu=st["mfu"], union=st["union"])
 
 
 def _decode_ceiling(m, topo, wl, st, seed) -> tuple:
@@ -581,7 +578,7 @@ def _decode_ceiling(m, topo, wl, st, seed) -> tuple:
     """
     return M.max_users_decode_bounded(
         m, topo, wl, floor=st["decode_floor"], n_iter=DECODE_ITER, seed=seed,
-        mbu=st["mbu"], latency=_latency(st))
+        decode=_decode(st))
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +619,8 @@ def legal_deployments():
 def base_state(dep: dict) -> dict:
     st = dict(DEFAULT_STATE)
     st.update(dep)
-    st["mtp"] = M.MODELS[dep["model"]].mtp
+    st["acc"] = M.MODELS[dep["model"]].acceptance
+    st["dspec"] = M.MODELS[dep["model"]].spec_tokens
     st["gpuh"] = M.GPUS[dep["gpu"]].eur_gpu_h
     st["cap"] = min(st["cap"], cap_slider_max(dep["model"]))
     return st
@@ -633,7 +631,7 @@ def base_state(dep: dict) -> dict:
 # Values are inside each control's real range (interactive/index.html): users
 # 4-1024, think 5-180, turn 250-16000, out 100-8000, sla 1-60, decode_floor
 # 5-100, inval 0-100, sub_ratio 0-1, sigmas 0.30-1.40, sys 1-40, ram 0-1024,
-# burst 1-512, mbu/mfu 0.10-1.00, ekwh 0.05-0.60, gpuh 0.5-20, mtp 1.0-3.0.
+# burst 1-512, eta/mfu 0.10-1.00, ekwh 0.05-0.60, gpuh 0.5-20, acc 0-1, dspec 0-8.
 # The medians take applyURLState's x4 scaling (a share link reaches 4x the
 # slider's max), and `cap` takes capSliderMax() per model. A value outside a
 # control's range would be a state no user can produce, i.e. a test of nothing.
@@ -652,7 +650,7 @@ KNOB_SWEEP = [
     ("turn", [500, 8000, 16000]),
     ("out", [100, 1200, 4000]),
     ("burst", [1, 128, 512]),
-    ("mbu", [0.15, 0.30, 1.0]),
+    ("eta", [0.15, 0.45, 1.0]),
     ("mfu", [0.35, 0.55]),
     ("cap", [32, 64, 262, "max"]),
     ("sys", [3, 30, 40]),
@@ -663,7 +661,8 @@ KNOB_SWEEP = [
     ("user_sigma", [0.3, 1.4]),
     ("sub_median", [2, 40]),
     ("sub_sigma", [0.3, 1.4]),
-    ("mtp", [1.0, 1.7]),
+    ("acc", [0.5, 0.9]),
+    ("dspec", [0, 1, 5]),
     ("ekwh", [0.08, 0.26]),
     ("pue", ["1.2", "2.0"]),
     ("gpuh", [1.0, 12.0]),
@@ -671,9 +670,11 @@ KNOB_SWEEP = [
     # (a no-op on anchors whose tp <= kv_heads — the GLM-5.3 TP8 anchor is
     # the one that moves, by 8x on the pool)
     ("kvshard", ["replicate"]),
-    # the opt-in latency decode pricing at its defaults, and the scheduler's
-    # max_num_seqs cap above and below each anchor's decode ceiling
-    ("dprice", ["latency"]),
+    # the expert union's no-overlap upper bound, calibrated taus (us), and
+    # the scheduler's max_num_seqs cap above and below each anchor's ceiling
+    ("union", ["linear"]),
+    ("t0", [20.0]),
+    ("trec", [30.0]),
     ("mns", [4, 32, 256]),
 ]
 
@@ -716,11 +717,11 @@ SPREAD_PROBE = [
          turn=1000, burst=200, out=900, decode_floor=60),
     # B300 NVFP4 MoE deployment with DP4 and high subagent share.
     dict(model='35BA3B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=8, tp=2,
-         ram=256, cap=262, mbu=0.15, mfu=0.35, chunk='16384', user_median=12,
+         ram=256, cap=262, eta=0.15, mfu=0.35, chunk='16384', user_median=12,
          user_sigma=0.5, sub_ratio=0.4, inval=3.0, users=128, turn=1000, burst=200),
     # H200 FP16-KV MoE deployment with DP2 and TP2.
     dict(model='Q38FN', gpu='H200', wdt='fp8', kv='fp16', ngpu=4, tp=2,
-         cap=262, mbu=0.3, chunk='4096', sub_ratio=0.4, sys=30, inval=0.5,
+         cap=262, eta=0.3, chunk='4096', sub_ratio=0.4, sys=30, inval=0.5,
          turn=6000, burst=200, out=200),
     # B300 large-MoE deployment with DP4, short cap, and low decode floor.
     dict(model='DSV41F', gpu='B300', wdt='fp8', kv='fp8', ngpu=8, tp=2,
@@ -746,40 +747,40 @@ SPREAD_PROBE = [
     dict(model='27B', gpu='H200', wdt='fp8', kv='fp8', ngpu=4, tp=4),
     # H200 huge-MoE reference deployment on TP8.
     dict(model='GLM52', gpu='H200', wdt='fp8', kv='fp8', ngpu=8, tp=8),
-    # H200 MoE sweep state at full memory-bandwidth utilization.
+    # H200 MoE sweep state at full memory-bandwidth utilization (eta = 1).
     dict(model='35BA3B', gpu='H200', wdt='fp8', kv='fp8', ngpu=2, tp=2,
-         mbu=1.0),
+         eta=1.0),
     # H200 FP16-KV MoE deployment on odd TP3.
     dict(model='MM35', gpu='H200', wdt='fp8', kv='fp16', ngpu=3, tp=3,
-         ram=256, mbu=0.3, mfu=0.55, chunk='4096', user_median=60, user_sigma=1.1,
+         ram=256, eta=0.3, mfu=0.55, chunk='4096', user_median=60, user_sigma=1.1,
          sub_ratio=0.0, sys=3, inval=0.5, users=32, think=45, sla=5, turn=1000),
     # H200 huge-MoE sweep state with an 8K chunk.
     dict(model='GLM52', gpu='H200', wdt='fp8', kv='fp8', ngpu=8, tp=8,
          chunk='8192'),
-    # B300 large-MoE deployment on TP2 with low MBU.
+    # B300 large-MoE deployment on TP2 with low eta.
     dict(model='GLM53F', gpu='B300', wdt='fp8', kv='fp8', ngpu=2, tp=2,
-         cap=262, mbu=0.15, user_median=60, sub_ratio=0.0, sys=30, inval=10.0,
+         cap=262, eta=0.15, user_median=60, sub_ratio=0.0, sys=30, inval=10.0,
          users=128, sla=20, turn=6000, out=200, decode_floor=60),
     # B300 MoE deployment with DP5 and a low decode floor.
     dict(model='Q38FN', gpu='B300', wdt='fp8', kv='fp8', ngpu=5, tp=1,
-         cap=64, mbu=0.15, chunk='16384', user_sigma=0.5, sub_ratio=0.0,
+         cap=64, eta=0.15, chunk='16384', user_sigma=0.5, sub_ratio=0.0,
          inval=10.0, sla=20, turn=1000, out=900, decode_floor=10),
     # B300 NVFP4 MoE deployment with DP2 and added RAM.
     dict(model='35BA3B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=2, tp=1,
-         ram=256, cap=64, mbu=0.3, user_median=60, user_sigma=0.5, sys=30,
+         ram=256, cap=64, eta=0.3, user_median=60, user_sigma=0.5, sys=30,
          users=128, think=15, sla=5, turn=1000, out=900, decode_floor=60),
     # B300 NVFP4 FP16-KV MoE deployment with DP3 and high context variance.
     dict(model='MM35', gpu='B300', wdt='nvfp4', kv='fp16', ngpu=6, tp=2,
-         cap=64, mbu=0.15, mfu=0.35, chunk='8192', user_sigma=1.1, sub_ratio=0.4,
+         cap=64, eta=0.15, mfu=0.35, chunk='8192', user_sigma=1.1, sub_ratio=0.4,
          sys=30, inval=0.5, users=128, think=15, turn=1000, out=200,
          decode_floor=60),
     # B300 NVFP4 MoE deployment on TP6 with high request load.
     dict(model='Q38FN', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=6, tp=6,
-         ram=256, mbu=0.3, chunk='2048', sub_ratio=0.4, sys=3, users=400, sla=20,
+         ram=256, eta=0.3, chunk='2048', sub_ratio=0.4, sys=3, users=400, sla=20,
          burst=8, out=200, decode_floor=60),
     # B300 NVFP4 large-MoE deployment on odd TP3 with a 64K chunk.
     dict(model='GLM53F', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=3, tp=3,
-         ram=256, mbu=0.3, mfu=0.35, chunk='65536', user_median=60, user_sigma=0.5,
+         ram=256, eta=0.3, mfu=0.35, chunk='65536', user_median=60, user_sigma=0.5,
          sub_ratio=0.4, inval=35.0, users=128, think=15, turn=1000, burst=8,
          out=900, decode_floor=60),
     # B300 NVFP4 dense deployment on TP6 with a low decode floor.
@@ -793,12 +794,12 @@ SPREAD_PROBE = [
          decode_floor=60),
     # B300 NVFP4 FP16-KV dense deployment on TP6.
     dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp16', ngpu=6, tp=6,
-         ram=256, cap=64, mbu=0.15, mfu=0.35, user_median=12, user_sigma=0.5,
+         ram=256, cap=64, eta=0.15, mfu=0.35, user_median=12, user_sigma=0.5,
          inval=10.0, users=128, think=90, sla=5, turn=6000, burst=8, out=900,
          decode_floor=60),
     # B300 NVFP4 single-GPU MoE deployment with high context variance.
     dict(model='MM35', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=1, tp=1,
-         cap=64, mbu=0.15, mfu=0.55, chunk='8192', user_median=12, user_sigma=1.1,
+         cap=64, eta=0.15, mfu=0.55, chunk='8192', user_median=12, user_sigma=1.1,
          sub_ratio=0.4, inval=0.5, users=32, think=90, sla=20, turn=6000, burst=8,
          out=900, decode_floor=60),
     # H200 compressed-sparse MoE deployment with DP2 x TP4 and a heavy
@@ -808,7 +809,7 @@ SPREAD_PROBE = [
     # B300 compressed-sparse MoE on TP2 with speculation off (no
     # --speculative-config). research/model_dsv4flash_vision.md.
     dict(model='DSV4FV', gpu='B300', wdt='fp8', kv='fp8', ngpu=2, tp=2,
-         mtp=1.0),
+         dspec=0),
     # B300 MLA+DSA MoE with cross-layer KV sharing on TP8: the vLLM recipe's
     # single-node FP8 layout, the only split of one node it fits
     # (research/model_mistral_large4.md).
@@ -817,12 +818,12 @@ SPREAD_PROBE = [
 # how many knobs of the sweep each anchor gets (the first anchor gets all of
 # them; the others cover the knobs most likely to interact with topology)
 ANCHOR_KNOBS = {
-    1: {"chunk", "inval", "sla", "decode_floor", "mbu", "users", "out", "ram",
-        "dprice", "mns"},
-    2: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "kvshard",
-        "dprice"},
-    3: {"chunk", "inval", "sla", "decode_floor", "users", "mbu", "out",
-        "dprice", "mns"},
+    1: {"chunk", "inval", "sla", "decode_floor", "eta", "users", "out", "ram",
+        "union", "mns"},
+    2: {"chunk", "inval", "sla", "decode_floor", "users", "eta", "kvshard",
+        "union"},
+    3: {"chunk", "inval", "sla", "decode_floor", "users", "eta", "out",
+        "union", "mns"},
     4: {"kvshard", "users", "decode_floor", "ram"},
     5: {"kvshard"},
     6: {"kvshard"},
@@ -835,27 +836,26 @@ KNOB_COMBOS = [
     (4, {"kvshard": "replicate", "ram": 256}),
     (5, {"kvshard": "replicate", "ram": 256}),
     (6, {"kvshard": "replicate", "ram": 256}),
-    # the latency pricing off its defaults (speculation off, a different fixed
-    # cost and bandwidth efficiency, a moved MFU its compute leg reads), and
-    # together with a cap
-    (0, {"dprice": "latency", "dspec": 0, "dfixed": 1.5, "dbw": 0.5}),
-    (0, {"dprice": "latency", "mfu": 0.3, "users": 200}),
-    (1, {"dprice": "latency", "dspec": 5, "mns": 16, "users": 200}),
-    (3, {"dprice": "latency", "mns": 8, "users": 400}),
+    # the decode constants off their priors (speculation off, a calibrated
+    # launch cost, a moved eta and the MFU the verify leg reads), with a cap
+    (0, {"dspec": 0, "t0": 2.0, "eta": 0.5}),
+    (0, {"mfu": 0.3, "users": 200}),
+    (1, {"dspec": 5, "mns": 16, "users": 200}),
+    (3, {"union": "linear", "mns": 8, "users": 400}),
 ]
 
 # Whole configurations someone reported, priced as stated rather than as a
 # knob off an anchor. Each is (deployment, knobs).
 # Issue #105: Qwen3.8-27B on 4xH200 TP4, a long-context low-miss agentic
-# load under latency decode pricing, the region no sweep state sat in (the
-# latency states all ran chunk 32,768, cap 180, miss 1%). Its slowed and
+# load (reported under the retired latency decode pricing), the region no
+# sweep state sat in (chunk 32,768, cap 180, miss 1% everywhere else). Its slowed and
 # cold-wait figures read 1-3% apart on the page and in `ws predict`; that was
 # the explorer's 20,000-draw context sample, inside the `mc` bands.
 NAMED_STATES = [
     (dict(model="27B", gpu="H200", wdt="fp8", kv="fp8", ngpu=4, tp=4),
      {"chunk": "16384", "cap": 262, "user_median": 68, "user_sigma": 0.69,
       "inval": 2.5, "think": 46, "out": 807, "decode_floor": 50, "mfu": 0.33,
-      "mns": 96, "dprice": "latency", "users": 48}),
+      "mns": 96, "users": 48}),
 ]
 
 
@@ -923,7 +923,7 @@ def build_states() -> list[dict]:
         st["turn"] = rng.choice([1000, 2000, 6000])
         st["out"] = rng.choice([200, 400, 900])
         st["burst"] = rng.choice([8, 32, 200])
-        st["mbu"] = rng.choice([0.15, 0.22, 0.30])
+        st["eta"] = rng.choice([0.2, 0.29, 0.4])
         st["mfu"] = rng.choice([0.35, 0.45, 0.55])
         st["sys"] = rng.choice([3, 15, 30])
         st["sub_ratio"] = rng.choice([0.0, 0.1, 0.4])
@@ -1254,7 +1254,9 @@ MAPPING = [
     ("peak_flops", "model.peak_flops", "prefill.js peakFlops", "exact", ""),
     ("tp_efficiency", "model.tp_efficiency", "config.js tpEff", "exact", ""),
     ("w_decode_n64", "model.Model.w_decode", "config.js w_decode", "exact",
-     "linear (no-overlap) expert union; JS has no `coverage` arm"),
+     "weight bytes at 64 routed positions, coverage union"),
+    ("decode_step_n8_ms", "model.decode_step_seconds", "config.js decodeStepSeconds",
+     "exact", "one step at n = 8 with 8 x 20k context tokens of KV, the model's own k"),
     ("prefill_overhead_seconds", "model.prefill_overhead_seconds",
      "prefill.js prefillOverheadSeconds", "exact", ""),
     ("mfu_ceiling", "model.mfu_ceiling", "prefill.js mfuCeil", "exact",
@@ -1363,8 +1365,8 @@ MAPPING = [
      "the recommended cap is min(max_users_decode, GPU-resident warm p5), both "
      "sampled"),
     ("decode_p50_n*", "model.decode_curves (p50)", "capacity.js decodeCurves (p50)", "mc",
-     "latency=DecodeLatency when state.dprice is 'latency' (render.js modelFor bakes "
-     "decode_lat onto the model)"),
+     "the step equation's constants from the state (render.js modelFor bakes "
+     "them onto the model as `decode`)"),
     ("steady_n / steady_per_user_tok_s", "model.steady_decode_point",
      "prefill.js steadyDecodePoint", "mc",
      "Python bisects integer n re-sampling each probe; the explorer inverts the "
@@ -1375,7 +1377,7 @@ MAPPING = [
     ("energy_*", "model.energy_cost", "cost.js energyCost", "mc", ""),
     ("(state -> model)", "golden.py state_model / state_topo / state_wl",
      "render.js modelFor + state.js currentTopo/currentWL", "n/a",
-     "the explorer's dtype/mtp switches. state_dt and wover have Python "
+     "the explorer's dtype, acceptance and draft-depth switches. state_dt and wover have Python "
      "counterparts (deployment.recurrent_state_dtype / weight_overhead, "
      "applied by RunConfig.to_model as the same two field edits modelFor "
      "makes) but are still NOT sampled here. SPREAD_PROBE now names its states "
