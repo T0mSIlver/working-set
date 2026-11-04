@@ -158,10 +158,7 @@ export const SAME_MODEL_TIE = 1.05;
 // short row name for a direct label: the model as its button reads (a full
 // name is ~25 characters and three of them stack at a 560-wide viewBox) and
 // the split as the DP×TP shorthand the split control uses
-const FRONTIER_SHORT = { "27B": "Qwen3.8-27B", "35BA3B": "35B-A3B", "MM35": "Mistral-Med-3.5",
-                         "GLM52": "GLM-5.3", "DSV4F": "DSv4-Flash",
-                         "DSV4FV": "DSv4-Flash-Vision", "DSV41F": "DSv4.1-Flash", "Q38FN": "Q3.8-Flash",
-                         "GLM53F": "G5.3-Flash", "ML4": "Mistral-Large-4" };
+const FRONTIER_SHORT = Object.fromEntries(Object.entries(CONFIG.MODELS).map(([k, m]) => [k, m.explorer.short]));
 // the row as the table and the tooltip print it: the model without its
 // architecture tag and the split in the TP/DP shorthand. r.label keeps the
 // Python-identical topology name (deploy card, harness, self-checks)

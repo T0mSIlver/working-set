@@ -135,7 +135,7 @@ function enforceConstraints(){
   if (!fp8Ok && state.kv === "fp8") state.kv = "fp16";
   const stateOk = m.deltanet_state > 0 && m.state_fp32_ok !== false;
   if (!stateOk && state.state_dt === "fp32") state.state_dt = "bf16";
-  const woverOk = state.model !== "27B";
+  const woverOk = !m.weights_as_deployed;
   if (!woverOk && state.wover === "p15") state.wover = "pub";
   // reflect state + disabled flags back into the segmented controls
   const sync = (segId, val)=>document.querySelectorAll(`#${segId} button`).forEach(
@@ -156,28 +156,16 @@ function enforceConstraints(){
   document.querySelector('#seg-wover button[data-v="p15"]').disabled = !woverOk;
   // control explanations live in the label tooltips, not under the knobs;
   // the state-dependent ones are re-stamped here on every constraint pass
-  document.getElementById('kv-tip').setAttribute('data-tip', fp16Ok
-    ? (state.model === "GLM52"
-      ? "GLM-5.3's FP8 cache row depends on the GPU: on B300 vLLM serves it through FlashInfer as plain fp8_e4m3, 576 B per latent; on H200 through FlashMLA as fp8_ds_mla, 656 B (512 fp8 values, 16 B of scales, 64 rope values kept BF16), so an H200 holds 11.5% fewer tokens. FP16 is BF16 KV on either part (vLLM's default on Hopper): double the 576-B row and doubled top-k reads; the indexer scan stays fp8."
-      : state.model === "GLM53F"
-      ? "GLM-5.3-Flash inverts the usual constraint: fp8 KV is BLACKWELL-ONLY — vLLM's recipe says Hopper must run BF16 KV, so on H200 the toggle LOCKS to FP16 (double bytes/token AND doubled top-k reads; the compressed indexer scan stays fp8). On B300 both arms are selectable."
-      : "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected.")
-    : (state.model === "DSV4F" || state.model === "DSV4FV"
-      ? `${m.name.split(" (")[0]}: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled.`
-      : state.model === "DSV41F"
-      ? "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels, quantization-aware trained) and the sliding windows FP8 — that native layout is what the FP8 arm prices; no serving stack offers a BF16 main KV, so the toggle is disabled."
-      : `${m.name.split(" (")[0]}: FP16 KV is not servable, so the toggle is disabled.`));
-  if (state.model === "ML4")
-    document.getElementById('kv-tip').setAttribute('data-tip', "Mistral-Large-4: every NVIDIA configuration Mistral and vLLM document runs the FP8 latent cache (fp8_ds_mla, which the NVFP4 card calls needed); the bfloat16 opt-out exists on ROCm only, so the FP16 toggle is disabled. Its rows are 656 B per latent on both parts: 512 fp8 values, 16 B of scales and 64 rope values kept BF16.");
-  document.getElementById('state-tip').setAttribute('data-tip', stateOk
-    ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence: method page, "The three un-measured structural knobs".`
-    : (state.model === "DSV4F" || state.model === "DSV4FV"
-      ? `${m.name.split(" (")[0]} pays a fixed ${fmt(m.deltanet_state/MIB,1)} MiB/session (fp8/bf16 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.`
-      : state.model === "DSV41F"
-      ? `DeepSeek-V4.1-Flash pays a fixed ${fmt(m.deltanet_state/MIB,1)} MiB/session (fp8 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.`
-      : state.model === "ML4"
-      ? `Mistral-Large-4 keeps no recurrent state (MLA attention); the ${fmt(m.deltanet_state/MIB,1)} MiB/session it pays is its DSpark drafter's three 2,048-token latent windows, fp8 like the cache — no bf16/fp32 knob to turn, so the control is disabled.`
-      : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention — so this control is disabled.`));
+  // a model's own wording, where the catalogue has one, replaces the generic
+  // tip; {state_mib} is its per-session state in MiB
+  const short = m.name.split(" (")[0], ex = m.explorer;
+  document.getElementById('kv-tip').setAttribute('data-tip', ex.kv_tip ?? (fp16Ok
+    ? "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
+    : `${short}: FP16 KV is not servable, so the toggle is disabled.`));
+  document.getElementById('state-tip').setAttribute('data-tip',
+    ex.state_tip?.replaceAll('{state_mib}', fmt(m.deltanet_state/MIB,1)) ?? (stateOk
+      ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence: method page, "The three un-measured structural knobs".`
+    : `${short} keeps no recurrent state — pure GQA attention — so this control is disabled.`));
   document.getElementById('kvshard-tip').setAttribute('data-tip', (() => {
     const heads = m.kv_heads || 1, tp = state.tp;
     const copies = tp > heads ? tp / heads : 1;
@@ -192,19 +180,7 @@ function enforceConstraints(){
   document.getElementById('wover-tip').setAttribute('data-tip', woverOk
     ? "Slack between a checkpoint's stated bytes and the server's real resident footprint. This model's figure is raw/on-disk — an under-estimate by an unknown margin; +15% is the one calibrated data point (the 27B's as-deployed 28.8 GiB vs its raw params), transferred here as an extrapolation."
     : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Its NVFP4 figure is a measured checkpoint total under the same convention, so the knob stays disabled on this model.");
-  const modelTips = {
-    "27B": "Qwen3.8-27B — dense hybrid, the calibrated baseline (measured on Qwen3.6-27B, whose checkpoint is tensor-for-tensor the same shape): 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.",
-    "35BA3B": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN.",
-    "MM35": "Mistral-Medium-3.5-128B — dense, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B), the study's KV-hungriest model. No MTP module: speculative default 1.0× (external EAGLE draft unmeasured). Hard 262k context max.",
-    "GLM52": "GLM-5.3 — 744B-A40B MLA+DSA (constants derived on GLM-5.2, whose checkpoint is tensor-for-tensor the same shape): 47.3 KiB/token stored on B300 and 53.4 KiB on H200 (vLLM's FP8 row differs by GPU), but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context.",
-    "DSV4F": "DeepSeek-V4-Flash-0731 — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's lightest big-MoE fit: from 2×H200 / 1×B300 (native FP4 experts; NVFP4 exists but is 5% heavier: the experts are already 4-bit natively and NVIDIA's repack only adds denser scales). A different architecture from V4.1-Flash (no encoder-decoder split, no Engram tables), kept alongside it. 1M native context.",
-    "DSV4FV": "DeepSeek-V4-Flash-Vision-Exp — DeepSeek-V4-Flash-0731's text backbone plus a 0.47B vision tower (32-layer ViT + aligner), continued-trained for multimodal agents. The text config and cache code are 0731's unchanged, so every cache, decode and prefill constant is too (3.4 KiB/token + 14.9 MiB/session); only the resident weights grow, by 0.93 GB. Fits from 2×H200 / 1×B300. No official NVFP4 checkpoint. Priced on the text workload only: image encoding and image tokens are not modelled. Terminal-Bench 74.2% on 2.1 and 12.1% on 4.0 (AA, max effort) — below 0731 on 2.1 although DeepSeek's card has it above (83.9 vs 82.7). 1M native context.",
-    "DSV41F": "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four FP4 compressed caches across the 40 layers: 890 B/token stored — 4× below V4-Flash-0731, ~40× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far, but its heaviest fit after GLM-5.3: vLLM keeps the 203 GB Engram tables in HBM, so 510 GB resident — 8×H200 (5 by arithmetic) / 2×B300. Native MXFP4 experts (384, 6 routed: kink n = 64); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1.",
-    "Q38FN": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 12.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN.",
-    "GLM53F": "GLM-5.3-Flash — MoE 320B-A18B hybrid (34 KDA linear + 11 NoPE sparse-MLA layers, +1 MTP DSA layer whose cache is charged): 6.4 KiB/token stored — 7.4× below GLM-5.2 — plus a 74.4 MiB bf16 KDA state per session; decode reads top-2048 latents + a kpool-4 compressed indexer scan. 288 experts / 8 routed (kink n = 36). Fits from 3×H200 / 2×B300 (pool arithmetic; no recipe floor published). fp8 KV is Blackwell-only, so on H200 the KV toggle locks to BF16. NVFP4: RedHatAI checkpoint (2026-08-27, the vLLM recipe\'s) — 42 decode layers\' experts ×0.5625, the rest upcast to BF16, so the fixed per-step read grows 14.0 → 16.7 GB while the resident drops to 197.8 GB. 1M native context.",
-    "ML4": "Mistral-Large-4 — 1.05T-A49B MoE (52B active with embeddings and lm_head), 72 layers of MLA + DSA as GLM-5.3, plus two cache savings: 9 late NoPE layers attend to layer 35's latents and store none, and 28 layers reuse the top-k of the indexer before them. 46.0 KiB/token stored in vLLM's 656-B fp8_ds_mla rows, 3% below GLM-5.3 on B300, plus 3.8 MiB/session for the DSpark drafter's windows; decode reads top-2048 latents on all 72 layers and 44 indexer scans. 128 experts / 4 routed (kink n = 32), 32.2 GB of routed experts per token, the study's heaviest. The largest model here: 1,060.5 GB in FP8, so no 8×H200 node holds it (the vLLM recipe runs it on 2×8 H200, which this page does not price); 8×B300 in FP8, from 4×B300 with the official NVFP4 checkpoint (610.0 GB). Terminal-Bench 24.7% on 4.0 (AA, high effort); AA has no 2.1 run. 1M native context, 262k validated by the recipe. License: Mistral Ecosystem Open-Weight (MIT, plus a separate commercial licence for Model-as-a-Service operators).",
-  };
-  document.getElementById('model-tip').setAttribute('data-tip', modelTips[state.model]);
+  document.getElementById('model-tip').setAttribute('data-tip', m.explorer.tip);
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
   // per-model ranges: max_seq_len cap (mirrors check_cap_allowed) and the
   // prompt-median sliders both scale with the model's context window — the
@@ -224,6 +200,12 @@ function enforceConstraints(){
 }
 
 // segmented controls
+// the model and GPU buttons, one per catalogue row, before the wiring below
+for (const [segId, rows, label] of [['seg-model', CONFIG.MODELS, m => m.explorer.short],
+                                    ['seg-gpu', CONFIG.GPUS, g => g.name]]){
+  document.getElementById(segId).innerHTML = Object.entries(rows).map(([k, r]) =>
+    `<button data-v="${k}" aria-pressed="${k === state[segId.slice(4)]}">${esc(label(r))}</button>`).join('\n');
+}
 document.querySelectorAll('.seg').forEach(seg=>{
   const key=seg.dataset.key;
   // #seg-split has no data-key: its buttons are rebuilt per GPU count and carry
