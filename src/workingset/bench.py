@@ -691,18 +691,23 @@ async def calibrate(client, ep, plan: Plan, trace: AgentTrace,
 
 
 CALIBRATE_TREES = 3
-CALIBRATE_TREE_S = 90.0
+CALIBRATE_TREE_S = 120.0
 
 
 async def calibrate_trees(client, ep, plan: Plan, trace: AgentTrace,
                           prefix_text: str, run_nonce: str) -> list:
-    """Whole trees replayed alone, one at a time, from their first request,
+    """Whole trees replayed alone, one at a time, from the request that first spawns subagents,
     for `CALIBRATE_TREE_S` each: the recordings with the most subagents
     spawned early. Their requests show how much a tree's own streams slow
     each other (`fit_tree_beta`)."""
     points = spawn_points(trace)
-    roots = [i for i in root_sessions(trace) if i in points]
-    roots.sort(key=lambda i: (-len(points[i]), len(trace.sessions[i])))
+    # start each tree at the request that first spawns subagents (what comes
+    # before it is a lone stream); take those spawning the most at once
+    first = {i: min(k for _, k in points[i]) for i in root_sessions(trace)
+             if i in points}
+    wide = {i: sum(1 for _, k in points[i] if k == first[i]) for i in first}
+    roots = sorted(first, key=lambda i: (
+        -wide[i], trace.sessions[i][first[i]].prompt_tokens))
     rows: list[Row] = []
     for n, root in enumerate(roots[:CALIBRATE_TREES]):
         stop = asyncio.Event()
@@ -710,10 +715,11 @@ async def calibrate_trees(client, ep, plan: Plan, trace: AgentTrace,
         uid = 900_000 + n * 1_000
         forest = _Forest(client, ep, plan, trace, prefix_text, run_nonce,
                          rows, t0, stop, None, uid_base=uid + 500)
-        seat = _seat(trace, plan, prefix_text, uid, run_nonce, start=(root, 0))
+        seat = _seat(trace, plan, prefix_text, uid, run_nonce, start=(root, first[root]))
         task = asyncio.create_task(_seat_loop(
             client, ep, plan.options(), seat, rows, t0, stop, 0.0, gaps=True,
-            limit=len(trace.sessions[root]), spawn=forest.spawner(uid)))
+            limit=len(trace.sessions[root]) - first[root],
+            spawn=forest.spawner(uid)))
         try:
             await asyncio.wait_for(asyncio.shield(task), CALIBRATE_TREE_S)
         except asyncio.TimeoutError:

@@ -250,3 +250,24 @@ def test_the_cap_is_reported_with_its_share():
 def test_the_speed_line_names_the_cap_not_40k():
     assert "at 32k context" in B._rates(B.Speed(a=1.0), cap=32_768)
     assert "at 40k context" in B._rates(B.Speed(a=1.0), cap=200_000)
+
+
+def test_tree_calibration_replays_a_whole_tree_from_its_first_spawn(
+        tmp_path, monkeypatch):
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(_tree_trace().to_dict()))
+    load_trace.cache_clear()
+    tr = load_trace(str(path))
+    plan = B.Plan(str(path), context_cap_tokens=100_000)
+    monkeypatch.setattr(B, "CALIBRATE_TREE_S", 5.0)
+
+    async def go():
+        async with httpx.AsyncClient(
+                transport=httpx.MockTransport(_server_stub())) as c:
+            return await B.calibrate_trees(
+                c, B.EndpointSpec(base_url="http://fake/v1", model="m"),
+                plan, tr, "p" * 100, "n")
+    rows = asyncio.run(go())
+    kids = [r for r in rows if r.child]
+    assert len(kids) == 3                    # the child recording, once
+    assert [r.prompt for r in rows if not r.child][0] == 1_200   # request 1
