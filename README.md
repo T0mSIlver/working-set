@@ -48,6 +48,7 @@ uv run ws test workingset.toml --dry-run # the plan, the sampler self-check, no 
 uv run ws test workingset.toml --exclusive --out run.json   # measure it
 uv run ws report run.json                # re-print the verdicts
 uv run ws models                         # model / GPU keys
+uv run ws api workingset.toml --hours 84 # one seat on each API and coding plan, same workload
 uv run pytest                            # self-checks + config round-trips
 ```
 
@@ -210,7 +211,9 @@ bytes, priced from one vLLM anchor, give 24M. Method, sources and the misses:
   uv run scripts/tables.py           # regenerates every number in docs/scenarios.md
   ```
 
-- [research/](research/) — sourced constants for each model and GPU.
+- [research/](research/) — sourced constants for each model and GPU;
+  [research/api_prices.md](research/api_prices.md) for the API and coding-plan
+  prices `ws api` reads.
 - [interactive/](interactive/) — the explorer, a dependency-free page
   mirroring the Python model: `index.html` holds the markup and styles,
   `src/*.js` the model and the charts as ES modules (`src/main.js` is the

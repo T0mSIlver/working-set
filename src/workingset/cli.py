@@ -20,6 +20,8 @@
     ws decode-sweep --base-url URL --model M   decode step time at n held sequences
     ws aa stats|predict ...                    Artificial Analysis' AgentPerf-Local
                                                traces at N concurrent agents
+    ws api [CONFIG] [--hours H] [--json]       one seat on each API and coding plan,
+                                               at the workload's own token flows
 """
 from __future__ import annotations
 
@@ -513,6 +515,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_replay(sub)
     from .decode_sweep import add_subparser as _add_decode
     _add_decode(sub)
+    from .api_cost import add_subparser as _add_api
+    _add_api(sub)
     return ap
 
 

@@ -1,0 +1,1468 @@
+# API prices, coding plans and the Terminal-Bench 4.0 scores of the models
+# they serve, read 2026-11-04: what workingset.api_cost prices a seat from.
+# scripts/api_prices.py writes the explorer's copy (interactive/src/
+# api_prices.js). research/api_prices.md has the method and every caveat.
+#
+# Units: USD per million tokens, list price before tax, unless a field says
+# otherwise. A plan's meter is in its own unit (credits, requests). Every
+# number carries the page it was read from (`url`) and the text it was read
+# off (`quote`). Re-read rows together and change `read` below.
+schema = 1
+read = "2026-11-04"
+note = "List prices before tax, USD per million tokens unless a field says otherwise. Sources and method: research/api_prices.md."
+
+[fx]
+usd_per_eur = 1.1267
+date = "2026-11-04"
+url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+quote = "<Cube time='2026-11-04'> <Cube currency='USD' rate='1.1267'/>"
+
+[[apis]]
+key = "claude-fable-5.1"
+name = "Claude Fable 5.1"
+vendor = "Anthropic"
+api_id = "claude-fable-5-1"
+
+[[apis.bands]]
+above_tokens = 0
+input = 10
+output = 50
+cache = [
+  { ttl_s = 300, read = 0.25, write = 12.5 },
+  { ttl_s = 3600, read = 0.25, write = 20 },
+]
+
+[apis.source]
+url = "https://platform.claude.com/docs/en/about-claude/pricing"
+read = "2026-11-04"
+quote = "Claude Fable 5.1 | $10 / MTok | $50 / MTok | $12.50 / MTok (5m writes) | $20 / MTok (1h writes) | $0.25 / MTok (hits and refreshes)"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+quote = "The cache's default minimum lifetime (TTL) is 5 minutes. This lifetime is refreshed each time the cached content is used."
+
+[apis.quality]
+tb40 = 0.5202020202020202
+runs_passed = 103
+runs = 198
+aa = "claude-fable-5-1"
+aa_name = "Claude Fable 5.1 (Max, Default Fallback)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/claude-fable-5-1"
+
+[apis.openrouter]
+id = "anthropic/claude-fable-5.1"
+url = "https://openrouter.ai/api/v1/models/anthropic/claude-fable-5.1/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Anthropic"
+tag = "anthropic"
+input = 10.0
+output = 50.0
+cache_read = 0.25
+cache_write = 12.5
+cache_write_1h = 20.0
+
+[[apis]]
+key = "claude-opus-5.5"
+name = "Claude Opus 5.5"
+vendor = "Anthropic"
+api_id = "claude-opus-5-5"
+
+[[apis.bands]]
+above_tokens = 0
+input = 4
+output = 20
+cache = [
+  { ttl_s = 300, read = 0.2, write = 5 },
+  { ttl_s = 3600, read = 0.2, write = 8 },
+]
+
+[apis.source]
+url = "https://platform.claude.com/docs/en/about-claude/pricing"
+read = "2026-11-04"
+quote = "Claude Opus 5.5 | $4 / MTok | $20 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+quote = "The cache's default minimum lifetime (TTL) is 5 minutes. This lifetime is refreshed each time the cached content is used."
+
+[apis.quality]
+tb40 = 0.5959595959595959
+runs_passed = 118
+runs = 198
+aa = "claude-opus-5-5"
+aa_name = "Claude Opus 5.5 (Max, Default Fallback)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/claude-opus-5-5"
+
+[apis.openrouter]
+id = "anthropic/claude-opus-5.5"
+url = "https://openrouter.ai/api/v1/models/anthropic/claude-opus-5.5/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Anthropic"
+tag = "anthropic"
+input = 4.0
+output = 20.0
+cache_read = 0.2
+cache_write = 5.0
+cache_write_1h = 8.0
+
+[[apis]]
+key = "claude-sonnet-5.5"
+name = "Claude Sonnet 5.5"
+vendor = "Anthropic"
+api_id = "claude-sonnet-5-5"
+
+[[apis.bands]]
+above_tokens = 0
+input = 2
+output = 10
+cache = [
+  { ttl_s = 300, read = 0.1, write = 2.5 },
+  { ttl_s = 3600, read = 0.1, write = 4 },
+]
+
+[apis.source]
+url = "https://platform.claude.com/docs/en/about-claude/pricing"
+read = "2026-11-04"
+quote = "Claude Sonnet 5.5 | $2 / MTok | $10 / MTok | $2.50 / MTok | $4 / MTok | $0.10 / MTok"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+quote = "The cache's default minimum lifetime (TTL) is 5 minutes. This lifetime is refreshed each time the cached content is used."
+
+[apis.quality]
+tb40 = 0.6363636363636364
+runs_passed = 126
+runs = 198
+aa = "claude-sonnet-5-5"
+aa_name = "Claude Sonnet 5.5 (Max, Default Fallback)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/claude-sonnet-5-5"
+
+[apis.openrouter]
+id = "anthropic/claude-sonnet-5.5"
+url = "https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5.5/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Anthropic"
+tag = "anthropic"
+input = 2.0
+output = 10.0
+cache_read = 0.1
+cache_write = 2.5
+cache_write_1h = 4.0
+
+[[apis]]
+key = "claude-haiku-5.5"
+name = "Claude Haiku 5.5"
+vendor = "Anthropic"
+api_id = "claude-haiku-5-5"
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.1
+output = 0.5
+cache = [
+  { ttl_s = 300, read = 0.01, write = 0.125 },
+  { ttl_s = 3600, read = 0.01, write = 0.2 },
+]
+
+[[apis.bands]]
+above_tokens = 100000
+input = 0.5
+output = 2.5
+cache = [
+  { ttl_s = 300, read = 0.05, write = 0.625 },
+  { ttl_s = 3600, read = 0.05, write = 1.0 },
+]
+
+[apis.source]
+url = "https://platform.claude.com/docs/en/about-claude/pricing"
+read = "2026-11-04"
+quote = "Claude Haiku 5.5 | $0.10 / MTok for prompts up to 100,000 tokens | $0.50 / MTok | $0.125 / MTok | $0.20 / MTok | $0.01 / MTok / $0.50 / MTok for prompts over 100,000 tokens | $2.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok. 'A request’s prompt length counts all of its input tokens, including cache reads and cache writes. Each request is priced on its own'"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+quote = "The cache's default minimum lifetime (TTL) is 5 minutes. This lifetime is refreshed each time the cached content is used."
+
+[apis.quality]
+tb40 = 0.3282828282828283
+runs_passed = 65
+runs = 198
+aa = "claude-haiku-5-5"
+aa_name = "Claude Haiku 5.5 (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/claude-haiku-5-5"
+
+[apis.openrouter]
+id = "anthropic/claude-haiku-5.5"
+url = "https://openrouter.ai/api/v1/models/anthropic/claude-haiku-5.5/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Anthropic"
+tag = "anthropic"
+input = 0.1
+output = 0.5
+cache_read = 0.01
+cache_write = 0.125
+cache_write_1h = 0.2
+
+[[apis.openrouter.first_party.long_context]]
+min_prompt_tokens = 100000
+prompt = 0.5
+completion = 2.5
+input_cache_read = 0.05
+input_cache_write = 0.625
+input_cache_write_1h = 1.0
+
+[[apis]]
+key = "gpt-6-astra"
+name = "GPT-6 Astra"
+vendor = "OpenAI"
+api_id = "gpt-6-astra"
+
+[[apis.bands]]
+above_tokens = 0
+input = 10
+output = 50
+cache = [
+  { ttl_s = 1800, read = 1.0, write = 12.5 },
+  { ttl_s = 43200, read = 1.0, write = 25.0 },
+]
+
+[[apis.bands]]
+above_tokens = 272000
+input = 20
+output = 75
+cache = [
+  { ttl_s = 1800, read = 2.0, write = 25 },
+  { ttl_s = 43200, read = 2.0, write = 50 },
+]
+
+[apis.source]
+url = "https://platform.openai.com/docs/pricing"
+read = "2026-11-04"
+quote = "Standard (Short context ≤272K): gpt-6-astra | Input $10 | Output $50 | Cached input $1.0 | 30m write $12.5 | 12h write $25; Long context: Input $20 | Output $75 | Cached $2.0 | 30m write $25 | 12h write $50"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.openai.com/docs/guides/prompt-caching"
+quote = "Cache writes are explicit/opt-in per breakpoint (Responses API; with no explicit breakpoints no writes occur). Write 30m default = 1.25x input, 12h = 2.5x input; no storage fee. Min cacheable prefix 1,024 visible tokens (GPT-5.6 and later). Cache read 0.1x input. (https://platform.openai.com/docs/guides/prompt-caching.md)"
+
+[apis.quality]
+tb40 = 0.5909090909090909
+runs_passed = 117
+runs = 198
+aa = "gpt-6-astra"
+aa_name = "GPT-6 Astra (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/gpt-6-astra"
+
+[apis.openrouter]
+id = "openai/gpt-6-astra"
+url = "https://openrouter.ai/api/v1/models/openai/gpt-6-astra/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "OpenAI"
+tag = "openai"
+input = 10.0
+output = 50.0
+cache_read = 1.0
+cache_write = 12.5
+
+[[apis.openrouter.first_party.long_context]]
+min_prompt_tokens = 272000
+prompt = 20.0
+completion = 75.0
+input_cache_read = 2.0
+input_cache_write = 25.0
+
+[[apis]]
+key = "gpt-6.1-sol"
+name = "GPT-6.1 Sol"
+vendor = "OpenAI"
+api_id = "gpt-6.1-sol"
+
+[[apis.bands]]
+above_tokens = 0
+input = 2
+output = 10
+cache = [
+  { ttl_s = 1800, read = 0.1, write = 2.5 },
+  { ttl_s = 43200, read = 0.1, write = 5.0 },
+]
+
+[[apis.bands]]
+above_tokens = 272000
+input = 4
+output = 15
+cache = [
+  { ttl_s = 1800, read = 0.2, write = 5 },
+  { ttl_s = 43200, read = 0.2, write = 10 },
+]
+
+[apis.source]
+url = "https://platform.openai.com/docs/pricing"
+read = "2026-11-04"
+quote = "Standard (Short context ≤272K): gpt-6.1-sol | Input $2 | Output $10 | Cached input $0.1 | 30m write $2.5 | 12h write $5; Long context: Input $4 | Output $15 | Cached $0.2 | 30m write $5 | 12h write $10"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.openai.com/docs/guides/prompt-caching"
+quote = "Cache writes are explicit/opt-in per breakpoint (Responses API; with no explicit breakpoints no writes occur). Write 30m default = 1.25x input, 12h = 2.5x input; no storage fee. Min cacheable prefix 1,024 visible tokens (GPT-5.6 and later). Cache read 0.05x input for GPT-6.1 Sol/Terra. (https://platform.openai.com/docs/guides/prompt-caching.md)"
+
+[apis.quality]
+tb40 = 0.5606060606060606
+runs_passed = 111
+runs = 198
+aa = "gpt-6-1-sol"
+aa_name = "GPT-6.1 Sol (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/gpt-6-1-sol"
+
+[apis.openrouter]
+id = "openai/gpt-6.1-sol"
+url = "https://openrouter.ai/api/v1/models/openai/gpt-6.1-sol/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "OpenAI"
+tag = "openai"
+input = 2.0
+output = 10.0
+cache_read = 0.1
+cache_write = 2.5
+
+[[apis.openrouter.first_party.long_context]]
+min_prompt_tokens = 272000
+prompt = 4.0
+completion = 15.0
+input_cache_read = 0.2
+input_cache_write = 5.0
+
+[[apis]]
+key = "gpt-6.1-terra"
+name = "GPT-6.1 Terra"
+vendor = "OpenAI"
+api_id = "gpt-6.1-terra"
+
+[[apis.bands]]
+above_tokens = 0
+input = 1
+output = 5
+cache = [
+  { ttl_s = 1800, read = 0.05, write = 1.25 },
+  { ttl_s = 43200, read = 0.05, write = 2.5 },
+]
+
+[[apis.bands]]
+above_tokens = 272000
+input = 2
+output = 7.5
+cache = [
+  { ttl_s = 1800, read = 0.1, write = 2.5 },
+  { ttl_s = 43200, read = 0.1, write = 5 },
+]
+
+[apis.source]
+url = "https://platform.openai.com/docs/pricing"
+read = "2026-11-04"
+quote = "Standard (Short context ≤272K): gpt-6.1-terra | Input $1 | Output $5 | Cached input $0.05 | 30m write $1.25 | 12h write $2.5; Long context: Input $2 | Output $7.5 | Cached $0.1 | 30m write $2.5 | 12h write $5"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.openai.com/docs/guides/prompt-caching"
+quote = "Cache writes are explicit/opt-in per breakpoint (Responses API; with no explicit breakpoints no writes occur). Write 30m default = 1.25x input, 12h = 2.5x input; no storage fee. Min cacheable prefix 1,024 visible tokens (GPT-5.6 and later). Cache read 0.05x input for GPT-6.1 Sol/Terra. (https://platform.openai.com/docs/guides/prompt-caching.md)"
+
+[apis.quality]
+tb40 = 0.5555555555555556
+runs_passed = 110
+runs = 198
+aa = "gpt-6-1-terra"
+aa_name = "GPT-6.1 Terra (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/gpt-6-1-terra"
+
+[apis.openrouter]
+id = "openai/gpt-6.1-terra"
+url = "https://openrouter.ai/api/v1/models/openai/gpt-6.1-terra/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "OpenAI"
+tag = "openai"
+input = 1.0
+output = 5.0
+cache_read = 0.05
+cache_write = 1.25
+
+[[apis.openrouter.first_party.long_context]]
+min_prompt_tokens = 272000
+prompt = 2.0
+completion = 7.5
+input_cache_read = 0.1
+input_cache_write = 2.5
+
+[[apis]]
+key = "gpt-6-luna"
+name = "GPT-6 Luna"
+vendor = "OpenAI"
+api_id = "gpt-6-luna"
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.1
+output = 0.5
+cache = [
+  { ttl_s = 1800, read = 0.01, write = 0.125 },
+  { ttl_s = 43200, read = 0.01, write = 0.25 },
+]
+
+[[apis.bands]]
+above_tokens = 272000
+input = 0.2
+output = 0.75
+cache = [
+  { ttl_s = 1800, read = 0.02, write = 0.25 },
+  { ttl_s = 43200, read = 0.02, write = 0.5 },
+]
+
+[apis.source]
+url = "https://platform.openai.com/docs/pricing"
+read = "2026-11-04"
+quote = "Standard (Short context ≤272K): gpt-6-luna | Input $0.1 | Output $0.5 | Cached input $0.01 | 30m write $0.125 | 12h write $0.25; Long context: Input $0.2 | Output $0.75 | Cached $0.02 | 30m write $0.25 | 12h write $0.5"
+
+[apis.cache]
+kind = "explicit breakpoints"
+ttl = "documented"
+url = "https://platform.openai.com/docs/guides/prompt-caching"
+quote = "Cache writes are explicit/opt-in per breakpoint (Responses API; with no explicit breakpoints no writes occur). Write 30m default = 1.25x input, 12h = 2.5x input; no storage fee. Min cacheable prefix 1,024 visible tokens (GPT-5.6 and later). Cache read 0.1x input. (https://platform.openai.com/docs/guides/prompt-caching.md)"
+
+[apis.quality]
+tb40 = 0.12626262626262627
+runs_passed = 25
+runs = 198
+aa = "gpt-6-luna"
+aa_name = "GPT-6 Luna (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/gpt-6-luna"
+
+[apis.openrouter]
+id = "openai/gpt-6-luna"
+url = "https://openrouter.ai/api/v1/models/openai/gpt-6-luna/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "OpenAI"
+tag = "openai"
+input = 0.1
+output = 0.5
+cache_read = 0.01
+cache_write = 0.125
+
+[[apis.openrouter.first_party.long_context]]
+min_prompt_tokens = 272000
+prompt = 0.2
+completion = 0.75
+input_cache_read = 0.02
+input_cache_write = 0.25
+
+[[apis]]
+key = "gemini-4-argon"
+name = "Gemini 4 Argon"
+vendor = "Google"
+api_id = "gemini-4-argon"
+price_changes = [
+  { from = "2026-12-01", input = 4.0, cached_input = 0.2, output = 20.0 },
+]
+
+[[apis.bands]]
+above_tokens = 0
+input = 2.0
+output = 10.0
+cache = [
+  { ttl_s = 300, read = 0.1, write = 2.0 },
+]
+
+[apis.source]
+url = "https://ai.google.dev/gemini-api/docs/pricing"
+read = "2026-11-04"
+quote = "Standard, Paid tier per 1M tokens: Input price '$2.00 through November 30, 2026. $4.00 starting December 1, 2026.' Output price (including thinking tokens) '$10.00 through November 30, 2026. $20.00 starting December 1, 2026.' Context caching price '$0.10 through November 30, 2026. $0.20 starting December 1, 2026. Implicit caching only (explicit caching is not supported).'"
+
+[apis.cache]
+kind = "implicit (no write fee, hit not guaranteed)"
+ttl = "assumed 5 min: not stated"
+url = "https://ai.google.dev/gemini-api/docs/caching"
+quote = "Implicit caching only; explicit caching not supported, so no storage fee. Min implicit-cache input 4,096 tokens (https://ai.google.dev/gemini-api/docs/caching). TTL not applicable to implicit caching; not stated."
+
+[apis.quality]
+tb40 = 0.5707070707070707
+runs_passed = 113
+runs = 198
+aa = "gemini-4-argon"
+aa_name = "Gemini 4 Argon (High)"
+effort = "high"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/gemini-4-argon"
+
+[apis.openrouter]
+id = "google/gemini-4-argon"
+url = "https://openrouter.ai/api/v1/models/google/gemini-4-argon/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Google AI Studio"
+tag = "google-ai-studio"
+input = 2.0
+output = 10.0
+cache_read = 0.1
+cache_write = 0.1875
+
+[[apis]]
+key = "gemini-3.8-flash"
+name = "Gemini 3.8 Flash"
+vendor = "Google"
+api_id = "gemini-3.8-flash"
+price_changes = [
+  { from = "2027-01-01", input = 1.5, cached_input = 0.15, output = 7.5 },
+]
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.75
+output = 3.75
+cache = [
+  { ttl_s = 300, read = 0.075, write = 0.75 },
+]
+
+[apis.source]
+url = "https://ai.google.dev/gemini-api/docs/pricing"
+read = "2026-11-04"
+quote = "Standard, Paid tier per 1M tokens: Input '$0.75 through December 31, 2026. $1.50 starting January 1, 2027.' Output (including thinking tokens) '$3.75 through December 31, 2026. $7.50 starting January 1, 2027.' Context caching '$0.075 through December 31, 2026. $0.15 starting January 1, 2027. $0.50 / 1,000,000 tokens per hour (storage price) through December 31, 2026. $1.00 / 1,000,000 tokens per hour (storage price) starting January 1, 2027.'"
+
+[apis.cache]
+kind = "implicit (no write fee, hit not guaranteed)"
+ttl = "assumed 5 min: not stated"
+url = "https://ai.google.dev/gemini-api/docs/caching"
+quote = "Explicit and implicit caching. Storage $0.50 per 1M tokens per hour through 2026-12-31 then $1.00. Min implicit-cache input 4,096 tokens. Default explicit-cache TTL not retrieved/stated on the pricing page."
+
+[apis.quality]
+tb40 = 0.19696969696969696
+runs_passed = 39
+runs = 198
+aa = "gemini-3-8-flash"
+aa_name = "Gemini 3.8 Flash (High)"
+effort = "high"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/gemini-3-8-flash"
+
+[apis.openrouter]
+id = "google/gemini-3.8-flash"
+url = "https://openrouter.ai/api/v1/models/google/gemini-3.8-flash/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Google AI Studio"
+tag = "google-ai-studio"
+input = 0.75
+output = 3.75
+cache_read = 0.075
+cache_write = 0.041667
+
+[[apis]]
+key = "glm-5.3"
+name = "GLM-5.3"
+vendor = "Z.ai"
+api_id = "glm-5.3"
+ws_model = "GLM52"
+
+[[apis.bands]]
+above_tokens = 0
+input = 1.4
+output = 4.4
+cache = [
+  { ttl_s = 300, read = 0.26, write = 1.4 },
+]
+
+[apis.source]
+url = "https://docs.z.ai/guides/overview/pricing"
+read = "2026-11-04"
+quote = "GLM-5.3 | $1.4 | $0.26 | Limited-time Free | $4.4"
+
+[apis.cache]
+kind = "automatic prefix (no write fee)"
+ttl = "assumed 5 min: not stated"
+url = "https://docs.z.ai/guides/overview/pricing"
+quote = "Cached Input Storage: \"Limited-time Free\""
+
+[apis.quality]
+tb40 = 0.41919191919191917
+runs_passed = 83
+runs = 198
+aa = "glm-5-3"
+aa_name = "GLM-5.3 (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/glm-5-3"
+
+[apis.openrouter]
+id = "z-ai/glm-5.3"
+url = "https://openrouter.ai/api/v1/models/z-ai/glm-5.3/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+first_party = { provider = "Z.AI", tag = "z-ai/fp8", input = 1.4, output = 4.4, cache_read = 0.26 }
+
+[[apis]]
+key = "glm-5.3-flash"
+name = "GLM-5.3-Flash"
+vendor = "Z.ai"
+api_id = "glm-5.3-flash"
+ws_model = "GLM53F"
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.15
+output = 0.5
+cache = [
+  { ttl_s = 300, read = 0.03, write = 0.15 },
+]
+
+[apis.source]
+url = "https://docs.z.ai/guides/overview/pricing"
+read = "2026-11-04"
+quote = "GLM-5.3-Flash | $0.15 | $0.03 | Limited-time Free | $0.50"
+
+[apis.cache]
+kind = "automatic prefix (no write fee)"
+ttl = "assumed 5 min: not stated"
+url = "https://docs.z.ai/guides/overview/pricing"
+quote = "Cached Input Storage: \"Limited-time Free\""
+
+[apis.quality]
+tb40 = 0.3282828282828283
+runs_passed = 65
+runs = 198
+aa = "glm-5-3-flash"
+aa_name = "GLM-5.3-Flash"
+effort = "not labelled"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/glm-5-3-flash"
+
+[apis.openrouter]
+id = "z-ai/glm-5.3-flash"
+url = "https://openrouter.ai/api/v1/models/z-ai/glm-5.3-flash/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+first_party = { provider = "Z.AI", tag = "z-ai/fp8", input = 0.15, output = 0.5, cache_read = 0.03 }
+
+[[apis]]
+key = "deepseek-v4.1-flash-1017"
+name = "DeepSeek V4.1 Flash 1017"
+vendor = "DeepSeek"
+api_id = "deepseek-flash"
+note = "Serves every Flash alias: the 2026-09-10 V4.1 Flash (the study's DSV41F checkpoint) and V4 Flash Vision (Exp) are retired and billed as this model."
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.3
+output = 1.2
+cache = [
+  { ttl_s = 3600, read = 0.006, write = 0.3 },
+]
+
+[apis.source]
+url = "https://api-docs.deepseek.com/quick_start/pricing"
+read = "2026-11-04"
+quote = "1M INPUT TOKENS(CACHE HIT) | OFF-PEAK | $0.003; PEAK | $0.006; CACHE MISS OFF-PEAK $0.15, PEAK $0.3; OUTPUT OFF-PEAK $0.6, PEAK $1.2. Off-peak rates are half of the peak rates. Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese public holidays. All other hours are off-peak, including weekends and Chinese public holidays in full."
+
+[apis.cache]
+kind = "automatic prefix (no write fee)"
+ttl = "assumed 1 h: \"cleared, usually within a few hours to a few days\""
+url = "https://api-docs.deepseek.com/guides/kv_cache"
+quote = "Once the cache is no longer in use, it will be automatically cleared, usually within a few hours to a few days."
+
+[apis.time_blend]
+peak_share = 0.2222222222222222
+offpeak_factor = 0.5
+basis = "a 09:00-18:00 CET working day (08:00-17:00 UTC, Mon-Fri) overlaps peak 08:00-10:00 UTC: 2 of 9 hours at peak"
+quote = "Off-peak rates are half of the peak rates. Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese public holidays. All other hours are off-peak, including weekends and Chinese public holidays in full."
+
+[apis.quality]
+tb40 = 0.3383838383838384
+runs_passed = 67
+runs = 198
+aa = "deepseek-v4-1-flash-1017"
+aa_name = "DeepSeek V4.1 Flash 1017 (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/deepseek-v4-1-flash-1017"
+
+[apis.openrouter]
+id = "deepseek/deepseek-v4.1-flash-1017"
+url = "https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash-1017/endpoints"
+read = "2026-11-04"
+matches_vendor_page = false
+
+[apis.openrouter.first_party]
+provider = "DeepSeek"
+tag = "deepseek"
+input = 0.15
+output = 0.6
+cache_read = 0.003
+
+[[apis]]
+key = "deepseek-v4-pro"
+name = "DeepSeek V4 Pro 0813"
+vendor = "DeepSeek"
+api_id = "deepseek-v4-pro"
+
+[[apis.bands]]
+above_tokens = 0
+input = 1.32
+output = 3.96
+cache = [
+  { ttl_s = 3600, read = 0.044, write = 1.32 },
+]
+
+[apis.source]
+url = "https://api-docs.deepseek.com/quick_start/pricing"
+read = "2026-11-04"
+quote = "1M INPUT TOKENS(CACHE HIT) OFF-PEAK $0.022, PEAK $0.044; CACHE MISS OFF-PEAK $0.66, PEAK $1.32; OUTPUT OFF-PEAK $1.98, PEAK $3.96"
+
+[apis.cache]
+kind = "automatic prefix (no write fee)"
+ttl = "assumed 1 h: \"cleared, usually within a few hours to a few days\""
+url = "https://api-docs.deepseek.com/guides/kv_cache"
+quote = "Once the cache is no longer in use, it will be automatically cleared, usually within a few hours to a few days."
+
+[apis.time_blend]
+peak_share = 0.2222222222222222
+offpeak_factor = 0.5
+basis = "a 09:00-18:00 CET working day (08:00-17:00 UTC, Mon-Fri) overlaps peak 08:00-10:00 UTC: 2 of 9 hours at peak"
+quote = "Off-peak rates are half of the peak rates. Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese public holidays. All other hours are off-peak, including weekends and Chinese public holidays in full."
+
+[apis.quality]
+tb40 = 0.1414141414141414
+runs_passed = 28
+runs = 198
+aa = "deepseek-v4-pro"
+aa_name = "DeepSeek V4 Pro 0813 (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/deepseek-v4-pro"
+
+[apis.openrouter]
+id = "deepseek/deepseek-v4-pro-0813"
+url = "https://openrouter.ai/api/v1/models/deepseek/deepseek-v4-pro-0813/endpoints"
+read = "2026-11-04"
+matches_vendor_page = false
+
+[apis.openrouter.first_party]
+provider = "DeepSeek"
+tag = "deepseek"
+input = 0.66
+output = 1.98
+cache_read = 0.022
+
+[[apis]]
+key = "qwen3.8-27b"
+name = "Qwen3.8-27B"
+vendor = "Alibaba"
+api_id = "qwen3.8-27b"
+ws_model = "27B"
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.5
+output = 3.0
+cache = [
+  { ttl_s = 300, read = 0.05, write = 0.625 },
+  { ttl_s = 300, read = 0.1, write = 0.5 },
+]
+
+[apis.source]
+url = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+read = "2026-11-04"
+quote = "qwen3.8-27b | International | Non-Thinking and Thinking modes | 0<Token<=1M | $0.5 | $3"
+
+[apis.cache]
+kind = "explicit (create 125%, hit 10%) or implicit (hit 20%, no write fee)"
+ttl = "explicit 5 min documented; implicit not stated, assumed 5 min"
+url = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
+quote = "Explicit cache: ... within its 5-minute validity period. Tokens used to create the cache are typically billed at 125% of the standard input token price, while subsequent cache hits are typically billed at only 10% of that price. / Implicit cache: ... typically billed at 20% of the standard input token price. (qwen3.8-27b listed for both; not among the exceptions)"
+
+[apis.quality]
+tb40 = 0.05555555555555555
+runs_passed = 11
+runs = 198
+aa = "qwen3-8-27b"
+aa_name = "Qwen3.8 27B (Xhigh)"
+effort = "xhigh"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/qwen3-8-27b"
+
+[apis.openrouter]
+id = "qwen/qwen3.8-27b"
+url = "https://openrouter.ai/api/v1/models/qwen/qwen3.8-27b/endpoints"
+read = "2026-11-04"
+matches_vendor_page = false
+
+[apis.openrouter.first_party]
+provider = "Alibaba"
+tag = "alibaba"
+input = 0.425
+output = 2.55
+cache_read = 0.085
+cache_write = 0.53125
+
+[[apis]]
+key = "qwen3.6-35b-a3b"
+name = "Qwen3.6-35B-A3B"
+vendor = "Alibaba"
+api_id = "qwen3.6-35b-a3b"
+ws_model = "35BA3B"
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.375
+output = 2.25
+cache = [
+  { ttl_s = 300, read = 0.375, write = 0.375 },
+]
+
+[apis.source]
+url = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+read = "2026-11-04"
+quote = "qwen3.6-35b-a3b | International | 0<Token<=256K | $0.375 | $2.25 | $2.25 | No free quota"
+
+[apis.cache]
+kind = "none: not in either supported-model list"
+ttl = "no context cache"
+url = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
+quote = "qwen3.6-35b-a3b is in neither the explicit-cache nor the implicit-cache supported-model list (International)."
+
+[apis.quality]
+tb40 = 0.0
+runs_passed = 0
+runs = 198
+aa = "qwen3-6-35b-a3b"
+aa_name = "Qwen3.6 35B A3B (Reasoning)"
+effort = "reasoning"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/qwen3-6-35b-a3b"
+
+[apis.openrouter]
+id = "qwen/qwen3.6-35b-a3b"
+url = "https://openrouter.ai/api/v1/models/qwen/qwen3.6-35b-a3b/endpoints"
+read = "2026-11-04"
+note = "no endpoint run by Alibaba on OpenRouter; resellers only: n, o, n, e,  , l, i, s, t, e, d"
+
+[[apis]]
+key = "qwen3.8-max"
+name = "Qwen3.8 Max"
+vendor = "Alibaba"
+api_id = "qwen3.8-max"
+
+[[apis.bands]]
+above_tokens = 0
+input = 2.0
+output = 6.0
+cache = [
+  { ttl_s = 300, read = 0.25, write = 2.5 },
+  { ttl_s = 300, read = 0.25, write = 2.0 },
+]
+
+[apis.source]
+url = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+read = "2026-11-04"
+quote = "qwen3.8-max | context caching discount | International | Non-Thinking and Thinking modes | 0<Token<=1M | $2 | $6"
+
+[apis.cache]
+kind = "explicit (create 125%) or implicit; hit price from Alibaba's endpoint on OpenRouter"
+ttl = "explicit 5 min documented; implicit not stated, assumed 5 min"
+url = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
+quote = "qwen3.8-max, qwen3.8-max-0902, and qwen3.8-2.4t-a95b: Cache creation is billed at 125% of the standard input token price, but the cache hit price is not 10% of the standard input token price. (OpenRouter, Alibaba endpoint: input_cache_read $0.25/M)"
+
+[apis.quality]
+tb40 = 0.3888888888888889
+runs_passed = 77
+runs = 198
+aa = "qwen3-8-max"
+aa_name = "Qwen3.8 Max (0902)"
+effort = "not labelled"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/qwen3-8-max"
+
+[apis.openrouter]
+id = "qwen/qwen3.8-max-0902"
+url = "https://openrouter.ai/api/v1/models/qwen/qwen3.8-max-0902/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Alibaba"
+tag = "alibaba"
+input = 2.0
+output = 6.0
+cache_read = 0.25
+cache_write = 2.5
+
+[[apis]]
+key = "mistral-large-4"
+name = "Mistral Large 4"
+vendor = "Mistral"
+api_id = "mistral-large-4"
+ws_model = "ML4"
+
+[[apis.bands]]
+above_tokens = 0
+input = 0.7
+output = 2.1
+cache = [
+  { ttl_s = 300, read = 0.07, write = 0.7 },
+]
+
+[apis.source]
+url = "https://docs.mistral.ai/inference/pricing"
+read = "2026-11-04"
+quote = "Mistral Large 4 ↗ | $0.7 | $0.07 | $2.1 (Model | Input | Cached input | Output)"
+
+[apis.cache]
+kind = "automatic prefix (no write fee)"
+ttl = "assumed 5 min: not stated"
+url = "https://docs.mistral.ai/inference/pricing"
+quote = ""
+
+[apis.quality]
+tb40 = 0.2474747474747475
+runs_passed = 49
+runs = 198
+aa = "mistral-large-4"
+aa_name = "Mistral Large 4 (High)"
+effort = "high"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/mistral-large-4"
+
+[apis.openrouter]
+id = "mistralai/mistral-large-4-0"
+url = "https://openrouter.ai/api/v1/models/mistralai/mistral-large-4-0/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Mistral"
+tag = "mistral/zdr"
+input = 0.7
+output = 2.1
+cache_read = 0.07
+
+[[apis]]
+key = "kimi-k3.1-pro"
+name = "Kimi K3.1 Pro"
+vendor = "Moonshot"
+api_id = "kimi-k3.1-pro"
+
+[[apis.bands]]
+above_tokens = 0
+input = 2.0
+output = 10.0
+cache = [
+  { ttl_s = 300, read = 0.2, write = 2.0 },
+  { ttl_s = 3600, read = 0.2, write = 4.0 },
+]
+
+[apis.source]
+url = "https://platform.moonshot.ai/docs/pricing/chat"
+read = "2026-11-04"
+quote = "Name | Input | Output | Cached Input | 5m writes | 1h writes; kimi-k3.1-pro $2.00 / MTok $10.00 / MTok $0.20 / MTok $2.00 / MTok $4.00 / MTok"
+
+[apis.cache]
+kind = "explicit, 5 min or 1 h writes"
+ttl = "documented"
+url = "https://platform.moonshot.ai/docs/pricing/chat"
+quote = "Default cache TTL 5m. 5m writes $2.00 / MTok, 1h writes $4.00 / MTok"
+
+[apis.quality]
+tb40 = 0.6717171717171717
+runs_passed = 133
+runs = 198
+aa = "kimi-k3-1-pro"
+aa_name = "Kimi K3.1 Pro"
+effort = "not labelled"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/kimi-k3-1-pro"
+
+[apis.openrouter]
+id = "moonshotai/kimi-k3.1-pro"
+url = "https://openrouter.ai/api/v1/models/moonshotai/kimi-k3.1-pro/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Moonshot AI"
+tag = "moonshotai/mxfp4"
+input = 2.0
+output = 10.0
+cache_read = 0.2
+
+[[apis]]
+key = "kimi-k3"
+name = "Kimi K3"
+vendor = "Moonshot"
+api_id = "kimi-k3"
+
+[[apis.bands]]
+above_tokens = 0
+input = 3.0
+output = 15.0
+cache = [
+  { ttl_s = 300, read = 0.3, write = 3.0 },
+  { ttl_s = 3600, read = 0.3, write = 6.0 },
+]
+
+[apis.source]
+url = "https://platform.moonshot.ai/docs/pricing/chat"
+read = "2026-11-04"
+quote = "kimi-k3 $3.00 / MTok $15.00 / MTok $0.30 / MTok $3.00 / MTok $6.00 / MTok"
+
+[apis.cache]
+kind = "explicit, 5 min or 1 h writes"
+ttl = "documented"
+url = "https://platform.moonshot.ai/docs/pricing/chat"
+quote = "5m writes $3.00 / MTok, 1h writes $6.00 / MTok"
+
+[apis.quality]
+tb40 = 0.12626262626262627
+runs_passed = 25
+runs = 198
+aa = "kimi-k3"
+aa_name = "Kimi K3 (Max)"
+effort = "max"
+read = "2026-11-04"
+url = "https://artificialanalysis.ai/models/kimi-k3"
+
+[apis.openrouter]
+id = "moonshotai/kimi-k3"
+url = "https://openrouter.ai/api/v1/models/moonshotai/kimi-k3/endpoints"
+read = "2026-11-04"
+matches_vendor_page = true
+
+[apis.openrouter.first_party]
+provider = "Moonshot AI"
+tag = "moonshotai"
+input = 3.0
+output = 15.0
+cache_read = 0.3
+
+[[plans]]
+key = "claude-pro"
+name = "Claude Pro"
+vendor = "Anthropic"
+usd_month = 20
+api = "claude-sonnet-5.5"
+overage = "api"
+confidence = "measured (one aggregator, 79 accounts), ±25%"
+note = "Overage: usage credits at standard API rates. Anthropic publishes only multiples of Pro; the dollar budgets are a third party's measurement (wokey.ai, a pay-as-you-go reseller)."
+budgets = { 5h = 12, week = 155 }
+
+[plans.price_source]
+url = "https://claude.com/pricing"
+read = "2026-11-04"
+quote = "$20 if billed monthly. Prices shown don't include applicable tax."
+
+[plans.budget_source]
+url = "https://wokey.ai/claude-usage-limits"
+read = "2026-11-04"
+quote = "Pro: median full week $155 API-equivalent (79 accounts, week 10/26-11/02, valued at 92% cache reads); $12 per full 5-hour window"
+
+[[plans]]
+key = "claude-max"
+name = "Claude Max"
+vendor = "Anthropic"
+usd_month = 100
+api = "claude-sonnet-5.5"
+overage = "api"
+confidence = "derived: documented 5x Pro x measured Pro (two single reports: $420 and $1,250 a week)"
+budgets = { 5h = 60, week = 775 }
+
+[plans.price_source]
+url = "https://claude.com/pricing"
+read = "2026-11-04"
+quote = "Max $100/month (formerly Max 5x): 5x more usage than Pro"
+
+[plans.budget_source]
+url = "https://wokey.ai/claude-usage-limits"
+read = "2026-11-04"
+quote = "Max = 5x Pro per session and per week (claude.com/pricing) x Pro $155/week, $12 per 5-hour window"
+
+[[plans]]
+key = "claude-ultra"
+name = "Claude Ultra"
+vendor = "Anthropic"
+usd_month = 200
+api = "claude-sonnet-5.5"
+overage = "api"
+confidence = "measured (one aggregator, 18 accounts), equals the documented 10x Pro"
+budgets = { week = 1549 }
+
+[plans.price_source]
+url = "https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan"
+read = "2026-11-04"
+quote = "Max 20x plan is now called the Ultra plan; $200/month; 10x Pro per week; no 5-hour limit for verified accounts"
+
+[plans.budget_source]
+url = "https://wokey.ai/claude-usage-limits"
+read = "2026-11-04"
+quote = "Ultra: median full week $1,549 API-equivalent (18 accounts, interquartile $1,216-$1,697)"
+
+[[plans]]
+key = "claude-team-standard"
+name = "Claude Team, standard seat"
+vendor = "Anthropic"
+usd_month = 25
+api = "claude-sonnet-5.5"
+overage = "api"
+confidence = "measured (one aggregator, 258 accounts)"
+budgets = { 5h = 20, week = 181 }
+
+[plans.price_source]
+url = "https://support.claude.com/en/articles/9266767-what-is-the-team-plan"
+read = "2026-11-04"
+quote = "Standard seat $25/month billed monthly"
+
+[plans.budget_source]
+url = "https://wokey.ai/claude-usage-limits"
+read = "2026-11-04"
+quote = "Team Standard: median week $181 ($168-$189), $20 per 5-hour window"
+
+[[plans]]
+key = "claude-team-premium"
+name = "Claude Team, premium seat"
+vendor = "Anthropic"
+usd_month = 125
+api = "claude-sonnet-5.5"
+overage = "api"
+confidence = "measured (one aggregator, 30 accounts)"
+budgets = { 5h = 90, week = 844 }
+
+[plans.price_source]
+url = "https://support.claude.com/en/articles/9266767-what-is-the-team-plan"
+read = "2026-11-04"
+quote = "Premium seat $125/month billed monthly"
+
+[plans.budget_source]
+url = "https://wokey.ai/claude-usage-limits"
+read = "2026-11-04"
+quote = "Team Premium: median week $844 ($790-$893), $90 per 5-hour window"
+
+[[plans]]
+key = "chatgpt-plus"
+name = "ChatGPT Plus (Codex)"
+vendor = "OpenAI"
+usd_month = 20
+api = "gpt-6.1-sol"
+overage = "api"
+confidence = "measured (one aggregator, 12 accounts), low"
+note = "Overage: ChatGPT credits; OpenAI states no dollar price per credit, and its credit rate card is at parity with API list ($0.04 per credit)."
+budgets = { week = 55 }
+
+[plans.price_source]
+url = "https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers"
+read = "2026-11-04"
+quote = "ChatGPT Plus $20/month"
+
+[plans.budget_source]
+url = "https://wokey.ai/codex-usage-limits"
+read = "2026-11-04"
+quote = "Plus: median week $55 API-equivalent at GPT-6.1 Sol rates (12 accounts, 10/19-10/26)"
+
+[[plans]]
+key = "chatgpt-pro-200"
+name = "ChatGPT Pro 200 (Codex)"
+vendor = "OpenAI"
+usd_month = 200
+api = "gpt-6.1-sol"
+overage = "api"
+confidence = "measured (one aggregator, 7 accounts) across a limit change; may be up to 2x"
+budgets = { week = 581 }
+
+[plans.price_source]
+url = "https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers"
+read = "2026-11-04"
+quote = "Pro tiers $100 / $200 / $500 per month"
+
+[plans.budget_source]
+url = "https://wokey.ai/codex-usage-limits"
+read = "2026-11-04"
+quote = "Pro $200: median week $581 ($565-$696, 7 accounts, 10/26-11/02)"
+
+[[plans]]
+key = "glm-coding-lite"
+name = "GLM Coding Plan Lite"
+vendor = "Z.ai"
+usd_month = 18
+api = "glm-5.3"
+overage = "none"
+confidence = "documented"
+note = "Past a budget calls stop: \"Once the quota is used up, you'll need to wait until the next 5-hour cycle ... The system will not deduct from your account balance.\" (docs.z.ai/devpack/faq)"
+budgets = { 5h = 2000, week = 10000 }
+price_source = { url = "https://z.ai/subscribe", read = "2026-11-04", quote = "Lite Monthly $18" }
+
+[plans.budget_source]
+url = "https://docs.z.ai/devpack/overview"
+read = "2026-11-04"
+quote = "Lite 2,000 10,000 (credits per 5 hours, per week)"
+
+[plans.meter]
+unit = "credits"
+per_request = 0
+quote = "Model credit usage = (Input tokens x Input multiplier + Cached Input tokens x Cached Input multiplier + Output tokens x Output multiplier) / 10,000 | GLM-5.3 6.9 1.7 24"
+url = "https://docs.z.ai/devpack/overview"
+
+[[plans.meter.bands]]
+above_tokens = 0
+input = 690
+output = 2400
+cache = [
+  { ttl_s = 300, read = 170, write = 690 },
+]
+
+[plans.meter.time_blend]
+peak_share = 0.2222222222222222
+offpeak_factor = 0.5
+basis = "peak Mon-Fri 14:00-18:00 SGT = 07:00-11:00 CET; a 09:00-18:00 CET working day spends 2 of 9 hours at peak"
+quote = "During off-peak hours, model usage is charged at 50% of the standard credit rate. Peak hours : Monday to Friday, 14:00-18:00 Singapore Standard Time (UTC+8)."
+
+[[plans]]
+key = "glm-coding-pro"
+name = "GLM Coding Plan Pro"
+vendor = "Z.ai"
+usd_month = 80
+api = "glm-5.3"
+overage = "none"
+confidence = "documented"
+budgets = { 5h = 12000, week = 60000 }
+price_source = { url = "https://z.ai/subscribe", read = "2026-11-04", quote = "Pro Monthly $80" }
+
+[plans.budget_source]
+url = "https://docs.z.ai/devpack/overview"
+read = "2026-11-04"
+quote = "Pro 12,000 60,000"
+
+[plans.meter]
+unit = "credits"
+per_request = 0
+quote = "Model credit usage = (Input tokens x Input multiplier + Cached Input tokens x Cached Input multiplier + Output tokens x Output multiplier) / 10,000 | GLM-5.3 6.9 1.7 24"
+url = "https://docs.z.ai/devpack/overview"
+
+[[plans.meter.bands]]
+above_tokens = 0
+input = 690
+output = 2400
+cache = [
+  { ttl_s = 300, read = 170, write = 690 },
+]
+
+[plans.meter.time_blend]
+peak_share = 0.2222222222222222
+offpeak_factor = 0.5
+basis = "peak Mon-Fri 14:00-18:00 SGT = 07:00-11:00 CET; a 09:00-18:00 CET working day spends 2 of 9 hours at peak"
+quote = "During off-peak hours, model usage is charged at 50% of the standard credit rate. Peak hours : Monday to Friday, 14:00-18:00 Singapore Standard Time (UTC+8)."
+
+[[plans]]
+key = "glm-coding-max"
+name = "GLM Coding Plan Max"
+vendor = "Z.ai"
+usd_month = 168
+api = "glm-5.3"
+overage = "none"
+confidence = "documented"
+budgets = { 5h = 28000, week = 140000 }
+price_source = { url = "https://z.ai/subscribe", read = "2026-11-04", quote = "Max Monthly $168" }
+
+[plans.budget_source]
+url = "https://docs.z.ai/devpack/overview"
+read = "2026-11-04"
+quote = "Max 28,000 140,000"
+
+[plans.meter]
+unit = "credits"
+per_request = 0
+quote = "Model credit usage = (Input tokens x Input multiplier + Cached Input tokens x Cached Input multiplier + Output tokens x Output multiplier) / 10,000 | GLM-5.3 6.9 1.7 24"
+url = "https://docs.z.ai/devpack/overview"
+
+[[plans.meter.bands]]
+above_tokens = 0
+input = 690
+output = 2400
+cache = [
+  { ttl_s = 300, read = 170, write = 690 },
+]
+
+[plans.meter.time_blend]
+peak_share = 0.2222222222222222
+offpeak_factor = 0.5
+basis = "peak Mon-Fri 14:00-18:00 SGT = 07:00-11:00 CET; a 09:00-18:00 CET working day spends 2 of 9 hours at peak"
+quote = "During off-peak hours, model usage is charged at 50% of the standard credit rate. Peak hours : Monday to Friday, 14:00-18:00 Singapore Standard Time (UTC+8)."
+
+[[plans]]
+key = "copilot-pro-plus"
+name = "GitHub Copilot Pro+"
+vendor = "GitHub"
+usd_month = 39
+api = "claude-sonnet-5.5"
+overage = "api"
+confidence = "documented (3,100 of the 7,000 credits are flex and can change)"
+budgets = { month = 70 }
+
+[plans.price_source]
+url = "https://github.com/features/copilot/plans"
+read = "2026-11-04"
+quote = "Copilot Pro+ $39 USD"
+
+[plans.budget_source]
+url = "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals"
+read = "2026-11-04"
+quote = "Copilot Pro+ $39 USD 3,900 3,100 7,000 (base, flex, total AI credits); 1 AI credits = $0.01 USD; usage calculated ... using the listed API rates for each model"
+
+[[plans]]
+key = "copilot-business"
+name = "GitHub Copilot Business"
+vendor = "GitHub"
+usd_month = 19
+api = "claude-sonnet-5.5"
+overage = "api"
+confidence = "documented (pooled across the organisation)"
+budgets = { month = 19 }
+
+[plans.price_source]
+url = "https://github.com/features/copilot/plans"
+read = "2026-11-04"
+quote = "Copilot Business $19 USD per user"
+
+[plans.budget_source]
+url = "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises"
+read = "2026-11-04"
+quote = "Copilot Business $19 USD 1,900; usage beyond the pool is charged at $0.01 USD per AI credit"
+
+[[plans]]
+key = "google-ai-pro"
+name = "Google AI Pro (Gemini CLI)"
+vendor = "Google"
+usd_month = 19.99
+api = "gemini-4-argon"
+overage = "none"
+confidence = "documented (requests); which model the CLI routes to is not"
+note = "A budget of model requests per day: every request of the workload counts as one. Gemini CLI picks the model; the row prices Gemini 4 Argon's score."
+budgets = { day = 1500 }
+
+[plans.price_source]
+url = "https://one.google.com/about/google-ai-plans/"
+read = "2026-11-04"
+quote = "Google AI Pro $19.99/month"
+
+[plans.budget_source]
+url = "https://geminicli.com/docs/resources/quota-and-pricing/"
+read = "2026-11-04"
+quote = "Google AI Pro 1,500 requests (model requests per user per day, Gemini CLI and agent mode)"
+
+[plans.meter]
+unit = "requests"
+per_request = 1
+
+[[plans.meter.bands]]
+above_tokens = 0
+input = 0
+output = 0
+cache = [
+  { ttl_s = 300, read = 0, write = 0 },
+]
+
+[[plans]]
+key = "google-ai-ultra"
+name = "Google AI Ultra (Gemini CLI)"
+vendor = "Google"
+usd_month = 99.99
+api = "gemini-4-argon"
+overage = "none"
+confidence = "documented (requests)"
+budgets = { day = 2000 }
+
+[plans.price_source]
+url = "https://one.google.com/about/google-ai-plans/"
+read = "2026-11-04"
+quote = "Google AI Ultra $99.99/month (5x)"
+
+[plans.budget_source]
+url = "https://geminicli.com/docs/resources/quota-and-pricing/"
+read = "2026-11-04"
+quote = "Google AI Ultra 2,000 requests"
+
+[plans.meter]
+unit = "requests"
+per_request = 1
+
+[[plans.meter.bands]]
+above_tokens = 0
+input = 0
+output = 0
+cache = [
+  { ttl_s = 300, read = 0, write = 0 },
+]
+
+[[plans]]
+key = "mistral-pro"
+name = "Mistral Pro (Vibe)"
+vendor = "Mistral"
+usd_month = 14.99
+api = "mistral-large-4"
+overage = "api"
+confidence = "documented allowance; that Vibe meters it at API list is not stated"
+budgets = { month = 25.5 }
+
+[plans.price_source]
+url = "https://mistral.ai/pricing"
+read = "2026-11-04"
+quote = "Pro $14.99/month (EUR 17.99 incl. VAT)"
+
+[plans.budget_source]
+url = "https://mistral.ai/pricing"
+read = "2026-11-04"
+quote = "$25.5 /mo in API credits. Each Mistral plan includes monthly usage that is shared across Studio, the API, and Vibe Code. Keep going past your plan limit by paying only for what you use beyond it at API rate."
