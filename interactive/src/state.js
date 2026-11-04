@@ -83,10 +83,12 @@ export const state = {
   showCeil: false,
   // UI-only: which Terminal-Bench version is chart H's x-axis (CONFIG.BENCHES
   // key). The table prints BOTH columns whichever way this sits, so the toggle
-  // only moves the axis, the staircase and the emphasis. Default 2.1: it is
-  // the version every model in the study has a run on and the one the write-up
-  // is built around. Not a compute input — re-renders from cached rows.
-  bench: "tb21",
+  // only moves the axis, the staircase and the emphasis. Default 4.0 (owner
+  // decision 2026-11-04): the version every model in the study has an
+  // Artificial Analysis run on, since AA stopped running its legacy 2.1 on new
+  // models (Mistral-Large-4 has none). Not a compute input — re-renders from
+  // cached rows.
+  bench: "tb40",
   // electricity price and facility PUE the cost card multiplies by — pricing
   // constants, so deliberately NOT in samplingSig (they move no sampled draw).
   // Defaults: Eurostat EU non-household average and the Uptime-survey colo

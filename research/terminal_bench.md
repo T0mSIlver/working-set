@@ -153,9 +153,11 @@ spread one scaffold change produces on the same model (§ 1) — the version
 has saturated for this field. On 4.0 the same four are inside 17. How many
 steps chart H's staircase then has depends on the explorer state, not on the
 benchmark alone: the efficient set is recomputed per GPU, load and price, so
-at the 64-user H200 default both versions collapse to a single step
-(Qwen3.8-Flash-Next TP8), while at 8 users on 8×H200 the 2.1 staircase has
-two steps and the 4.0 staircase four — the same rows, reordered by the axis.
+at the 64-user H200 default the 2.1 staircase has two steps
+(Qwen3.8-Flash-Next and DeepSeek-V4.1-Flash, both TP8) and the 4.0 staircase
+three (GLM-5.3-Flash joins), while at 8 users on 8×H200 the 2.1 staircase has
+two steps and the 4.0 staircase four (GLM-5.3 joins) — the same rows,
+reordered by the axis (counted 2026-11-04).
 Reading 4.0 as "the harder, therefore better" axis is tempting and wrong in
 one direction: it is also a *different harness* (mini-SWE-agent, not
 Terminus 2) and a *smaller* task set (66, not 89), so a 0.0% is 0 of 198
@@ -164,10 +166,9 @@ the explorer claims is only that the choice of version changes which
 configurations are Pareto-efficient, so the reader should see both — hence
 the toggle rather than a pick.
 
-The default axis is **2.1**, the version the write-up's prose was built
-against. It was also the version every model had a run on until
-Mistral-Large-4 (2026-11-04), which AA scored on 4.0 only; AA no longer runs
-its legacy 2.1 eval on new models, so 4.0 is now the version every study
-model has an AA run on, and Mistral-Large-4 is absent from chart H on the
-default axis. Either way it is a presentation default, not a judgement that
-2.1 is the better benchmark.
+The default axis is **4.0** since 2026-11-04 (owner decision). It had been
+2.1, the version every model had a run on and the one the write-up's prose
+was built against, until Mistral-Large-4, which AA scored on 4.0 only: AA no
+longer runs its legacy 2.1 eval on new models, so 4.0 is now the version
+every study model has an AA run on. It is a presentation default, not a
+judgement that 4.0 is the better benchmark.
