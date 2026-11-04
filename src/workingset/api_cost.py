@@ -1,5 +1,6 @@
-"""What one agentic-coding seat costs on a metered API or a coding plan,
-priced from the same workload the self-host side uses.
+"""What one agentic-coding seat costs on a metered API, priced from the same
+workload the self-host side uses, and how much of that workload a coding
+plan's published limits hold.
 
 The self-host €/seat divides a 24/7 bill by the concurrent sessions a
 configuration carries. A metered API bills tokens, so its seat price depends
@@ -346,10 +347,6 @@ class SeatCost:
     requests_month: float
     ttl_s: float
     hit_rate: float
-    fits: bool = True          # a plan: the workload fits its budgets
-    plans_per_seat: float = 1.0
-    overflow_eur: float = 0.0  # a plan: extra usage billed past its budgets
-    binds: str = ""            # a plan: "5h" | "week" | ""
 
 
 def api_seat_cost(offer: ApiOffer, wl: M.Workload, *, think_time_s: float = M.THINK_TIME_S,
@@ -371,71 +368,72 @@ def api_seat_cost(offer: ApiOffer, wl: M.Workload, *, think_time_s: float = M.TH
                     rc.usd, n, rc.ttl_s, rc.hit_rate)
 
 
-def plan_seat_cost(plan: Plan, wl: M.Workload, *, think_time_s: float = M.THINK_TIME_S,
-                   turn_tokens: float = 2_000, out_tokens: float = M.OUT_TOKENS_DEFAULT,
-                   active_hours: float = ACTIVE_HOURS_DEFAULT,
-                   peak_active_share: float = 1.0,
-                   sessions_per_active_user: float = 1.0,
-                   usd_eur: float | None = None) -> SeatCost:
-    """A seat on a coding plan (research/api_prices.md § 6).
+@dataclass(frozen=True)
+class PlanCover:
+    """What a plan's own limits hold of the workload, in active hours.
 
-    The seat sends the API seat's requests; the meter prices each one in the
-    plan's unit. A working day is H / 21 hours, worked in consecutive 5-hour
-    windows; a week is H / (30/7) hours of it, a month H. A budget the seat
-    overspends in some window binds. Past it the excess either bills at API
-    list x overage_factor (overage "api": Claude's extra usage, Copilot's
-    budget, Mistral's pay-as-you-go) or cannot be served (overage "none"):
-    then plans_per_seat is the number of plans the seat's usage needs, which
-    most vendors forbid stacking, so read it as the size of the shortfall.
-    The budgets overlap, so the overage billed is the largest window's
-    excess, a lower bound on the real spill.
-    """
-    if active_hours < 0:
-        raise ValueError(f"active_hours must be >= 0, got {active_hours!r}")
-    if not 0 < peak_active_share <= 1:
-        raise ValueError("peak_active_share must be in (0, 1]")
+    Not a seat price: a plan bills its price only while the usage fits, and
+    how much fits is the vendor's to say. `published` is False where the
+    vendor states no limit (Claude, ChatGPT): the budgets in the price file
+    for those are a third party's measurement and are not used here."""
+    key: str
+    name: str
+    vendor: str
+    model: str                   # the API offer whose model the plan serves
+    usd_month: float
+    eur_month: float
+    published: bool
+    hours: dict                  # window -> active hours of this workload the budget holds
+    hours_month: float           # the month those budgets allow; inf: none binds
+    binds: str                   # the window that sets hours_month, "" if none
+
+
+def plan_cover(plan: Plan, wl: M.Workload, *, think_time_s: float = M.THINK_TIME_S,
+               turn_tokens: float = 2_000, out_tokens: float = M.OUT_TOKENS_DEFAULT,
+               sessions_per_active_user: float = 1.0,
+               usd_eur: float | None = None) -> PlanCover:
+    """Active hours of this workload a plan's published budgets hold.
+
+    The seat sends the API seat's requests and the plan's meter prices them
+    in its own unit (research/api_prices.md § 5). A budget per window holds
+    budget / (units per hour) hours of work in that window. The month is the
+    tightest of: a 5-hour budget at one window per working day (21), a daily
+    budget over 21 days, a weekly one over 30/7 weeks, a monthly one. A
+    5-hour budget that holds the whole 5 hours never binds."""
     fx = usd_per_eur() if usd_eur is None else usd_eur
     offer = catalogue()["apis"][plan.api]
     lam = requests_per_hour(wl, think_time_s) * sessions_per_active_user
-    rc = request_cost(offer, wl, turn_tokens, out_tokens)
-    unit_req = (rc.usd if plan.meter is None
-                else request_cost(plan.meter, wl, turn_tokens, out_tokens).usd) + plan.per_request
-    rate_h, usd_h = lam * unit_req, lam * rc.usd
-    hours_day = active_hours / WORKDAYS_PER_MONTH
-    full, rem = divmod(hours_day, 5.0)
-    win5 = [5.0] * int(full) + ([rem] if rem > 1e-12 else [])
-    # window -> (the hours of each window in a month, how many such months hold)
-    spans = {"5h": (win5, WORKDAYS_PER_MONTH), "day": ([hours_day], WORKDAYS_PER_MONTH),
-             "week": ([active_hours / WEEKS_PER_MONTH], WEEKS_PER_MONTH),
-             "month": ([active_hours], 1.0)}
-    need, over = {}, {}
-    for w, budget in plan.budgets.items():
-        hours, times = spans[w]
-        need[w] = max(h * rate_h for h in hours) / budget if budget > 0 else math.inf
-        # the excess share of each window, billed at the API's own price
-        over[w] = times * sum(max(0.0, h * rate_h - budget) / (h * rate_h) * h * usd_h
-                              for h in hours if h * rate_h > 0)
-    binds = max(need, key=need.get) if need and max(need.values()) > 1.0 else ""
-    plans, overflow_eur = 1.0, 0.0
-    if binds:
-        if plan.overage == "api":
-            overflow_eur = max(over.values()) * plan.overage_factor / fx
-        else:
-            plans = float(math.ceil(need[binds] - 1e-9))
-    eur = plan.usd_month / fx * plans + overflow_eur
-    return SeatCost(plan.key, plan.name, "plan", eur,
-                    eur / (peak_active_share * sessions_per_active_user),
-                    rc.usd, lam * active_hours, rc.ttl_s, rc.hit_rate,
-                    not binds, plans, overflow_eur, binds)
+    unit = (request_cost(plan.meter, wl, turn_tokens, out_tokens).usd if plan.meter is not None
+            else request_cost(offer, wl, turn_tokens, out_tokens).usd) + plan.per_request
+    rate = lam * unit
+    published = plan.confidence.startswith("documented")
+    hours, month = {}, {}
+    if published:
+        for w, budget in plan.budgets.items():
+            h = budget / rate if rate > 0 else math.inf
+            hours[w] = h
+            month[w] = {"5h": math.inf if h >= 5.0 else h * WORKDAYS_PER_MONTH,
+                        "day": h * WORKDAYS_PER_MONTH, "week": h * WEEKS_PER_MONTH,
+                        "month": h}[w]
+    binds = min(month, key=month.get) if month and math.isfinite(min(month.values())) else ""
+    return PlanCover(plan.key, plan.name, plan.vendor, offer.name, plan.usd_month,
+                     plan.usd_month / fx, published, hours,
+                     month[binds] if binds else math.inf, binds)
 
 
 def comparison(wl: M.Workload | None = None, **kw) -> list[SeatCost]:
-    """Every API offer and plan in the catalogue, cheapest seat first."""
+    """Every API offer in the catalogue, cheapest seat first."""
     wl = wl or M.Workload()
-    cat = catalogue()
-    rows = [api_seat_cost(o, wl, **kw) for o in cat["apis"].values()]
-    rows += [plan_seat_cost(p, wl, **kw) for p in cat["plans"].values()]
+    rows = [api_seat_cost(o, wl, **kw) for o in catalogue()["apis"].values()]
     return sorted(rows, key=lambda r: r.eur_seat)
+
+
+def plan_covers(wl: M.Workload | None = None, **kw) -> list[PlanCover]:
+    """Every plan, the most hours of this workload its published limits hold
+    first; plans without a published limit last."""
+    wl = wl or M.Workload()
+    rows = [plan_cover(p, wl, **kw) for p in catalogue()["plans"].values()]
+    return sorted(rows, key=lambda r: (not r.published, -r.hours_month, r.usd_month))
 
 
 # ---- ws api -----------------------------------------------------------------------
@@ -457,11 +455,16 @@ def cmd_api(args) -> int:
                       sessions_per_active_user=w.sessions_per_active_user)
     kw["active_hours"] = args.hours
     rows = comparison(wl, **kw)
+    pkw = {k: v for k, v in kw.items() if k in ("think_time_s", "turn_tokens", "out_tokens",
+                                                "sessions_per_active_user")}
+    covers = plan_covers(wl, **pkw)
     cat = catalogue()
     if args.json:
         print(json.dumps({"read": cat["read"], "fx": cat["fx"], "active_hours": args.hours,
-                          "rows": [r.__dict__ for r in rows]}, indent=2, allow_nan=False,
-                         default=lambda x: None))
+                          "apis": [r.__dict__ for r in rows],
+                          "plans": [{**c.__dict__, "hours_month": c.hours_month
+                                     if math.isfinite(c.hours_month) else None} for c in covers]},
+                         indent=2, allow_nan=False, default=lambda x: None))
         return 0
     think = kw.get("think_time_s", M.THINK_TIME_S)
     print(f"one seat, {args.hours:g} active hours a month: "
@@ -470,30 +473,29 @@ def cmd_api(args) -> int:
           f"and {kw.get('out_tokens', M.OUT_TOKENS_DEFAULT):,.0f} output tokens each")
     print(f"prices read {cat['read']}, before tax; €1 = ${usd_per_eur():g} (ECB {cat['fx']['date']})")
     print()
-    print(f"  {'':4} {'offer':48} {'TB 4.0':>7} {'€/seat':>8} {'$/req':>8} {'hit':>6}  plan check")
+    print(f"  {'API, list price':40} {'TB 4.0':>7} {'€/seat':>8} {'$/req':>8} {'hit':>6}")
     for r in rows:
-        offer = cat["apis"][r.key] if r.kind == "api" else cat["apis"][cat["plans"][r.key].api]
-        tb = offer.tb40
-        name = r.name if r.kind == "api" else f"{r.name} · {offer.name}"
-        check = ""
-        if r.kind == "plan":
-            p = cat["plans"][r.key]
-            if r.fits:
-                check = "fits" if p.budgets else "no published budget"
-            elif r.overflow_eur:
-                check = f"over the {r.binds} budget: +{_fmt_eur(r.overflow_eur)} at API price"
-            else:
-                check = f"over the {r.binds} budget: needs {r.plans_per_seat:.0f} plans"
-        print(f"  {r.kind:4} {name[:48]:48} {(f'{tb*100:.1f}%' if tb is not None else '—'):>7} "
-              f"{_fmt_eur(r.eur_seat):>8} {r.usd_request:8.4f} {r.hit_rate:6.1%}  {check}")
+        tb = cat["apis"][r.key].tb40
+        print(f"  {r.name[:40]:40} {(f'{tb*100:.1f}%' if tb is not None else '—'):>7} "
+              f"{_fmt_eur(r.eur_seat):>8} {r.usd_request:8.4f} {r.hit_rate:6.1%}")
     if kw.get("peak_active_share", 1.0) < 1.0 or kw.get("sessions_per_active_user", 1.0) > 1.0:
         print(f"\n  per concurrent session at the peak (the explorer's €/seat unit): "
               f"divide by {kw['peak_active_share'] * kw['sessions_per_active_user']:g}")
+    print()
+    print("  coding plans: a price, and the hours of this workload a month their own limits hold")
+    for c in covers:
+        if not c.published:
+            what = "limit not published"
+        elif not math.isfinite(c.hours_month):
+            what = "no published limit binds"
+        else:
+            what = f"{c.hours_month:,.0f} h a month ({c.binds} budget)"
+        print(f"  {c.name[:30]:30} {c.model[:20]:20} ${c.usd_month:>7,.2f}/month  {what}")
     return 0
 
 
 def add_subparser(sub) -> None:
-    p = sub.add_parser("api", help="what one seat costs on each API and coding plan",
+    p = sub.add_parser("api", help="what one seat costs on each API; what each coding plan holds",
                        description="Price one agentic-coding seat on every API and coding "
                                    "plan in the shipped catalogue, from CONFIG's workload "
                                    "(the study's reference workload without one). "

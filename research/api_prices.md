@@ -1,8 +1,9 @@
 # API and coding-plan seats: prices, limits, and the cost model
 
-This file prices one agentic-coding seat on a metered API or a coding plan
-from the workload the self-host rows use, so the frontier table and chart H
-can set them side by side. The data ships as
+This file prices one agentic-coding seat on a metered API from the workload
+the self-host rows use, so the frontier table and chart H can set them side
+by side, and states what each coding plan's published limits hold of that
+workload (§ 5). The data ships as
 `src/workingset/data/api_prices.toml`; the model is
 `src/workingset/api_cost.py`; `ws api [CONFIG] [--hours H]` prints it.
 Everything below was read on 2026-11-04. Prices are list, before tax, in
@@ -187,13 +188,18 @@ and are unchanged.
 
 ## 5. Coding plans
 
-A plan is a price, the model it is priced on, a meter and budgets in the
-meter's unit per 5-hour window, day, week or month. The seat sends the API
-seat's requests; the meter prices them. A working day is H / 21 hours worked
-in consecutive 5-hour windows. Past a budget, a plan either bills the excess
-at API list (Claude usage credits, ChatGPT credits, Copilot, Mistral) or
-stops (Z.ai, Gemini CLI); a plan that stops needs that many plans per seat,
-which vendors forbid stacking, so the table reads it as a shortfall.
+A plan does not give the same usage as an API: it bills its price only while
+the usage fits its limits, and how much fits is the vendor's to say. So a
+plan gets no €/seat here. `ws api` states its price and the active hours of
+this workload a month its published limits hold. The seat sends the API
+seat's requests and the plan's meter prices them in its own unit; a
+5-hour budget counts one window per working day and binds only if it holds
+less than the 5 hours; a weekly one counts 30/7 weeks. Where the vendor
+publishes no limit (Claude, ChatGPT) the plan says so and claims nothing.
+
+At the default workload: GLM Coding Max 779 h, Pro 334 h, Lite 55 h (its
+5-hour budget holds 2.6 h); Google AI Ultra 318 h, Pro 239 h (11 h a day);
+Mistral Pro and Copilot Pro+ 33 h; Copilot Business 9 h.
 
 | plan | model priced | $/month | budgets | over budget | basis |
 |---|---|---|---|---|---|
@@ -214,7 +220,8 @@ which vendors forbid stacking, so the table reads it as a shortfall.
 | [Mistral Pro (Vibe)](https://mistral.ai/pricing) | Mistral Large 4 | 14.99 | [$25.5 / month](https://mistral.ai/pricing) | billed at API list | documented allowance; that Vibe meters it at API list is not stated |
 
 - **Claude and ChatGPT** publish only multiples of Pro or local-message
-  estimates. The dollar budgets are API-equivalent spend per full week
+  estimates. The data file keeps, for the record and not in any figure,
+  third-party budgets: API-equivalent spend per full week
   measured by wokey.ai (a pay-as-you-go reseller: a conflict of interest)
   on 79 Pro, 18 Ultra, 258 Team Standard, 30 Team Premium, 12 Plus and 7 Pro
   200 accounts,

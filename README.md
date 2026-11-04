@@ -48,7 +48,7 @@ uv run ws test workingset.toml --dry-run # the plan, the sampler self-check, no 
 uv run ws test workingset.toml --exclusive --out run.json   # measure it
 uv run ws report run.json                # re-print the verdicts
 uv run ws models                         # model / GPU keys
-uv run ws api workingset.toml --hours 84 # one seat on each API and coding plan, same workload
+uv run ws api workingset.toml --hours 84 # one seat on each API; what each coding plan holds
 uv run pytest                            # self-checks + config round-trips
 ```
 

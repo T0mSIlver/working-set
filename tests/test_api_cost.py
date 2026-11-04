@@ -99,21 +99,24 @@ def test_catalogue_rows_carry_their_sources():
         assert p.meta["budget_source"]["quote"]
 
 
-def test_a_plan_that_stops_needs_more_plans_and_one_that_bills_spills_at_api():
+def test_a_plan_states_hours_only_where_the_vendor_publishes_a_limit():
     cat = A.catalogue()
     wl = M.Workload()
-    lite = A.plan_seat_cost(cat["plans"]["glm-coding-lite"], wl)
-    assert not lite.fits and lite.binds == "5h" and lite.plans_per_seat >= 2
-    assert lite.eur_seat == pytest.approx(18 * lite.plans_per_seat / A.usd_per_eur(), rel=1e-12)
-    # Copilot Business's $19 a month is gone in a few days of agent use
-    cb = A.plan_seat_cost(cat["plans"]["copilot-business"], wl)
-    api = A.api_seat_cost(cat["apis"][cat["plans"]["copilot-business"].api], wl)
-    assert not cb.fits and cb.binds == "month"
-    # base price plus the API bill past the $19 pool: the API seat itself
-    assert cb.eur_seat == pytest.approx(api.eur_seat, rel=1e-9)
-    # at a few hours a month every plan fits
-    for p in cat["plans"].values():
-        assert A.plan_seat_cost(p, wl, active_hours=2).fits, p.key
+    # Claude publishes multiples of Pro, no number: nothing is claimed
+    pro = A.plan_cover(cat["plans"]["claude-pro"], wl)
+    assert not pro.published and pro.hours == {} and pro.binds == ""
+    # Copilot Business: $19 of API-list credits a month, metered at Sonnet's
+    # list price, so the hours are the API seat's own hour price into $19
+    cb = A.plan_cover(cat["plans"]["copilot-business"], wl)
+    api = A.api_seat_cost(cat["apis"]["claude-sonnet-5.5"], wl, active_hours=1, usd_eur=1.0)
+    assert cb.published and cb.binds == "month"
+    assert cb.hours_month == pytest.approx(19 / api.eur_seat, rel=1e-9)
+    # Gemini CLI counts requests: 1,500 a day at 132 requests an hour
+    g = A.plan_cover(cat["plans"]["google-ai-pro"], wl)
+    assert g.hours["day"] == pytest.approx(1500 / A.requests_per_hour(wl), rel=1e-12)
+    # a 5-hour budget that holds the whole window never binds
+    mx = A.plan_cover(cat["plans"]["glm-coding-max"], wl)
+    assert mx.hours["5h"] >= 5 and mx.binds == "week"
 
 
 def test_ws_api_prints_every_row():
@@ -122,4 +125,6 @@ def test_ws_api_prints_every_row():
     cat = A.catalogue()
     for a in cat["apis"].values():
         assert a.name in out
-    assert "40 active hours" in out
+    for p in cat["plans"].values():
+        assert p.name in out
+    assert "40 active hours" in out and "limit not published" in out
