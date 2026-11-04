@@ -56,8 +56,12 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     `vllm serve "<${base} ${state.wdt==='nvfp4'?'NVFP4':'FP8'} checkpoint>"`,
     `  --tensor-parallel-size ${topo.tp}`,
     // Mistral-Large-4's FlashMLA sparse path names its own FP8 layout (its
-    // NVFP4 card: "needed for this checkpoint")
-    `  --kv-cache-dtype ${state.model==='ML4' ? 'fp8_ds_mla' : (state.kv==='fp8'?'fp8_e4m3':'auto')}`,
+    // NVFP4 card: "needed for this checkpoint"). GLM-5.3's recipe passes fp8
+    // (FlashMLA's fp8_ds_mla) on Hopper and fp8_e4m3 on Blackwell, where
+    // vLLM also turns auto into fp8, so its BF16 arm must say bfloat16.
+    `  --kv-cache-dtype ${state.model==='ML4' ? 'fp8_ds_mla'
+      : state.model==='GLM52' ? (state.kv==='fp8' ? (state.gpu==='H200' ? 'fp8' : 'fp8_e4m3') : 'bfloat16')
+      : (state.kv==='fp8'?'fp8_e4m3':'auto')}`,
     `  --max-model-len ${wl.cap}`,
     `  --max-num-seqs ${state.mns ?? sug}`,
     `  --max-num-batched-tokens ${prefillChunk()}`,
@@ -103,7 +107,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     cmts.push(`# BF16 KV is REQUIRED on Hopper for this model — fp8 KV is Blackwell-only (vLLM recipe); the KV toggle locks accordingly`);
   if (state.model==="GLM53F" && topo.tp<4)
     cmts.push(`# TP<4 is this study's pool arithmetic; the vLLM recipe only demonstrates TP4 (one GB200 tray)`);
-  if (state.kv==='fp16') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
+  if (state.kv==='fp16' && state.model!=='GLM52') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
   if (state.model==="ML4")
     cmts.push(`# Mistral-Large-4 ships in the vllm/vllm-openai:mistral-large-4 image only (no vLLM release includes it yet, 2026-11-04); the recipe validates --max-model-len 262144`);
   if (dcp > 1) cmts.push(`# DCP ${dcp}: ${m0.kv_heads===1?'a single-latent (MQA/MLA) cache':`${m0.kv_heads} KV heads`} would replicate on ${dcp}× the ranks under plain TP${topo.tp}; the page prices ONE copy${state.model==='ML4' ? '' : ' (speculative decoding under DCP is still in development in vLLM, 2026-08)'}`);

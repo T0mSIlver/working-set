@@ -148,6 +148,7 @@ def state_model(st: dict) -> M.Model:
     if st["wdt"] != "fp8":
         m = M.with_weight_dtype(m, st["wdt"])
     m = M.with_kv_dtype(m, st["kv"])
+    m = M.with_gpu(m, st["gpu"])         # GLM-5.3's Hopper FP8 row
     if st["mtp"] is not None:
         m = replace(m, mtp=float(st["mtp"]))
     return m
@@ -605,7 +606,7 @@ def legal_deployments():
                     if (kv == "fp8" and base.kv_fp8_blackwell_only
                             and not g.supports_nvfp4):
                         continue
-                    m = M.with_kv_dtype(base, kv)
+                    m = M.with_gpu(M.with_kv_dtype(base, kv), gpu)
                     need = M.min_tp_for(m, gpu)
                     for ngpu in NGPUS:
                         for tp in divisors(ngpu):

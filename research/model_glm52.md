@@ -58,18 +58,36 @@ Only a **compressed latent** is cached per layer (`kv_lora_rank +
 qk_rope_head_dim = 576` elements, one "head"), confirmed in vLLM
 (`MLAAttentionSpec(num_kv_heads=1, head_size=576)`). The DSA **indexer key
 cache** (132 B/token) exists on the 21 indexer layers + the MTP layer.
-**vLLM requires a quantized (FP8) KV cache on this path** — BF16 KV is not
-servable, so the study's FP16-KV toggle is disabled for this model.
+
+**The FP8 row depends on the GPU** (vLLM main and the GLM-5.3 recipe, read
+2026-11-04; issue #122). On Blackwell, vLLM serves DSA through FlashInfer's
+sparse MLA (TRTLLM-gen), which refuses `fp8_ds_mla` and stores plain
+`fp8_e4m3`: 576 B per latent. The recipe passes `--kv-cache-dtype fp8_e4m3`
+there, and `GlmMoeDsaForCausalLM` turns `auto` into it on SM10x. On Hopper,
+FlashMLA's sparse kernel stores `fp8_ds_mla` rows of 656 B (512 fp8 values,
+4 fp32 scales, 64 rope values kept BF16); the recipe passes `fp8` there,
+FlashMLA's alias for it.
 
 ```
-kv_bpt (fp8, incl. MTP layer):
-  MLA latent  79 layers x 576 B      = 45,504
-  indexer     22 layers x 132 B      =  2,904
-  ----------------------------------------------
-  TOTAL                              = 48,408 B = 47.3 KiB/token
-(alternative fp8_ds_mla FlashMLA layout: 656 B/layer -> 54,728 B = +13%,
- not modelled; BF16 theoretical 91.7 KiB — unservable)
+kv_bpt (fp8, incl. MTP layer)        B300 (fp8_e4m3)   H200 (fp8_ds_mla)
+  MLA latent  79 layers               x 576 = 45,504    x 656 = 51,824
+  indexer     22 layers x 132 B              2,904             2,904
+  ---------------------------------------------------------------------
+  TOTAL                                      48,408            54,728 B
+                                         = 47.3 KiB        = 53.4 KiB/token
 ```
+
+The base constants are B300's; `kv_hopper_fp8` carries H200's, and
+`with_gpu()` swaps them in (the model refuses an H200 topology without the
+swap). The recipe confirms the H200 figure: 8 × H200 leaves "~23 GiB/GPU for
+KV" and "vLLM estimates ~450K max tokens", i.e. ~54.9 kB per token per rank
+(TP8 replicates the latent) — the 656-B row, where 576 B would give ~510K.
+
+**BF16 KV is servable** on both parts: it is vLLM's default on Hopper
+(`auto`), and both sparse backends list `bfloat16`. The FP16 arm doubles the
+whole B300 row: 94.5 KiB/token, against a true 91.7 KiB (the indexer keys
+stay fp8), a 3% over-charge. The study's first reading, "vLLM requires a quantized KV
+cache on this path", no longer holds.
 
 A 262k-token session holds 11.8 GiB; the model's full 1M context holds
 47.3 GiB. The study's *reference* cap (180k) stays far below GLM-5.2's
@@ -84,7 +102,8 @@ token" pricing, so GLM-5.2 carries two decode-specific KV fields:
 ```
 kv_decode_bpt   = 21 x 132        = 2,772 B per CONTEXT token per step
                   (the indexer must score every token, on indexer layers only)
-kv_decode_const = 78 x 2048 x 576 = 92.0e6 B per ACTIVE SEQUENCE per step
+kv_decode_const = 78 x 2048 x 576 = 92.0e6 B per ACTIVE SEQUENCE per step on B300
+                  78 x 2048 x 656 = 104.8e6 B on H200 (fp8_ds_mla rows)
                   (sparse MLA reads only the top-2048 tokens per layer)
 ```
 
@@ -159,7 +178,8 @@ falls 1.78×.
 
 ## 6. Remaining assumptions / re-verification ledger
 
-- fp8 (576 B) KV layout modelled; `fp8_ds_mla` (+13%) not.
+- KV rows per GPU (§ 2): 576 B on B300 (`fp8_e4m3`), 656 B on H200
+  (`fp8_ds_mla`), since 2026-11-04 (issue #122).
 - The DSA decode pricing (§3) is a byte model of the vLLM kernels' *reads*;
   indexer top-k compute and gather costs are not priced (roofline limitation,
   as everywhere).
@@ -188,8 +208,9 @@ falls 1.78×.
   `zai-org--GLM-5.2-FP8_config.json`, `nvidia--GLM-5.2-NVFP4_config.json`
 - transformers `GlmMoeDsaConfig` (defaults cross-check):
   https://github.com/huggingface/transformers/blob/main/src/transformers/models/glm_moe_dsa/configuration_glm_moe_dsa.py
-- vLLM DSA implementation (576-latent, 132 B indexer cache, fp8-KV
-  requirement, IndexShare guard):
+- vLLM DSA implementation (576-latent, 132 B indexer cache, IndexShare guard;
+  per-GPU cache dtypes in `vllm/model_executor/models/config.py`
+  `GlmMoeDsaForCausalLM`, `flashinfer_mla_sparse.py`, `flashmla_sparse.py`):
   https://github.com/vllm-project/vllm/blob/main/vllm/models/deepseek_v32/nvidia/attention.py ·
   https://github.com/vllm-project/vllm/blob/main/vllm/v1/kv_cache_interface.py ·
   https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/deepseek_v2.py

@@ -1,5 +1,5 @@
 import { CONFIG, PREFILL_MFU_HI, PREFILL_MFU_LO, kv_pool_tokens, makeGrid, makeTopo,
-         minTpFor, servableKv, unionKink, withKvDtype } from './config.js';
+         minTpFor, servableKv, unionKink, withGpu, withKvDtype } from './config.js';
 import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
          decodeFloor, capDecodeUsers, decodePowerUsers, decodeSlotMean, decodeSlotUsers, effectiveMns, maxUsersDecode, p50AtCap, recommendedMns, missContextSeconds, missShareAt, operatingPoint, prefillChunk,
          prefillContextSeconds, prefillSeconds, prefillServiceMoments, serverRate,
@@ -67,12 +67,13 @@ function modelFor(key){
     m = { ...m, w_resident: wr, w_decode_shared: wds, w_route_pertok: wpt,
           w_route_total: wtot, weight_dtype: "nvfp4", name: m.name + " [NVFP4]" };
   }
-  // FP16 KV is not servable for GLM-5.3 (DSA asserts a quantized cache);
+  // FP16 KV is not servable on Mistral-Large-4 and the DeepSeek Flash models;
   // the UI disables the toggle — withKvDtype's guard keeps the math honest
   // anyway (and prices the sparse-decode doubling on Q38FN). servableKv
   // first resolves GPU-coupled dtypes (GLM-5.3-Flash: BF16 forced on H200),
-  // so no code path — the frontier included — ever prices an unservable arm.
-  m = withKvDtype(m, servableKv(m, state.kv, state.gpu));
+  // and withGpu GPU-coupled rows (GLM-5.3: fp8_ds_mla on H200), so no code
+  // path — the frontier included — ever prices an unservable arm.
+  m = withGpu(withKvDtype(m, servableKv(m, state.kv, state.gpu)), state.gpu);
   // fp32 recurrent state. No-op on the pure-attention models (MM35, GLM-5.3
   // carry no state at all) and on the DeepSeek Flash models (their per-session state is a
   // fixed mixed-precision buffer, state_fp32_ok) — the UI disables both.

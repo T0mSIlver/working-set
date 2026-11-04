@@ -24,7 +24,9 @@ license changed.**
 Architecture-determined constants that carry over untouched: `kv_bpt`
 (47.3 KiB), `w_resident` (755.5e9), `w_decode_shared`, `w_route_pertok`,
 `w_route_total`, `kv_decode_bpt`/`_const`/`_topk` (the DSA decode pricing),
-`kv_fp16_ok: false`, `params_prefill`, `attn_layers`/`attn_d`, `max_ctx`.
+`params_prefill`, `attn_layers`/`attn_d`, `max_ctx`. (Since 2026-11-04 the
+FP8 cache row depends on the GPU, 53.4 KiB/token on H200, and BF16 KV is
+servable: `model_glm52.md` § 2, issue #122.)
 
 ## 2. What is not the same
 

@@ -32,13 +32,13 @@ hardened" — the two caveats the explorer's tooltip carries.
 | `27B` | Qwen3.8-27B | GQA 24/4 on 16 full-attention layers | 4 | DeltaNet, 48 v-heads | shards (None) |
 | `35BA3B` | Qwen3.6-35B-A3B | GQA 16/2 on 10 layers | 2 | DeltaNet, 32 v-heads | shards |
 | `MM35` | Mistral-Medium-3.5 | GQA 96/8 on 88 layers | 8 | — | — |
-| `GLM52` | GLM-5.3 | MLA, one 576-B latent | **1** | — | — |
+| `GLM52` | GLM-5.3 | MLA, one latent (576 B on B300, 656 B on H200) | **1** | — | — |
 | `DSV4F` | DeepSeek-V4-Flash-0731 | MQA, one 512-dim latent (CSA + HCA) | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `DSV4FV` | DeepSeek-V4-Flash-Vision-Exp | as `DSV4F` (same text backbone) | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `DSV41F` | DeepSeek-V4.1-Flash | MQA, one 512-dim latent per cache | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `Q38FN` | Qwen3.8-Flash-Next | GQA 24/2 on 12 QSA layers | 2 | DeltaNet, 48 v-heads | shards |
 | `GLM53F` | GLM-5.3-Flash | NoPE sparse-MLA, one latent | **1** | KDA, 64 heads | shards |
-| `ML4` | Mistral-Large-4 | MLA, one 576-B latent (63 of 72 layers; 9 share layer 35's) | **1** | DSpark drafter's latent windows | **1** (replicates with the cache) |
+| `ML4` | Mistral-Large-4 | MLA, one 656-B latent (63 of 72 layers; 9 share layer 35's) | **1** | DSpark drafter's latent windows | **1** (replicates with the cache) |
 
 The DeltaNet / KDA states shard by value head at every width the study
 prices (≤ 8), so only the DeepSeek Flash models' fixed per-session state — the
