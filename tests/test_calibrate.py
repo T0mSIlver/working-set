@@ -137,3 +137,47 @@ def test_a_record_of_another_kind_is_refused(tmp_path, capsys):
                           "write": False})()
     assert C.cmd_calibrate(args) == 2
     assert "not a decode-sweep or replay record" in capsys.readouterr().err
+
+
+def test_acceptance_pools_rungs_at_their_own_depth():
+    """Equal k = 2 and k = 3 sweeps at 0.85: a draft that never tried
+    position 3 must not count as a rejection there (Codex review)."""
+    cfg = _cfg(2)
+    fits = C.calibrate(cfg, [_sweep(cfg, 2, k=2), _sweep(cfg, 2, k=3)])
+    assert fits["acceptance"].value == pytest.approx(ALPHA, abs=1e-9)
+    assert "0.850, 0.850, 0.850" in fits["acceptance"].note
+    # without per-position counters: solved from the accepted lengths
+    runs = [_sweep(cfg, 2, k=2), _sweep(cfg, 2, k=3)]
+    for rec in runs:
+        for r in rec["rungs"]:
+            r["server"]["spec_decode"].pop("accepted_per_position")
+    assert C.fit_acceptance(runs).value == pytest.approx(ALPHA, abs=1e-9)
+
+
+def test_a_zero_tau_stays_zero():
+    """A full-rank design that puts a tau on the zero bound keeps the zero, so
+    the written constants reproduce the fit (Codex review)."""
+    global TRUE
+    saved = TRUE
+    TRUE = replace(TRUE, tau_rec=0.0)
+    try:
+        cfg = _cfg(2)
+        fits = C.calibrate(cfg, [_sweep(cfg, 1), _sweep(cfg, 2), _sweep(cfg, 2, k=0)])
+    finally:
+        TRUE = saved
+    assert fits["tau_rec"].value == 0.0 and fits["tau_rec"].status == "measured"
+    assert fits["eta"].value == pytest.approx(saved.eta, rel=1e-6)
+
+
+def test_mfu_counts_attention_flops():
+    """Replay timings generated at MFU 0.45 with long prompts fit back to 0.45
+    (GEMM-only FLOPs read 0.33; Codex review)."""
+    cfg = _cfg(2)
+    m, t = cfg.to_model(), cfg.to_topology()
+    rows = []
+    for u, prompt in ((4_000, 4_000), (16_000, 16_000), (64_000, 64_000), (20_000, 120_000)):
+        f = M.prefill_flops(m, u, prior=prompt - u)[2]
+        rows.append({"ok": True, "uncached": u, "prompt": prompt,
+                     "ttft": 0.05 + f / (M.peak_flops(t) * 0.45)})
+    fit = C.fit_mfu([{"speed": {}, "calibration": rows, "steps": []}], cfg)
+    assert fit.value == pytest.approx(0.45, rel=1e-6)

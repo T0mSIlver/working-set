@@ -208,10 +208,15 @@ def fit_decode(rows: list[dict]) -> dict[str, Fit]:
         se = None
         if cov is not None and j in active:
             se = float(math.sqrt(max(cov[active.index(j), active.index(j)], 0.0)))
+        if c <= 0 and name == "eta":
+            out[name] = Fit(M.DECODE_ETA, None, len(rows), "not identified",
+                            "NNLS put the byte slope at zero: the step does not grow with bytes")
+            continue
         if c <= 0:
-            keep = out[name].value if name != "eta" else M.DECODE_ETA
-            out[name] = Fit(keep, None, len(rows), "not identified",
-                            "NNLS put it at zero: the runs do not separate it")
+            # the design separates it (rank-deficient columns were pinned
+            # above) and the data put it on the zero bound: keep the zero, so
+            # the written constants reproduce what was fitted
+            out[name] = Fit(0.0, None, len(rows), "measured", "at the zero bound")
             continue
         if name == "eta":
             eta = 1.0 / c
@@ -228,45 +233,50 @@ def fit_decode(rows: list[dict]) -> dict[str, Fit]:
 # acceptance, pool, MFU
 # ---------------------------------------------------------------------------
 def fit_acceptance(runs: list[dict]) -> Fit | None:
-    """Per-draft acceptance from the spec-decode counters summed over every
-    clean rung of the sweeps: per position when the counters carry it (the
-    mean of the per-position chain is reported as the scalar), else the
-    geometric MLE A / (A + D - a_k)."""
-    D = A = 0.0
-    pos: dict[int, float] = {}
-    k_seen = set()
+    """Per-draft acceptance from the spec-decode counters of every clean
+    rung, each at its own draft depth k_r. With per-position counts the
+    geometric MLE is successes / trials, trials = A_r + D_r - a_(k_r) summed
+    (a draft run ends at its first rejection unless all k_r were accepted),
+    and the per-position figures pool only rungs that drafted that far.
+    Without them, a solves sum_r D_r (m(a, k_r) - 1) = A."""
+    rungs = []
     for rec in runs:
         for r in rec.get("rungs", []):
             sp = (r.get("server") or {}).get("spec_decode")
-            if not r.get("batch_ok") or not sp or not sp.get("drafts"):
-                continue
-            d = sp["drafts"]
-            D += d
-            A += sp["accepted_tokens"]
-            k_seen.add(_rung_k(r))
-            for j, frac in (sp.get("accepted_per_position") or {}).items():
-                pos[int(j)] = pos.get(int(j), 0.0) + frac * d
-    if D <= 0:
+            if r.get("batch_ok") and sp and sp.get("drafts"):
+                rungs.append((_rung_k(r), sp))
+    if not rungs:
         return None
-    k = max(k_seen)
-    if pos and len(pos) >= k:
-        chain, prev = [], D
-        for j in sorted(pos)[:k]:
-            a_j = pos[j]
-            chain.append(a_j / prev if prev > 0 else 0.0)
-            prev = a_j
-        geo = A / (A + D - pos[sorted(pos)[k - 1]])
-        se = math.sqrt(geo * (1 - geo) / (A + D - pos[sorted(pos)[k - 1]]))
+    D = sum(sp["drafts"] for _, sp in rungs)
+    A = sum(sp["accepted_tokens"] for _, sp in rungs)
+    with_pos = [(k, sp) for k, sp in rungs if sp.get("accepted_per_position")]
+    if with_pos and len(with_pos) == len(rungs):
+        trials = 0.0
+        num, den = {}, {}
+        for k, sp in with_pos:
+            d = sp["drafts"]
+            a = {int(j): frac * d for j, frac in sp["accepted_per_position"].items()}
+            last = a.get(k - 1, 0.0)
+            trials += sp["accepted_tokens"] + d - last
+            prev = d
+            for j in range(k):
+                num[j] = num.get(j, 0.0) + a.get(j, 0.0)
+                den[j] = den.get(j, 0.0) + prev
+                prev = a.get(j, 0.0)
+        geo = A / trials
+        se = math.sqrt(geo * (1 - geo) / trials)
+        chain = [num[j] / den[j] if den[j] > 0 else 0.0 for j in sorted(num)]
         return Fit(geo, se, int(D), "measured",
-                   "per position " + ", ".join(f"{a:.3f}" for a in chain))
-    # without per-position counts: invert the mean accepted length
-    al = 1.0 + A / D
+                   "per position " + ", ".join(f"{x:.3f}" for x in chain))
     lo, hi = 0.0, 1.0
     for _ in range(60):
         mid = (lo + hi) / 2
-        lo, hi = (mid, hi) if M.tokens_per_step(mid, k) < al else (lo, mid)
+        got = sum(sp["drafts"] * (M.tokens_per_step(mid, k) - 1) for k, sp in rungs)
+        lo, hi = (mid, hi) if got < A else (lo, mid)
+    ks = sorted({k for k, _ in rungs})
     return Fit(lo, None, int(D), "measured",
-               f"from the mean accepted length {al:.3f} at {k} drafts (no per-position counters)")
+               f"from the accepted lengths at {', '.join(map(str, ks))} drafts "
+               "(no per-position counters)")
 
 
 def pool_from_log(path: str) -> int | None:
@@ -299,7 +309,7 @@ def fit_mfu(replays: list[dict], cfg: RunConfig) -> Fit | None:
             if not r.get("ok", True) or not r.get("ttft") or not r.get("uncached"):
                 continue
             u, prompt = float(r["uncached"]), float(r.get("prompt", r["uncached"]))
-            f = M.prefill_flops(m, u, prior=max(prompt - u, 0.0))[0]
+            f = M.prefill_flops(m, u, prior=max(prompt - u, 0.0))[2]   # GEMM + attention
             rows.append([1.0, f / peak])
             y.append(float(r["ttft"]))
     if len(rows) < 4:
