@@ -1,0 +1,6200 @@
+{
+ "read": "2026-11-04",
+ "vectors": [
+  {
+   "name": "reference",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 706.200979687,
+     "eur_session": 706.200979687,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 16.1357791883,
+     "eur_session": 16.1357791883,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 318.572897469,
+     "eur_session": 318.572897469,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 159.286448734,
+     "eur_session": 159.286448734,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.89294820454
+     },
+     "hours_month": 8.89294820454,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.7634933852
+     },
+     "hours_month": 32.7634933852,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 38.805099418,
+     "eur_session": 38.805099418,
+     "hit_rate": 0.939294314956,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 8.63532987737,
+     "eur_session": 8.63532987737,
+     "hit_rate": 0.939294314956,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 66.9799008258,
+     "eur_session": 66.9799008258,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 142.520563275,
+     "eur_session": 142.520563275,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 17.8257431082,
+     "eur_session": 17.8257431082,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 158.105380802,
+     "eur_session": 158.105380802,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.59730261615,
+      "week": 12.9865130808
+     },
+     "hours_month": 54.5433549392,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 36.3622366261,
+      "week": 181.811183131
+     },
+     "hours_month": 779.190784846,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.5838156969,
+      "week": 77.9190784846
+     },
+     "hours_month": 333.938907791,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 876.69541873,
+     "eur_session": 876.69541873,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 8.7669541873,
+     "eur_session": 8.7669541873,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 138.375279431,
+     "eur_session": 138.375279431,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 69.1876397156,
+     "eur_session": 69.1876397156,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 178.613068869,
+     "eur_session": 178.613068869,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 267.919603303,
+     "eur_session": 267.919603303,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 57.0035418861,
+     "eur_session": 57.0035418861,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 33.3510361406
+     },
+     "hours_month": 33.3510361406,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 156.778326137,
+     "eur_session": 156.778326137,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 50.8129643742,
+     "eur_session": 50.8129643742,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 180.913515329,
+     "eur_session": 180.913515329,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "user_median=8000",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 546.136256482,
+     "eur_session": 546.136256482,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0554952850088
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 6.61526579939,
+     "eur_session": 6.61526579939,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.000672205986307
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 232.609916686,
+     "eur_session": 232.609916686,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0236365073169
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 116.304958343,
+     "eur_session": 116.304958343,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0118182536585
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 12.1794131434
+     },
+     "hours_month": 12.1794131434,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 44.8715221071
+     },
+     "hours_month": 44.8715221071,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 30.6594210228,
+     "eur_session": 30.6594210228,
+     "hit_rate": 0.871874740673,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00311543737972
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 7.33452162898,
+     "eur_session": 7.33452162898,
+     "hit_rate": 0.871874740673,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000745292705571
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 44.213762533,
+     "eur_session": 44.213762533,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00449275308856
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 103.747952661,
+     "eur_session": 103.747952661,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0105422815894
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 9.9819517245,
+     "eur_session": 9.9819517245,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00101430961472
+    },
+    "glm-5.3:api": {
+     "eur_seat": 89.2840795209,
+     "eur_session": 89.2840795209,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00907254440803
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 4.79923733863,
+      "week": 23.9961866932
+     },
+     "hours_month": 100.783984111,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 67.1893227409,
+      "week": 335.946613704
+     },
+     "hours_month": 1439.77120159,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 28.7954240318,
+      "week": 143.977120159
+     },
+     "hours_month": 617.044800682,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 613.003860864,
+     "eur_session": 613.003860864,
+     "hit_rate": 0.869820397248,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0622899936901
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 6.13003860864,
+     "eur_session": 6.13003860864,
+     "hit_rate": 0.869820397248,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000622899936901
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 108.103636329,
+     "eur_session": 108.103636329,
+     "hit_rate": 0.869820397248,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0109848815884
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 54.0518181646,
+     "eur_session": 54.0518181646,
+     "hit_rate": 0.869820397248,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0054924407942
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 117.903366755,
+     "eur_session": 117.903366755,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0119806749028
+    },
+    "kimi-k3:api": {
+     "eur_seat": 176.855050132,
+     "eur_session": 176.855050132,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0179710123542
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 35.7551461461,
+     "eur_session": 35.7551461461,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00363323621599
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 53.1707289859
+     },
+     "hours_month": 53.1707289859,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 71.357573175,
+     "eur_session": 71.357573175,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00725095397693
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 34.5833189011,
+     "eur_session": 34.5833189011,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00351416174296
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 109.235267464,
+     "eur_session": 109.235267464,
+     "hit_rate": 0.849317274974,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0110998715595
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 8000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "user_median=120000",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 1089.80608099,
+     "eur_session": 1089.80608099,
+     "hit_rate": 0.970466066428,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.110739945117
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 71.5503982765,
+     "eur_session": 71.5503982765,
+     "hit_rate": 0.970466066428,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00727054777581
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 539.920415197,
+     "eur_session": 539.920415197,
+     "hit_rate": 0.970466066428,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.0548636662881
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 269.960207598,
+     "eur_session": 269.960207598,
+     "hit_rate": 0.970466066428,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.027431833144
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 5.24716642827
+     },
+     "hours_month": 5.24716642827,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 19.3316657884
+     },
+     "hours_month": 19.3316657884,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 63.0206528485,
+     "eur_session": 63.0206528485,
+     "hit_rate": 0.970466066428,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00640380317139
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 12.5023855249,
+     "eur_session": 12.5023855249,
+     "hit_rate": 0.970466066428,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00127042187689
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 134.659302281,
+     "eur_session": 134.659302281,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0136833185317
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 257.784164216,
+     "eur_session": 257.784164216,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0261945723144
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 41.14384384,
+     "eur_session": 41.14384384,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00418080527187
+    },
+    "glm-5.3:api": {
+     "eur_seat": 362.698027044,
+     "eur_session": 362.698027044,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0368553271167
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 1.09871169237,
+      "week": 5.49355846183
+     },
+     "hours_month": 23.0729455397,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.3819636931,
+      "week": 76.9098184657
+     },
+     "hours_month": 329.61350771,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 6.5922701542,
+      "week": 32.961350771
+     },
+     "hours_month": 141.262931876,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1660.60029428,
+     "eur_session": 1660.60029428,
+     "hit_rate": 0.968179418484,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.168740832572
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 16.6060029428,
+     "eur_session": 16.6060029428,
+     "hit_rate": 0.968179418484,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00168740832572
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 228.367119938,
+     "eur_session": 228.367119938,
+     "hit_rate": 0.968179418484,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0232053782498
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 114.183559969,
+     "eur_session": 114.183559969,
+     "hit_rate": 0.968179418484,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0116026891249
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 359.091472749,
+     "eur_session": 359.091472749,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0364888494179
+    },
+    "kimi-k3:api": {
+     "eur_seat": 538.637209123,
+     "eur_session": 538.637209123,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0547332741269
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 120.170983244,
+     "eur_session": 120.170983244,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0122110972963
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 15.820184992
+     },
+     "hours_month": 15.820184992,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 410.717986782,
+     "eur_session": 410.717986782,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0417348444902
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 99.0606152193,
+     "eur_session": 99.0606152193,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0100659808052
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 393.999320678,
+     "eur_session": 393.999320678,
+     "hit_rate": 0.945357809491,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0400359879697
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 120000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "user_sigma=1.4",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 799.047144038,
+     "eur_session": 799.047144038,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0811946624447
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 30.0434093446,
+     "eur_session": 30.0434093446,
+     "hit_rate": 0.951671937026,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.0030528417486
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 368.436058333,
+     "eur_session": 368.436058333,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0374383934816
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 184.218029166,
+     "eur_session": 184.218029166,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0187191967408
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 7.68940013466
+     },
+     "hours_month": 7.68940013466,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 28.3293689172
+     },
+     "hours_month": 28.3293689172,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 43.5300318072,
+     "eur_session": 43.5300318072,
+     "hit_rate": 0.951671937026,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00442327622991
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 9.38986875389,
+     "eur_session": 9.38986875389,
+     "hit_rate": 0.951671937026,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000954145483857
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 80.1854877611,
+     "eur_session": 80.1854877611,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00814799684889
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 165.010766645,
+     "eur_session": 165.010766645,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0167674630934
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 22.3755647638,
+     "eur_session": 22.3755647638,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00227367864533
+    },
+    "glm-5.3:api": {
+     "eur_seat": 198.025443896,
+     "eur_session": 198.025443896,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0201222283223
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.05136452995,
+      "week": 10.2568226497
+     },
+     "hours_month": 43.0786551289,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 28.7191034193,
+      "week": 143.595517096
+     },
+     "hours_month": 615.409358985,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 12.3081871797,
+      "week": 61.5409358985
+     },
+     "hours_month": 263.746868136,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1029.65073099,
+     "eur_session": 1029.65073099,
+     "hit_rate": 0.949429572503,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.104627297854
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 10.2965073099,
+     "eur_session": 10.2965073099,
+     "hit_rate": 0.949429572503,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00104627297854
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 155.934463581,
+     "eur_session": 155.934463581,
+     "hit_rate": 0.949429572503,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0158451803857
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 77.9672317904,
+     "eur_session": 77.9672317904,
+     "hit_rate": 0.949429572503,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00792259019284
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 213.827967363,
+     "eur_session": 213.827967363,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.021727991597
+    },
+    "kimi-k3:api": {
+     "eur_seat": 320.741951045,
+     "eur_session": 320.741951045,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0325919873956
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 69.3287563591,
+     "eur_session": 69.3287563591,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00704479705896
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 27.4219138699
+     },
+     "hours_month": 27.4219138699,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 206.326965647,
+     "eur_session": 206.326965647,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0209657821244
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 60.2270332632,
+     "eur_session": 60.2270332632,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00611993131112
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 222.490761385,
+     "eur_session": 222.490761385,
+     "hit_rate": 0.927049928755,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0226082558489
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 1.4
+   }
+  },
+  {
+   "name": "sub_ratio=0.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 659.58328842,
+     "eur_session": 659.58328842,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.073725445542
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 15.5838767323,
+     "eur_session": 15.5838767323,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00174190018991
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 299.054376004,
+     "eur_session": 299.054376004,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0334270402226
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 149.527188002,
+     "eur_session": 149.527188002,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0167135201113
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 9.47336840348
+     },
+     "hours_month": 9.47336840348,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 34.9018835918
+     },
+     "hours_month": 34.9018835918,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 36.172129643,
+     "eur_session": 36.172129643,
+     "hit_rate": 0.94251183562,
+     "requests_month": 10080.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00404316849888
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 7.99318788795,
+     "eur_session": 7.99318788795,
+     "hit_rate": 0.94251183562,
+     "requests_month": 10080.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000893444919976
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 63.3915779488,
+     "eur_session": 63.3915779488,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.007085643936
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 133.823147227,
+     "eur_session": 133.823147227,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0149581884902
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 17.0668265978,
+     "eur_session": 17.0668265978,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00190765808807
+    },
+    "glm-5.3:api": {
+     "eur_seat": 151.291878159,
+     "eur_session": 151.291878159,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0169107697542
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.70696425661,
+      "week": 13.5348212831
+     },
+     "hours_month": 56.8462493888,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 37.8974995926,
+      "week": 189.487497963
+     },
+     "hours_month": 812.089276983,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 16.2417855397,
+      "week": 81.2089276983
+     },
+     "hours_month": 348.038261564,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 12.5
+     },
+     "hours_month": 262.5,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 16.6666666667
+     },
+     "hours_month": 350.0,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 825.961179809,
+     "eur_session": 825.961179809,
+     "hit_rate": 0.940291054466,
+     "requests_month": 10080.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0923224663978
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 8.25961179809,
+     "eur_session": 8.25961179809,
+     "hit_rate": 0.940291054466,
+     "requests_month": 10080.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000923224663978
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 129.120913905,
+     "eur_session": 129.120913905,
+     "hit_rate": 0.940291054466,
+     "requests_month": 10080.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0144325926287
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 64.5604569525,
+     "eur_session": 64.5604569525,
+     "hit_rate": 0.940291054466,
+     "requests_month": 10080.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00721629631433
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 169.044207863,
+     "eur_session": 169.044207863,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.018895050496
+    },
+    "kimi-k3:api": {
+     "eur_seat": 253.566311795,
+     "eur_session": 253.566311795,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.028342575744
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 54.1554434631,
+     "eur_session": 54.1554434631,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0060532676736
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 35.1050063302
+     },
+     "hours_month": 35.1050063302,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 151.908840752,
+     "eur_session": 151.908840752,
+     "hit_rate": 0.0,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0169797312376
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 47.9763583342,
+     "eur_session": 47.9763583342,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00536259552928
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 172.340368784,
+     "eur_session": 172.340368784,
+     "hit_rate": 0.91812682088,
+     "requests_month": 10080.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0192634814989
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.0,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "sub_ratio=0.5",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 892.671744753,
+     "eur_session": 892.671744753,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0665193951596
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 18.3433890123,
+     "eur_session": 18.3433890123,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00136689791007
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 396.646983327,
+     "eur_session": 396.646983327,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0295570209071
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 198.323491664,
+     "eur_session": 198.323491664,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0147785104535
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 7.14250302069
+     },
+     "hours_month": 7.14250302069,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 26.3144848131
+     },
+     "hours_month": 26.3144848131,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 49.3369785184,
+     "eur_session": 49.3369785184,
+     "hit_rate": 0.928017251428,
+     "requests_month": 15120.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00367645328681
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 11.203897835,
+     "eur_session": 11.203897835,
+     "hit_rate": 0.928017251428,
+     "requests_month": 15120.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000834883048328
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 81.3331923338,
+     "eur_session": 81.3331923338,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00606072141551
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 177.310227464,
+     "eur_session": 177.310227464,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0132126609315
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 20.8614091496,
+     "eur_session": 20.8614091496,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00155453370958
+    },
+    "glm-5.3:api": {
+     "eur_seat": 185.359391372,
+     "eur_session": 185.359391372,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0138124620541
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.23511608756,
+      "week": 11.1755804378
+     },
+     "hours_month": 46.9374378388,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 31.2916252259,
+      "week": 156.458126129
+     },
+     "hours_month": 670.534826269,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 13.4106965254,
+      "week": 67.0534826269
+     },
+     "hours_month": 287.372068401,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 8.33333333333
+     },
+     "hours_month": 175.0,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.1111111111
+     },
+     "hours_month": 233.333333333,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1079.63237442,
+     "eur_session": 1079.63237442,
+     "hit_rate": 0.925830622949,
+     "requests_month": 15120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0804511770011
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 10.7963237442,
+     "eur_session": 10.7963237442,
+     "hit_rate": 0.925830622949,
+     "requests_month": 15120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000804511770011
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 175.392741535,
+     "eur_session": 175.392741535,
+     "hit_rate": 0.925830622949,
+     "requests_month": 15120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0130697752571
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 87.6963707677,
+     "eur_session": 87.6963707677,
+     "hit_rate": 0.925830622949,
+     "requests_month": 15120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00653488762857
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 216.88851289,
+     "eur_session": 216.88851289,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161619237747
+    },
+    "kimi-k3:api": {
+     "eur_seat": 325.332769335,
+     "eur_session": 325.332769335,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.024242885662
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 68.3959355779,
+     "eur_session": 68.3959355779,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00509667332114
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 27.7959087704
+     },
+     "hours_month": 27.7959087704,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 176.256267676,
+     "eur_session": 176.256267676,
+     "hit_rate": 0.0,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0131341228036
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 62.1593885344,
+     "eur_session": 62.1593885344,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00463194332419
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 215.206101507,
+     "eur_session": 215.206101507,
+     "hit_rate": 0.90400724593,
+     "requests_month": 15120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160365551963
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.5,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "sys_user=40000",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 773.515074615,
+     "eur_session": 773.515074615,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0786002376054
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 17.5008318672,
+     "eur_session": 17.5008318672,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00177833579228
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 354.724025168,
+     "eur_session": 354.724025168,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0360450540365
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 177.362012584,
+     "eur_session": 177.362012584,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0180225270182
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 7.98663771144
+     },
+     "hours_month": 7.98663771144,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 29.4244547264
+     },
+     "hours_month": 29.4244547264,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 42.2307072457,
+     "eur_session": 42.2307072457,
+     "hit_rate": 0.948933267756,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00429124619893
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 9.18237564836,
+     "eur_session": 9.18237564836,
+     "hit_rate": 0.948933267756,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000933061205178
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 76.5540403582,
+     "eur_session": 76.5540403582,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00777898965292
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 158.8261123,
+     "eur_session": 158.8261123,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161390134135
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 21.1243944739,
+     "eur_session": 21.1243944739,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00214654177973
+    },
+    "glm-5.3:api": {
+     "eur_seat": 187.047695602,
+     "eur_session": 187.047695602,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0190067314787
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.1772117293,
+      "week": 10.8860586465
+     },
+     "hours_month": 45.7214463153,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 30.4809642102,
+      "week": 152.404821051
+     },
+     "hours_month": 653.16351879,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 13.0632703758,
+      "week": 65.316351879
+     },
+     "hours_month": 279.927222339,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 987.589051021,
+     "eur_session": 987.589051021,
+     "hit_rate": 0.946697356187,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.100353227253
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 9.87589051021,
+     "eur_session": 9.87589051021,
+     "hit_rate": 0.946697356187,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00100353227253
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 151.105806287,
+     "eur_session": 151.105806287,
+     "hit_rate": 0.946697356187,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0153545194754
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 75.5529031434,
+     "eur_session": 75.5529031434,
+     "hit_rate": 0.946697356187,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0076772597377
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 204.144107622,
+     "eur_session": 204.144107622,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0207439724078
+    },
+    "kimi-k3:api": {
+     "eur_seat": 306.216161433,
+     "eur_session": 306.216161433,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0311159586117
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 65.9394054497,
+     "eur_session": 65.9394054497,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00670039034273
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 28.8314274692
+     },
+     "hours_month": 28.8314274692,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 192.701423735,
+     "eur_session": 192.701423735,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0195812314323
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 57.6382277686,
+     "eur_session": 57.6382277686,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00585687150314
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 211.057298946,
+     "eur_session": 211.057298946,
+     "hit_rate": 0.924382115349,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.021446451905
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 40000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "invalidation=0.1",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 1108.14024653,
+     "eur_session": 1108.14024653,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.112602959575
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 23.5616048764,
+     "eur_session": 23.5616048764,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00239419734977
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 476.067467333,
+     "eur_session": 476.067467333,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0483752899932
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 238.033733667,
+     "eur_session": 238.033733667,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0241876449966
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 5.95094702108
+     },
+     "hours_month": 5.95094702108,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 21.9245416566
+     },
+     "hours_month": 21.9245416566,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 65.0702164255,
+     "eur_session": 65.0702164255,
+     "hit_rate": 0.853903922687,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00661206825817
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 14.6870104418,
+     "eur_session": 14.6870104418,
+     "hit_rate": 0.853903922687,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00149241113499
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 89.127574713,
+     "eur_session": 89.127574713,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00905664127247
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 204.862163846,
+     "eur_session": 204.862163846,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0208169372299
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 21.7631073548,
+     "eur_session": 21.7631073548,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00221144417899
+    },
+    "glm-5.3:api": {
+     "eur_seat": 195.510341145,
+     "eur_session": 195.510341145,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0198666577712
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.19808171542,
+      "week": 10.9904085771
+     },
+     "hours_month": 46.1597160239,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 30.7731440159,
+      "week": 153.86572008
+     },
+     "hours_month": 659.424514627,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 13.1884902925,
+      "week": 65.9424514627
+     },
+     "hours_month": 282.610506269,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1263.13519111,
+     "eur_session": 1263.13519111,
+     "hit_rate": 0.851891922767,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.128352671341
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 12.6313519111,
+     "eur_session": 12.6313519111,
+     "hit_rate": 0.851891922767,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00128352671341
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 219.023579755,
+     "eur_session": 219.023579755,
+     "hit_rate": 0.851891922767,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0222559404139
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 109.511789877,
+     "eur_session": 109.511789877,
+     "hit_rate": 0.851891922767,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.011127970207
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 237.673532568,
+     "eur_session": 237.673532568,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0241510433932
+    },
+    "kimi-k3:api": {
+     "eur_seat": 356.510298852,
+     "eur_session": 356.510298852,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0362265650899
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 77.6747041808,
+     "eur_session": 77.6747041808,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00789286518764
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 24.4754995289
+     },
+     "hours_month": 24.4754995289,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 156.778326137,
+     "eur_session": 156.778326137,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 69.6795013892,
+     "eur_session": 69.6795013892,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00708043778997
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 238.333410592,
+     "eur_session": 238.333410592,
+     "hit_rate": 0.831811404637,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0242180964749
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.1,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "cap=262144",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 710.47886948,
+     "eur_session": 710.47886948,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0721948540984
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 16.5695326934,
+     "eur_session": 16.5695326934,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00168370242475
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 320.870344094,
+     "eur_session": 320.870344094,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0326050339728
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 160.435172047,
+     "eur_session": 160.435172047,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0163025169864
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.82927428075
+     },
+     "hours_month": 8.82927428075,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.5289052449
+     },
+     "hours_month": 32.5289052449,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 39.0228008189,
+     "eur_session": 39.0228008189,
+     "hit_rate": 0.940044073794,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00396527684728
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 8.67009527862,
+     "eur_session": 8.67009527862,
+     "hit_rate": 0.940044073794,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00088100616436
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 67.5883486379,
+     "eur_session": 67.5883486379,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00686794664596
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 143.556800066,
+     "eur_session": 143.556800066,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0145874320558
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 18.0353762768,
+     "eur_session": 18.0353762768,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0018326531792
+    },
+    "glm-5.3:api": {
+     "eur_seat": 159.9446989,
+     "eur_session": 159.9446989,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0162526778726
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.56583993446,
+      "week": 12.8291996723
+     },
+     "hours_month": 53.8826386238,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 35.9217590825,
+      "week": 179.608795413
+     },
+     "hours_month": 769.751980339,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.3950396068,
+      "week": 76.9751980339
+     },
+     "hours_month": 329.89370586,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 883.742839308,
+     "eur_session": 883.742839308,
+     "hit_rate": 0.937829107272,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0898009611335
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 8.83742839308,
+     "eur_session": 8.83742839308,
+     "hit_rate": 0.937829107272,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000898009611335
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 139.184319365,
+     "eur_session": 139.184319365,
+     "hit_rate": 0.937829107272,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0141431252371
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 69.5921596824,
+     "eur_session": 69.5921596824,
+     "hit_rate": 0.937829107272,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00707156261853
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 180.235596368,
+     "eur_session": 180.235596368,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183145243892
+    },
+    "kimi-k3:api": {
+     "eur_seat": 270.353394552,
+     "eur_session": 270.353394552,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0274717865838
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 57.5714265108,
+     "eur_session": 57.5714265108,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00585008353623
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 33.0220614775
+     },
+     "hours_month": 33.0220614775,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 159.061281181,
+     "eur_session": 159.061281181,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161629099483
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 51.2467178792,
+     "eur_session": 51.2467178792,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00520740232995
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 182.829188182,
+     "eur_session": 182.829188182,
+     "hit_rate": 0.9157229059,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0185780705559
+    }
+   },
+   "workload": {
+    "cap": 262144.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "cap=1000000",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 712.735418079,
+     "eur_session": 712.735418079,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0724241518353
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 16.7983337872,
+     "eur_session": 16.7983337872,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00170695190097
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 322.082226637,
+     "eur_session": 322.082226637,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0327281786392
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 161.041113318,
+     "eur_session": 161.041113318,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0163640893196
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.7960528159
+     },
+     "hours_month": 8.7960528159,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.4065103744
+     },
+     "hours_month": 32.4065103744,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 39.1376363604,
+     "eur_session": 39.1376363604,
+     "hit_rate": 0.940430456047,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00397694578709
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 8.68843371679,
+     "eur_session": 8.68843371679,
+     "hit_rate": 0.940430456047,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000882869612979
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 67.9092994161,
+     "eur_session": 67.9092994161,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00690055985318
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 144.103405704,
+     "eur_session": 144.103405704,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0146429750367
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 18.1459558979,
+     "eur_session": 18.1459558979,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0018438896564
+    },
+    "glm-5.3:api": {
+     "eur_seat": 160.914922744,
+     "eur_session": 160.914922744,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0163512665454
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.54954878944,
+      "week": 12.7477439472
+     },
+     "hours_month": 53.5405245782,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 35.6936830521,
+      "week": 178.468415261
+     },
+     "hours_month": 764.864636831,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.2972927366,
+      "week": 76.4864636831
+     },
+     "hours_month": 327.799130071,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 902.193665531,
+     "eur_session": 902.193665531,
+     "hit_rate": 0.938214579117,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0916758299923
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 9.02193665531,
+     "eur_session": 9.02193665531,
+     "hit_rate": 0.938214579117,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000916758299923
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 141.400422662,
+     "eur_session": 141.400422662,
+     "hit_rate": 0.938214579117,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0143683131505
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 70.7002113309,
+     "eur_session": 70.7002113309,
+     "hit_rate": 0.938214579117,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00718415657526
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 181.091465109,
+     "eur_session": 181.091465109,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0184014929418
+    },
+    "kimi-k3:api": {
+     "eur_seat": 271.637197664,
+     "eur_session": 271.637197664,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0276022394127
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 57.8709805703,
+     "eur_session": 57.8709805703,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00588052252964
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.8511313762
+     },
+     "hours_month": 32.8511313762,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 160.265519545,
+     "eur_session": 160.265519545,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0162852778563
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 51.475518973,
+     "eur_session": 51.475518973,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00523065180618
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 183.839688475,
+     "eur_session": 183.839688475,
+     "hit_rate": 0.916099291529,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0186807518944
+    }
+   },
+   "workload": {
+    "cap": 1000000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "sub_shares_prefix=True",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 710.092296529,
+     "eur_session": 710.092296529,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0721555727362
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 16.214690633,
+     "eur_session": 16.214690633,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00164764537665
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 320.662734556,
+     "eur_session": 320.662734556,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0325839378629
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 160.331367278,
+     "eur_session": 160.331367278,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0162919689315
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.83499069663
+     },
+     "hours_month": 8.83499069663,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.5499657244
+     },
+     "hours_month": 32.5499657244,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 39.0031281585,
+     "eur_session": 39.0031281585,
+     "hit_rate": 0.939977259583,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00396327782253
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 8.66695369144,
+     "eur_session": 8.66695369144,
+     "hit_rate": 0.939977259583,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000880686933995
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 67.5333660466,
+     "eur_session": 67.5333660466,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00686235962524
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 143.46316018,
+     "eur_session": 143.46316018,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0145779168989
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 18.0164327049,
+     "eur_session": 18.0164327049,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00183072824032
+    },
+    "glm-5.3:api": {
+     "eur_seat": 159.778488301,
+     "eur_session": 159.778488301,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0162357884893
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.56865170758,
+      "week": 12.8432585379
+     },
+     "hours_month": 53.9416858593,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 35.9611239062,
+      "week": 179.805619531
+     },
+     "hours_month": 770.595512275,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.4119102455,
+      "week": 77.0595512275
+     },
+     "hours_month": 330.255219547,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 883.105996775,
+     "eur_session": 883.105996775,
+     "hit_rate": 0.937762450492,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0897362487885
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 8.83105996775,
+     "eur_session": 8.83105996775,
+     "hit_rate": 0.937762450492,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000897362487885
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 139.111210199,
+     "eur_session": 139.111210199,
+     "hit_rate": 0.937762450492,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0141356962961
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 69.5556050995,
+     "eur_session": 69.5556050995,
+     "hit_rate": 0.937762450492,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00706784814805
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 180.088976124,
+     "eur_session": 180.088976124,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0182996256673
+    },
+    "kimi-k3:api": {
+     "eur_seat": 270.133464186,
+     "eur_session": 270.133464186,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.027449438501
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 57.5201094255,
+     "eur_session": 57.5201094255,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00584486898356
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 33.051522408
+     },
+     "hours_month": 33.051522408,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 158.85498118,
+     "eur_session": 158.85498118,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161419469061
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 51.2075215977,
+     "eur_session": 51.2075215977,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00520341942498
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 182.656077759,
+     "eur_session": 182.656077759,
+     "hit_rate": 0.915657820332,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0185604800515
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": true,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "think=10.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 10.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 2118.60293906,
+     "eur_session": 2118.60293906,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 48.407337565,
+     "eur_session": 48.407337565,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 955.718692406,
+     "eur_session": 955.718692406,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 477.859346203,
+     "eur_session": 477.859346203,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 2.96431606818
+     },
+     "hours_month": 2.96431606818,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 10.9211644617
+     },
+     "hours_month": 10.9211644617,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 116.415298254,
+     "eur_session": 116.415298254,
+     "hit_rate": 0.939294314956,
+     "requests_month": 33264.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 25.9059896321,
+     "eur_session": 25.9059896321,
+     "hit_rate": 0.939294314956,
+     "requests_month": 33264.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 200.939702477,
+     "eur_session": 200.939702477,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 427.561689824,
+     "eur_session": 427.561689824,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 53.4772293245,
+     "eur_session": 53.4772293245,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 474.316142405,
+     "eur_session": 474.316142405,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 0.865767538717,
+      "week": 4.32883769359
+     },
+     "hours_month": 18.1811183131,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 12.120745542,
+      "week": 60.6037277102
+     },
+     "hours_month": 259.730261615,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 5.1946052323,
+      "week": 25.9730261615
+     },
+     "hours_month": 111.312969264,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 3.78787878788
+     },
+     "hours_month": 79.5454545455,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 5.05050505051
+     },
+     "hours_month": 106.060606061,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 2630.08625619,
+     "eur_session": 2630.08625619,
+     "hit_rate": 0.937081115044,
+     "requests_month": 33264.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 26.3008625619,
+     "eur_session": 26.3008625619,
+     "hit_rate": 0.937081115044,
+     "requests_month": 33264.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 415.125838293,
+     "eur_session": 415.125838293,
+     "hit_rate": 0.937081115044,
+     "requests_month": 33264.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 207.562919147,
+     "eur_session": 207.562919147,
+     "hit_rate": 0.937081115044,
+     "requests_month": 33264.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 535.839206606,
+     "eur_session": 535.839206606,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 803.758809909,
+     "eur_session": 803.758809909,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 171.010625658,
+     "eur_session": 171.010625658,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 11.1170120469
+     },
+     "hours_month": 11.1170120469,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 470.33497841,
+     "eur_session": 470.33497841,
+     "hit_rate": 0.0,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 152.438893123,
+     "eur_session": 152.438893123,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 542.740545986,
+     "eur_session": 542.740545986,
+     "hit_rate": 0.9149925451,
+     "requests_month": 33264.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "think=120.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 120.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 176.550244922,
+     "eur_session": 176.550244922,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 4.03394479708,
+     "eur_session": 4.03394479708,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 79.6432243672,
+     "eur_session": 79.6432243672,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 39.8216121836,
+     "eur_session": 39.8216121836,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 35.5717928182
+     },
+     "hours_month": 35.5717928182,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 131.053973541
+     },
+     "hours_month": 131.053973541,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 9.70127485451,
+     "eur_session": 9.70127485451,
+     "hit_rate": 0.939294314956,
+     "requests_month": 2772.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 2.15883246934,
+     "eur_session": 2.15883246934,
+     "hit_rate": 0.939294314956,
+     "requests_month": 2772.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 16.7449752064,
+     "eur_session": 16.7449752064,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 35.6301408187,
+     "eur_session": 35.6301408187,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 4.45643577705,
+     "eur_session": 4.45643577705,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 39.5263452004,
+     "eur_session": 39.5263452004,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 10.3892104646,
+      "week": 51.946052323
+     },
+     "hours_month": 222.625938527,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 145.448946505,
+      "week": 727.244732523
+     },
+     "hours_month": 3116.76313938,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 62.3352627877,
+      "week": 311.676313938
+     },
+     "hours_month": 1335.75563116,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 45.4545454545
+     },
+     "hours_month": 954.545454545,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 60.6060606061
+     },
+     "hours_month": 1272.72727273,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 219.173854683,
+     "eur_session": 219.173854683,
+     "hit_rate": 0.937081115044,
+     "requests_month": 2772.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 2.19173854683,
+     "eur_session": 2.19173854683,
+     "hit_rate": 0.937081115044,
+     "requests_month": 2772.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 34.5938198578,
+     "eur_session": 34.5938198578,
+     "hit_rate": 0.937081115044,
+     "requests_month": 2772.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 17.2969099289,
+     "eur_session": 17.2969099289,
+     "hit_rate": 0.937081115044,
+     "requests_month": 2772.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 44.6532672172,
+     "eur_session": 44.6532672172,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 66.9799008258,
+     "eur_session": 66.9799008258,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 14.2508854715,
+     "eur_session": 14.2508854715,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 133.404144563
+     },
+     "hours_month": 133.404144563,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 39.1945815342,
+     "eur_session": 39.1945815342,
+     "hit_rate": 0.0,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 12.7032410936,
+     "eur_session": 12.7032410936,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 45.2283788322,
+     "eur_session": 45.2283788322,
+     "hit_rate": 0.9149925451,
+     "requests_month": 2772.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "turn=500.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 500.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 480.138994673,
+     "eur_session": 480.138994673,
+     "hit_rate": 0.97629142169,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.0487890156293
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 12.9483568919,
+     "eur_session": 12.9483568919,
+     "hit_rate": 0.97629142169,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00131573897097
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 230.566079498,
+     "eur_session": 230.566079498,
+     "hit_rate": 0.97629142169,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.0234288241135
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 115.283039749,
+     "eur_session": 115.283039749,
+     "hit_rate": 0.97629142169,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.0117144120568
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 12.2873767153
+     },
+     "hours_month": 12.2873767153,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 45.2692826353
+     },
+     "hours_month": 45.2692826353,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 27.4252086423,
+     "eur_session": 27.4252086423,
+     "hit_rate": 0.97629142169,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00278679496549
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 6.01331742591,
+     "eur_session": 6.01331742591,
+     "hit_rate": 0.97629142169,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000611039388868
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 57.3839751841,
+     "eur_session": 57.3839751841,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00583103579004
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 115.509809617,
+     "eur_session": 115.509809617,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0117374551312
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 16.1198007719,
+     "eur_session": 16.1198007719,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163800320434
+    },
+    "glm-5.3:api": {
+     "eur_seat": 141.898928607,
+     "eur_session": 141.898928607,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.014418968512
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.81914559934,
+      "week": 14.0957279967
+     },
+     "hours_month": 59.2020575861,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 39.4680383907,
+      "week": 197.340191954
+     },
+     "hours_month": 845.743679802,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 16.914873596,
+      "week": 84.5743679802
+     },
+     "hours_month": 362.461577058,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 709.262606614,
+     "eur_session": 709.262606614,
+     "hit_rate": 0.97399104783,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0720712643283
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 7.09262606614,
+     "eur_session": 7.09262606614,
+     "hit_rate": 0.97399104783,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000720712643283
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 103.432779511,
+     "eur_session": 103.432779511,
+     "hit_rate": 0.97399104783,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0105102554722
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 51.7163897556,
+     "eur_session": 51.7163897556,
+     "hit_rate": 0.97399104783,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00525512773608
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 153.023933824,
+     "eur_session": 153.023933824,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0155494287734
+    },
+    "kimi-k3:api": {
+     "eur_seat": 229.535900737,
+     "eur_session": 229.535900737,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0233241431602
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 48.0473446205,
+     "eur_session": 48.0473446205,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0048823000707
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 39.5677888258
+     },
+     "hours_month": 39.5677888258,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 156.778326137,
+     "eur_session": 156.778326137,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 42.6386573461,
+     "eur_session": 42.6386573461,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00433269978643
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 156.035189591,
+     "eur_session": 156.035189591,
+     "hit_rate": 0.951032449008,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0158554155945
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "turn=8000.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 8000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 1350.02189423,
+     "eur_session": 1350.02189423,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.137181607885
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 23.9429345891,
+     "eur_session": 23.9429345891,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00243294592366
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 570.845582351,
+     "eur_session": 570.845582351,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0580061072903
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 285.422791175,
+     "eur_session": 285.422791175,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0290030536451
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 4.96290479274
+     },
+     "hours_month": 4.96290479274,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 18.2843860785
+     },
+     "hours_month": 18.2843860785,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 80.8762107707,
+     "eur_session": 80.8762107707,
+     "hit_rate": 0.791305888019,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00821818422396
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 18.3288304555,
+     "eur_session": 18.3288304555,
+     "hit_rate": 0.791305888019,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00186247233714
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 102.455747137,
+     "eur_session": 102.455747137,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0104109749549
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 242.378501041,
+     "eur_session": 242.378501041,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0246291357434
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 24.1325602302,
+     "eur_session": 24.1325602302,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00245221461142
+    },
+    "glm-5.3:api": {
+     "eur_seat": 218.020143461,
+     "eur_session": 218.020143461,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0221539768793
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.0119774573,
+      "week": 10.0598872865
+     },
+     "hours_month": 42.2515266033,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 28.1676844022,
+      "week": 140.838422011
+     },
+     "hours_month": 603.59323719,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 12.0718647438,
+      "week": 60.359323719
+     },
+     "hours_month": 258.682815938,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1495.6894514,
+     "eur_session": 1495.6894514,
+     "hit_rate": 0.789441383897,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.151983523169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 14.956894514,
+     "eur_session": 14.956894514,
+     "hit_rate": 0.789441383897,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00151983523169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 267.556642771,
+     "eur_session": 267.556642771,
+     "hit_rate": 0.789441383897,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0271875964475
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 133.778321386,
+     "eur_session": 133.778321386,
+     "hit_rate": 0.789441383897,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0135937982238
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 273.215325699,
+     "eur_session": 273.215325699,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0277625998797
+    },
+    "kimi-k3:api": {
+     "eur_seat": 409.822988549,
+     "eur_session": 409.822988549,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0416438998195
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 90.1143317768,
+     "eur_session": 90.1143317768,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00915690995788
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 21.0968349662
+     },
+     "hours_month": 21.0968349662,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 156.778326137,
+     "eur_session": 156.778326137,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 81.0331297507,
+     "eur_session": 81.0331297507,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00823412944536
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 272.887931692,
+     "eur_session": 272.887931692,
+     "hit_rate": 0.770832929469,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0277293319478
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "out=2000.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 2000.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 1493.49129654,
+     "eur_session": 1493.49129654,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.151760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 26.1372994489,
+     "eur_session": 26.1372994489,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00265592489981
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 633.48902421,
+     "eur_session": 633.48902421,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0643715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 316.744512105,
+     "eur_session": 316.744512105,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0321857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 4.47214106052
+     },
+     "hours_month": 4.47214106052,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 16.4763091703
+     },
+     "hours_month": 16.4763091703,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 76.9099507538,
+     "eur_session": 76.9099507538,
+     "hit_rate": 0.939294314956,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00781515525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 20.1822545246,
+     "eur_session": 20.1822545246,
+     "hit_rate": 0.939294314956,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00205080683377
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 126.02667459,
+     "eur_session": 126.02667459,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0128061196122
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 299.978626646,
+     "eur_session": 299.978626646,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0304821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 25.6986462767,
+     "eur_session": 25.6986462767,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00261135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 227.386928685,
+     "eur_session": 227.386928685,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0231057767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 1.85221262071,
+      "week": 9.26106310355
+     },
+     "hours_month": 38.8964650349,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 25.93097669,
+      "week": 129.65488345
+     },
+     "hours_month": 555.663786213,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 11.1132757243,
+      "week": 55.5663786213
+     },
+     "hours_month": 238.141622663,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1663.98573558,
+     "eur_session": 1663.98573558,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.169084842017
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 16.6398573558,
+     "eur_session": 16.6398573558,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00169084842017
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 295.833342802,
+     "eur_session": 295.833342802,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0300609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 147.916671401,
+     "eur_session": 147.916671401,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0150304575818
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 336.07113224,
+     "eur_session": 336.07113224,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0341496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 504.106698359,
+     "eur_session": 504.106698359,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0512244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 90.069735194,
+     "eur_session": 90.069735194,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00915237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 21.1072807252
+     },
+     "hours_month": 21.1072807252,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 192.206390395,
+     "eur_session": 192.206390395,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0195309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 98.0503833855,
+     "eur_session": 98.0503833855,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00996332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 275.388353351,
+     "eur_session": 275.388353351,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0279834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "hours=8.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 8.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 67.2572361606,
+     "eur_session": 67.2572361606,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 1.53674087508,
+     "eur_session": 1.53674087508,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 30.3402759494,
+     "eur_session": 30.3402759494,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 15.1701379747,
+     "eur_session": 15.1701379747,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.89294820454
+     },
+     "hours_month": 8.89294820454,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.7634933852
+     },
+     "hours_month": 32.7634933852,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 3.6957237541,
+     "eur_session": 3.6957237541,
+     "hit_rate": 0.939294314956,
+     "requests_month": 1056.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 0.822412369273,
+     "eur_session": 0.822412369273,
+     "hit_rate": 0.939294314956,
+     "requests_month": 1056.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 6.37903817388,
+     "eur_session": 6.37903817388,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 13.5733869786,
+     "eur_session": 13.5733869786,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 1.69768981983,
+     "eur_session": 1.69768981983,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 15.0576553145,
+     "eur_session": 15.0576553145,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.59730261615,
+      "week": 12.9865130808
+     },
+     "hours_month": 54.5433549392,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 36.3622366261,
+      "week": 181.811183131
+     },
+     "hours_month": 779.190784846,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.5838156969,
+      "week": 77.9190784846
+     },
+     "hours_month": 333.938907791,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 83.4948017838,
+     "eur_session": 83.4948017838,
+     "hit_rate": 0.937081115044,
+     "requests_month": 1056.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 0.834948017838,
+     "eur_session": 0.834948017838,
+     "hit_rate": 0.937081115044,
+     "requests_month": 1056.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 13.1785980411,
+     "eur_session": 13.1785980411,
+     "hit_rate": 0.937081115044,
+     "requests_month": 1056.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 6.58929902053,
+     "eur_session": 6.58929902053,
+     "hit_rate": 0.937081115044,
+     "requests_month": 1056.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 17.0107684637,
+     "eur_session": 17.0107684637,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 25.5161526955,
+     "eur_session": 25.5161526955,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 5.42890875105,
+     "eur_session": 5.42890875105,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 33.3510361406
+     },
+     "hours_month": 33.3510361406,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 14.9312691559,
+     "eur_session": 14.9312691559,
+     "hit_rate": 0.0,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 4.8393299404,
+     "eur_session": 4.8393299404,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 17.2298586027,
+     "eur_session": 17.2298586027,
+     "hit_rate": 0.9149925451,
+     "requests_month": 1056.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "hours=160.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 160.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 1345.14472321,
+     "eur_session": 1345.14472321,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 30.7348175016,
+     "eur_session": 30.7348175016,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 606.805518988,
+     "eur_session": 606.805518988,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 303.402759494,
+     "eur_session": 303.402759494,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.89294820454
+     },
+     "hours_month": 8.89294820454,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.7634933852
+     },
+     "hours_month": 32.7634933852,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 73.914475082,
+     "eur_session": 73.914475082,
+     "hit_rate": 0.939294314956,
+     "requests_month": 21120.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 16.4482473855,
+     "eur_session": 16.4482473855,
+     "hit_rate": 0.939294314956,
+     "requests_month": 21120.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 127.580763478,
+     "eur_session": 127.580763478,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 271.467739571,
+     "eur_session": 271.467739571,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 33.9537963965,
+     "eur_session": 33.9537963965,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 301.153106289,
+     "eur_session": 301.153106289,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.59730261615,
+      "week": 12.9865130808
+     },
+     "hours_month": 54.5433549392,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 36.3622366261,
+      "week": 181.811183131
+     },
+     "hours_month": 779.190784846,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.5838156969,
+      "week": 77.9190784846
+     },
+     "hours_month": 333.938907791,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1669.89603568,
+     "eur_session": 1669.89603568,
+     "hit_rate": 0.937081115044,
+     "requests_month": 21120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 16.6989603568,
+     "eur_session": 16.6989603568,
+     "hit_rate": 0.937081115044,
+     "requests_month": 21120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 263.571960821,
+     "eur_session": 263.571960821,
+     "hit_rate": 0.937081115044,
+     "requests_month": 21120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 131.785980411,
+     "eur_session": 131.785980411,
+     "hit_rate": 0.937081115044,
+     "requests_month": 21120.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 340.215369274,
+     "eur_session": 340.215369274,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 510.323053911,
+     "eur_session": 510.323053911,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 108.578175021,
+     "eur_session": 108.578175021,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 33.3510361406
+     },
+     "hours_month": 33.3510361406,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 298.625383117,
+     "eur_session": 298.625383117,
+     "hit_rate": 0.0,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 96.786598808,
+     "eur_session": 96.786598808,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 344.597172055,
+     "eur_session": 344.597172055,
+     "hit_rate": 0.9149925451,
+     "requests_month": 21120.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "hours=400.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 400.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 3362.86180803,
+     "eur_session": 3362.86180803,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 76.837043754,
+     "eur_session": 76.837043754,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 1517.01379747,
+     "eur_session": 1517.01379747,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 758.506898735,
+     "eur_session": 758.506898735,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.89294820454
+     },
+     "hours_month": 8.89294820454,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.7634933852
+     },
+     "hours_month": 32.7634933852,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 184.786187705,
+     "eur_session": 184.786187705,
+     "hit_rate": 0.939294314956,
+     "requests_month": 52800.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 41.1206184636,
+     "eur_session": 41.1206184636,
+     "hit_rate": 0.939294314956,
+     "requests_month": 52800.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 318.951908694,
+     "eur_session": 318.951908694,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 678.669348928,
+     "eur_session": 678.669348928,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 84.8844909913,
+     "eur_session": 84.8844909913,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 752.882765723,
+     "eur_session": 752.882765723,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.59730261615,
+      "week": 12.9865130808
+     },
+     "hours_month": 54.5433549392,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 36.3622366261,
+      "week": 181.811183131
+     },
+     "hours_month": 779.190784846,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.5838156969,
+      "week": 77.9190784846
+     },
+     "hours_month": 333.938907791,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 4174.74008919,
+     "eur_session": 4174.74008919,
+     "hit_rate": 0.937081115044,
+     "requests_month": 52800.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 41.7474008919,
+     "eur_session": 41.7474008919,
+     "hit_rate": 0.937081115044,
+     "requests_month": 52800.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 658.929902053,
+     "eur_session": 658.929902053,
+     "hit_rate": 0.937081115044,
+     "requests_month": 52800.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 329.464951027,
+     "eur_session": 329.464951027,
+     "hit_rate": 0.937081115044,
+     "requests_month": 52800.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 850.538423184,
+     "eur_session": 850.538423184,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 1275.80763478,
+     "eur_session": 1275.80763478,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 271.445437553,
+     "eur_session": 271.445437553,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 33.3510361406
+     },
+     "hours_month": 33.3510361406,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 746.563457793,
+     "eur_session": 746.563457793,
+     "hit_rate": 0.0,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 241.96649702,
+     "eur_session": 241.96649702,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 861.492930136,
+     "eur_session": 861.492930136,
+     "hit_rate": 0.9149925451,
+     "requests_month": 52800.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "active=0.25",
+   "opts": {
+    "active": 0.25,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 1.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 706.200979687,
+     "eur_session": 2824.80391875,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 16.1357791883,
+     "eur_session": 64.5431167533,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 318.572897469,
+     "eur_session": 1274.29158987,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 159.286448734,
+     "eur_session": 637.145794937,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 8.89294820454
+     },
+     "hours_month": 8.89294820454,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 32.7634933852
+     },
+     "hours_month": 32.7634933852,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 38.805099418,
+     "eur_session": 155.220397672,
+     "hit_rate": 0.939294314956,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 8.63532987737,
+     "eur_session": 34.5413195095,
+     "hit_rate": 0.939294314956,
+     "requests_month": 11088.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 66.9799008258,
+     "eur_session": 267.919603303,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 142.520563275,
+     "eur_session": 570.082253099,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 17.8257431082,
+     "eur_session": 71.3029724327,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 158.105380802,
+     "eur_session": 632.421523207,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 2.59730261615,
+      "week": 12.9865130808
+     },
+     "hours_month": 54.5433549392,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 36.3622366261,
+      "week": 181.811183131
+     },
+     "hours_month": 779.190784846,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 15.5838156969,
+      "week": 77.9190784846
+     },
+     "hours_month": 333.938907791,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 11.3636363636
+     },
+     "hours_month": 238.636363636,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 15.1515151515
+     },
+     "hours_month": 318.181818182,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 876.69541873,
+     "eur_session": 3506.78167492,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 8.7669541873,
+     "eur_session": 35.0678167492,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 138.375279431,
+     "eur_session": 553.501117725,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 69.1876397156,
+     "eur_session": 276.750558862,
+     "hit_rate": 0.937081115044,
+     "requests_month": 11088.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 178.613068869,
+     "eur_session": 714.452275475,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 267.919603303,
+     "eur_session": 1071.67841321,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 57.0035418861,
+     "eur_session": 228.014167544,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 33.3510361406
+     },
+     "hours_month": 33.3510361406,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 156.778326137,
+     "eur_session": 627.113304546,
+     "hit_rate": 0.0,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 50.8129643742,
+     "eur_session": 203.251857497,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 180.913515329,
+     "eur_session": 723.654061315,
+     "hit_rate": 0.9149925451,
+     "requests_month": 11088.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  },
+  {
+   "name": "spu=2.0",
+   "opts": {
+    "active": 1.0,
+    "hours": 84.0,
+    "out": 400.0,
+    "spu": 2.0,
+    "think": 30.0,
+    "turn": 2000.0
+   },
+   "out": {
+    "chatgpt-plus:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "chatgpt-pro-200:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-fable-5.1:api": {
+     "eur_seat": 1412.40195937,
+     "eur_session": 706.200979687,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.071760159074
+    },
+    "claude-haiku-5.5:api": {
+     "eur_seat": 32.2715583767,
+     "eur_session": 16.1357791883,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00163962684086
+    },
+    "claude-max:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-opus-5.5:api": {
+     "eur_seat": 637.145794937,
+     "eur_session": 318.572897469,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0323715804093
+    },
+    "claude-pro:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-sonnet-5.5:api": {
+     "eur_seat": 318.572897469,
+     "eur_session": 159.286448734,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0161857902046
+    },
+    "claude-team-premium:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-team-standard:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "claude-ultra:plan": {
+     "binds": "",
+     "hours": {},
+     "hours_month": null,
+     "published": false
+    },
+    "copilot-business:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 4.44647410227
+     },
+     "hours_month": 4.44647410227,
+     "published": true
+    },
+    "copilot-pro-plus:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 16.3817466926
+     },
+     "hours_month": 16.3817466926,
+     "published": true
+    },
+    "deepseek-v4-pro:api": {
+     "eur_seat": 77.6101988361,
+     "eur_session": 38.805099418,
+     "hit_rate": 0.939294314956,
+     "requests_month": 22176.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.00394315525923
+    },
+    "deepseek-v4.1-flash-1017:api": {
+     "eur_seat": 17.2706597547,
+     "eur_session": 8.63532987737,
+     "hit_rate": 0.939294314956,
+     "requests_month": 22176.0,
+     "ttl_s": 3600.0,
+     "usd_request": 0.000877473500435
+    },
+    "gemini-3.8-flash:api": {
+     "eur_seat": 133.959801652,
+     "eur_session": 66.9799008258,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00680611961223
+    },
+    "gemini-4-argon:api": {
+     "eur_seat": 285.04112655,
+     "eur_session": 142.520563275,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0144821355196
+    },
+    "glm-5.3-flash:api": {
+     "eur_seat": 35.6514862164,
+     "eur_session": 17.8257431082,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00181135143939
+    },
+    "glm-5.3:api": {
+     "eur_seat": 316.210761604,
+     "eur_session": 158.105380802,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0160657767451
+    },
+    "glm-coding-lite:plan": {
+     "binds": "5h",
+     "hours": {
+      "5h": 1.29865130808,
+      "week": 6.49325654038
+     },
+     "hours_month": 27.2716774696,
+     "published": true
+    },
+    "glm-coding-max:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 18.1811183131,
+      "week": 90.9055915653
+     },
+     "hours_month": 389.595392423,
+     "published": true
+    },
+    "glm-coding-pro:plan": {
+     "binds": "week",
+     "hours": {
+      "5h": 7.79190784846,
+      "week": 38.9595392423
+     },
+     "hours_month": 166.969453895,
+     "published": true
+    },
+    "google-ai-pro:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 5.68181818182
+     },
+     "hours_month": 119.318181818,
+     "published": true
+    },
+    "google-ai-ultra:plan": {
+     "binds": "day",
+     "hours": {
+      "day": 7.57575757576
+     },
+     "hours_month": 159.090909091,
+     "published": true
+    },
+    "gpt-6-astra:api": {
+     "eur_seat": 1753.39083746,
+     "eur_session": 876.69541873,
+     "hit_rate": 0.937081115044,
+     "requests_month": 22176.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0890848420169
+    },
+    "gpt-6-luna:api": {
+     "eur_seat": 17.5339083746,
+     "eur_session": 8.7669541873,
+     "hit_rate": 0.937081115044,
+     "requests_month": 22176.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.000890848420169
+    },
+    "gpt-6.1-sol:api": {
+     "eur_seat": 276.750558862,
+     "eur_session": 138.375279431,
+     "hit_rate": 0.937081115044,
+     "requests_month": 22176.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.0140609151637
+    },
+    "gpt-6.1-terra:api": {
+     "eur_seat": 138.375279431,
+     "eur_session": 69.1876397156,
+     "hit_rate": 0.937081115044,
+     "requests_month": 22176.0,
+     "ttl_s": 1800.0,
+     "usd_request": 0.00703045758185
+    },
+    "kimi-k3.1-pro:api": {
+     "eur_seat": 357.226137737,
+     "eur_session": 178.613068869,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0181496522993
+    },
+    "kimi-k3:api": {
+     "eur_seat": 535.839206606,
+     "eur_session": 267.919603303,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0272244784489
+    },
+    "mistral-large-4:api": {
+     "eur_seat": 114.007083772,
+     "eur_session": 57.0035418861,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00579237830475
+    },
+    "mistral-pro:plan": {
+     "binds": "month",
+     "hours": {
+      "month": 16.6755180703
+     },
+     "hours_month": 16.6755180703,
+     "published": true
+    },
+    "qwen3.6-35b-a3b:api": {
+     "eur_seat": 313.556652273,
+     "eur_session": 156.778326137,
+     "hit_rate": 0.0,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0159309289374
+    },
+    "qwen3.8-27b:api": {
+     "eur_seat": 101.625928748,
+     "eur_session": 50.8129643742,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.00516332674607
+    },
+    "qwen3.8-max:api": {
+     "eur_seat": 361.827030657,
+     "eur_session": 180.913515329,
+     "hit_rate": 0.9149925451,
+     "requests_month": 22176.0,
+     "ttl_s": 300.0,
+     "usd_request": 0.0183834106891
+    }
+   },
+   "workload": {
+    "cap": 180000.0,
+    "invalidation": 0.01,
+    "min_tokens": 1000.0,
+    "sub_median": 8000.0,
+    "sub_ratio": 0.1,
+    "sub_shares_prefix": false,
+    "sub_sigma": 0.9,
+    "sys_sub": 3000.0,
+    "sys_user": 15000.0,
+    "user_median": 31000.0,
+    "user_sigma": 0.81
+   }
+  }
+ ]
+}

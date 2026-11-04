@@ -129,5 +129,6 @@ document.getElementById('chartH').addEventListener('click', e => {
   const vx = (e.clientX - rect.left) / scale, vy = (e.clientY - rect.top) / scale;
   let best = null, bd = Infinity;
   for (const p of g.pts){ const d = Math.hypot(p.x - vx, p.y - vy); if (d < bd){ bd = d; best = p; } }
-  if (best && bd <= Math.max(12, 24 / scale)) select(frontierRowName(best.r));
+  // an API row has no configuration to load
+  if (best && bd <= Math.max(12, 24 / scale) && !best.r.kind) select(frontierRowName(best.r));
 });

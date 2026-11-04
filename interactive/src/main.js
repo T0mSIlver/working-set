@@ -318,6 +318,16 @@ document.getElementById('t-sub_shares_prefix').addEventListener('change',e=>{
 });
 // frontier table: header sort and column picker, display-only
 wireFrontierTable();
+// the API and plan rows' active hours: display-only, like the benchmark axis
+// (the rows are closed form and rebuilt on every frontier render)
+document.getElementById('s-hours').addEventListener('input', e=>{
+  state.hours = parseInt(e.target.value, 10);
+  document.getElementById('v-hours').textContent = fmt(state.hours, 0);
+  if (lastFrontierRows){
+    renderFrontierTable(lastFrontierRows, lastFrontierCurKey);
+    renderFrontierChart(lastFrontierRows, lastFrontierCurKey);
+  }
+});
 // chart H's benchmark axis: display-only too — the score is a lookup, not a
 // model input, so this re-renders from the cached rows rather than recomputing
 // (a recompute would redraw every other chart from a fresh RNG state for a
@@ -478,6 +488,9 @@ function syncLabels(){
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
   document.getElementById('v-ekwh').textContent=state.ekwh.toFixed(2);
   document.getElementById('v-gpuh').textContent=state.gpuh.toFixed(2);
+  const hEl = document.getElementById('s-hours');
+  if (String(state.hours) !== hEl.value) hEl.value = state.hours;
+  document.getElementById('v-hours').textContent = fmt(state.hours, 0);
 }
 
 // the statistic the cold request wait limit is checked at, as its label prints it
@@ -506,8 +519,8 @@ const URL_ENUMS = {
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
 const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000], mns: [1, 4096],
-                        dbw: [0.01, 1], dfixed: [0, 50], dspec: [0, 16] };
-const URL_INT = new Set(['tp', 'headcount', 'mns', 'dspec']);
+                        dbw: [0.01, 1], dfixed: [0, 50], dspec: [0, 16], hours: [4, 400] };
+const URL_INT = new Set(['tp', 'headcount', 'mns', 'dspec', 'hours']);
 export function encodeStateURL(){
   const p = new URLSearchParams();
   const put = (k, v) => { if (String(v) !== String(STATE_DEFAULTS[k])) p.set(k, String(v)); };
@@ -687,6 +700,7 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
     if (!best || bd > Math.max(12, 24/scale)){ leave(); return; }
     drawCross(svg, best.x, geom, [{ y: best.y, color: best.color, r: 6 }]);
     const r=best.r, on=geom.par.has(r);
+    if (r.kind){ tt.innerHTML = extTooltip(r, on); placeTip(); return; }
     const cen = r.op.binding==='decode' && r.censored ? '≥ ' : '';
     tt.innerHTML=`<div class="tth">${esc(frontierRowName(r))}${r.key===geom.curKey?' — yours':''}</div>`
       +`<div class="row"><span class="sw" style="background:${best.color}"></span>binds on ${esc(PLANNER_LABEL[r.op.binding])} · ${on?(geom.tied.has(r)?`efficient: within ${fmt((SAME_MODEL_TIE-1)*100,0)}% of a cheaper split`:'efficient'):'dominated'}</div>`
@@ -704,14 +718,29 @@ setupHover('chartD','ttD',()=>chartDGeom,(n,dc)=>{
       +`<div class="row">€/seat/month, full <b class="tnum">${cen?'≤ ':''}${fmt(r.eurSeat,2)}</b></div>`
       +`<div class="row">€/user/month at your load <b class="tnum">${fmt(r.eur/Math.max(1,state.users),2)}</b></div>`
       +`<div class="row">€/month <b class="tnum">${fmt(r.eur,0)}</b> · max users <b class="tnum">${cen}${fmt(r.op.limit,0)}</b></div>`;
-    const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();
-    const cx=(rect.left-parRect.left)+best.x*scale, cy=(rect.top-parRect.top)+best.y*scale;
-    const tw=tt.offsetWidth, th=tt.offsetHeight, pad=4, gap=12;
-    let left=cx+gap; if (left+tw>parRect.width-pad) left=cx-gap-tw;
-    let top=cy-th-gap; if (top<pad) top=cy+gap;
-    tt.style.left=Math.max(pad,Math.min(left,parRect.width-tw-pad))+'px';
-    tt.style.top =Math.max(pad,Math.min(top, parRect.height-th-pad))+'px';
-    tt.style.opacity=1;
+    placeTip();
+    function placeTip(){
+      const par=tt.offsetParent||box, parRect=par.getBoundingClientRect();
+      const cx=(rect.left-parRect.left)+best.x*scale, cy=(rect.top-parRect.top)+best.y*scale;
+      const tw=tt.offsetWidth, th=tt.offsetHeight, pad=4, gap=12;
+      let left=cx+gap; if (left+tw>parRect.width-pad) left=cx-gap-tw;
+      let top=cy-th-gap; if (top<pad) top=cy+gap;
+      tt.style.left=Math.max(pad,Math.min(left,parRect.width-tw-pad))+'px';
+      tt.style.top =Math.max(pad,Math.min(top, parRect.height-th-pad))+'px';
+      tt.style.opacity=1;
+    }
+  }
+  // an API row: what the seat is billed and why (frontier.js apiRows)
+  function extTooltip(r, on){
+    const sc = r.sc, bench = CONFIG.BENCHES[state.bench], q = frontierScore(r);
+    const peak = hasHeadcount() && state.active * state.spu !== 1
+      ? `<div class="row">per person <b class="tnum">€${fmt(sc.eurSeat,2)}</b>; per session at the peak ÷ ${fmt(state.active*state.spu,2)}</div>` : '';
+    return `<div class="tth">${esc(frontierRowName(r))}</div>`
+      + `<div class="row">${esc(r.vendor)} API, list price · ${on ? 'efficient' : 'dominated'}</div>`
+      + `<div class="row">${esc(bench.name)} <b class="tnum">${isFinite(q) ? fmt(q*100,1)+'%' : '—'}</b></div>`
+      + `<div class="row">€/seat/month at ${fmt(state.hours,0)} active h <b class="tnum">${fmt(r.eurSeat,2)}</b></div>`
+      + peak
+      + `<div class="row">${fmt(sc.requestsMonth,0)} requests · $${fmt(sc.usdRequest*1000,2)} per 1,000 · cache hit ${fmt(sc.hitRate*100,0)}%</div>`;
   }
   box.addEventListener('mousemove', handler);
   box.addEventListener('mouseleave', leave);

@@ -234,6 +234,10 @@ svg text{fill:var(--text-2)}
 .ftable tr.you td:first-child{box-shadow:inset 3px 0 0 var(--s1)}
 .ftable td.num{text-align:right; font-variant-numeric:tabular-nums}
 .ftable .bind{font-weight:650; font-size:11px; text-transform:uppercase; letter-spacing:.03em}
+.ftable tr.ext td:first-child{box-shadow:inset 3px 0 0 var(--muted)}
+.ftable .kindtag{display:inline-block; font-size:9.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); border:1px solid var(--border); border-radius:4px; padding:0 4px; margin-right:4px; vertical-align:1px}
+.legend .sw.dia{width:8px; height:8px; transform:rotate(45deg); border-radius:0}
+.legend .sw.dash{height:0; border-top:2px dashed var(--text); background:none; opacity:.7}
 .ftable td.v{font-weight:650; white-space:nowrap}
 
 /* deploy card */
@@ -767,6 +771,10 @@ details.more .more-body{padding:0 0 16px}
           <button data-v="tb40" aria-pressed="true">TB 4.0</button>
         </div>
       </div>
+      <div class="field" style="margin:0 0 8px; max-width:420px">
+        <label class="flabel"><span class="tip" data-tip="Hours a month one seat runs its coding agent. A self-hosted configuration bills 24/7 whatever this says; an API bills the tokens these hours send. Default 84: 4 hours a day, 21 working days. Requesty's public gateway data puts the median Claude Code user near 11 hours and the 95th percentile near 137 on this workload. Prices are list, before tax, read 2026-11-04; research/api_prices.md has every source.">API seats: active hours</span> <span class="val"><span id="v-hours">84</span> h / month</span></label>
+        <input type="range" id="s-hours" min="4" max="400" step="4" value="84">
+      </div>
       <div class="legend">
         <span class="li"><span class="sw dot" style="background:var(--s1)"></span>binds on cache</span>
         <span class="li"><span class="sw dot" style="background:var(--s4)"></span>decode</span>
@@ -776,6 +784,8 @@ details.more .more-body{padding:0 0 16px}
         <span class="li"><span class="sw" style="background:var(--muted)"></span>efficient set</span>
         <span class="li"><span class="sw dot" style="background:var(--muted); opacity:.35"></span>dominated</span>
         <span class="li"><span class="sw dot" style="background:var(--surface); box-shadow:inset 0 0 0 2px var(--s4)"></span>hollow: max users is a lower bound (decode search censored)</span>
+        <span class="li"><span class="sw dia" style="background:var(--text)"></span>API at list price</span>
+        <span class="li"><span class="sw dash"></span>efficient set, API</span>
       </div>
       <div class="chartbox"><div id="chartH"></div><div class="tt" id="ttH"></div></div>
     </div>

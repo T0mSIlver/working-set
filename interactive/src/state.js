@@ -1,3 +1,4 @@
+import { ACTIVE_HOURS_DEFAULT } from './apicost.js';
 import { AVG_OUT_TOK, CONFIG, DECODE_BW_EFF, DECODE_FIXED_MS, DECODE_FLOOR_TOKS, DECODE_MBU, DECODE_SPEC_TOKENS,
          PREFILL_MFU, makeGrid } from './config.js';
 
@@ -99,6 +100,11 @@ export const state = {
   // CONFIG.GPUS[gpu].eur_gpu_h and re-seeded on every GPU switch, the way mtp
   // follows the model; a pricing constant, so NOT in samplingSig either.
   gpuh: CONFIG.GPUS["H200"].eur_gpu_h,
+  // active agent hours per seat per month that the API and plan rows of the
+  // frontier bill (api_cost.ACTIVE_HOURS_DEFAULT: 4 h a day, 21 days). A
+  // self-hosted row bills 24/7 whatever this says. A pricing constant, so NOT
+  // in samplingSig; display-only, it re-renders from cached rows.
+  hours: ACTIVE_HOURS_DEFAULT,
 };
 
 // Snapshot of the published reference configuration, taken BEFORE any URL

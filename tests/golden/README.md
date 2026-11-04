@@ -389,3 +389,18 @@ The vectors compare the per-group closed forms both sides actually compute.
 **Everything the page draws rather than computes** — SVG geometry, the frontier
 table's ranking, tooltips. `AGENTS.md` already asks for a headless-browser
 check on those.
+
+## API and plan seats
+
+`api_vectors.json` is the same contract for `workingset.api_cost` and its
+mirror `interactive/src/apicost.js`: every API offer and plan in
+`src/workingset/data/api_prices.toml`, at the reference workload and one
+knob moved at a time. Both sides are closed form on the same erfc
+polynomial, so `tests/js/api_golden.test.mjs` holds them to 1e-9.
+
+```sh
+uv run scripts/golden_api.py            # rewrite tests/golden/api_vectors.json
+uv run scripts/golden_api.py --check    # fail if it is stale
+node --import ./tests/js/register.mjs --test tests/js/api_golden.test.mjs
+```
+
