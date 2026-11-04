@@ -89,3 +89,11 @@ jobs:
       # every AA figure an exact run count, and a MEASURED zero still a score
       - name: frontier benchmark scores are well formed
         run: node --import ./tests/js/register.mjs --test tests/js/frontier_bench.test.mjs
+      # the API and plan seats: the explorer's copy of the price file is the
+      # TOML's, and the mirror agrees with workingset.api_cost
+      - name: explorer price file is current
+        run: uv run scripts/api_prices.py --check
+      - name: API golden vectors are current
+        run: uv run scripts/golden_api.py --check
+      - name: JS API seats agree with the Python model
+        run: node --import ./tests/js/register.mjs --test tests/js/api_golden.test.mjs
