@@ -1,0 +1,697 @@
+{
+ "source": {
+  "id": "deployments",
+  "name": "External self-hosted LLM deployments",
+  "publisher": "various (see records)",
+  "url": "https://www.theregister.com/ai-and-ml/2026/11/03/british-fintech-revolut-slashes-ai-coding-costs-10x-by-cutting-out-claude-and-going-self-hosted/5307345",
+  "license": "press quotes and public repos; short quotes only",
+  "method": "Self-reported deployment figures from press, repos and vendor blogs, with GPU count; derived per-GPU rows computed by Working Set.",
+  "kind": "vendor",
+  "refresh_days": 90,
+  "redistribute": "cite",
+  "terms": "Press articles and public repos: figures and short quotes with a link to the article."
+ },
+ "records": [
+  {
+   "id": "deployments/revolut-glm53-b200x56",
+   "url": "https://www.theregister.com/ai-and-ml/2026/11/03/british-fintech-revolut-slashes-ai-coding-costs-10x-by-cutting-out-claude-and-going-self-hosted/5307345",
+   "read": "2026-11-04",
+   "published": "2026-11-03",
+   "kind": "vendor",
+   "config": {
+    "model": "GLM-5.3 (GLM-5.1 before)",
+    "ws_model": "GLM52",
+    "gpu": "B200",
+    "n_gpus": 56,
+    "weights": "nvfp4",
+    "kv": null,
+    "engine": null,
+    "parallel": "prefill/decode disaggregated; TP8 per secondary",
+    "spec_decode": null,
+    "max_ctx": 262144,
+    "extra": {
+     "dgx_b200_systems": 7,
+     "engine_note": "not stated in The Register or any summary found"
+    }
+   },
+   "workload": {
+    "name": "Revolut internal coding agents (OpenCode/Codex clients per secondary)",
+    "isl": "up to ~256K",
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "engineers_rollout": 2000,
+     "concurrent_users": null,
+     "tokens_per_day": null
+    }
+   },
+   "metrics": [
+    {
+     "name": "users",
+     "value": 2000,
+     "op": "~",
+     "unit": "engineers (rollout population, not concurrent)"
+    },
+    {
+     "name": "tok_s_per_user",
+     "value": 200,
+     "op": "~",
+     "unit": "tok/s",
+     "at": "typical working hours"
+    },
+    {
+     "name": "tok_s_per_user",
+     "value": 800,
+     "op": "~",
+     "unit": "tok/s",
+     "at": "after 5 pm"
+    },
+    {
+     "name": "ttft_s",
+     "value": 3,
+     "op": "<",
+     "unit": "s",
+     "at": "context ~256K; stated as target/achieved, percentile not stated"
+    },
+    {
+     "name": "usd_per_mtok",
+     "value": 0.3,
+     "unit": "USD",
+     "at": "input/output, GLM 5.1; excludes staffing/observability per secondary"
+    },
+    {
+     "name": "max_ctx_tokens",
+     "value": 256000,
+     "unit": "tokens"
+    }
+   ],
+   "quote": "\"Revolut initially adopted GLM-5.1 before moving to GLM-5.3, which it now serves using 56 Nvidia B200 GPUs.\" / \"sub-3 second time to first token on context windows of around 256,000 tokens, and generation speeds of around 200 tokens a second\" / \"At $0.30 per million input/output tokens, self hosting GLM 5.1 cost about a tenth of using OpenAI's Codex or Anthropic's Claude Code.\"",
+   "note": "Press account of David Abitbol's AI Engineer NYC talk (2026-10-13; video https://www.youtube.com/watch?v=Ok6QdZHCcI8, transcript not read). Register: tok/s and TTFT are what 'the sweet spot' means; percentile not stated. ws_model GLM52 = GLM-5.3 in Working Set.",
+   "inputs": [],
+   "use": "context"
+  },
+  {
+   "id": "deployments/revolut-glm53-b200x56-secondary-metrics",
+   "url": "https://www.startuphub.ai/ai-news/artificial-intelligence/2026/revolut-says-self-hosted-ai-cut-coding-costs-90",
+   "read": "2026-11-04",
+   "published": "2026-10-29",
+   "kind": "vendor",
+   "config": {
+    "model": "GLM-5.3 (summary mistakenly says GLM 4.5)",
+    "ws_model": "GLM52",
+    "gpu": "B200",
+    "n_gpus": 56,
+    "weights": "nvfp4",
+    "kv": null,
+    "engine": null,
+    "parallel": "TP8 (not TP4) to fit KV cache",
+    "spec_decode": null,
+    "max_ctx": 262144,
+    "extra": {}
+   },
+   "workload": {
+    "name": "Revolut internal coding agents",
+    "isl": "up to ~256K",
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "requests_per_s",
+     "value": 3,
+     "unit": "req/s",
+     "at": "before tuning, same GPU count"
+    },
+    {
+     "name": "requests_per_s",
+     "value": 7,
+     "op": ">",
+     "unit": "req/s",
+     "at": "after tuning"
+    },
+    {
+     "name": "ttft_s",
+     "value": 10,
+     "op": ">",
+     "unit": "s",
+     "at": "April 2026, before tuning"
+    },
+    {
+     "name": "ttft_s",
+     "value": 1.6,
+     "unit": "s",
+     "at": "after tuning; percentile not stated"
+    }
+   ],
+   "quote": "\"time to first token falling from over 10 seconds to 1.6 seconds even as requests per second rose from 3 to over 7\" / \"GLM needs TP8 not TP4 to fit KV cache\" / \"improved performance 88% for 76% more demand without adding GPUs\"",
+   "note": "secondary: https://www.startuphub.ai/ai-news/artificial-intelligence/2026/revolut-says-self-hosted-ai-cut-coding-costs-90 (a rewrite of the talk; also says 'GLM 4.5', contradicting The Register). Not in The Register. Verify against the talk transcript before use.",
+   "inputs": [],
+   "use": "context"
+  },
+  {
+   "id": "deployments/deepseek-v3r1-h800-2025-02-28",
+   "url": "https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md",
+   "read": "2026-11-04",
+   "published": "2025-03-01",
+   "kind": "vendor",
+   "config": {
+    "model": "DeepSeek-V3 and R1",
+    "ws_model": null,
+    "gpu": "H800",
+    "n_gpus": 1814,
+    "weights": "fp8 matmul, bf16 MLA",
+    "kv": null,
+    "engine": "DeepSeek in-house",
+    "parallel": "prefill EP32/DP32 (4 nodes per unit); decode EP144/DP144 (18 nodes per unit); PD disaggregated",
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "avg_nodes": 226.75,
+     "peak_nodes": 278,
+     "gpus_per_node": 8,
+     "n_gpus_basis": "average occupancy 226.75 x 8; peak 2224"
+    }
+   },
+   "workload": {
+    "name": "DeepSeek web+app+API, 24 h from 2025-02-27 12:00 to 02-28 12:00 UTC+8",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": true,
+    "extra": {
+     "avg_kvcache_len_per_output_token": 4989
+    }
+   },
+   "metrics": [
+    {
+     "name": "input_tokens_day",
+     "value": 608000000000.0,
+     "unit": "tokens"
+    },
+    {
+     "name": "input_cache_hit_tokens_day",
+     "value": 342000000000.0,
+     "unit": "tokens"
+    },
+    {
+     "name": "cache_hit_rate",
+     "value": 0.563,
+     "unit": "fraction"
+    },
+    {
+     "name": "output_tokens_day",
+     "value": 168000000000.0,
+     "unit": "tokens"
+    },
+    {
+     "name": "tok_s_per_user",
+     "low": 20,
+     "high": 22,
+     "unit": "tok/s",
+     "at": "average output speed"
+    },
+    {
+     "name": "tok_s_per_node_prefill",
+     "value": 73700,
+     "op": "~",
+     "unit": "tok/s",
+     "at": "input incl. cache hits, during prefilling"
+    },
+    {
+     "name": "tok_s_per_node_decode",
+     "value": 14800,
+     "op": "~",
+     "unit": "tok/s",
+     "at": "output, during decoding"
+    },
+    {
+     "name": "usd_per_gpu_h",
+     "value": 2,
+     "unit": "USD",
+     "at": "assumed H800 lease"
+    },
+    {
+     "name": "usd_day",
+     "value": 87072,
+     "unit": "USD",
+     "at": "226.75 nodes x 8 x 24 h x $2"
+    }
+   ],
+   "quote": "\"the combined peak node occupancy for V3 and R1 inference services reached 278, with an average occupancy of 226.75 nodes (each node contains 8 H800 GPUs).\" / \"Total input tokens: 608B, of which 342B tokens (56.3%) hit the on-disk KV cache. Total output tokens: 168B. The average output speed was 20–22 tokens per second\"",
+   "note": "Primary, self-reported. Chat/API mix, not coding agents; Feb 2025. 'cost profit margin 545%' is theoretical (all tokens billed at R1 price) and is omitted. No user count.",
+   "inputs": [],
+   "use": "context"
+  },
+  {
+   "id": "deployments/kimi-k2-h200x128-mooncake-bench",
+   "url": "https://github.com/kvcache-ai/Mooncake",
+   "read": "2026-11-04",
+   "published": "2025-07-20",
+   "kind": "vendor",
+   "config": {
+    "model": "Kimi K2 (1T MoE)",
+    "ws_model": null,
+    "gpu": "H200",
+    "n_gpus": 128,
+    "weights": null,
+    "kv": null,
+    "engine": "SGLang + Mooncake (OME)",
+    "parallel": "PD disaggregated 1P1D, 4 prefill nodes + 12 decode nodes, large-scale EP",
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "decode_batch_size": 480
+    }
+   },
+   "workload": {
+    "name": "synthetic benchmark",
+    "isl": 2000,
+    "osl": 100,
+    "prefix_cache": null,
+    "extra": {
+     "source_of_workload": "lmsys blog via search summary, page not read"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total_prefill",
+     "value": 224000,
+     "unit": "tok/s"
+    },
+    {
+     "name": "tok_s_total_decode",
+     "value": 288000,
+     "unit": "tok/s"
+    }
+   ],
+   "quote": "\"Mooncake powers the deployment of Kimi K2 on 128 H200 GPUs with PD disaggregation and large-scale expert parallelism ... achieving 224k tokens/sec prefill throughput and 288k tokens/sec decode throughput.\"",
+   "note": "Benchmark of a serving stack, not a user load; short output (100 tok) inflates prefill share. Blog: https://lmsys.org/blog/2025-07-20-k2-large-scale-ep (config details via search summary only).",
+   "inputs": [],
+   "use": "context"
+  },
+  {
+   "id": "deployments/daocloud-glm52-b300x24-vllm",
+   "url": "https://vllm.ai/blog/2026-07-23-glm-5.2-nvfp4-b300-pd",
+   "read": "2026-11-04",
+   "published": "2026-07-23",
+   "kind": "vendor",
+   "config": {
+    "model": "GLM-5.2 NVFP4",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 24,
+    "weights": "nvfp4",
+    "kv": null,
+    "engine": "vLLM + NIXL",
+    "parallel": "4 prefill instances TP1 DP4 EP (16 GPUs) + 1 decode instance TP1 DP8 EP (8 GPUs)",
+    "spec_decode": null,
+    "max_ctx": 262144,
+    "extra": {}
+   },
+   "workload": {
+    "name": "synthetic random dataset, no prefix hits",
+    "isl": "16K-256K",
+    "osl": 1000,
+    "prefix_cache": false,
+    "extra": {
+     "headline_case": "16K in / 1K out"
+    }
+   },
+   "metrics": [
+    {
+     "name": "concurrency",
+     "value": 700,
+     "op": "~",
+     "unit": "requests",
+     "at": "8K context"
+    },
+    {
+     "name": "concurrency",
+     "value": 300,
+     "op": "~",
+     "unit": "requests",
+     "at": "16K context"
+    },
+    {
+     "name": "concurrency",
+     "value": 25,
+     "op": "~",
+     "unit": "requests",
+     "at": "256K context"
+    },
+    {
+     "name": "ttft_mean_s",
+     "value": 2.5,
+     "op": "<=",
+     "unit": "s",
+     "at": "SLA"
+    },
+    {
+     "name": "tpot_ms",
+     "value": 20,
+     "op": "<=",
+     "unit": "ms",
+     "at": "SLA mean"
+    }
+   ],
+   "quote": "\"We deployed GLM-5.2-NVFP4 across three 8-GPU B300 servers (24 GPUs in total)\" / \"Mean TTFT <= 2.5 s and mean TPOT <= 20 ms\" / \"roughly 700 concurrent requests at 8K, 300 at 16K, and 25 at 256K\"",
+   "note": "Vendor (DaoCloud) engineering report, synthetic load; quotes via fetch-tool summary of the page. Not a customer deployment. Concurrency capped at 1024.",
+   "inputs": [],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/revolut-engineers-per-gpu",
+   "url": "https://www.theregister.com/ai-and-ml/2026/11/03/british-fintech-revolut-slashes-ai-coding-costs-10x-by-cutting-out-claude-and-going-self-hosted/5307345",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "GLM-5.3",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 56,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "users_per_gpu",
+     "value": 35.7,
+     "unit": "engineers/GPU",
+     "at": "rollout population, not concurrent"
+    }
+   ],
+   "quote": "computed: 2000 engineers / 56 GPUs",
+   "note": "Derived by Working Set from ext-deployments/revolut-glm53-b200x56. Formula: 2000 engineers / 56 GPUs",
+   "inputs": [
+    "deployments/revolut-glm53-b200x56"
+   ],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/revolut-req-s-per-gpu",
+   "url": "https://www.startuphub.ai/ai-news/artificial-intelligence/2026/revolut-says-self-hosted-ai-cut-coding-costs-90",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "GLM-5.3",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 56,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "requests_per_s_per_gpu",
+     "value": 0.125,
+     "unit": "req/s/GPU",
+     "op": ">",
+     "at": "secondary source"
+    }
+   ],
+   "quote": "computed: 7 req/s / 56 GPUs (7 is a lower bound: 'over 7')",
+   "note": "Derived by Working Set from ext-deployments/revolut-glm53-b200x56-secondary-metrics. Formula: 7 req/s / 56 GPUs (7 is a lower bound: 'over 7')",
+   "inputs": [
+    "deployments/revolut-glm53-b200x56-secondary-metrics"
+   ],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/deepseek-output-tok-s-per-gpu",
+   "url": "https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "DeepSeek-V3/R1",
+    "ws_model": null,
+    "gpu": "H800",
+    "n_gpus": 1814,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "tok_s_per_gpu",
+     "value": 1072,
+     "unit": "tok/s/GPU",
+     "op": "~",
+     "at": "output, whole-service average incl. prefill nodes"
+    }
+   ],
+   "quote": "computed: 168e9 output tokens / 86400 s / (226.75 x 8 = 1814 GPUs)",
+   "note": "Derived by Working Set from ext-deployments/deepseek-v3r1-h800-2025-02-28. Formula: 168e9 output tokens / 86400 s / (226.75 x 8 = 1814 GPUs)",
+   "inputs": [
+    "deployments/deepseek-v3r1-h800-2025-02-28"
+   ],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/deepseek-input-tok-s-per-gpu",
+   "url": "https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "DeepSeek-V3/R1",
+    "ws_model": null,
+    "gpu": "H800",
+    "n_gpus": 1814,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "tok_s_per_gpu",
+     "value": 3879,
+     "unit": "tok/s/GPU",
+     "op": "~",
+     "at": "input incl. cache hits"
+    }
+   ],
+   "quote": "computed: 608e9 input tokens / 86400 / 1814",
+   "note": "Derived by Working Set from ext-deployments/deepseek-v3r1-h800-2025-02-28. Formula: 608e9 input tokens / 86400 / 1814",
+   "inputs": [
+    "deployments/deepseek-v3r1-h800-2025-02-28"
+   ],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/deepseek-uncached-input-tok-s-per-gpu",
+   "url": "https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "DeepSeek-V3/R1",
+    "ws_model": null,
+    "gpu": "H800",
+    "n_gpus": 1814,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "tok_s_per_gpu",
+     "value": 1697,
+     "unit": "tok/s/GPU",
+     "op": "~",
+     "at": "uncached input"
+    }
+   ],
+   "quote": "computed: (608e9 - 342e9) / 86400 / 1814",
+   "note": "Derived by Working Set from ext-deployments/deepseek-v3r1-h800-2025-02-28. Formula: (608e9 - 342e9) / 86400 / 1814",
+   "inputs": [
+    "deployments/deepseek-v3r1-h800-2025-02-28"
+   ],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/deepseek-concurrent-streams-per-gpu",
+   "url": "https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "DeepSeek-V3/R1",
+    "ws_model": null,
+    "gpu": "H800",
+    "n_gpus": 1814,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "concurrent_streams_per_gpu",
+     "value": 51,
+     "unit": "streams/GPU",
+     "op": "~",
+     "at": "range 49-53; whole service ~88k-97k streams"
+    }
+   ],
+   "quote": "computed: (168e9/86400 tok/s) / (20 to 22 tok/s per stream) / 1814 = 49 to 53; Little's law estimate",
+   "note": "Derived by Working Set from ext-deployments/deepseek-v3r1-h800-2025-02-28. Formula: (168e9/86400 tok/s) / (20 to 22 tok/s per stream) / 1814 = 49 to 53; Little's law estimate",
+   "inputs": [
+    "deployments/deepseek-v3r1-h800-2025-02-28"
+   ],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/kimi-k2-decode-tok-s-per-gpu",
+   "url": "https://github.com/kvcache-ai/Mooncake",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "Kimi K2",
+    "ws_model": null,
+    "gpu": "H200",
+    "n_gpus": 128,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "tok_s_per_gpu",
+     "value": 2250,
+     "unit": "tok/s/GPU",
+     "at": "synthetic 2000 in / 100 out"
+    }
+   ],
+   "quote": "computed: 288000 decode tok/s / 128 GPUs (3000 over the 96 decode GPUs)",
+   "note": "Derived by Working Set from ext-deployments/kimi-k2-h200x128-mooncake-bench. Formula: 288000 decode tok/s / 128 GPUs (3000 over the 96 decode GPUs)",
+   "inputs": [
+    "deployments/kimi-k2-h200x128-mooncake-bench"
+   ],
+   "use": "context"
+  },
+  {
+   "id": "deployments/derived/daocloud-concurrency-per-gpu-8k",
+   "url": "https://vllm.ai/blog/2026-07-23-glm-5.2-nvfp4-b300-pd",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "derived",
+   "config": {
+    "model": "GLM-5.2 NVFP4",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 24,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "derived",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "concurrency_per_gpu",
+     "value": 29,
+     "unit": "requests/GPU",
+     "op": "~",
+     "at": "8K ctx, synthetic, SLA TTFT<=2.5s TPOT<=20ms"
+    }
+   ],
+   "quote": "computed: 700 / 24 GPUs (~29 at 8K, ~12.5 at 16K, ~1 at 256K)",
+   "note": "Derived by Working Set from ext-deployments/daocloud-glm52-b300x24-vllm. Formula: 700 / 24 GPUs (~29 at 8K, ~12.5 at 16K, ~1 at 256K)",
+   "inputs": [
+    "deployments/daocloud-glm52-b300x24-vllm"
+   ],
+   "use": "context"
+  }
+ ]
+}

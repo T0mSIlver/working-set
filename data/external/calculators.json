@@ -1,0 +1,464 @@
+{
+ "source": {
+  "id": "calculators",
+  "name": "Self-host vs API cost calculators and break-even articles",
+  "publisher": "BenchLM, GPUPerHour, AppScale, Findstack, Spheron",
+  "url": "https://benchlm.ai/tools/self-host-calculator",
+  "license": "Public web pages, no stated reuse licence. Facts and short quotes only.",
+  "method": "Each record is one tool's default scenario or an article's worked example, read 2026-11-04. Numbers are the tool's assumptions, not measurements, except where a metric is marked vendor.",
+  "kind": "guess",
+  "refresh_days": 30,
+  "redistribute": "cite",
+  "terms": "Public web pages, no stated reuse licence. Facts and short quotes only."
+ },
+ "records": [
+  {
+   "id": "calculators/benchlm-self-host-default",
+   "url": "https://benchlm.ai/tools/self-host-calculator",
+   "read": "2026-11-04",
+   "published": null,
+   "kind": "guess",
+   "config": {
+    "model": "GLM-5.1",
+    "ws_model": null,
+    "gpu": "H100",
+    "n_gpus": 8,
+    "weights": "q4",
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "BenchLM default: Chatbot preset, 50,000 requests/day, 200 in / 400 out tokens, API blended 70/30",
+    "isl": 200,
+    "osl": 400,
+    "prefix_cache": null,
+    "extra": {
+     "requests_per_day": 50000
+    }
+   },
+   "metrics": [
+    {
+     "name": "usd_per_gpu_h",
+     "value": 3.99,
+     "unit": "USD/GPU-h",
+     "kind": "derived",
+     "at": "rent mode: ($23,302/mo with overhead 0) / (8 GPUs x 730 h); the 730 h month is our assumption, the page shows no hourly rate"
+    },
+    {
+     "name": "self_host_usd_month",
+     "value": 27962,
+     "unit": "USD/month",
+     "at": "rent, overhead 20%"
+    },
+    {
+     "name": "self_host_usd_month_no_overhead",
+     "value": 23302,
+     "unit": "USD/month",
+     "at": "overhead set to 0 in the page"
+    },
+    {
+     "name": "overhead_pct",
+     "value": 20,
+     "unit": "%"
+    },
+    {
+     "name": "utilization_pct",
+     "value": 70,
+     "unit": "%",
+     "at": "input exists but changing it to 35% and 100% left cost and break-even unchanged (tested 2026-11-04)"
+    },
+    {
+     "name": "api_usd_month",
+     "value": 3060,
+     "unit": "USD/month",
+     "at": "default volume"
+    },
+    {
+     "name": "usd_per_mtok",
+     "value": 2.3,
+     "unit": "USD/Mtok",
+     "kind": "derived",
+     "at": "blended 70/30 API price: $69 per month at 1M tokens/day over 30 days"
+    },
+    {
+     "name": "breakeven_mtok_day",
+     "value": 405,
+     "unit": "Mtok/day"
+    }
+   ],
+   "quote": "Q4 · 8× NVIDIA H100 (80GB) | Overhead % 20% | Utilization % 70% | API / mo $3,060 | Self-host / mo $27,962 | Break-even 405M/day | Blended 70/30 in/out. Above this volume, self-host saves money. | 1M/day $69 $27,962 API",
+   "note": "Cost is a fixed monthly node price plus overhead. No concurrency, seats, latency or per-GPU throughput: volume is tokens/day only, and no throughput ceiling is shown for the node. Defaults read from the rendered page; the page changes with its model and config selectors. A search snippet showed 264M/day for another configuration.",
+   "use": "context"
+  },
+  {
+   "id": "calculators/benchlm-faq-node-prices",
+   "url": "https://benchlm.ai/tools/self-host-calculator",
+   "read": "2026-11-04",
+   "published": null,
+   "kind": "guess",
+   "config": {
+    "model": "frontier open-weight (Kimi K3, Qwen3.8 Max)",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "4-bit",
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "BenchLM FAQ rent price points",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "rent_usd_month_8xh100",
+     "value": 23000,
+     "op": "~",
+     "unit": "USD/month"
+    },
+    {
+     "name": "rent_usd_month_8xb300",
+     "value": 48000,
+     "op": "~",
+     "unit": "USD/month"
+    },
+    {
+     "name": "usd_per_gpu_h",
+     "value": 8.22,
+     "op": "~",
+     "unit": "USD/GPU-h",
+     "kind": "derived",
+     "at": "$48,000 / (8 x 730 h); 730 h is our assumption"
+    }
+   ],
+   "quote": "Rented GPU time ranges from about $250 a month for a small model on one RTX 4090 to about $23,000 for an 8×H100 node and $48,000 for the 8×B300 node that 2T-class models like Kimi K3 and Qwen3.8 Max need at 4-bit, before overhead.",
+   "note": "Same page FAQ. 8xH100 gives $3.94/GPU-h by the same formula.",
+   "use": "context"
+  },
+  {
+   "id": "calculators/gpuperhour-self-host-vs-api-default",
+   "url": "https://gpuperhour.com/tools/self-host-vs-api-cost-calculator",
+   "read": "2026-11-04",
+   "published": "2026-11-04",
+   "kind": "guess",
+   "config": {
+    "model": "Llama-3.3-70B",
+    "ws_model": null,
+    "gpu": "H100",
+    "n_gpus": 2,
+    "weights": "fp8",
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "GPUPerHour default: 300M input + 100M output tokens/month (inferred), 100 concurrent requests, 1,000/1,000 tokens",
+    "isl": 1000,
+    "osl": 1000,
+    "prefix_cache": false,
+    "extra": {
+     "concurrent_requests": 100
+    }
+   },
+   "metrics": [
+    {
+     "name": "usd_per_gpu_h",
+     "value": 2.5,
+     "unit": "USD/GPU-h",
+     "at": "cheapest live Hyperstack offer, 4 Nov 2026"
+    },
+    {
+     "name": "tok_s_total",
+     "value": 2895.49,
+     "unit": "tok/s",
+     "kind": "vendor",
+     "at": "output tokens/s, NVIDIA NIM 1.8.0 TP2, 100 concurrent requests"
+    },
+    {
+     "name": "tok_s_total_single_request",
+     "value": 53.37,
+     "unit": "tok/s",
+     "kind": "vendor",
+     "at": "1 concurrent request, same server"
+    },
+    {
+     "name": "hours_per_month",
+     "value": 730,
+     "unit": "h"
+    },
+    {
+     "name": "self_host_always_on_usd_month",
+     "value": 3650,
+     "unit": "USD/month",
+     "kind": "derived"
+    },
+    {
+     "name": "api_usd_month",
+     "value": 62,
+     "unit": "USD/month"
+    },
+    {
+     "name": "utilization_pct",
+     "value": 1.3,
+     "unit": "%",
+     "at": "output of the page, not an input"
+    },
+    {
+     "name": "usd_per_mtok",
+     "value": 0.48,
+     "unit": "USD/Mtok output",
+     "kind": "derived",
+     "at": "server never idle"
+    },
+    {
+     "name": "breakeven_mtok_month",
+     "value": 5887,
+     "unit": "Mtok output/month",
+     "kind": "derived",
+     "at": "one always-on server vs DeepInfra at the default mix"
+    }
+   ],
+   "quote": "Published by NVIDIA (vendor-run): 2,895 output tokens per second across 100 concurrent requests, 1,000 input and 1,000 output tokens each, NVIDIA NIM 1.8.0, TP2. | 1 server x 730 hours | How busy your servers would be | One always-on server beats this API above about 5,887 million output tokens a month (at your input-to-output ratio); one server can produce about 7,609 million at the throughput used.",
+   "note": "Closest to Working Set: it takes measured throughput at a stated concurrency and shows utilization as an output. It has no users, arrival rate, peaks or latency, and excludes ops cost. Input tokens/month 300M and output 100M are inferred by the reader from the displayed $62; the page does not state them. API price default DeepInfra $0.10 in / $0.32 out per Mtok.",
+   "use": "context"
+  },
+  {
+   "id": "calculators/appscale-inference-cost-default",
+   "url": "https://appscale.blog/en/tools/inference-cost-calculator",
+   "read": "2026-11-04",
+   "published": "2026-08",
+   "kind": "guess",
+   "config": {
+    "model": "generic",
+    "ws_model": null,
+    "gpu": "generic",
+    "n_gpus": 2,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "AppScale default: 50,000 requests/day, 1,500 in / 500 out tokens, 0% cache hit",
+    "isl": 1500,
+    "osl": 500,
+    "prefix_cache": null,
+    "extra": {
+     "requests_per_day": 50000
+    }
+   },
+   "metrics": [
+    {
+     "name": "usd_per_gpu_h",
+     "value": 2.5,
+     "unit": "USD/GPU-h"
+    },
+    {
+     "name": "tok_s_total",
+     "value": 2500,
+     "unit": "tok/s",
+     "at": "fleet output tokens/s, user input"
+    },
+    {
+     "name": "self_host_usd_month",
+     "value": 3650,
+     "unit": "USD/month",
+     "at": "2 x $2.50 x 730 h, fixed"
+    },
+    {
+     "name": "api_usd_month",
+     "value": 22800,
+     "unit": "USD/month"
+    },
+    {
+     "name": "usd_per_mtok",
+     "value": 7.5,
+     "unit": "USD/Mtok",
+     "at": "API blended"
+    },
+    {
+     "name": "breakeven_req_day",
+     "value": 8004,
+     "op": "~",
+     "unit": "requests/day"
+    }
+   ],
+   "quote": "GPU count × $/hour × 730h, a fixed monthly | Self-host / month (fixed) $3,650 2 GPU × $2.50/hr × 730h | Requests / day: 50,000",
+   "note": "Prices are labelled illustrative (Aug 2026). No utilization, concurrency, users, latency or ops cost. Throughput only converts the fixed cost to $/Mtok output. The page's verdict text at default volume reads inconsistent with its own numbers.",
+   "use": "context"
+  },
+  {
+   "id": "calculators/findstack-break-even-a100",
+   "url": "https://findstack.com/resources/self-hosted-llm-vs-api-cost",
+   "read": "2026-11-04",
+   "published": "2026-08",
+   "kind": "guess",
+   "config": {
+    "model": "70B-class dense",
+    "ws_model": null,
+    "gpu": "A100",
+    "n_gpus": 1,
+    "weights": null,
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "Findstack article: single user or small team, always-on A100",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {}
+   },
+   "metrics": [
+    {
+     "name": "usd_per_gpu_h",
+     "value": 1.19,
+     "unit": "USD/GPU-h",
+     "at": "RunPod community tier, August 2026"
+    },
+    {
+     "name": "tok_s_total",
+     "value": 20,
+     "unit": "tok/s",
+     "at": "author's assumption, not measured"
+    },
+    {
+     "name": "utilization_pct",
+     "value": 100,
+     "unit": "%",
+     "at": "base case"
+    },
+    {
+     "name": "utilization_pct_real",
+     "low": 5,
+     "high": 15,
+     "unit": "%",
+     "at": "author's claim of what real self-hosters run"
+    },
+    {
+     "name": "usd_per_mtok",
+     "value": 16.53,
+     "unit": "USD/Mtok",
+     "at": "100% utilization floor"
+    },
+    {
+     "name": "usd_per_mtok_10pct_util",
+     "value": 165,
+     "unit": "USD/Mtok"
+    },
+    {
+     "name": "self_host_usd_month",
+     "value": 868.7,
+     "unit": "USD/month"
+    }
+   ],
+   "quote": "Break-even tokens per month = monthly GPU cost ÷ API price per token | We have used 20 tokens per second for a 70B-class model on an A100, and we have not measured it. | $16.53 per million tokens becomes $165 per million",
+   "note": "An article, not an interactive tool (no calculator on the page). Single stream: no batching, concurrency, seats or latency. The 20 tok/s figure is far below batched serving, so its 'impossible' verdicts do not carry over to multi-user serving. Page discloses affiliate links.",
+   "use": "context"
+  },
+  {
+   "id": "calculators/spheron-break-even-h100",
+   "url": "https://www.spheron.network/blog/migrate-from-openai-api-to-self-hosted-llms-cost-2026/",
+   "read": "2026-11-04",
+   "published": "2026-07",
+   "kind": "guess",
+   "config": {
+    "model": "70B dense",
+    "ws_model": null,
+    "gpu": "H100",
+    "n_gpus": 1,
+    "weights": "fp8",
+    "kv": null,
+    "engine": null,
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {}
+   },
+   "workload": {
+    "name": "Spheron article: Llama-class 70B FP8 on one H100 with vLLM vs GPT-5.4",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": false,
+    "extra": {
+     "api_input_share": "80/20 or 60/40"
+    }
+   },
+   "metrics": [
+    {
+     "name": "usd_per_gpu_h",
+     "value": 2.64,
+     "unit": "USD/GPU-h",
+     "at": "Spheron H100 SXM5 on-demand, 04 Nov 2026 (2.5352875 on 7 Jul 2026)"
+    },
+    {
+     "name": "usd_per_gpu_h_h200",
+     "value": 5.51,
+     "unit": "USD/GPU-h",
+     "at": "Spheron H200 SXM5 live"
+    },
+    {
+     "name": "tok_s_total",
+     "value": 400,
+     "unit": "tok/s",
+     "kind": "vendor",
+     "at": "'at typical concurrency', Spheron's own estimate"
+    },
+    {
+     "name": "tok_day_ceiling_mtok",
+     "value": 34.5,
+     "unit": "Mtok/day"
+    },
+    {
+     "name": "usd_per_mtok",
+     "value": 1.76,
+     "unit": "USD/Mtok",
+     "at": "full utilization floor"
+    },
+    {
+     "name": "breakeven_mtok_day",
+     "value": 12.17,
+     "unit": "Mtok/day",
+     "at": "vs GPT-5.4 at $5.00/M blended, 80/20"
+    },
+    {
+     "name": "breakeven_mtok_day_6040",
+     "value": 8.11,
+     "unit": "Mtok/day",
+     "at": "vs GPT-5.4 at $7.50/M, 60/40"
+    },
+    {
+     "name": "ops_usd_month",
+     "value": 200,
+     "op": ">=",
+     "unit": "USD/month",
+     "at": "engineering floor, cited from mlpivot.dev"
+    }
+   ],
+   "quote": "Breakeven volume (M tokens/day) = self-hosted daily cost / blended API rate | roughly 400 tokens/sec at typical concurrency | Treat $200/month as a floor, not a ceiling",
+   "note": "Vendor-run (a GPU cloud selling the GPUs). An article with a formula, no calculator tool. Concurrency is only the phrase 'typical concurrency'; no seats or latency. Spheron's separate DeepSeek post gives crossovers of 831M/933M tokens/day (secondary, not read in full).",
+   "use": "context"
+  }
+ ]
+}
