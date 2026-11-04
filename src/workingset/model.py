@@ -305,7 +305,7 @@ class Model:
     # (num_speculative_tokens; 0 = no draft model ships with it) and how they
     # are drafted: "mtp" (a built-in MTP module), "dspark" (DeepSeek's DSpark
     # stages) or "eagle" (no module; an external EAGLE-style draft).
-    drafts: int = 0
+    spec_tokens: int = 0
     draft_method: str = "mtp"
     # True when w_resident is already the measured AS-DEPLOYED footprint, so
     # the +15% weight-overhead allowance (calibrated on exactly that figure)
@@ -3732,7 +3732,7 @@ def _selfcheck():
     # serves its own depth: 7 vs 3) IS DSV4F's — the text config and the
     # cache code are unchanged, so a drift here is a copy error
     ds4v = MODELS["DSV4FV"]
-    _same = ("name", "w_resident", "nvfp4_w", "drafts")
+    _same = ("name", "w_resident", "nvfp4_w", "spec_tokens")
     assert all(getattr(ds4v, f.name) == getattr(ds4, f.name)
                for f in fields(Model) if f.name not in _same)
     # resident delta = ViT 823,685,120 + aligner 109,068,288 + 4 image

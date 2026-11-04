@@ -94,7 +94,7 @@ w_route_total = 0.0
 # calibrated against the same passes, so moving one without the
 # other breaks the fit (see MBU_DEFAULT).
 mtp = 2.94
-drafts = 2                       # num_speculative_tokens: the 27B's measured run
+spec_tokens = 2                  # num_speculative_tokens: the 27B's measured run
 weights_as_deployed = true        # w_resident is the measured as-deployed footprint (no +15%)
 # RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
 # header: 23,417,339,744 B (dense MLPs of 56/64 layers NVFP4;
@@ -140,7 +140,7 @@ w_decode_shared = 1_940_000_000  # attn + deltanet + shared expert + router + lm
 w_route_pertok = 1_006_632_960   # 8 routed experts x 3.146M x 40 layers, FP8
 w_route_total = 32_212_254_720   # 256 routed experts (saturates at exactly n=32 linear)
 mtp = 1.7                        # MTP module, speedup kept equal to baseline's fit
-drafts = 2                       # num_speculative_tokens: MTP module
+spec_tokens = 2                  # num_speculative_tokens: MTP module
 # RedHatAI/Qwen3.6-35B-A3B-NVFP4 recipe: experts + full-attn NVFP4
 # (0.5625 B/param), but embed/lm_head/DeltaNet/router — AND the MTP
 # module (`re:^mtp.*` is in the measured ignore list) — stay BF16,
@@ -188,7 +188,7 @@ w_decode_shared = 125.0e9        # 88 FP8 layers + BF16 lm_head; vision tower no
 w_route_pertok = 0.0
 w_route_total = 0.0
 mtp = 1.0                        # no MTP module (EAGLE draft is external)
-drafts = 0                       # num_speculative_tokens: no MTP module; the explorer's slider models an external EAGLE-style draft
+spec_tokens = 0                  # num_speculative_tokens: no MTP module; the explorer's slider models an external EAGLE-style draft
 draft_method = "eagle"
 # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
 # edge MLP + all attention FP8, lm_head BF16 (research note #3).
@@ -240,7 +240,7 @@ w_decode_shared = 18.92e9        # MLA + indexers + dense MLP + shared exp + lm_
 w_route_pertok = 22_649_241_600  # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
 w_route_total = 724_775_731_200  # 256 experts (saturates at n=32, like 35BA3B)
 mtp = 1.7                        # MTP module (5 drafts); transplanted fit, unmeasured
-drafts = 5                       # num_speculative_tokens: MTP module
+spec_tokens = 5                  # num_speculative_tokens: MTP module
 # nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header:
 # routed experts of the 75 main MoE layers NVFP4 (21,233,688 B/expert);
 # attention, indexers, shared experts and the MTP layer BF16, dense
@@ -322,7 +322,7 @@ w_decode_shared = 7.66e9         # attn 4.60 + shared exp 1.08 + compressors/ind
 w_route_pertok = 3_449_290_752   # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
 w_route_total = 147_169_738_752  # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
 mtp = 1.7                        # DSpark drafts 7 tokens; transplanted fit, unmeasured
-drafts = 7                       # num_speculative_tokens: DSpark, 0731's model card (greedy drafts)
+spec_tokens = 7                  # num_speculative_tokens: DSpark, 0731's model card (greedy drafts)
 draft_method = "dspark"
 # nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
 # shard header. Routed experts repacked NVFP4 (E4M3 block-16 scales):
@@ -391,7 +391,7 @@ w_decode_shared = 7.66e9         # = DSV4F: the tower is never read by a text de
 w_route_pertok = 3_449_290_752   # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
 w_route_total = 147_169_738_752  # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
 mtp = 1.7                        # DSpark (the README serves 3 drafts); transplanted fit
-drafts = 3                       # num_speculative_tokens: DSpark, its model card
+spec_tokens = 3                  # num_speculative_tokens: DSpark, its model card
 draft_method = "dspark"
 # nvfp4_w: none  # no official NVFP4 checkpoint; the experts are already 4-bit
 kv_decode_bpt = 426              # = DSV4F: fp4 indexer scan + dense HCA
@@ -419,6 +419,7 @@ state_tip = "DeepSeek-V4-Flash-Vision-Exp pays a fixed {state_mib} MiB/session (
 speculative_config = '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic","enable_adaptive_verification":true}'
 
 [[models.DSV4FV.explorer.recipe]]
+after_spec = true
 note = "priced as a text workload: image encoding (ViT prefill) and image tokens are not modelled"
 
 # MoE 552B backbone + 196B Engram tables (510.3 GB on disk incl. 3 DSpark
@@ -450,7 +451,7 @@ w_decode_shared = 8_522_921_408  # exact ledger: attn 5.07 + shared exp 1.42 + g
 w_route_pertok = 4_512_153_600   # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
 w_route_total = 288_777_830_400  # 384 experts (kink at n = 384/6 = 64)
 mtp = 1.7                        # DSpark drafts 5 tokens; transplanted fit, unmeasured
-drafts = 5                       # num_speculative_tokens: DSpark, the vLLM recipe on NVIDIA
+spec_tokens = 5                  # num_speculative_tokens: DSpark, the vLLM recipe on NVIDIA
 draft_method = "dspark"
 # nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
 # shard header. Only the 40 main layers' routed experts change: native
@@ -520,7 +521,7 @@ w_route_pertok = 2_359_584_000   # 10 experts x 4,915,800 B (FP8 + block scales)
 w_route_total = 120_810_700_800  # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
 mtp = 1.7                        # MTP module (1 hybrid layer, 3 drafts per the vLLM
                                  # recipe); transplanted fit, unmeasured
-drafts = 3                       # num_speculative_tokens: vLLM recipe
+spec_tokens = 3                  # num_speculative_tokens: vLLM recipe
 # nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
 # shard header: routed experts of the 48 main layers NVFP4
 # (2,764,824 B/expert, x0.5625 of FP8); n-gram table, MTP experts,
@@ -591,7 +592,7 @@ w_decode_shared = 13_957_216_504 # exact ledger sum — KDA 9.37 (BF16!) + DSA a
 w_route_pertok = 8_457_781_248   # 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
 w_route_total = 304_480_124_928  # 288 experts (kink at n = 288/8 = 36)
 mtp = 1.7                        # MTP draft layer (recipe runs 5 drafts); transplanted fit
-drafts = 5                       # num_speculative_tokens: vLLM recipe
+spec_tokens = 5                  # num_speculative_tokens: vLLM recipe
 # RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
 # NVFP4 checkpoint), MEASURED from every shard header: routed experts
 # of the 42 decode layers NVFP4 (14,155,800 B/expert, x0.5625), MTP
@@ -665,7 +666,7 @@ w_route_pertok = 32_169_775_104  # 4 experts x 113,273,856 B (FP8 + F32 block sc
 w_route_total = 1_029_432_803_328 # 128 experts (kink at n = 128/4 = 32)
 mtp = 1.7                        # DSpark drafter (3 drafts, the recipe's depth); transplanted
                                  # fit, unmeasured — the recipe reports AL 2.79-2.98 on GB300
-drafts = 3                       # num_speculative_tokens: DSpark, fixed by the checkpoint (vLLM recipe)
+spec_tokens = 3                  # num_speculative_tokens: DSpark, fixed by the checkpoint (vLLM recipe)
 draft_method = "dspark"
 # mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from
 # every shard header: only the 71 MoE layers' routed experts change,
