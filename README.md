@@ -46,6 +46,7 @@ uv run ws link workingset.toml           # the explorer URL showing this config
 uv run ws hypotheses                     # the H-* and what each one needs
 uv run ws test workingset.toml --dry-run # the plan, the sampler self-check, no requests
 uv run ws test workingset.toml --exclusive --out run.json   # measure it
+uv run ws calibrate sweep.json --config workingset.toml --write   # fit the decode constants to a ws decode-sweep run
 uv run ws report run.json                # re-print the verdicts
 uv run ws models                         # model / GPU keys
 uv run ws api workingset.toml --hours 84 # one seat on each API and coding plan, same workload
