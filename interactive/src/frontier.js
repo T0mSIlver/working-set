@@ -161,7 +161,7 @@ export const SAME_MODEL_TIE = 1.05;
 const FRONTIER_SHORT = { "27B": "Qwen3.8-27B", "35BA3B": "35B-A3B", "MM35": "Mistral-Med-3.5",
                          "GLM52": "GLM-5.3", "DSV4F": "DSv4-Flash",
                          "DSV4FV": "DSv4-Flash-Vision", "DSV41F": "DSv4.1-Flash", "Q38FN": "Q3.8-Flash",
-                         "GLM53F": "G5.3-Flash" };
+                         "GLM53F": "G5.3-Flash", "ML4": "Mistral-Large-4" };
 // the row as the table and the tooltip print it: the model without its
 // architecture tag and the split in the TP/DP shorthand. r.label keeps the
 // Python-identical topology name (deploy card, harness, self-checks)
@@ -352,9 +352,9 @@ export function renderFrontierChart(rows, curKey){
   if (unscored) notes.push(`${unscored} unscored`);
   if (notViable) notes.push(`${notViable} not viable${curNotViable?' (yours among them)':''}`);
   if (!rows.some(r => r.key === curKey)) notes.push('your split is not in the grid');
-  // a row scored from its vendor card (QUALITY[mk].source) is not an AA
-  // measurement: the source line names it rather than label it AA
-  const vendor = [...new Set(live.filter(r => CONFIG.QUALITY[r.mk].source).map(r => FRONTIER_SHORT[r.mk] || r.mk))];
+  // a score taken from a vendor card (QUALITY[mk].source[bench]) is not an
+  // AA measurement: the source line names it rather than label it AA
+  const vendor = [...new Set(live.filter(r => CONFIG.QUALITY[r.mk].source?.[state.bench]).map(r => FRONTIER_SHORT[r.mk] || r.mk))];
   const bench = CONFIG.BENCHES[state.bench];
   const axisSrc = `scores: Artificial Analysis, ${bench.harness}` + (vendor.length ? `; ${vendor.join(', ')}: vendor card` : '');
   g+=`<text class="axtick" x="${mL}" y="${wide ? mT-10 : 12}" text-anchor="start">${esc(axisSrc)}</text>`;

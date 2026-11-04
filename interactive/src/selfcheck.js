@@ -94,10 +94,13 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["Q38FN"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"B300")===1 &&
                  minTpFor(withKvDtype(CONFIG.MODELS["GLM53F"],"fp16"),"H200")===3 &&
-                 minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2, "min TP per model/part");
+                 minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2 &&
+                 minTpFor(CONFIG.MODELS["ML4"],"H200")===9 &&
+                 minTpFor(CONFIG.MODELS["ML4"],"B300")===5 &&
+                 minTpFor({...CONFIG.MODELS["ML4"], w_resident: CONFIG.MODELS["ML4"].nvfp4_w[0]},"B300")===3, "min TP per model/part");
   // (GLM-5.3-Flash prices as its BF16-KV arm on any H200 topology — the fp8
   // arm THROWS there, asserted below with the rest of its identities)
-  for (const mk of ["MM35","GLM52","DSV4F","DSV4FV","DSV41F","Q38FN","GLM53F"])
+  for (const mk of ["MM35","GLM52","DSV4F","DSV4FV","DSV41F","Q38FN","GLM53F","ML4"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(
           mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk],
@@ -108,24 +111,28 @@ export function unitChecks(){
   console.assert(kv_pool_tokens(CONFIG.MODELS["GLM52"], makeGrid(2,4,"B300")) > 0,
     "GLM-5.3 DP2xTP4 on B300 must hold a real pool");
   const DEEPSEEK_FLASH = ["DSV4F", "DSV4FV", "DSV41F"];   // fixed window + compressor state
+  // every model whose deltanet_state is a FIXED latent window, not a bf16
+  // recurrent state: the DeepSeek Flash models and Mistral-Large-4's DSpark
+  // drafter windows (mirror _selfcheck's FIXED_STATE)
+  const FIXED_STATE = [...DEEPSEEK_FLASH, "ML4"];
   // KV sharding under TP (research/kv_tp_sharding.md; mirror _selfcheck):
   // every default ("dcp") topology at a TP the KV heads divide stores ONE
   // copy; "replicate" pays tp/kv_heads copies past the heads, and the
   // single-latent models pay it at every tp > 1
-  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV4F",1],["DSV4FV",1],["DSV41F",1],["Q38FN",2],["GLM53F",1]]){
+  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV4F",1],["DSV4FV",1],["DSV41F",1],["Q38FN",2],["GLM53F",1],["ML4",1]]){
     const m = CONFIG.MODELS[mk];
     console.assert(m.kv_heads === heads, mk+" kv_heads");
     for (const tp of [1,2,4,8]){
       const d = makeGrid(1,tp,"B300"), r = makeGrid(1,tp,"B300","replicate");
       const [dk, ds] = kvReplication(m, d), [rk, rs] = kvReplication(m, r);
       console.assert(dk === 1 && ds === 1, mk+" TP"+tp+" dcp = one copy");
-      console.assert(rk === Math.max(1, tp/heads) && rs === (DEEPSEEK_FLASH.includes(mk) ? rk : 1), mk+" TP"+tp+" replicate factor");
+      console.assert(rk === Math.max(1, tp/heads) && rs === (FIXED_STATE.includes(mk) ? rk : 1), mk+" TP"+tp+" replicate factor");
       console.assert(dcpSize(m, d) === Math.max(1, Math.floor(tp/heads)) && dcpSize(m, r) === 1, mk+" dcp size");
     }
   }
-  console.assert(DEEPSEEK_FLASH.every(k => CONFIG.MODELS[k].state_heads === 1)
-    && Object.keys(CONFIG.MODELS).every(k => DEEPSEEK_FLASH.includes(k) || CONFIG.MODELS[k].state_heads === undefined),
-    "only the DeepSeek Flash models' state replicates with their cache");
+  console.assert(FIXED_STATE.every(k => CONFIG.MODELS[k].state_heads === 1)
+    && Object.keys(CONFIG.MODELS).every(k => FIXED_STATE.includes(k) || CONFIG.MODELS[k].state_heads === undefined),
+    "only the fixed latent windows (DeepSeek Flash, Mistral-Large-4's drafter) replicate with their cache");
   console.assert(kvReplication(CONFIG.MODELS["27B"], makeGrid(1,6,"B300"))[0] === 1
     && kvReplication(CONFIG.MODELS["27B"], makeGrid(1,6,"B300","replicate"))[0] === 1.5
     && kvReplication(CONFIG.MODELS["GLM52"], makeGrid(1,3,"B300","replicate"))[0] === 3
@@ -293,8 +300,8 @@ export function unitChecks(){
   console.assert(dsf.deltanet_state === 43*128*528 + 3*2*2*512*4,
     "DSV41F per-session state = fp8 windows + fp32 compressor buffers");
   console.assert(dsf.state_step_bytes === 40*528 + 3*2*2*512*4 && state_traffic(dsf) === dsf.state_step_bytes
-    && Object.keys(CONFIG.MODELS).every(k => DEEPSEEK_FLASH.includes(k) || state_traffic(CONFIG.MODELS[k]) === 2*CONFIG.MODELS[k].deltanet_state),
-    "DSV41F per-step state traffic = ring-slot writes + compressor r/w; every non-DeepSeek model streams 2 x its state");
+    && Object.keys(CONFIG.MODELS).every(k => FIXED_STATE.includes(k) || state_traffic(CONFIG.MODELS[k]) === 2*CONFIG.MODELS[k].deltanet_state),
+    "DSV41F per-step state traffic = ring-slot writes + compressor r/w; every recurrent-state model streams 2 x its state");
   console.assert(dsf.state_fp32_ok === false && dsf.kv_fp16_ok === false,
     "DSV41F: fixed-precision state, quantized-only main KV");
   console.assert(dsf.w_route_pertok === 6*18800640*40 &&
@@ -379,6 +386,24 @@ export function unitChecks(){
                  g53fp16.kv_decode_const === 2*g53.kv_decode_const &&
                  g53fp16.kv_decode_bpt === g53.kv_decode_bpt,
     "GLM53F FP16-KV: kv_bpt and kv_decode_const double, indexer scan unchanged");
+  // Mistral-Large-4 (research/model_mistral_large4.md; mirror _selfcheck):
+  // MLA + DSA on 72 layers, 63 of which store latents (9 share layer 35's)
+  // and 44 of which run an indexer (28 reuse the previous one's top-k)
+  const ml4 = CONFIG.MODELS["ML4"], ml4e = 3*6144**2 + 3*48**2*4, ml4e4 = 3*6144**2/2 + 3*6144**2/16 + 6*4;
+  console.assert(ml4.kv_bpt === 63*576 + 44*132 && ml4.kv_decode_bpt === 44*132 &&
+                 ml4.kv_decode_const === 72*2048*576 && ml4.kv_decode_topk === 2048,
+    "ML4 caches: 63 latents + 44 indexers stored; 44 scans + 72 top-k gathers read");
+  console.assert(ml4.deltanet_state === 3*2048*576 && state_traffic(ml4) === 0 && ml4.state_fp32_ok === false,
+    "ML4 per-session state = the DSpark drafter's three 2,048-token latent windows, storage only");
+  console.assert(ml4.w_route_pertok === 4*ml4e*71 && ml4.w_route_total === 128*ml4e*71 &&
+                 ml4.w_route_total/ml4.w_route_pertok === 32,
+    "ML4 expert bytes (FP8 + F32 block-128 scales); kink at n = 128/4 = 32");
+  console.assert(ml4.nvfp4_w[2] === 4*ml4e4*71 && ml4.nvfp4_w[3] === 128*ml4e4*71 &&
+                 ml4.nvfp4_w[1] === ml4.w_decode_shared &&
+                 ml4.nvfp4_w[0] - ml4.w_resident === ml4.nvfp4_w[3] - ml4.w_route_total,
+    "ML4 NVFP4: only the routed experts change (ModelOpt NVFP4, measured)");
+  console.assert(ml4.kv_fp16_ok === false && !ml4.kv_fp8_blackwell_only,
+    "ML4: fp8_ds_mla latent cache only, servable on Hopper and Blackwell");
   // zero-pool honesty: weights that don't fit report ZERO warm even with a
   // large CPU-offload buffer (the guard fires before the workload is touched)
   const zr = warmCapacity(glm, makeTopo("tp",1,"H200"), null, 512, 3, 1000);

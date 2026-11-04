@@ -46,7 +46,7 @@ test('AA scores are exact run counts over their version denominator', () => {
       const v = q[b];
       if (v === null || v === undefined) continue;
       assert.ok(v >= 0 && v <= 1, `${mk}.${b} = ${v} is not a pass rate`);
-      if (q.source) continue;                       // vendor card: a percentage
+      if (q.source?.[b]) continue;                  // vendor card: a percentage
       const runs = CONFIG.BENCHES[b].runs, k = v * runs;
       assert.ok(Math.abs(k - Math.round(k)) < 1e-9,
         `${mk}.${b} = ${v} is not k/${runs} (k = ${k}) — see research/terminal_bench.md`);
@@ -54,8 +54,9 @@ test('AA scores are exact run counts over their version denominator', () => {
   }
 });
 
-/* research/terminal_bench.md § 2, transcribed: runs passed per version, or a
-   percentage for the one row scored from a vendor card. Pinned rather than
+/* research/terminal_bench.md § 2, transcribed: runs passed per version, a
+   percentage where `vendor` names the version scored from a vendor card, or
+   null where Artificial Analysis has no run. Pinned rather than
    derived from CONFIG so the two copies must be changed together — these are
    hand-read off Artificial Analysis's model pages, and the failure mode is a
    digit, not a formula. Going red after a ledger update is the intended
@@ -67,22 +68,24 @@ const LEDGER = {
   "GLM52":  { tb21: 224, tb40:  83 },
   "DSV4F":  { tb21: 210, tb40:  24 },
   "DSV4FV": { tb21: 198, tb40:  24 },
-  "DSV41F": { tb21: 0.906, tb40: 0.312, vendor: true },
+  "DSV41F": { tb21: 0.906, tb40:  53, vendor: ["tb21"] },
   "Q38FN":  { tb21: 230, tb40:  50 },
   "GLM53F": { tb21: 225, tb40:  65 },
+  "ML4":    { tb21: null, tb40:  49 },
 };
 
 test('CONFIG.QUALITY is the ledger in research/terminal_bench.md', () => {
   assert.deepEqual(Object.keys(CONFIG.QUALITY).sort(), Object.keys(LEDGER).sort());
   for (const [mk, row] of Object.entries(LEDGER)){
     for (const b of BENCH_KEYS){
-      const want = row.vendor ? row[b] : row[b] / CONFIG.BENCHES[b].runs;
+      const vendor = (row.vendor || []).includes(b);
+      const want = vendor || row[b] === null ? row[b] : row[b] / CONFIG.BENCHES[b].runs;
       assert.equal(CONFIG.QUALITY[mk][b], want,
         `${mk}.${b}: config says ${CONFIG.QUALITY[mk][b]}, the ledger says `
-        + (row.vendor ? row[b] : `${row[b]}/${CONFIG.BENCHES[b].runs}`));
+        + (vendor || row[b] === null ? row[b] : `${row[b]}/${CONFIG.BENCHES[b].runs}`));
+      assert.equal(!!CONFIG.QUALITY[mk].source?.[b], vendor,
+        `${mk}.${b}: vendor provenance disagrees with the ledger`);
     }
-    assert.equal(!!CONFIG.QUALITY[mk].source, !!row.vendor,
-      `${mk}: vendor provenance disagrees with the ledger`);
   }
 });
 
@@ -90,7 +93,7 @@ test('a measured zero is a score, an absent one is not', () => {
   // pinned from the ledger, not discovered from CONFIG: a zero mistyped as
   // null would otherwise just shrink the set this test walks
   const zeroes = Object.entries(LEDGER).flatMap(([mk, row]) =>
-    BENCH_KEYS.filter(b => !row.vendor && row[b] === 0).map(b => [mk, b]));
+    BENCH_KEYS.filter(b => !(row.vendor || []).includes(b) && row[b] === 0).map(b => [mk, b]));
   assert.equal(zeroes.length, 2, 'the ledger pins two measured zeroes on 4.0');
   const was = state.bench;
   try {

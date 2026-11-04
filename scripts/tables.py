@@ -14,7 +14,7 @@ from scenario_model import GIB, Workload, MODELS, TOPOLOGIES
 MODELS_K = ["27B", "35BA3B"]
 TOPOS_K = ["1xH200", "2xH200-TP2", "2xH200-DP2"]
 # the 2026-07+ models, which fit no single H200 — the DP x TP node-split table
-MODELS_EXT_K = ["MM35", "GLM52", "DSV4F", "DSV41F", "Q38FN", "GLM53F"]
+MODELS_EXT_K = ["MM35", "GLM52", "DSV4F", "DSV41F", "Q38FN", "GLM53F", "ML4"]
 
 
 def wl(**kw):

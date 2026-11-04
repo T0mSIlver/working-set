@@ -41,8 +41,10 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
     "DSV4F": '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"greedy"}',
     "DSV4FV": '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic","enable_adaptive_verification":true}',
     "DSV41F": '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block","enable_adaptive_verification":true}',
+    // Mistral-Large-4's vLLM recipe: depth 3 is fixed by the checkpoint
+    "ML4": '{"method":"dspark","num_speculative_tokens":3}',
   };
-  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "DSV4FV":3, "DSV41F":5, "Q38FN":3, "GLM53F":5}[state.model];
+  const specDrafts = {"27B":2, "35BA3B":2, "GLM52":5, "DSV4F":7, "DSV4FV":3, "DSV41F":5, "Q38FN":3, "GLM53F":5, "ML4":3}[state.model];
   const specOn = state.mtp>1 && m0.mtp>1 && specDrafts !== undefined;
   const eagle = state.mtp>1 && m0.mtp<=1;   // Mistral: the slider models an external draft
   const ramGrp = ramPerCache(topo);
@@ -53,7 +55,9 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const lines = [
     `vllm serve "<${base} ${state.wdt==='nvfp4'?'NVFP4':'FP8'} checkpoint>"`,
     `  --tensor-parallel-size ${topo.tp}`,
-    `  --kv-cache-dtype ${state.kv==='fp8'?'fp8_e4m3':'auto'}`,
+    // Mistral-Large-4's FlashMLA sparse path names its own FP8 layout (its
+    // NVFP4 card: "needed for this checkpoint")
+    `  --kv-cache-dtype ${state.model==='ML4' ? 'fp8_ds_mla' : (state.kv==='fp8'?'fp8_e4m3':'auto')}`,
     `  --max-model-len ${wl.cap}`,
     `  --max-num-seqs ${state.mns ?? sug}`,
     `  --max-num-batched-tokens ${prefillChunk()}`,
@@ -62,6 +66,9 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   // checkpoint (128-wide quantization blocks) — TP8 must run as TEP8. The
   // triton MoE backend is the recipe's HOPPER guidance only; Blackwell rows
   // never mention it, so it is not emitted on B300.
+  // Mistral-Large-4's vLLM recipe: the checkpoint loads in Mistral's format
+  if (state.model==="ML4")
+    lines.splice(1, 0, `  --tokenizer-mode mistral --config-format mistral --load-format mistral`);
   if (state.model==="Q38FN" && topo.tp>=8)
     lines.splice(2, 0, `  --enable-expert-parallel`,
                  ...(state.gpu==="H200" ? [`  --moe-backend triton`] : []));
@@ -78,8 +85,9 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const heads = m0.kv_heads || 1;
   const illegalTp = topo.tp > 1 && (topo.tp % heads !== 0) && (heads % topo.tp !== 0);
   // speculative decoding under DCP was still in development in vLLM at the
-  // cited date (2026-08-07): never emit the two flags together
-  const specBlocked = specOn && dcp > 1;
+  // cited date (2026-08-07): never emit the two flags together — except on
+  // Mistral-Large-4, whose recipe validates TP8 DCP8 with DSpark (vllm#63796)
+  const specBlocked = specOn && dcp > 1 && state.model !== "ML4";
   if (specOn && !specBlocked)
     lines.push(`  --speculative-config '${SPEC_CONFIG[state.model]
       ?? `{"method":"mtp","num_speculative_tokens":${specDrafts}}`}'`);
@@ -96,9 +104,11 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   if (state.model==="GLM53F" && topo.tp<4)
     cmts.push(`# TP<4 is this study's pool arithmetic; the vLLM recipe only demonstrates TP4 (one GB200 tray)`);
   if (state.kv==='fp16') cmts.push(`# auto = the checkpoint's 16-bit dtype (the study's FP16-KV case)`);
-  if (dcp > 1) cmts.push(`# DCP ${dcp}: ${m0.kv_heads===1?'a single-latent (MQA/MLA) cache':`${m0.kv_heads} KV heads`} would replicate on ${dcp}× the ranks under plain TP${topo.tp}; the page prices ONE copy (speculative decoding under DCP is still in development in vLLM, 2026-08)`);
+  if (state.model==="ML4")
+    cmts.push(`# Mistral-Large-4 ships in the vllm/vllm-openai:mistral-large-4 image only (no vLLM release includes it yet, 2026-11-04); the recipe validates --max-model-len 262144`);
+  if (dcp > 1) cmts.push(`# DCP ${dcp}: ${m0.kv_heads===1?'a single-latent (MQA/MLA) cache':`${m0.kv_heads} KV heads`} would replicate on ${dcp}× the ranks under plain TP${topo.tp}; the page prices ONE copy${state.model==='ML4' ? '' : ' (speculative decoding under DCP is still in development in vLLM, 2026-08)'}`);
   if (rKv > 1) cmts.push(`# KV REPLICATED: plain TP${topo.tp} keeps ${rKv}× copies of every session's cache — the page prices the pool ÷ ${rKv} and ${rKv}× per-step cache reads; --decode-context-parallel-size ${Math.max(1, Math.floor(topo.tp/(m0.kv_heads||1)))} would remove them`);
-  if (specOn && !specBlocked) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${['DSV4F','DSV4FV','DSV41F'].includes(state.model)?' (DSpark drafts)':''}`);
+  if (specOn && !specBlocked) cmts.push(`# speculative decoding modelled at ${state.mtp.toFixed(2)}×${['DSV4F','DSV4FV','DSV41F','ML4'].includes(state.model)?' (DSpark drafts)':''}`);
   if (state.model==="DSV4FV")
     cmts.push(`# priced as a text workload: image encoding (ViT prefill) and image tokens are not modelled`);
   if (specBlocked) cmts.push(`# NOT EMITTED: --speculative-config — the page prices ${state.mtp.toFixed(2)}× speculative decoding, but vLLM's DCP path had no speculative-decoding support as of 2026-08; set the MTP slider to 1.0 for a recipe that matches, or choose Replicated`);

@@ -38,6 +38,7 @@ hardened" — the two caveats the explorer's tooltip carries.
 | `DSV41F` | DeepSeek-V4.1-Flash | MQA, one 512-dim latent per cache | **1** | latent windows + compressor state | **1** (replicates with the cache) |
 | `Q38FN` | Qwen3.8-Flash-Next | GQA 24/2 on 12 QSA layers | 2 | DeltaNet, 48 v-heads | shards |
 | `GLM53F` | GLM-5.3-Flash | NoPE sparse-MLA, one latent | **1** | KDA, 64 heads | shards |
+| `ML4` | Mistral-Large-4 | MLA, one 576-B latent (63 of 72 layers; 9 share layer 35's) | **1** | DSpark drafter's latent windows | **1** (replicates with the cache) |
 
 The DeltaNet / KDA states shard by value head at every width the study
 prices (≤ 8), so only the DeepSeek Flash models' fixed per-session state — the

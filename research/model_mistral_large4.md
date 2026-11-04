@@ -1,78 +1,270 @@
-# Mistral Large 4 Preview — what is known, and why it is not in the model yet
+# Mistral Large 4 (1.05T-A49B) — architecture parameterization note
 
-**Status (2026-10-06, release day):** API-only public preview. Weights are
-promised for the end of October (VentureBeat gives 2026-10-27); the license
-is "coming soon". No `config.json`, no checkpoint, no vLLM or Transformers
-code is public, so none of the constants `model.py` needs can be read.
-**Not integrated.** Revisit when the weights land.
+**Purpose:** the constants behind the `ML4` row of `src/workingset/model.py`
+and its mirror in `interactive/src/config.js`.
 
-## 1. Published facts
+**Status (2026-11-04):** open weights since 2026-10-29, integrated as `ML4`.
+This note replaces the release-day note of 2026-10-06 (PR #106), which kept
+the model out until a checkpoint existed; § 9 says what that note got right.
+
+Sources, all read 2026-11-04:
+
+| Source | Revision | Read |
+|---|---|---|
+| [`mistralai/Mistral-Large-4-1T-A52B`](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B) | `af26e786` | `config.json`, `params.json`, the safetensors index, **all 54 shard headers**, README, LICENSE, technical report |
+| [`mistralai/Mistral-Large-4-1T-A52B-NVFP4`](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B-NVFP4) | `bb6d00fe` | `params.json`, the index, **all 32 shard headers**, README |
+| vLLM recipe `recipes/models/mistralai/Mistral-Large-4-1T-A52B.yaml` | `main`, `date_updated: 2026-10-30` | flags, hardware floors, measured capacities and latencies |
+| vLLM [#64534](https://github.com/vllm-project/vllm/pull/64534) "Add Mistral Large 4" (open working branch) | head `28a4495d` | `vllm/models/mistral/{common,nvidia}/…`, `flashmla_sparse.py`, `kv_cache_interface.py` |
+| Artificial Analysis model and Terminal-Bench 4.0 pages | — | the page's embedded dataset (§ 8) |
+
+## 1. Architecture
 
 | Field | Value | Source |
 |---|---|---|
-| Parameters | 1.05T total, 49B active, plus a 1.6B vision encoder | [docs model card](https://docs.mistral.ai/models/mistral-large-4-0) |
-| Architecture | "granular Mixture-of-Experts", natively multimodal input, text output, hybrid instruct/reasoning | model card; [launch post](https://mistral.ai/news/mistral-large-4/) |
-| Context | 1M (Mistral); 524K at Artificial Analysis and Vercel, 512K at Vals — unresolved | model card; [kingy.ai](https://kingy.ai/blog/mistral-large-4-specs-benchmarks-pricing/) |
-| Training | from scratch, 3,800 Grace Blackwell GPUs, ~2 months, 160+ languages | launch post |
-| API price | $0.68 in / $0.07 cached / $2.09 out per M tokens (half the launch rate of $1.36 / $0.14 / $4.18) | model card |
+| `architectures` / `model_type` | `MistralLarge4ForConditionalGeneration` / `mistral_large4` (Pixtral vision tower + text decoder) | config |
+| Layers / hidden | **72** / 6144 | config, params |
+| Attention | **MLA + DSA on all 72 layers** (`layer_types` all `indexed_attention`): `kv_lora_rank` 512, `qk_rope_head_dim` 64, `qk_nope_head_dim` 64, `v_head_dim` 128, 64 heads, no q-LoRA | config |
+| NoPE layers | every 4th (3, 7, …, 71: 18 layers); vLLM keeps the 576-wide latent row with a zero rope slot | `no_rope_layers`; vLLM `attention.py` docstring |
+| **Cross-layer KV sharing** | layers 39, 43, …, 71 (**9**, all NoPE) attend to **layer 35's** latents and write none; **63 layers store a cache** | `kv_source_layers`; vLLM `kv_sharing_target_layer_name` |
+| DSA indexer | 32 heads × 128, `index_topk` **2048**, fp8 keys + fp32 block scales = **132 B/token** per indexer | params `dsa`; vLLM `MistralIndexerCache` (`head_dim + head_dim/128 × 4`) |
+| **Index sharing** | **44** layers run an indexer (`full`), **28** reuse the top-k of the nearest preceding one (`shared`); the 9 KV-sharing layers all run their own | `indexer_types`; vLLM `layer_spec.py` |
+| MoE | 1 dense layer (0, `intermediate_size` 24576), **71** MoE layers: **128 routed experts, top-4**, 1 shared, `moe_intermediate_size` 6144 | config, params `moe` |
+| Vocab / embeddings | 204,800, untied | config |
+| Context | `max_position_embeddings` **1,048,576** (YaRN ×2048 over 512); the vLLM recipe validates 262,144 | config; recipe |
+| Draft model | **DSpark**, embedded: 3 dense MLA layers in BF16, each windowed to 2,048 tokens, depth 3 | README; params `mtp`; vLLM `dspark.py` |
+| Logit soft-cap | 30 | config |
+| License | **Mistral Ecosystem Open-Weight License**: MIT plus a separate commercial licence for Model-as-a-Service operators; internal use is exempt | `LICENSE` |
 
-Not published: expert count and top-k, shared experts, layer count, hidden
-size, attention type (MLA, GQA, sparse, sliding window), KV bytes per token,
-weight dtype of the release checkpoint, MTP or draft model.
+**Parameters (shard-header ledger, elements excluding scales):** 1,053.2B
+total; 49.82B active per token excluding embeddings and lm_head, **52.34B**
+including them, which is the card's "49B active (52B including embeddings and
+output layers)" and the repo name's A52B. Vision tower and adapter 1.70B, the
+DSpark drafter 2.10B.
 
-## 2. What `model.py` needs and what is missing
+## 2. KV bytes per token
 
-Every field of `Model` is unknown: `kv_bpt` and `kv_decode_*` (attention
-design), `w_resident` (checkpoint dtype), `w_decode_shared`,
-`w_route_pertok` and `w_route_total` (expert count, size and top-k),
-`params_prefill`, `attn_layers`, `attn_d`, `kv_heads`. The study's rule is
-that weight and cache constants come from the checkpoint's own headers, not
-from marketing totals, so a placeholder row would rank the frontier on a
-guess.
+```
+kv_bpt (fp8):
+  MLA latent  63 layers x 576 B   = 36,288
+  indexer     44 layers x 132 B   =  5,808
+  -------------------------------------------
+  TOTAL                           = 42,096 B = 41.1 KiB/token
+```
 
-Mistral Large 3 is a weak prior. Its NVFP4 `params.json` is a DeepSeek-V3
-shape: MLA (`kv_lora_rank` 512 + rope 64 = 576 B/layer, 61 layers, so
-35,136 B/token in fp8), 128 experts with 4 routed and 1 shared. "Granular"
-MoE in the Large 4 card suggests many smaller experts instead, so the
-expert-union kink and the per-token routed read cannot be carried over.
+That is 13% below GLM-5.3's 48,408 B with the same per-layer layout: KV
+sharing removes 9 latent rows and index sharing 28 indexer rows. A 262k
+session holds 10.3 GiB, the full 1M 41.1 GiB.
 
-## 3. Bounds from the totals alone
+**The 576-B convention under-prices vLLM by about 10%.** vLLM's FlashMLA
+sparse path stores `fp8_ds_mla` rows of 656 B (512 fp8 + 16 B of fp32 scales +
+64 bf16 rope values), which puts the cache at 63 × 656 + 44 × 132 = **47,136
+B/token**. The recipe's own measurements say that is what runs. On 8 × GB300
+at `--gpu-memory-utilization 0.85`, without speculative decoding, it reports
+2.38M (FP8) and 3.60M (NVFP4) KV tokens under TP8, and 18.88M / 28.76M under
+DCP8. Solving each pair for one bytes-per-token figure and one per-GPU
+overhead gives **46.2 kB** (TP8) and **45.6 kB** (DCP8). The 656-B layout
+leaves 0.9 and −0.3 GB/GPU of overhead (TP8) and 1.9 and 0.0 GB/GPU (DCP8).
+The 576-B layout needs 12.9 vs 17.9 GB/GPU and 13.8 vs 18.1 GB/GPU, so the
+two checkpoints would need overheads 5 GB apart.
 
-- **Resident weights.** FP8 ≈ 1.05 TB. That leaves ~75 GB of 8×H200's
-  1,128 GB for KV and activations, so 8×H200 is a marginal fit at best;
-  8×B300 (2.3 TB) fits. Mistral shipped NVFP4 checkpoints for Large 3 and
-  Small 4; an experts-only NVFP4 repack would land near 0.6 TB, i.e. 3–4×B300.
-- **Decode weight read.** 49B active vs GLM-5.3's 40B: about 1.2× the
-  bytes per step at small batch on the same hardware, before attention.
-- **Size vs GLM-5.3.** 1.4× the total parameters (1.05T vs 744B).
+The row keeps 576 B anyway, because GLM-5.3 is priced at 576 B
+(`model_glm52.md` § 2) and the two must compare like for like. Correcting
+both together is issue #122.
 
-## 4. Quality vs the study's models
+**KV dtype.** FP8 only (`kv_fp16_ok=False`): every NVIDIA configuration
+Mistral and vLLM document runs `fp8_ds_mla` (the default, so no flag needed),
+the NVFP4 card calls `--kv-cache-dtype fp8_ds_mla` "needed for this
+checkpoint", and `params.json` sets `fp8_kv_cache: true`. FlashMLA sparse also
+accepts `bfloat16`, but only the ROCm recipe documents it as an opt-out, and
+the study prices no AMD part. `fp8_ds_mla` runs on SM90 unchanged (recipe), so
+the cache is not Blackwell-only.
 
-The study scores quality with Artificial Analysis runs only
-(`research/terminal_bench.md`). AA lists the preview (Intelligence Index 38,
-116 tok/s) but shows no Terminal-Bench 4.0 score yet.
+## 3. Decode reads
 
-| Terminal-Bench 4.0 | Score | Source |
-|---|---|---|
-| GLM-5.3 | 41.9% (83/198) | AA |
-| GLM-5.3-Flash | 32.8% (65/198) | AA |
-| DeepSeek-V4.1-Flash | 31.2% | vendor card |
-| **Mistral Large 4** | **28.3%** | Mistral launch claim |
-| Qwen3.8-Flash-Next | 25.3% (50/198) | AA |
-| **Mistral Large 4** | **22.7%** | Vals (different harness) |
-| DeepSeek-V4-Flash-0731 | 12.1% (24/198) | AA |
+```
+kv_decode_bpt   = 44 x 132         =      5,808 B per CONTEXT token per step
+                  (every indexer scans its own keys; the 28 shared layers do not)
+kv_decode_const = 72 x 2048 x 576  = 84,934,656 B per ACTIVE SEQUENCE per step
+                  (every layer gathers its own top-2048; the 9 KV-sharing layers
+                   gather from layer 35's latents, a separate read each)
+kv_decode_topk  = 2048
+```
 
-On Mistral's own figure, Large 4 trails GLM-5.3 by 13.6 points while
-needing ~1.4× its weights. Other launch claims: DeepSWE v1.1 61.7% (GLM-5.3
-61%, per Mistral's chart), SWE-Atlas-QnA 59.4%; its claimed lead is in
-cybersecurity (CyberGym-E2E 82%) and legal/finance agents, outside what the
-study measures.
+At the 31k median context the indexer scan (~180 MB/seq) is twice the sparse
+gather (85 MB/seq); both are far below a dense read (31k × 41.1 KiB ≈ 1.3
+GB/seq).
 
-## 5. Integration checklist (when weights land)
+## 4. Weight bytes
 
-1. Read `config.json`, `params.json`, the safetensors index and every shard
-   header; build the per-tensor ledger as in `model_glm53flash.md`.
-2. Note the vLLM recipe's KV dtype constraints and any NVFP4 checkpoint.
-3. Add the row to `model.py`, mirror it in `interactive/src`, regenerate
-   `tests/golden/`.
-4. Take the Terminal-Bench scores from AA once it publishes them.
+### FP8, as shipped
+
+`quant_method: fp8`, block 128 × 128, UE8M0 scales. Kept BF16
+(`modules_to_not_convert`): vision tower, projector, lm_head, `kv_b_proj`,
+`kv_a_proj_with_mqa`, `indexer.wk`, `indexer.weights_proj`. The DSpark drafter
+is BF16.
+
+| Component | Bytes | Note |
+|---|---:|---|
+| Routed experts | 1,029,432,803,328 | 9,088 experts × 113,273,856 B (3 × 6144² FP8 + 3 × 48² F32 scales) |
+| MLA (72 layers) | 8,669,905,920 | `wkv_a` on the 63 cache-owning layers only |
+| Shared experts | 8,042,443,776 | 71 × 3 × 6144² FP8 + scales |
+| DSpark drafter | 4,199,938,048 | BF16 |
+| Vision tower + adapter | 3,408,437,248 | BF16 |
+| lm_head / embeddings | 2,516,582,400 each | BF16 |
+| Indexers (44) | 1,195,183,616 | `wq_b` FP8, `wk` + `weights_proj` BF16 |
+| Dense MLP (layer 0) | 453,095,424 | FP8 |
+| Routers (71) | 111,673,344 | BF16 |
+| Norms and misc | 1,781,824 | |
+| **Total** | **1,060,548,427,328** | = the index's `total_size`, to the byte |
+
+```
+w_resident      = 1,060,548,427,328 B   (987.7 GiB)
+w_decode_shared =    20,990,666,304 B   MLA + indexers + dense MLP + shared experts
+                                        + routers + norms + lm_head
+w_route_pertok  =    32,169,775,104 B   4 x 113,273,856 x 71
+w_route_total   = 1,029,432,803,328 B   128 experts: the union saturates at n = 32
+```
+
+The drafter and the vision tower are resident but in no decode read, the
+convention for every draft model in the study (`model_glm52.md` § 4). Per
+token Large 4 reads 32.2 GB of routed experts against GLM-5.3's 22.6 GB and
+DSv4.1-Flash's 4.5 GB, the heaviest in the study. Per-token reads, more than
+the cache, are what limit how many users a node can carry.
+
+**Not modelled:** vLLM replicates `kv_a_proj_with_mqa` and the indexer
+projections on every TP rank (`ReplicatedLinear`), about 1.6 GB per rank
+instead of 1/tp of it. That puts ~1.4 GB per GPU at TP8 outside the pool;
+GLM-5.3 has the same shape and the same omission.
+
+### NVFP4, official
+
+ModelOpt NVFP4 on the routed experts of the 71 MoE layers only; attention,
+indexers, shared experts and the dense MLP stay FP8 and the drafter, vision
+and heads BF16, **byte-identical** to the FP8 checkpoint (every other
+component's sum matches to the byte).
+
+```
+per expert = 3 x 6144^2 / 2   (E2M1 packed)    56,623,104
+           + 3 x 6144^2 / 16  (E4M3 scales)     7,077,888
+           + 6 x 4            (F32 globals)            24
+           = 63,701,016 B   (x 0.5624 of FP8)
+
+nvfp4_w = (610,030,457,408,     resident = the index's total_size
+           20,990,666,304,      always-active read, unchanged
+           18,091,088,544,      4 x 63,701,016 x 71
+           578,914,833,408)     128 x 63,701,016 x 71
+```
+
+## 5. DSpark drafter
+
+Three dense MLA layers in BF16 with the target's attention geometry and a
+recurrent Markov head; depth 3 is fixed by the checkpoint. Each draft layer
+caches latents over a sliding window of 2,048 context tokens (vLLM
+`draft_attention_windows`), so the drafter's cache is a fixed per-session
+charge, not a per-token one:
+
+```
+deltanet_state   = 3 x 2048 x 576 = 3,538,944 B (3.4 MiB) per session
+state_step_bytes = 0   (the drafter's reads are folded into mtp)
+state_heads      = 1   (a latent window: replicates with the cache under plain TP)
+```
+
+This is DSv4-Flash's convention for its three DSpark stages (storage counted,
+decode left to the speedup). `mtp` stays at the study's transplanted 1.7, as
+on every MoE row. The recipe reports DSpark acceptance lengths of 2.98 / 2.85
+/ 2.79 at 8k / 32k / 60k input and "1.9–2.2× output throughput vs no spec" on
+GB300; the technical report gives +90% decode interactivity at 8 concurrent
+requests.
+
+## 6. Prefill constants
+
+`params_prefill = 49.82e9`, the active GEMM parameters excluding embeddings and
+lm_head. `attn_layers = 72`, `attn_d = 64 × 128`: MLA priced as dense
+attention on every layer, as GLM-5.3 is, an upper bound (DSA prefill
+sparsity is not characterised). The KV-sharing layers still compute
+attention, so they stay in the count. Large 4's heads are half as wide as
+GLM-5.3's (qk 128 vs 256), so its quadratic term per layer is half: at the
+same load it prefills cheaper than GLM-5.3 despite 33% more active
+parameters.
+
+## 7. Serving
+
+| | Weights | Min TP (study arithmetic) | Recipe |
+|---|---:|---:|---|
+| H200, FP8 | 1,060.5 GB | **9** | 2 × 8 H200, TP16 or PP2 × TP8 (`strategy_min_gpus: h200: 16`); no performance numbers taken |
+| B300, FP8 | 1,060.5 GB | **5** → TP8 | 8 × B300 TP8 validated |
+| B300, NVFP4 | 610.0 GB | **3** → TP4 | one 4-GPU GB300 tray validated; NVFP4 is the default on Blackwell |
+
+Large 4 is the first model that **fits no 8-GPU H200 node**. The explorer's
+topologies stop at one node, so it prices Large 4 on B300 only: TP8 in FP8,
+and TP8 or DP2 × TP4 with NVFP4.
+
+The page's vLLM command follows the recipe: the
+`vllm/vllm-openai:mistral-large-4` image (no vLLM release includes the model
+yet), `--tokenizer-mode mistral --config-format mistral --load-format
+mistral`, `--kv-cache-dtype fp8_ds_mla`, and DSpark
+`{"method":"dspark","num_speculative_tokens":3}`. The recipe validates DSpark
+together with DCP (TP8 DCP8 + DSpark on GB300, TP16 DCP8 + DSpark on H200),
+so the page emits both flags for this model; elsewhere it drops the
+speculative config under DCP.
+
+## 8. Measured anchors against the model
+
+All from the recipe, on 8 × GB300 (same HBM size and bandwidth as B300), with
+DSpark. The model at its defaults (MBU 0.22, `mtp = 1.7`):
+
+| | Measured | Model | Ratio |
+|---|---:|---:|---:|
+| NVFP4 TP8, 1 user, per-user tok/s | 319 (TPOT 3.13 ms) | 444 | model 1.39× high |
+| FP8 TP8, 1 user | 281 (TPOT 3.56 ms) | 327 | model 1.16× high |
+| NVFP4 TP8, 8 users at ≥100 tok/s/user, 8k input | 110 per user (110.2 tok/s/GPU) | 104 | model 0.94× |
+
+The model is faster than measured at one user and close at eight. Both
+comparisons mix the measured DSpark acceptance (~2.9) with the study's 1.7,
+so they bound the model rather than calibrate it. The KV capacity check is in
+§ 2.
+
+## 9. Quality
+
+The study takes Terminal-Bench from Artificial Analysis only
+(`terminal_bench.md`). Read 2026-11-04 from AA's dataset:
+
+| Version | Score | Runs | Note |
+|---|---:|---:|---|
+| 2.1 | **no run** | — | AA's legacy eval; it has not run 2.1 on Large 4 |
+| 4.0 | **24.7%** | 49 / 198 | "Mistral Large 4 (High)", mini-swe-agent, 66 tasks × 3 |
+
+Mistral's technical report claims **41.0%** on 4.0, labelled "AA Coding Agent
+Index", and 90.2% on 2.1. AA's Coding Agent Index is a separate index that
+runs models inside coding agents (Claude Code, Codex, Opencode and others).
+The 4.0 field the study reads is AA's Intelligence Index run with
+mini-swe-agent. The same report's figures for GLM-5.3 (40.0) and
+DeepSeek-V4.1-Flash-1017 (31.0) sit within three points of AA's
+mini-swe-agent runs (41.9 and 33.8). Large 4's sits 16 points above, so the
+harness matters far more for Large 4 than for those two. The preview claimed
+28.3% at launch.
+
+On the study's axis Large 4 lands below GLM-5.3 (41.9), GLM-5.3-Flash (32.8)
+and DeepSeek-V4.1-Flash (26.8), and level with Qwen3.8-Flash-Next (25.3).
+
+## 10. What the preview note got right
+
+The preview note (2026-10-06) had 1.05T total / 49B active, the A49B decode
+read "about 1.2× GLM-5.3's" (it is 1.42× on routed experts and 1.11× on the
+always-active read), FP8 ≈ 1.05 TB and NVFP4 ≈ 0.6 TB. It called 8 × H200 "a
+marginal fit at best"; with the study's per-GPU reserve the model does not
+fit at all (9 GPUs needed). It expected many small "granular" experts; the
+release has 128 experts of 113 MB each, top-4, the same count and top-k as
+Mistral Large 3. Its prior of a DeepSeek-V3-style MLA cache held, plus the
+two sharing schemes.
+
+## 11. Open
+
+- The 656-B `fp8_ds_mla` row (§ 2, issue #122), shared with GLM-5.3: +12% on Large 4's
+  `kv_bpt` (+13% on GLM-5.3's) and +14% on both rows' `kv_decode_const`.
+- DSpark acceptance is measured (~2.9) and `mtp` is not: the study keeps 1.7
+  on every row until the k-sweep of issue #74 settles how the speedup is
+  priced.
+- 2 × 8 H200 (TP16 across nodes, or PP2 × TP8) is outside the explorer; the
+  Python model can price TP16 with its cross-node penalty, unmeasured.
+- Image input is not priced: the 1.70B vision tower is resident only.

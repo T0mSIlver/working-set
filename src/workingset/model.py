@@ -813,6 +813,59 @@ MODELS = {
         params_prefill=16.11e9, attn_layers=11, attn_d=64 * 256,
         kv_heads=1,                      # NoPE sparse-MLA: one latent per token; the KDA state shards (64 heads)
     ),
+    # MoE 1.05T-A49B (52B with embeddings and lm_head), open weights
+    # 2026-10-29 under the Mistral Ecosystem Open-Weight License (MIT plus a
+    # separate commercial licence for Model-as-a-Service operators). 72
+    # layers of MLA + DSA, as GLM-5.3, with two cache savings of its own:
+    # cross-layer KV sharing (9 late NoPE layers attend to layer 35's
+    # latents and store none) and index sharing (28 layers reuse the top-k
+    # of the indexer before them). 63 x 576 B latents + 44 x 132 B indexer
+    # keys = 41.1 KiB/token, 13% below GLM-5.3. 128 experts / 4 routed
+    # (kink n = 32). The largest model in the study: 1,060.5 GB in FP8, so
+    # it fits no 8-GPU H200 node (min TP 9; the vLLM recipe runs it on
+    # 2 x 8 H200) and needs TP8 on B300, TP4 with the official NVFP4
+    # checkpoint. research/model_mistral_large4.md.
+    "ML4": Model(
+        name="Mistral-Large-4 (MoE 1.05T-A49B, MLA+DSA, KV sharing)",
+        kv_bpt=42_096,                   # 63 x 576 (MLA latent) + 44 x 132 (indexer keys)
+        deltanet_state=3_538_944,        # DSpark drafter: 3 MLA layers x 2,048-token window x 576 B
+                                         # (storage incl. the drafter, as DSV4F's DSpark windows)
+        state_step_bytes=0.0,            # the drafter's window reads are folded into mtp, as every
+                                         # draft model's are; the target layers carry no state
+        state_fp32_ok=False,             # an fp8 latent window, not a bf16 recurrent state
+        w_resident=1_060_548_427_328,    # FP8 ckpt metadata.total_size, shard-header-verified
+                                         # (incl. the 4.20 GB BF16 DSpark drafter and 3.41 GB vision)
+        w_decode_shared=20_990_666_304,  # exact ledger: MLA 8.67 + shared exp 8.04 + lm_head 2.52
+                                         # + indexers 1.20 + dense MLP 0.45 + routers 0.11 + norms
+        w_route_pertok=32_169_775_104,   # 4 experts x 113,273,856 B (FP8 + F32 block scales) x 71
+        w_route_total=1_029_432_803_328, # 128 experts (kink at n = 128/4 = 32)
+        mtp=1.7,                         # DSpark drafter (3 drafts, the recipe's depth); transplanted
+                                         # fit, unmeasured — the recipe reports AL 2.79-2.98 on GB300
+        # mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from
+        # every shard header: only the 71 MoE layers' routed experts change,
+        # to ModelOpt NVFP4 (63,701,016 B/expert, x0.5624); attention,
+        # indexers, shared experts and dense MLP stay FP8, the drafter, vision
+        # and heads BF16, byte-identical. research/model_mistral_large4.md #4.
+        nvfp4_w=(610_030_457_408, 20_990_666_304,
+                 18_091_088_544,          # 4 x 63,701,016 x 71
+                 578_914_833_408),        # 128 x 63,701,016 x 71 (kink n=32)
+        kv_decode_bpt=5_808,             # 44 indexer layers x 132 B per CONTEXT token
+        kv_decode_const=84_934_656,      # 72 layers x top-2048 x 576 B per active seq (the 9
+                                         # KV-sharing layers read layer 35's latents)
+        kv_decode_topk=2_048,            # index_topk, read in token space
+        kv_fp16_ok=False,                # every NVIDIA config Mistral and vLLM document runs the fp8
+                                         # (fp8_ds_mla) latent cache, "needed" per the NVFP4 card;
+                                         # the bfloat16 opt-out is the ROCm recipe's only
+        max_ctx=1_048_576,               # native 1M (YaRN x2048 over 512); the recipe validates 262,144
+        # prefill: MoE active GEMM params excl embed/lm_head (49.82e9 ledger;
+        # card "49B active", 52B with embeddings + lm_head = 52.34e9 ✓).
+        # attn_layers/attn_d price MLA as DENSE attention over all 72 layers,
+        # as GLM-5.3: an upper bound (DSA prefill sparsity not characterised).
+        # 64 heads x 128 (qk_nope 64 + rope 64 = v_head_dim 128).
+        params_prefill=49.82e9, attn_layers=72, attn_d=64 * 128,
+        kv_heads=1, state_heads=1,       # MLA latents AND the drafter's latent windows replicate
+                                         # under plain TP
+    ),
 }
 
 # ---- MTP speedup <-> per-draft acceptance ------------------------------------
@@ -855,8 +908,9 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
     if not model.kv_fp16_ok:
         raise ValueError(
             f"{model.name}: FP16 KV is not servable (vLLM requires a quantized "
-            "KV cache on this model's sparse-attention path — GLM-5.3's DSA, "
-            "DSv4-Flash's CSA, DSv4.1-Flash's CSA2; see the model's research note)")
+            "KV cache on this model's sparse-attention path — GLM-5.3's and "
+            "Mistral-Large-4's DSA, DSv4-Flash's CSA, DSv4.1-Flash's CSA2; see the "
+            "model's research note)")
     # On a sparse-decode model the top-k gathers read MAIN-KV bytes and double
     # with the cache dtype; the indexer scan (kv_decode_bpt) keeps its own
     # quantized width. kv_bpt doubles wholesale — the indexer share inside it
@@ -3810,7 +3864,8 @@ def _selfcheck():
         return (with_kv_dtype(m_, "fp16")
                 if m_.kv_fp8_blackwell_only and gk == "H200" else m_)
     for mdl in (MODELS["MM35"], MODELS["GLM52"], MODELS["DSV4F"], MODELS["DSV4FV"],
-                MODELS["DSV41F"], MODELS["Q38FN"], _arm("GLM53F", "H200")):
+                MODELS["DSV41F"], MODELS["Q38FN"], _arm("GLM53F", "H200"),
+                MODELS["ML4"]):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
     # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
@@ -3831,6 +3886,12 @@ def _selfcheck():
     assert min_tp_for(MODELS["Q38FN"], "B300") == 1
     assert min_tp_for(_arm("GLM53F", "H200"), "H200") == 3
     assert min_tp_for(MODELS["GLM53F"], "B300") == 2
+    # Mistral-Large-4: 1,060.5 GB in FP8 needs 9 x 121.7 GB usable H200, so
+    # no 8-GPU node holds it (the vLLM recipe's floor is 2 x 8 H200); 5 x
+    # 259.3 GB B300, or 3 with the NVFP4 checkpoint's 610.0 GB
+    assert min_tp_for(MODELS["ML4"], "H200") == 9
+    assert min_tp_for(MODELS["ML4"], "B300") == 5
+    assert min_tp_for(with_weight_dtype(MODELS["ML4"], "nvfp4"), "B300") == 3
     assert kv_pool_tokens(MODELS["MM35"], topology_grid(4, 2)) > 0    # DP4xTP2
     assert kv_pool_tokens(MODELS["GLM52"], topology_grid(2, 4, "B300")) > 0
     # min_tp is exactly the boundary: one GPU less holds nothing
@@ -3840,7 +3901,8 @@ def _selfcheck():
                    ("DSV4FV", "H200"), ("DSV4FV", "B300"),
                    ("DSV41F", "H200"), ("DSV41F", "B300"),
                    ("Q38FN", "H200"), ("Q38FN", "B300"),
-                   ("GLM53F", "H200"), ("GLM53F", "B300")):
+                   ("GLM53F", "H200"), ("GLM53F", "B300"),
+                   ("ML4", "H200"), ("ML4", "B300")):
         need = min_tp_for(_arm(mk, gk), gk)
         assert kv_pool_tokens(_arm(mk, gk), topology_grid(1, need, gk)) > 0
         if need > 1:
@@ -3859,7 +3921,9 @@ def _selfcheck():
                          ("Q38FN", "H200", [(4, 2), (2, 4), (1, 8)]),
                          ("Q38FN", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
                          ("GLM53F", "H200", [(2, 4), (1, 8)]),
-                         ("GLM53F", "B300", [(4, 2), (2, 4), (1, 8)])):
+                         ("GLM53F", "B300", [(4, 2), (2, 4), (1, 8)]),
+                         ("ML4", "H200", []),
+                         ("ML4", "B300", [(1, 8)])):
         got = [(t.dp, t.tp) for t in node_splits(_arm(mk, gk), gk, node=8)]
         assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
         for t in node_splits(_arm(mk, gk), gk, node=8):
@@ -4043,6 +4107,10 @@ def _selfcheck():
     # DSv4.1-Flash identities (research/model_dsv41flash.md): four shared
     # compressed caches (CSA2), FP4 main KV, CED prefill
     DEEPSEEK_FLASH = ("DSV4F", "DSV4FV", "DSV41F")   # fixed window + compressor state
+    # every model whose deltanet_state is a FIXED latent window, not a bf16
+    # recurrent state: the DeepSeek Flash models and Mistral-Large-4's DSpark
+    # drafter windows
+    FIXED_STATE = DEEPSEEK_FLASH + ("ML4",)
     dsf = MODELS["DSV41F"]
     assert dsf.kv_bpt == 3 * (288 + 68) / 2 + (288 + 68)           # 890 B, the paper's figure
     assert dsf.deltanet_state == 43 * 128 * 528 + 3 * 2 * 2 * 512 * 4  # windows + fp32 state
@@ -4050,9 +4118,9 @@ def _selfcheck():
     assert dsf.state_traffic == dsf.state_step_bytes and all(
         MODELS[k].state_step_bytes is None and
         MODELS[k].state_traffic == 2 * MODELS[k].deltanet_state
-        for k in MODELS if k not in DEEPSEEK_FLASH)
+        for k in MODELS if k not in FIXED_STATE)
     assert not dsf.state_fp32_ok and all(
-        MODELS[k].state_fp32_ok for k in MODELS if k not in DEEPSEEK_FLASH)
+        MODELS[k].state_fp32_ok for k in MODELS if k not in FIXED_STATE)
     assert dsf.w_route_pertok == 6 * 18_800_640 * 40            # MXFP4 experts + E8M0 scales
     assert dsf.w_route_total == 384 * 18_800_640 * 40
     assert abs(dsf.w_route_total / dsf.w_route_pertok - 64) < 1e-9  # kink at n = 64
@@ -4074,24 +4142,49 @@ def _selfcheck():
     assert (dsf_4.w_resident - dsf.w_resident
             == dsf_4.w_route_total - dsf.w_route_total)
 
+    # Mistral-Large-4 identities (research/model_mistral_large4.md): MLA +
+    # DSA on 72 layers; 63 store latents (9 NoPE layers attend to layer 35's)
+    # and 44 run an indexer (28 reuse the top-k of the indexer before them)
+    ml4 = MODELS["ML4"]
+    assert ml4.kv_bpt == 63 * 576 + 44 * 132                    # 42,096 B
+    assert ml4.kv_decode_bpt == 44 * 132                        # every indexer scans
+    assert ml4.kv_decode_const == 72 * 2048 * 576               # every layer gathers top-k
+    assert ml4.deltanet_state == 3 * 2048 * 576                 # DSpark windows, storage only
+    assert ml4.state_traffic == 0.0 and not ml4.state_fp32_ok
+    assert not ml4.kv_fp16_ok and not ml4.kv_fp8_blackwell_only   # fp8_ds_mla on both parts
+    # an expert is 3 x 6144^2 FP8 plus 3 x 48^2 F32 block-128 scales, and the
+    # ModelOpt NVFP4 one 3 x 6144^2 / 2 packed + 3 x 6144^2 / 16 E4M3 scales +
+    # 6 F32 globals (shard headers, 2026-11-04)
+    assert ml4.w_route_pertok == 4 * (3 * 6144**2 + 3 * 48**2 * 4) * 71
+    assert ml4.w_route_total == 128 * (3 * 6144**2 + 3 * 48**2 * 4) * 71
+    assert ml4.w_route_total / ml4.w_route_pertok == 32         # kink at n = 32
+    ml4_4 = with_weight_dtype(ml4, "nvfp4")
+    _e4 = 3 * 6144**2 // 2 + 3 * 6144**2 // 16 + 6 * 4
+    assert ml4_4.w_route_pertok == 4 * _e4 * 71 and ml4_4.w_route_total == 128 * _e4 * 71
+    assert ml4_4.w_decode_shared == ml4.w_decode_shared
+    assert (ml4_4.w_resident - ml4.w_resident
+            == ml4_4.w_route_total - ml4.w_route_total)
+    # active GEMM params: card "49B" (52B with embeddings and lm_head)
+    assert 49e9 < ml4.params_prefill < 50e9
+
     # KV sharding under TP (research/kv_tp_sharding.md): every default
     # ("dcp") topology at a TP the KV heads divide stores ONE copy, so every
     # published number is untouched; the "replicate" arm pays tp/kv_heads
     # copies past the heads, and the single-latent models pay it at every tp > 1
     for mk, heads in (("27B", 4), ("35BA3B", 2), ("MM35", 8), ("GLM52", 1),
                       ("DSV4F", 1), ("DSV4FV", 1), ("DSV41F", 1), ("Q38FN", 2),
-                      ("GLM53F", 1)):
+                      ("GLM53F", 1), ("ML4", 1)):
         assert MODELS[mk].kv_heads == heads, mk
         for tp_ in (1, 2, 4, 8):
             assert kv_replication(MODELS[mk], topology_grid(1, tp_, "B300")) == (1.0, 1.0)
             rep = topology_grid(1, tp_, "B300", "replicate")
             r_kv, r_st = kv_replication(MODELS[mk], rep)
             assert r_kv == max(1.0, tp_ / heads), (mk, tp_, r_kv)
-            assert r_st == (r_kv if mk in DEEPSEEK_FLASH else 1.0), (mk, tp_, r_st)
+            assert r_st == (r_kv if mk in FIXED_STATE else 1.0), (mk, tp_, r_st)
             assert dcp_size(MODELS[mk], topology_grid(1, tp_, "B300")) == max(1, tp_ // heads)
             assert dcp_size(MODELS[mk], rep) == 1
-    assert all(MODELS[k].state_heads == 1 for k in DEEPSEEK_FLASH) and all(
-        MODELS[k].state_heads is None for k in MODELS if k not in DEEPSEEK_FLASH)
+    assert all(MODELS[k].state_heads == 1 for k in FIXED_STATE) and all(
+        MODELS[k].state_heads is None for k in MODELS if k not in FIXED_STATE)
     # odd TP: the default layout is one copy at every width (an extrapolation
     # where the heads do not divide); "replicate" pays the continuous ratio
     assert kv_replication(m27, topology_grid(1, 6, "B300")) == (1.0, 1.0)

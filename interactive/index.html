@@ -510,6 +510,7 @@ details.more .more-body{padding:0 0 16px}
             <button data-v="DSV41F" aria-pressed="false">DSv4.1-Flash</button>
             <button data-v="Q38FN" aria-pressed="false">Q3.8-Flash</button>
             <button data-v="GLM53F" aria-pressed="false">G5.3-Flash</button>
+            <button data-v="ML4" aria-pressed="false">Mistral-Large-4</button>
           </div>
         </div>
         <div class="field">
@@ -774,7 +775,7 @@ details.more .more-body{padding:0 0 16px}
     <div class="panel card">
       <p class="ct">Price per seat against capability</p>
       <div class="field" style="margin:6px 0 8px">
-        <label class="flabel"><span class="tip" id="bench-axis-label" data-tip="Which Terminal-Bench version is on the x-axis. Both are Artificial Analysis pass@1: 2.1 is 89 tasks × 3 in Terminus 2, and every model here has a run; 4.0 is 66 tasks × 3 in mini-SWE-agent v2.4.6. DeepSeek-V4.1-Flash has no AA run and uses its vendor card&#x27;s 90.6 and 31.2. Only this chart changes.">chart axis</span></label>
+        <label class="flabel"><span class="tip" id="bench-axis-label" data-tip="Which Terminal-Bench version is on the x-axis. Both are Artificial Analysis pass@1: 2.1 is 89 tasks × 3 in Terminus 2, with a run for every model but Mistral-Large-4; 4.0 is 66 tasks × 3 in mini-SWE-agent v2.4.6, with a run for every model. DeepSeek-V4.1-Flash has no AA run on 2.1 and uses its vendor card&#x27;s 90.6 there. Only this chart changes.">chart axis</span></label>
         <div class="seg" id="seg-bench" role="group" aria-labelledby="bench-axis-label">
           <button data-v="tb21" aria-pressed="true">TB 2.1</button>
           <button data-v="tb40" aria-pressed="false">TB 4.0</button>

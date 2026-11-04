@@ -37,6 +37,7 @@ math with live sliders.
 | Models *(2026-08)* | — | + **DeepSeek-V4-Flash-0731** (284B-A13B, CSA), **Qwen3.8-Flash-Next** (125B-A6B, QSA + n-gram) and **GLM-5.3-Flash** (320B-A18B, KDA + NoPE-MLA) — in the explorer and `tables.py`; the § tables below predate them ([`research/model_dsv4flash.md`](../research/model_dsv4flash.md), [`research/model_qwen38flashnext.md`](../research/model_qwen38flashnext.md), [`research/model_glm53flash.md`](../research/model_glm53flash.md)) |
 | Models *(2026-09-10)* | DeepSeek-V4-Flash-0731 | → **DeepSeek-V4.1-Flash** (552B + 196B Engram, 8B/16B active, CED + CSA2, FP4 main KV: 890 B/token but 510 GB resident — 8×H200 / 2×B300 minimum) replaces it ([`research/model_dsv41flash.md`](../research/model_dsv41flash.md)) |
 | Models *(2026-09-16)* | DeepSeek-V4.1-Flash | + **DeepSeek-V4-Flash-0731** back alongside it — a different architecture, not an older revision of the same one; its per-step state charge now follows the V4.1 correction (window reads counted once) ([`research/model_dsv4flash.md`](../research/model_dsv4flash.md)) |
+| Models *(2026-11-04)* | — | + **Mistral-Large-4** (1.05T-A49B, MLA + DSA with cross-layer KV and index sharing: 41.1 KiB/token, but 1,060.5 GB in FP8, so it fits no 8×H200 node — 8×B300, or 4×B300 in NVFP4) — in the explorer and `tables.py`; the § tables below predate it ([`research/model_mistral_large4.md`](../research/model_mistral_large4.md)) |
 
 Model refinements over the first draft of this study (each moves numbers by 10–20%):
 
