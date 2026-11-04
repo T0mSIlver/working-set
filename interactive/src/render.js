@@ -20,6 +20,7 @@ import { energyCost, renderCostCard } from './cost.js';
 import { computeFlipData, lastFlipAxes, renderFlipPanel, setLastFlipAxes } from './sensitivity.js';
 import { renderDeployCard } from './deploy.js';
 import { renderFrontierChart, renderFrontierTable } from './frontier.js';
+import { frontierAssemble, frontierDecode, frontierPlan, frontierWarm } from './frontier-rows.js';
 
 /* ============================================================================
    RENDER pipeline
@@ -442,15 +443,8 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   // (abandoning this job before the next slice can run), but a future
   // programmatic write with no render must not commit rows mixed across two
   // knob values under one signature
-  const plan = [];
+  const plan = frontierPlan();
   const floor0 = decodeFloor(), mns0 = state.mns;
-  for (const mk of Object.keys(CONFIG.MODELS))
-    for (const [dp, tp] of [[1,1],[1,2],[1,4],[1,8],[2,1],[2,2]]){
-      if (dp*tp > 8) continue;
-      const m2 = modelForCompare(mk), t2 = makeGrid(dp, tp, state.gpu, state.kvshard);
-      if (kv_pool_tokens(m2, t2) <= 0) continue;
-      plan.push({ mk, dp, tp, key: `${mk}|${dp}x${tp}`, m2, t2, ram: ramPerCache(t2) });
-    }
   // per-key reuse of whichever caches are still valid for their own signature:
   // a floor step keeps warm + moments and re-searches decode; a turn step
   // keeps warm + decode and re-derives moments (they depend on the workload
@@ -473,36 +467,9 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
     // most one row's overshoot — the block never approaches whole-table cost
     while (i < plan.length && performance.now() - t0 < FRONTIER_SLICE_MS){
       const p = plan[i++];
-      const m2 = p.m2, t2 = p.t2, reps = t2.replicas || 1;
-      if (warmOld[p.key]){ base.push(warmOld[p.key]); }
-      else {
-        // Seed PER ROW, so a row's fill depends only on that row (and slicing
-        // cannot move a draw). One stream shared across the table made every
-        // row's draws depend on how many the earlier rows consumed.
-        seedFor(`frontier|${p.mk}|${p.dp}x${p.tp}`, ssig);
-        const wc2 = warmCapacity(m2, t2, wl, p.ram,
-                                 Math.max(60, q.WARM_ITER/6), q.WARM_BUDGET_SCAN);
-        base.push({ key: p.key, mk: p.mk, dp: p.dp, tp: p.tp,
-                    label: `${m2.name} · ${t2.name}`, reps,
-                    warmUsers: warmUsersNow(wc2.all[0], wl)*reps,
-                    resident5: wc2.gpu[0] });
-      }
-      if (decOld[p.key]){ dec[p.key] = decOld[p.key]; }
-      else {
-        seedFor(`frontierDec|${p.key}`, ssig);
-        const raw = maxUsersDecode(m2, t2, wl, floor0, 140);
-        const res5 = base[base.length-1].resident5;
-        const mns = mns0 === null ? recommendedMns(raw.n, res5) : mns0;
-        seedFor(`frontierDecPow|${p.key}`, ssig);
-        const pu = p50AtCap(m2, t2, wl, mns, 140);
-        seedFor(`frontierDecSlot|${p.key}`, ssig);
-        const slotPu = p50AtCap(m2, t2, wl, Math.max(1, Math.ceil(decodeSlotMean(mns))), 140);
-        // the cap is applied at assembly: where the steady batch reaches it
-        // moves with think time and output length, which this cache is not
-        // keyed on
-        dec[p.key] = { raw, pu, slotPu, mns, floor: floor0 };
-      }
-      mo[p.key] = moOld[p.key] || prefillServiceMoments(m2, t2, wl, cs);
+      base.push(warmOld[p.key] || frontierWarm(p, wl, q, ssig));
+      dec[p.key] = decOld[p.key] || frontierDecode(p, base[base.length-1].resident5, wl, floor0, mns0, ssig);
+      mo[p.key] = moOld[p.key] || prefillServiceMoments(p.m2, p.t2, wl, cs);
     }
     } catch (e) {
       // the one-task rebuild re-threw on every render — noisy but it never
@@ -523,47 +490,15 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
   slice();   // first slice runs inside the settle render, the rest queue behind it
 }
 
-// €/seat/month: the bill with the configuration carrying its max users,
-// divided by them. Infinity where there is no ceiling to fill. Its prefill
-// duty is priced at the miss share at that load, which past the warm pool
-// is more than f.
-function seatPrice(op, topo, mo, f, wl, r){
-  if (!isFinite(op.limit) || op.limit < 1) return Infinity;
-  const rateMax = serverRate(op.limit, state.think, wl.sub_ratio) / r.reps;
-  const fMax = missShareAt(op.limit / r.reps, r.warmUsers / r.reps, f);
-  return energyCost(topo, mo, fMax, rateMax, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth / op.limit;
-}
 function assembleFrontier(wl, cs){
-  const f = wl.invalidation;
   // one context draw for every row's slowed-generation steps: on the no-fit
   // path cs is null, and operatingPoint would otherwise draw one per row
   const csSteps = cs || contextStats(wl);
-  const rows = lastFrontier.base.map(r0=>{
-    const d = lastFrontierDec.dec[r0.key];
-    const dcap = capDecodeUsers(d.raw, d.mns,
-                                decodeSlotUsers(d.slotPu, d.mns, state.think, state.out, wl.sub_ratio));
-    const r = { ...r0, decodeUsers: dcap.n*r0.reps, censored: dcap.censored, capped: dcap.capped,
-                decodePower: decodePowerUsers(dcap, d.mns, d.pu, d.floor)*r0.reps };
-    const m2 = modelForCompare(r.mk), t2 = makeGrid(r.dp, r.tp, state.gpu, state.kvshard);
-    const r2 = serverRate(state.users, state.think, wl.sub_ratio)/r.reps;
-    const mo2 = lastFrontierMo.mo[r.key]
-             || (lastFrontierMo.mo[r.key] = prefillServiceMoments(m2, t2, wl, cs));
-    const op = operatingPoint(m2, t2, wl, csSteps, {
-               mo: mo2, reps: r.reps,
-               warmUsers: r.warmUsers, decodeUsers: r.decodeUsers });
-    // each row at the share that misses with YOUR load on ITS pool
-    return { ...r, op,
-             bstar: bStar(mo2, op.missShare, SPIKE_SLA_S, r2),
-             // the whole bill at YOUR load — hardware plus energy
-             // (research/power.md) — comparable across rows because every
-             // row is priced at the same demand and the same €/GPU-hour
-             eur: energyCost(t2, mo2, op.missShare, r2, (r.decodePower ?? r.decodeUsers) / r.reps).totalMonth,
-             // and the bill at the row's OWN ceiling, per seat: what one
-             // user costs when the configuration is full. At your load the
-             // bill is the GPU count and every row on a topology prices the
-             // same; at capacity a row that carries twice the users halves
-             // the seat. Chart H's y-axis (research/power.md for the terms)
-             eurSeat: seatPrice(op, t2, mo2, f, wl, r) };
+  const rows = lastFrontier.base.map(r0 => {
+    const mo2 = lastFrontierMo.mo[r0.key]
+             || (lastFrontierMo.mo[r0.key] = prefillServiceMoments(modelForCompare(r0.mk),
+                  makeGrid(r0.dp, r0.tp, state.gpu, state.kvshard), wl, cs));
+    return frontierAssemble(r0, lastFrontierDec.dec[r0.key], mo2, wl, csSteps);
   }).sort((a,b)=>b.op.limit-a.op.limit);
   const curKey = `${state.model}|${state.ngpu/state.tp}x${state.tp}`;
   renderFrontierTable(rows, curKey);
