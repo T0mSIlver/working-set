@@ -52,3 +52,12 @@ def test_no_redistribution_source_refused_in_public_dir(tmp_path):
     with pytest.raises(X.SchemaError):
         X.load(tmp_path, public=True)
     assert len(X.load(tmp_path, public=False)) == 3
+
+
+def test_curves_group_points_by_serving_config():
+    d = _doc(value=0.3)
+    for i, (conc, tps) in enumerate([(8, 300.0), (1, 345.0)]):
+        d["records"][i]["config"]["extra"] = {"curve": "glm-b300"}
+        d["records"][i]["metrics"] = [{"name": "concurrency", "value": conc},
+                                      {"name": "tok_s_per_user", "value": tps}]
+    assert X.curves(X.parse(d)) == {"glm-b300": [(1, 345.0), (8, 300.0)]}

@@ -258,3 +258,16 @@ def spread(recs: Iterable[Record], metric: str, *,
     if not vals:
         return None
     return Range(metric, min(vals), max(vals), len(ids), tuple(ids))
+
+
+def curves(recs: Iterable[Record], metric: str = "tok_s_per_user",
+           x: str = "concurrency", **config: Any) -> dict[str, list[tuple[float, float]]]:
+    """`metric` against `x` per serving config (`config.extra.curve`), sorted
+    by `x`: the measured counterpart of the model's decode curve."""
+    out: dict[str, list[tuple[float, float]]] = {}
+    for r in select(recs, metric=metric, **config):
+        cid = (r.config.get("extra") or {}).get("curve")
+        xm, ym = r.metric(x), r.metric(metric)
+        if cid and xm is not None and xm.value is not None and ym.value is not None:
+            out.setdefault(cid, []).append((xm.value, ym.value))
+    return {k: sorted(v) for k, v in out.items()}

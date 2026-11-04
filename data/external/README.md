@@ -7,7 +7,7 @@ what it may be used for: [research/sources/](../../research/sources/).
 
 | file | source | records | use |
 |---|---|---|---|
-| `inferencex.json` | SemiAnalysis InferenceX (API) | curve points per model × GPU × engine, derived MBU | calibrate, check |
+| `inferencex.json` | SemiAnalysis InferenceX (API) | every point of each agent-trace curve for our models (`external.curves`), low and peak points for others, derived MBU | calibrate, check |
 | `mlperf-inference-v6.0.json` | MLCommons MLPerf Inference v6.0 | DeepSeek-R1 and gpt-oss-120b on H200/B200/B300/GB200/GB300 | context |
 | `deployments.json` | press and operator posts | Revolut, DeepSeek, Kimi K2 on Mooncake, DaoCloud GLM-5.2 | context |
 | `calculators.json` | self-host vs API calculators | each tool's default scenario | context |

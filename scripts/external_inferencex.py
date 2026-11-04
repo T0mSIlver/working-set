@@ -59,7 +59,12 @@ def par(r):
     if r['disagg']: p = 'disagg prefill %s x%s / decode %s x%s' % (r['prefill_tp'], r['prefill_num_workers'], p, r['decode_num_workers'])
     return p
 
-def record(r, tag, group):
+def curve(r):
+    """One curve = one serving config swept over concurrency."""
+    return '%s-%s-%s-%s-%s-%dg' % (r['model'], r['hardware'], r['framework'], r['precision'],
+                                   par(r).replace(' ', ''), ngpu(r))
+
+def record(r, tag, group, cid=None):
     m = r['metrics']; ag = r['benchmark_type'] == 'agentic_traces'; n = ngpu(r)
     ov = r['model'] in OVERLAP
     name, ws = OVERLAP[r['model']] if ov else (OTHER.get(r['model'], r['model']), None)
@@ -76,7 +81,7 @@ def record(r, tag, group):
                      'at':'costh/(tput_per_gpu*3600/1e6), all tokens, costh=%.2f USD/GPU-h' % COSTH[r['hardware']]})
     mets.append({'name':'usd_per_gpu_h','value':COSTH[r['hardware']],'unit':'USD/GPU-h','at':'HW_REGISTRY.costh (owning, hyperscaler volume)'})
     return {
-      'id': 'inferencex/%s-%s-%s-%s-%s' % (r['model'], r['hardware'], r['framework'], wl(r).replace('/','x'), tag),
+      'id': 'inferencex/%s-%s' % (cid, tag) if cid else 'inferencex/%s-%s-%s-%s-%s' % (r['model'], r['hardware'], r['framework'], wl(r).replace('/','x'), tag),
       'url': '%s/api/v1/benchmarks?model=%s' % (BASE, name if not ov or r['model']!='glm5.3' else 'GLM-5.2'),
       'read': READ, 'published': r['date'], 'kind': 'measured',
       # a vendor-tuned curve point with its full config: fits the decode step (calibrate)
@@ -84,14 +89,15 @@ def record(r, tag, group):
       'config': {'model': name, 'ws_model': ws, 'gpu': GPU_NAME[r['hardware']], 'n_gpus': n, 'weights': r['precision'], 'kv': None,
                  'engine': '%s %s' % (r['framework'], (r['image'] or 'n/a').split('@')[0].split(':')[-1]), 'parallel': par(r),
                  'spec_decode': r['spec_method'], 'max_ctx': None,
-                 'extra': {'disagg': r['disagg'], 'multinode': r['is_multinode'], 'row_id': r['id'], 'run_url': r['run_url'],
+                 'extra': {'curve': cid, 'disagg': r['disagg'], 'multinode': r['is_multinode'], 'row_id': r['id'], 'run_url': r['run_url'],
                            'offload': r.get('offload_mode'), 'kv_offload': m.get('kv_offloading')}},
       'workload': {'name': 'AgentX trace replay' if ag else 'InferenceX single-turn random', 'isl': None if ag else r['isl'],
                    'osl': None if ag else r['osl'], 'prefix_cache': bool(ag), 'extra': {}},
       'metrics': mets,
       'quote': 'API rows[id=%s] (model=%s hardware=%s framework=%s conc=%s): metrics.median_intvty=%s, metrics.median_tpot=%s, metrics.tput_per_gpu=%s' %
                (r['id'], r['model'], r['hardware'], r['framework'], r['conc'], m['median_intvty'], m['median_tpot'], m['tput_per_gpu']),
-      'note': ('%s point of group %s. ' % ('Lowest-latency point with conc<=8' if tag=='low' else 'Max-throughput point (%s)' % ('out_tok_s_per_gpu' if ag else 'tok_s_per_gpu'), group)
+      'note': (('Point at concurrency %d of curve %s. ' % (r['conc'], cid)) if cid else
+               '%s point of group %s. ' % ('Lowest-latency point with conc<=8' if tag=='low' else 'Max-throughput point (%s)' % ('out_tok_s_per_gpu' if ag else 'tok_s_per_gpu'), group)
                + 'n_gpus = total_tput_tps/tput_per_gpu (agentic) or topology fields (single-turn). Row date %s is the curve date; API has no pinned URL, rows keyed by extra.row_id.' % r['date'])}
 
 def build():
@@ -106,6 +112,13 @@ def build():
     recs = []
     for key, g in sorted(groups.items()):
         ag = key[3] == 'agentic'
+        if key[0] in OVERLAP and ag:
+            # our models: every point of every single-node curve, so a page can
+            # draw per-user speed against sessions next to the model's curve
+            for r in sorted(g, key=lambda r: (curve(r), r['conc'])):
+                if r['disagg'] or r['is_multinode']: continue
+                recs.append(record(r, 'c%d' % r['conc'], '/'.join(key), cid=curve(r)))
+            continue
         lowc = [r for r in g if r['conc'] <= 8]
         score = (lambda r: r['metrics']['output_tput_per_gpu']) if ag else (lambda r: r['metrics']['tput_per_gpu'])
         if lowc: recs.append(record(max(lowc, key=lambda r: r['metrics']['median_intvty']), 'low', '/'.join(key)))
