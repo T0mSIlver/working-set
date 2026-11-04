@@ -219,13 +219,19 @@ def test_a_trees_concurrency_counts_by_alone_time_not_load():
     assert [k[id(r)] for r in rows] == [2, 2, 2, 0]
 
 
-def test_the_per_stream_slowdown_is_fitted_on_a_tree_alone():
+def test_the_per_stream_slowdown_is_fitted_on_a_tree_alone(monkeypatch):
+    monkeypatch.setattr(B, "MIN_BETA_REQUESTS", 1)
     # each request took (1 + 0.25 k) s alone, k the others in flight
     rows = [_kid(0, 0, 0.0, 1.5), _kid(0, 0, 0.1, 1.5, True),
             _kid(0, 0, 0.2, 1.5, True), _kid(0, 0, 5.0, 1.0)]
     # (k = 2 for the first three: 1.5 s is 1 + 0.25 * 2)
     beta, n = B.fit_tree_beta(rows, FLAT1)
     assert beta == pytest.approx(0.25) and n == 3
+    monkeypatch.setattr(B, "MIN_BETA_REQUESTS", 4)    # too few: no correction
+    assert B.fit_tree_beta(rows, FLAT1) == (0.0, 3)
+    monkeypatch.setattr(B, "MIN_BETA_REQUESTS", 1)
+    monkeypatch.setattr(B, "MAX_TREE_BETA", 0.1)      # capped
+    assert B.fit_tree_beta(rows, FLAT1)[0] == pytest.approx(0.1)
 
 
 def test_a_trees_turn_is_judged_against_the_tree_alone():
@@ -308,7 +314,9 @@ def test_the_p90_has_a_bootstrap_interval():
     assert B.bootstrap_p90([1.0])[0] != B.bootstrap_p90([1.0])[0]   # nan
 
 
-def test_a_step_measures_past_the_window_until_it_has_the_turns(tmp_path):
+def test_a_step_measures_past_the_window_until_it_has_the_turns(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(B, "min_turns", lambda plan, n: plan.min_turns)
     path = tmp_path / "trace.json"
     path.write_text(json.dumps(_tree_trace().to_dict()))
     load_trace.cache_clear()

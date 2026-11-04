@@ -33,7 +33,7 @@ import math
 import random
 import sys
 import time
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import MISSING, asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -166,6 +166,10 @@ def tree_k(rows: list, speed: Speed) -> dict[int, int]:
     return k
 
 
+MIN_BETA_REQUESTS = 20  # fewer overlapping requests: no correction (stricter)
+MAX_TREE_BETA = 1.0     # a tree's own streams never excuse more than this
+
+
 def fit_tree_beta(rows: list, speed: Speed) -> tuple[float, int]:
     """The per-stream slowdown of a tree alone: (took / single-stream time - 1)
     against the other requests of its tree in flight, through the origin."""
@@ -180,7 +184,9 @@ def fit_tree_beta(rows: list, speed: Speed) -> tuple[float, int]:
             num += k * (r.service / base - 1.0)
             den += k * k
             n += 1
-    return (max(0.0, num / den) if den else 0.0), n
+    if n < MIN_BETA_REQUESTS or not den:
+        return 0.0, n
+    return min(max(0.0, num / den), MAX_TREE_BETA), n
 
 
 # ============================================================================
@@ -310,7 +316,7 @@ async def _seat_loop(client, ep, opts, seat: _Seat, rows: list, t0: float,
         recording, pos = seat._s, seat._pos
         seat.commit(reply)
         if spawn is not None:
-            spawn(recording, pos, turn)
+            spawn(recording, pos, turn if fixed_turn is None else fixed_turn)
 
 
 # ============================================================================
@@ -365,9 +371,10 @@ class Step:
         d = dict(d)
         rows = [Row.from_dict(r) for r in d.pop("rows", [])]
         d["window"] = tuple(d.get("window") or (0.0, 0.0))
-        for k in ("slowdown_p90", "slowdown_mean", "turn_s_p50", "turn_s_p90"):
-            if d.get(k) is None:
-                d[k] = float("nan")
+        for f in fields(cls):
+            if f.default is not MISSING and isinstance(f.default, float) \
+                    and d.get(f.name, 0.0) is None:
+                d[f.name] = float("nan")
         return cls(rows=rows, **d)
 
 
@@ -383,6 +390,12 @@ def bootstrap_p90(xs: list[float], n: int = 500, seed: int = 0
     return ps[int(0.05 * n)], ps[min(int(0.95 * n), n - 1)]
 
 
+def min_turns(plan, sessions: int) -> int:
+    """Turns a step needs to be judged: --min-turns, but at most 5 per
+    session, so a step of 1 or 2 sessions is not inconclusive by design."""
+    return min(plan.min_turns, 5 * sessions)
+
+
 MIN_TURN_SHARE = 0.5    # a step judged on fewer turns than this share of
                         # its sessions fails: it showed too little to pass
 
@@ -396,6 +409,16 @@ def _in_window(r: Row, w0: float, w1: float, end_all: float) -> bool:
         return False
     end = r.end if r.done else end_all
     return not math.isfinite(end) or end >= w0
+
+
+def count_turns(step: Step) -> int:
+    """The turns `judge` would score, without scoring them: cheap enough to
+    run on the load generator's event loop while a step measures on."""
+    w0, w1 = step.window
+    end_all = w1 + step.drain_s
+    return len({(r.seat, r.turn) for r in step.rows
+                if _in_window(r, w0, w1, end_all)
+                and not (r.done and r.error)})
 
 
 def judge(step: Step, speed: Speed, max_slowdown: float,
@@ -812,9 +835,8 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
     # keep measuring until the window holds enough turns to say anything
     measured = plan.measure_s
     while speed is not None and measured < plan.measure_cap_s and plan.min_turns:
-        probe = judge(Step(sessions=n, rows=list(rows), window=(
-            plan.ramp_s, plan.ramp_s + measured)), speed, math.inf)
-        if probe.turns >= plan.min_turns:
+        if count_turns(Step(sessions=n, rows=list(rows), window=(
+                plan.ramp_s, plan.ramp_s + measured))) >= min_turns(plan, n):
             break
         more = min(plan.measure_s / 6, plan.measure_cap_s - measured, 30.0)
         await asyncio.sleep(max(more, 0.01))
@@ -909,7 +931,7 @@ async def run(ep: EndpointSpec, plan: Plan, metrics=None,
             on_step(f"\n--- {n} session{'s' if n != 1 else ''} ---")
             step = judge(await run_step(client, ep, plan, trace, n, prefix,
                                         nonce, metrics, speed),
-                         speed, plan.max_slowdown, plan.min_turns)
+                         speed, plan.max_slowdown, min_turns(plan, n))
             steps.append(step)
             results[n] = step.passed
             on_step(step_line(step))
@@ -1228,7 +1250,7 @@ def cmd_replay(args) -> int:
     print(f"  steps: 1, 2, 4, ... sessions until one fails, then halved to "
           f"{RESOLUTION:.0%}; each {plan.ramp_s:g} s ramp + "
           f"{plan.measure_s:g} s measured, longer (up to "
-          f"{plan.measure_cap_s:g} s) until {plan.min_turns} turns are judged "
+          f"{plan.measure_cap_s:g} s) until {plan.min_turns} turns (5 per session at most) are judged "
           f"(cap {plan.max_sessions})")
     if pred and "error" in pred:
         print(f"  the model ({args.config}) could not price this trace: "

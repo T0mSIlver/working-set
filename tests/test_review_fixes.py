@@ -48,3 +48,49 @@ def test_cold_requests_below_the_bucket_cutoff_are_not_subtracted():
     server = {"histograms": {"prefill_kv_computed_tokens_hist": {
         "count": 3, "buckets": {"16384": 1, "+Inf": 3}}}}
     assert histogram_evict_frac(server, hit, miss, cold) == 1.0
+
+
+def test_replay_step_with_one_turn_survives_a_record_round_trip():
+    """A step with under 2 judged turns writes its interval as null; reading
+    it back must give NaN, or `ws report` crashes on the record."""
+    from workingset.bench import Step, _ci, _x
+    s = Step.from_dict(Step(sessions=1, window=(0.0, 10.0)).to_dict())
+    assert _ci(s) == "" and _x(s.raw_p90) == "-"
+
+
+def test_replay_grandchild_requests_file_under_the_root_turn():
+    """A subagent's own subagents are spawned in the root's turn, not in the
+    subagent's local turn counter."""
+    import asyncio
+    from types import SimpleNamespace
+    from workingset import bench
+
+    calls = []
+
+    class Seat:
+        uid, n_turn, _s, _pos = 7, 0, 3, 0
+        last = (10, 10, 1, False)
+
+        def think_s(self, wl):
+            return 0.0
+
+        def next_turn(self):
+            return "p", "hit"
+
+        def commit(self, reply):
+            self.n_turn += 1
+
+    async def fake_send(*a, **k):
+        return "r"
+
+    orig, orig_finish = bench.send_request, bench._finish
+    bench.send_request = fake_send
+    bench._finish = lambda row, tr, t0: None
+    try:
+        asyncio.run(bench._seat_loop(
+            None, None, None, Seat(), [], 0.0, asyncio.Event(), 0.0,
+            gaps=False, limit=2, spawn=lambda rec, pos, turn: calls.append(turn),
+            row_seat=1, fixed_turn=5))
+    finally:
+        bench.send_request, bench._finish = orig, orig_finish
+    assert calls == [5, 5]
