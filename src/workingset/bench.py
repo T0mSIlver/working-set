@@ -10,16 +10,39 @@ priced by the model or read from a config:
 2. Load. N sessions replay at once, with their recorded waits, for a ramp and
    a measured window. N doubles from 1 until a step fails, then the bracket
    between the last pass and the first fail is halved down to 10%.
-3. Verdict. A turn is what the agent did between two messages from the
-   person (`TURN_KINDS`). Its slowdown is the model time it took (sum over
-   its requests of send to last token) over the time the fitted speed gives
-   for the same requests alone. A step passes when the p90 turn slowdown is
-   at most `--max-slowdown` and at most 5% of requests failed.
+3. Verdict. A step of N sessions passes when all of these hold over its
+   window (`Limits`, one flag each):
+   - mid-session evictions are at most 1% of warm requests. A request is
+     warm when the session's previous request exists, no compaction or reset
+     lies between, and it adds at most `--warm-new-tokens` tokens. The replay
+     knows what it sent, so the tokens the request shares with the session's
+     previous prompt are what the server should have cached; an eviction is
+     `usage.prompt_tokens_details.cached_tokens` short of that by more than a
+     block. A server that never reports cached_tokens leaves the check
+     "unknown": it does not gate;
+   - the p90 time to first token of warm requests is at most 3 s;
+   - the p10 decode speed per request, (output - 1) / (last - first token),
+     over requests of at least 32 output tokens, is at least 50 tok/s;
+   - at most 1% of requests failed or were left unfinished.
+   A turn is what the agent did between two messages from the person
+   (`TURN_KINDS`); its slowdown (model time over the time the fitted speed
+   gives alone) is reported, and gates only under an explicit
+   `--max-slowdown`. Cold requests (a session's first, after a compaction)
+   report their time to first token less the idle-speed estimate, which is
+   queueing; it is not gated.
 
-The model time counted per request is the uncontended estimate for the
-tokens the session MEANT to send uncached (its growth since the previous
-request, or the whole prompt past the shared prefix on a cold start), so a
-prefix the server evicted under load costs slowdown, as it costs the person.
+Several `--base-url`s bench a data-parallel deployment: `--routing sticky`
+pins a session tree to one URL by a stable hash of its seat id (what a
+session-affine router does), `round-robin` sends each request to the next.
+`--output-scale` multiplies every recorded reply length and the context it
+adds to later prompts. `--chat-rate` adds background chat requests, Poisson,
+reported apart and never judged.
+
+The time counted per request for the turn slowdown is the uncontended
+estimate for the tokens the session MEANT to send uncached (its growth since
+the previous request, or the whole prompt past the shared prefix on a cold
+start), so a prefix the server evicted under load costs slowdown, as it
+costs the person.
 
 `--config` adds the model's prediction for the trace's averages next to the
 measurement; it never feeds the verdict.
@@ -27,6 +50,7 @@ measurement; it never feeds the verdict.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import itertools
 import json
 import math
@@ -54,9 +78,18 @@ TURN_KINDS = frozenset({"start", "think", "ask", "abort", "branch", "resume",
                         "idle"})
 
 PERCENTILE = 90
-MAX_ERROR_SHARE = 0.05
-DEFAULT_MAX_SLOWDOWN = 1.5
+MAX_ERROR_SHARE = 0.01
+MAX_EVICTION_SHARE = 0.01
+MAX_WARM_TTFT_S = 3.0
+MIN_DECODE_TOK_S = 50.0
+WARM_NEW_TOKENS = 8192
+KV_BLOCK_TOKENS = 16
+MIN_DECODE_TOKENS = 32      # requests with fewer output tokens have no speed
+ROUTINGS = ("sticky", "round-robin")
+CHAT_SIGMA = 0.8
+CALIBRATION_ERROR_SHARE = 0.05      # the alone fit tolerates a few failures
 RESOLUTION = 0.10           # stop halving when fail - pass <= 10% of pass
+DEFAULT_BASE_URL = "http://localhost:8000/v1"
 CALIBRATE_REQUESTS = 40
 CALIBRATE_MAX_S = 300.0
 
@@ -212,6 +245,13 @@ class Row:
     ended: float = float("nan")     # step seconds when it finished or failed
     child: bool = False             # a subagent's request (see `_tree`)
     phase: str = "single"           # calibration: "single" stream alone | "tree" concurrent
+    # --- what the verdict's checks read (old records lack them: defaults) ---
+    warm: bool = False      # the session's previous request succeeded, no reset
+    cold: bool = False      # a session's first request, or after a compaction
+    expected: int = 0       # prompt tokens it shares with the previous request
+    cached: int | None = None       # tokens the server says it served cached
+    span: float = float("nan")      # first to last token, seconds
+    url: int = 0            # which --base-url it went to
 
     @property
     def generated(self) -> int:
@@ -235,7 +275,7 @@ class Row:
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        for k in ("ttft", "service", "ended"):
+        for k in ("ttft", "service", "ended", "span"):
             if not math.isfinite(d[k]):
                 d[k] = None
         return d
@@ -243,10 +283,11 @@ class Row:
     @classmethod
     def from_dict(cls, d: dict) -> "Row":
         d = dict(d)
-        for k in ("ttft", "service", "ended"):
+        for k in ("ttft", "service", "ended", "span"):
             if d.get(k) is None:
                 d[k] = float("nan")
-        return cls(**d)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 class _Seat(ReplaySession):
@@ -255,15 +296,19 @@ class _Seat(ReplaySession):
 
     def next_turn(self, force_miss=None):
         r = self._req
-        want = min(r.prompt_tokens, self.room())
         prev, new_rec = self._prev, self._fresh or self._pos == 0
         text, kind = super().next_turn(force_miss)
+        want = self.want
         if kind == "hit":
             uncached = max(want - prev[0], 1)
         else:
             uncached = max(want - min(self.prefix_tokens, want), 1)
         starts = self.n_turn == 0 or new_rec or r.kind in TURN_KINDS
-        self.last = (uncached, want, max(1, r.output_tokens), starts)
+        self.last = (uncached, want, self.out_tokens(), starts)
+        # a hit that follows a compaction is cold: the summary replaced the
+        # history, whatever the prompt sizes say
+        self.cold = kind != "hit" or r.kind == "compaction"
+        self.shared = min(prev[0], want) if kind == "hit" else 0
         return text, kind
 
 
@@ -271,12 +316,56 @@ def _finish(row: Row, tr: RequestTrace, t0: float) -> None:
     row.error = tr.error
     row.ptok = tr.ptok_achieved
     row.ctok = tr.ctok
+    row.cached = tr.cached_tokens
+    if tr.span_s is not None:
+        row.span = tr.span_s
     if tr.ttft is not None:
         row.ttft = tr.ttft
         end = tr.t_end if tr.t_end is not None else tr.t_send + tr.ttft
         row.service = end - tr.t_send
     row.ended = time.monotonic() - t0
     row.done = True
+
+
+def sticky_index(key: int, n: int) -> int:
+    """The URL a session tree is pinned to: a stable hash of its seat id
+    (never Python's per-process `hash`), as a session-affine router does."""
+    if n <= 1:
+        return 0
+    h = hashlib.blake2b(str(key).encode(), digest_size=8).digest()
+    return int.from_bytes(h, "big") % n
+
+
+class Router:
+    """Picks the endpoint of each request when `--base-url` is repeated.
+    `sticky`: by the seat id, so a session tree stays on one URL.
+    `round-robin`: the next URL for every request."""
+
+    def __init__(self, eps: list, mode: str = "sticky"):
+        if mode not in ROUTINGS:
+            raise ValueError(f"routing {mode!r}: expected one of {ROUTINGS}")
+        self.eps, self.mode = list(eps), mode
+        self._next = itertools.count()
+
+    def __len__(self) -> int:
+        return len(self.eps)
+
+    def pick(self, key: int) -> tuple[int, EndpointSpec]:
+        n = len(self.eps)
+        i = (sticky_index(key, n) if self.mode == "sticky"
+             else next(self._next) % n)
+        return i, self.eps[i]
+
+
+def _target(ep, key: int) -> tuple[int, EndpointSpec]:
+    return ep.pick(key) if isinstance(ep, Router) else (0, ep)
+
+
+def _sampler(metrics, i: int):
+    """The sampler of URL `i` (`metrics` is one sampler or a list)."""
+    if isinstance(metrics, (list, tuple)):
+        return metrics[i] if i < len(metrics) else None
+    return metrics if i == 0 else None
 
 
 async def _seat_loop(client, ep, opts, seat: _Seat, rows: list, t0: float,
@@ -295,6 +384,7 @@ async def _seat_loop(client, ep, opts, seat: _Seat, rows: list, t0: float,
     except asyncio.TimeoutError:
         pass
     turn = 0
+    prev_ok, prev_ptok, prev_want = False, None, 0
     while not stop.is_set() and (limit is None or seat.n_turn < limit):
         if seat.n_turn and gaps:
             try:
@@ -312,8 +402,21 @@ async def _seat_loop(client, ep, opts, seat: _Seat, rows: list, t0: float,
                   want, out, sent=time.monotonic() - t0,
                   child=fixed_turn is not None)
         rows.append(row)
-        reply = await send_request(client, ep, opts, prompt, tr, out, metrics)
+        i, spec = _target(ep, seat.uid if row_seat is None else row_seat)
+        row.url = i
+        row.cold = seat.cold
+        reply = await send_request(client, spec, opts, prompt, tr, out,
+                                   _sampler(metrics, i))
         _finish(row, tr, t0)
+        # warm: the session's previous request succeeded, so the server holds
+        # its prompt; what this request shares with it is what should hit
+        if kind == "hit" and not seat.cold and prev_ok:
+            row.warm = True
+            shared = prev_ptok or prev_want
+            now = tr.ptok_achieved or want
+            row.expected = min(shared, now)
+        prev_ok = tr.error is None and tr.ttft is not None
+        prev_ptok, prev_want = tr.ptok_achieved, want
         recording, pos = seat._s, seat._pos
         seat.commit(reply)
         if spawn is not None:
@@ -333,9 +436,61 @@ def _pct(xs: list[float], q: float) -> float:
 
 
 @dataclass
+class Limits:
+    """What a step must hold to pass (`judge`). One flag each."""
+    max_eviction_share: float = MAX_EVICTION_SHARE
+    max_warm_ttft_s: float = MAX_WARM_TTFT_S
+    min_decode_tok_s: float = MIN_DECODE_TOK_S
+    max_failed_share: float = MAX_ERROR_SHARE
+    warm_new_tokens: int = WARM_NEW_TOKENS
+    kv_block_tokens: int = KV_BLOCK_TOKENS
+    max_slowdown: float | None = None   # gates only when given
+
+
+# the checks, in the order they are reported
+CHECKS = ("evictions", "warm time to first token", "decode speed",
+          "failed requests", "turn slowdown")
+
+
+def _check(status: str, value: float = float("nan"), limit=None,
+           n: int = 0, **extra) -> dict:
+    """status: pass | fail | unknown (not reported by the server) | n/a (no
+    request to judge) | info (reported, not gating)."""
+    return {"status": status, "n": n, "limit": limit,
+            "value": value if math.isfinite(value) else None, **extra}
+
+
+def merge_servers(servers: list) -> dict | None:
+    """One reading for the whole deployment from one per URL: the signals
+    that say what ran out, summed or maxed the way a pool of replicas
+    shows them."""
+    got = [s for s in servers if s]
+    if not got:
+        return None
+    if len(got) == 1:
+        return got[0]
+
+    def tot(k):
+        v = [s[k] for s in got if s.get(k) is not None]
+        return sum(v) if v else None
+
+    def top(k):
+        v = [s[k] for s in got if s.get(k) is not None]
+        return max(v) if v else None
+    hit = [s["prefix_hit_rate"] for s in got
+           if s.get("prefix_hit_rate") is not None]
+    return {"running_max": tot("running_max"),
+            "waiting_mean": tot("waiting_mean"),
+            "waiting_max": top("waiting_max"), "kv_max": top("kv_max"),
+            "preemptions": tot("preemptions"), "queue_p95_s": top("queue_p95_s"),
+            "prefix_hit_rate": sum(hit) / len(hit) if hit else None}
+
+
+@dataclass
 class Step:
     sessions: int
     rows: list = field(default_factory=list)
+    chat_rows: list = field(default_factory=list)   # background chat requests
     window: tuple = (0.0, 0.0)          # measured [start, end), step seconds
     drain_s: float = 0.0                # in-flight requests finishing after it
     server: dict | None = None
@@ -357,26 +512,43 @@ class Step:
     turn_s_p90: float = float("nan")
     passed: bool = False
     reasons: list = field(default_factory=list)
+    # --- the checks (CHECKS -> {status, value, limit, n}); empty in records
+    # from before them ---
+    checks: dict = field(default_factory=dict)
+    warm_requests: int = 0
+    evictions: int = 0
+    cold_requests: int = 0
+    cold_queue_p50: float = float("nan")    # cold time to first token less
+    cold_queue_p90: float = float("nan")    # the idle estimate: queueing
+    # --- per URL (--base-url repeated) ---
+    n_urls: int = 1
+    url_requests: list = field(default_factory=list)
+    servers: list = field(default_factory=list)
+    # --- background chat (--chat-rate): reported, never judged ---
+    chat: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        d = {k: v for k, v in asdict(self).items() if k != "rows"}
+        d = {k: v for k, v in asdict(self).items()
+             if k not in ("rows", "chat_rows")}
         for k, v in d.items():
             if isinstance(v, float) and not math.isfinite(v):
                 d[k] = None
         d["window"] = list(self.window)
         d["rows"] = [r.to_dict() for r in self.rows]
+        d["chat_rows"] = [r.to_dict() for r in self.chat_rows]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Step":
         d = dict(d)
         rows = [Row.from_dict(r) for r in d.pop("rows", [])]
+        chat_rows = [Row.from_dict(r) for r in d.pop("chat_rows", [])]
         d["window"] = tuple(d.get("window") or (0.0, 0.0))
         for f in fields(cls):
             if f.default is not MISSING and isinstance(f.default, float) \
                     and d.get(f.name, 0.0) is None:
                 d[f.name] = float("nan")
-        return cls(rows=rows, **d)
+        return cls(rows=rows, chat_rows=chat_rows, **d)
 
 
 def bootstrap_p90(xs: list[float], n: int = 500, seed: int = 0
@@ -422,13 +594,31 @@ def count_turns(step: Step) -> int:
                 and not (r.done and r.error)})
 
 
-def judge(step: Step, speed: Speed, max_slowdown: float,
-          min_turns: int = 0) -> Step:
-    """Score a step's requests against the endpoint alone. Every request in
-    flight during the window counts. One still running when the drain ended
-    counts with the time it had taken so far, a lower bound, and as a failed
-    request, so an overloaded step is never flattered by leaving its slowest
-    requests out. A subagent's requests count in the turn that spawned them."""
+def _as_limits(limits) -> Limits:
+    """`judge` takes Limits; a bare number is a `--max-slowdown`, which gates
+    on top of the defaults."""
+    if limits is None:
+        return Limits()
+    if isinstance(limits, Limits):
+        return limits
+    return Limits(max_slowdown=float(limits))
+
+
+def _decode_rates(rows: list, min_tokens: int) -> list[float]:
+    return [(r.generated - 1) / r.span for r in rows
+            if r.ok and r.generated >= min_tokens
+            and math.isfinite(r.span) and r.span > 0]
+
+
+def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
+    """Score a step's requests against the pass rule (`Limits`; the module
+    docstring says it) and, as information, against the endpoint alone. Every
+    request in flight during the window counts. One still running when the
+    drain ended counts with the time it had taken so far, a lower bound, and
+    as a failed request, so an overloaded step is never flattered by leaving
+    its slowest requests out. A subagent's requests count in the turn that
+    spawned them."""
+    lim = _as_limits(limits)
     w0, w1 = step.window
     end_all = w1 + step.drain_s
     rows = [r for r in step.rows if _in_window(r, w0, w1, end_all)]
@@ -472,13 +662,97 @@ def judge(step: Step, speed: Speed, max_slowdown: float,
         for r in rows) / span
     step.ran_out = ran_out(step.server)[0]
     step.reasons = []
+    step.checks = checks = {}
+
+    # 1. mid-session evictions, exact per request
+    warm = [r for r in rows if r.warm and r.uncached <= lim.warm_new_tokens]
+    step.warm_requests = len(warm)
+    known = [r for r in warm if r.ok and r.cached is not None]
+    block = max(lim.kv_block_tokens, 1)
+    evicted = [r for r in known
+               if r.cached < r.expected // block * block - block]
+    step.evictions = len(evicted)
+    if not warm:
+        checks["evictions"] = _check("n/a", limit=lim.max_eviction_share)
+    elif not known:
+        checks["evictions"] = _check("unknown", limit=lim.max_eviction_share,
+                                     n=len(warm))
+    else:
+        share = len(evicted) / len(known)
+        checks["evictions"] = _check(
+            "pass" if share <= lim.max_eviction_share else "fail", share,
+            lim.max_eviction_share, len(known), count=len(evicted))
+        if share > lim.max_eviction_share:
+            step.reasons.append(
+                f"evictions: {len(evicted)} of {len(known)} warm requests "
+                f"lost their cached prefix ({share:.1%} > "
+                f"{lim.max_eviction_share:.1%})")
+
+    # 2. warm time to first token (a request still running counts with the
+    # wait so far)
+    waits = [r.ttft if r.ok else max(end_all - r.sent, 0.0)
+             for r in warm if r.ok or not r.done]
+    ttft_p90 = _pct(waits, PERCENTILE)
+    if not waits:
+        checks["warm time to first token"] = _check(
+            "n/a", limit=lim.max_warm_ttft_s)
+    else:
+        bad = ttft_p90 > lim.max_warm_ttft_s
+        checks["warm time to first token"] = _check(
+            "fail" if bad else "pass", ttft_p90, lim.max_warm_ttft_s,
+            len(waits))
+        if bad:
+            step.reasons.append(
+                f"warm time to first token: p{PERCENTILE} {ttft_p90:.2f} s "
+                f"> {lim.max_warm_ttft_s:g} s")
+
+    # 3. decode speed per request
+    rates = _decode_rates(rows, MIN_DECODE_TOKENS)
+    p10 = _pct(rates, 10)
+    if not rates:
+        checks["decode speed"] = _check("n/a", limit=lim.min_decode_tok_s)
+    else:
+        bad = p10 < lim.min_decode_tok_s
+        checks["decode speed"] = _check(
+            "fail" if bad else "pass", p10, lim.min_decode_tok_s, len(rates))
+        if bad:
+            step.reasons.append(f"decode speed: p10 {p10:.1f} tok/s < "
+                                f"{lim.min_decode_tok_s:g} tok/s")
+
+    # 4. failed or unfinished requests
     failed = step.errors + step.unfinished
-    if failed > MAX_ERROR_SHARE * max(step.requests, 1):
+    fshare = failed / max(step.requests, 1)
+    checks["failed requests"] = _check(
+        "fail" if fshare > lim.max_failed_share else "pass", fshare,
+        lim.max_failed_share, step.requests, count=failed)
+    if fshare > lim.max_failed_share:
         first = next((r.error for r in rows if r.done and r.error), "")
         why = f"first: {first[:160]}" if first else (
             f"{step.unfinished} still running after the drain")
-        step.reasons.append(f"{failed} of {step.requests} requests failed "
-                            f"({why})")
+        step.reasons.append(f"failed requests: {failed} of {step.requests} "
+                            f"failed ({why})")
+
+    # cold requests: time to first token less the idle estimate, queueing
+    cold = [r for r in rows if r.cold and r.ok]
+    step.cold_requests = len(cold)
+    queue = [r.ttft - speed.ttft(r.uncached, r.prompt) for r in cold]
+    step.cold_queue_p50 = _pct(queue, 50)
+    step.cold_queue_p90 = _pct(queue, PERCENTILE)
+
+    # per-turn slowdown: information, a gate only when asked for
+    if lim.max_slowdown is None:
+        checks["turn slowdown"] = _check("info", step.slowdown_p90, None,
+                                         step.turns)
+    elif step.turns:
+        bad = step.slowdown_p90 > lim.max_slowdown
+        checks["turn slowdown"] = _check(
+            "fail" if bad else "pass", step.slowdown_p90, lim.max_slowdown,
+            step.turns)
+        if bad:
+            step.reasons.append(
+                f"turn slowdown: p{PERCENTILE} turn "
+                f"{step.slowdown_p90:.2f}x alone > {lim.max_slowdown:g}x")
+
     if not step.turns:
         step.reasons.append("no request completed in the window")
     else:
@@ -487,9 +761,14 @@ def judge(step: Step, speed: Speed, max_slowdown: float,
             step.reasons.append(
                 f"only {step.turns} turns judged for {step.sessions} "
                 f"session(s), at least {need} needed (lengthen --measure-s)")
-        if step.slowdown_p90 > max_slowdown:
-            step.reasons.append(f"p{PERCENTILE} turn {step.slowdown_p90:.2f}x "
-                                f"alone > {max_slowdown:g}x")
+
+    # per URL, and the background chat
+    n_url = max([len(step.servers), step.n_urls] + [r.url + 1 for r in step.rows]
+                + [r.url + 1 for r in step.chat_rows])
+    step.url_requests = [sum(1 for r in rows if r.url == i)
+                         for i in range(n_url)]
+    step.chat = _chat_summary(step, w0, w1, end_all, n_url)
+
     step.inconclusive = False
     if not step.reasons and step.turns < min_turns:
         step.inconclusive = True
@@ -499,6 +778,28 @@ def judge(step: Step, speed: Speed, max_slowdown: float,
             "--max-measure-s measures longer)")
     step.passed = not step.reasons
     return step
+
+
+def _num(v: float) -> float | None:
+    return v if math.isfinite(v) else None
+
+
+def _chat_summary(step: Step, w0: float, w1: float, end_all: float,
+                  n_url: int) -> dict:
+    """The background chat requests of the window, apart from the sessions:
+    how many, their p90 time to first token, their p10 decode speed."""
+    rows = [r for r in step.chat_rows if _in_window(r, w0, w1, end_all)]
+    if not rows:
+        return {}
+    ok = [r for r in rows if r.ok]
+    rates = _decode_rates(rows, MIN_DECODE_TOKENS)
+    return {"requests": len(rows), "failed": sum(
+                1 for r in rows if r.done and r.error)
+            + sum(1 for r in rows if not r.done),
+            "ttft_p90": _num(_pct([r.ttft for r in ok], PERCENTILE)),
+            "decode_p10": _num(_pct(rates, 10)), "decode_n": len(rates),
+            "url_requests": [sum(1 for r in rows if r.url == i)
+                             for i in range(n_url)]}
 
 
 KV_FULL = 0.95
@@ -567,7 +868,19 @@ def answer(results: dict[int, bool], max_sessions: int) -> dict:
 @dataclass
 class Plan:
     trace_path: str
-    max_slowdown: float = DEFAULT_MAX_SLOWDOWN
+    max_slowdown: float | None = None   # gates only when given
+    max_eviction_share: float = MAX_EVICTION_SHARE
+    max_warm_ttft_s: float = MAX_WARM_TTFT_S
+    min_decode_tok_s: float = MIN_DECODE_TOK_S
+    max_failed_share: float = MAX_ERROR_SHARE
+    warm_new_tokens: int = WARM_NEW_TOKENS
+    kv_block_tokens: int = KV_BLOCK_TOKENS
+    routing: str = "sticky"             # with several URLs
+    output_scale: float = 1.0
+    chat_rate: float = 0.0              # background chat requests per second
+    chat_prompt_tokens: int = 2000
+    chat_output_tokens: int = 300
+    chat_sigma: float = CHAT_SIGMA
     max_sessions: int = 256
     ramp_s: float = 60.0
     measure_s: float = 300.0
@@ -585,6 +898,12 @@ class Plan:
     # --tokenizer), "measured" (the server's prompt token counts), "default"
     cpt_source: str = "given"
     cpt_probes: int = 0
+
+    def limits(self) -> Limits:
+        return Limits(self.max_eviction_share, self.max_warm_ttft_s,
+                      self.min_decode_tok_s, self.max_failed_share,
+                      self.warm_new_tokens, self.kv_block_tokens,
+                      self.max_slowdown)
 
     @property
     def measure_cap_s(self) -> float:
@@ -610,7 +929,8 @@ def _seat(trace: AgentTrace, plan: Plan, prefix_text: str, uid: int,
                  rng=random.Random(f"replay {plan.seed} {uid}"),
                  text_rng=random.Random(f"bench-text {plan.seed} {uid} "
                                         f"{run_nonce}"),
-                 roots=root_sessions(trace), start=start)
+                 roots=root_sessions(trace), start=start,
+                 output_scale=plan.output_scale)
 
 
 def _prefix_text(plan: Plan) -> str:
@@ -730,7 +1050,7 @@ async def calibrate(client, ep, plan: Plan, trace: AgentTrace,
         stop.set()
         await task
     failed = [r for r in rows if r.done and r.error]
-    if failed and len(failed) > MAX_ERROR_SHARE * len(rows):
+    if failed and len(failed) > CALIBRATION_ERROR_SHARE * len(rows):
         raise ValueError(
             f"{len(failed)} of {len(rows)} requests failed while measuring "
             f"the endpoint alone; the first: {failed[0].error[:300]}")
@@ -816,13 +1136,70 @@ async def measure_chars_per_token(client, ep, plan: Plan,
     return chars / toks if toks else None
 
 
+def lognormal_tokens(rng: random.Random, mean: float, sigma: float,
+                     lo: int = 1) -> int:
+    """A length with this mean, drawn lognormal: mu = ln(mean) - sigma^2 / 2
+    puts the mean of the distribution (not its median) at `mean`."""
+    if sigma <= 0:
+        return max(lo, round(mean))
+    mu = math.log(max(mean, 1e-9)) - sigma * sigma / 2
+    return max(lo, round(rng.lognormvariate(mu, sigma)))
+
+
+async def _chat_one(client, ep, plan: Plan, opts, k: int, nonce: str,
+                    rows: list, t0: float, rng: random.Random) -> None:
+    """One background chat request: its own prompt (a number and the run
+    nonce first, so no two share a prefix), its own reply length."""
+    from .probe.session import make_text
+    cap = plan.context_cap_tokens
+    out = lognormal_tokens(rng, plan.chat_output_tokens, plan.chat_sigma)
+    n_in = lognormal_tokens(rng, plan.chat_prompt_tokens, plan.chat_sigma)
+    if cap:
+        n_in = min(n_in, max(cap - out, 1))
+    text = (f"chat {k} {nonce}\n"
+            + make_text(random.Random(f"chat-text {plan.seed} {k} {nonce}"),
+                        n_in, plan.chars_per_token))
+    i, spec = _target(ep, 2_000_000_000 + k)
+    tr = RequestTrace(uid=-1000 - k, kind="chat", t_send=time.monotonic())
+    row = Row(-1000 - k, 0, "chat", n_in, n_in, out,
+              sent=time.monotonic() - t0, cold=True, url=i)
+    rows.append(row)
+    await send_request(client, spec, opts, text, tr, out, None)
+    _finish(row, tr, t0)
+
+
+async def _chat_load(client, ep, plan: Plan, nonce: str, rows: list,
+                     t0: float, stop: asyncio.Event, tasks: list,
+                     seed_tag: str) -> None:
+    """Poisson arrivals at `plan.chat_rate` per second until `stop`."""
+    rng = random.Random(f"chat {plan.seed} {seed_tag}")
+    opts = plan.options()
+    k = 0
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(),
+                                   rng.expovariate(plan.chat_rate))
+            return
+        except asyncio.TimeoutError:
+            pass
+        k += 1
+        tasks.append(asyncio.create_task(_chat_one(
+            client, ep, plan, opts, k, nonce, rows, t0, rng)))
+
+
 async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
                    prefix_text: str, run_nonce: str, metrics=None,
                    speed: Speed | None = None) -> Step:
+    """`ep` is an EndpointSpec or a Router; `metrics` one sampler or a list,
+    one per URL."""
     rows: list[Row] = []
+    chat_rows: list[Row] = []
     stop = asyncio.Event()
     rng = random.Random(f"stagger {plan.seed} {n}")
-    await sampler_ready(metrics)
+    samplers = (list(metrics) if isinstance(metrics, (list, tuple))
+                else [metrics])
+    for m in samplers:
+        await sampler_ready(m)
     t0 = time.monotonic()
     opts = plan.options()
     forest = _Forest(client, ep, plan, trace, prefix_text, run_nonce, rows,
@@ -833,7 +1210,12 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
         rows, t0, stop, rng.uniform(0, plan.ramp_s), gaps=True,
         metrics=metrics, spawn=forest.spawner(n * 100_000 + i)))
         for i in range(n)]
-    s_start = sampler_now(metrics) + plan.ramp_s
+    chat_tasks: list = []
+    if plan.chat_rate > 0:
+        tasks.append(asyncio.create_task(_chat_load(
+            client, ep, plan, run_nonce, chat_rows, t0, stop, chat_tasks,
+            str(n))))
+    s_start = [sampler_now(m) + plan.ramp_s for m in samplers]
     await asyncio.sleep(plan.ramp_s + plan.measure_s)
     # keep measuring until the window holds enough turns to say anything
     measured = plan.measure_s
@@ -844,13 +1226,14 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
         more = min(plan.measure_s / 6, plan.measure_cap_s - measured, 30.0)
         await asyncio.sleep(max(more, 0.01))
         measured += max(more, 0.01)
-    s_end = sampler_now(metrics)
+    s_end = [sampler_now(m) for m in samplers]
     # no new request starts; the ones in flight finish, so the slowest of
     # them are measured rather than dropped. A request still running after
     # the drain counts with the time it has taken so far (`judge`).
     stop.set()
     drain_s = 0.0
-    pending = [t for t in tasks + forest.tasks if not t.done()]
+    await asyncio.sleep(0)      # the chat generator sees `stop` first
+    pending = [t for t in tasks + forest.tasks + chat_tasks if not t.done()]
     if pending:
         t_d = time.monotonic()
         _, still = await asyncio.wait(pending, timeout=plan.measure_s)
@@ -858,9 +1241,13 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
         for t in still:
             t.cancel()
         await asyncio.gather(*still, return_exceptions=True)
-    step = Step(sessions=n, rows=rows, drain_s=drain_s,
-                window=(plan.ramp_s, plan.ramp_s + measured))
-    step.server = _server(await sampler_window(metrics, s_start, s_end))
+    step = Step(sessions=n, rows=rows, chat_rows=chat_rows, drain_s=drain_s,
+                window=(plan.ramp_s, plan.ramp_s + measured),
+                n_urls=len(ep) if isinstance(ep, Router) else 1)
+    if any(m is not None for m in samplers):
+        step.servers = [_server(await sampler_window(m, a, b))
+                        for m, a, b in zip(samplers, s_start, s_end)]
+        step.server = merge_servers(step.servers)
     return step
 
 
@@ -905,14 +1292,19 @@ def _say(msg: str = "") -> None:
     print(msg, flush=True)      # a run piped to a file or `tee` shows progress
 
 
-async def run(ep: EndpointSpec, plan: Plan, metrics=None,
-              on_step=_say) -> dict:
+async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
+    """`ep`: an EndpointSpec, or a list of them (a data-parallel deployment,
+    routed by `plan.routing`); `metrics`: a sampler, or a list paired with
+    them. The endpoint alone is fitted on the first."""
+    eps = list(ep) if isinstance(ep, (list, tuple)) else [ep]
+    ep0 = eps[0]
+    target = Router(eps, plan.routing) if len(eps) > 1 else ep0
     trace = load_trace(plan.trace_path)
     from .probe.options import process_nonce
     nonce = process_nonce()
     async with make_client() as client:
         if plan.cpt_source == "default":
-            cpt = await measure_chars_per_token(client, ep, plan, nonce)
+            cpt = await measure_chars_per_token(client, ep0, plan, nonce)
             if cpt:
                 plan.chars_per_token, plan.cpt_source = round(cpt, 3), \
                     "measured"
@@ -925,16 +1317,16 @@ async def run(ep: EndpointSpec, plan: Plan, metrics=None,
         prefix = _prefix_text(plan)
         on_step(f"alone: up to {plan.calibrate_requests} requests back to "
                 "back, one in flight")
-        speed, cal_rows = await calibrate(client, ep, plan, trace, prefix,
+        speed, cal_rows = await calibrate(client, ep0, plan, trace, prefix,
                                           nonce)
         on_step(describe_speed(speed, trace, plan))
         results: dict[int, bool] = {}
         steps: list[Step] = []
         while (n := next_sessions(results, plan.max_sessions)) is not None:
             on_step(f"\n--- {n} session{'s' if n != 1 else ''} ---")
-            step = judge(await run_step(client, ep, plan, trace, n, prefix,
+            step = judge(await run_step(client, target, plan, trace, n, prefix,
                                         nonce, metrics, speed),
-                         speed, plan.max_slowdown, min_turns(plan, n))
+                         speed, plan.limits(), min_turns(plan, n))
             steps.append(step)
             results[n] = step.passed
             on_step(step_line(step))
@@ -986,19 +1378,86 @@ def describe_speed(speed: Speed, trace: AgentTrace, plan: Plan) -> str:
             "of model time")
 
 
+UNKNOWN_CACHED = ("WARNING: the server reports no cached_tokens (start vLLM "
+                  "with --enable-prompt-tokens-details): evictions cannot be "
+                  "counted, that check is UNKNOWN and does not gate")
+
+
+def check_cells(s: Step) -> dict[str, str]:
+    """Each check as a short cell: its value against its limit, or why it has
+    none."""
+    out = {}
+    for name in CHECKS:
+        c = s.checks.get(name)
+        if c is None:
+            continue
+        st, v, lim = c["status"], c["value"], c["limit"]
+        if name == "evictions":
+            cell = {"unknown": "unknown", "n/a": "no warm request"}.get(st) or (
+                f"{c.get('count', 0)}/{c['n']} = {v:.1%} (<= {lim:.1%})")
+        elif name == "warm time to first token":
+            cell = ("no warm request" if st == "n/a" else
+                    f"p{PERCENTILE} {v:.2f} s (<= {lim:g} s)")
+        elif name == "decode speed":
+            cell = ("no request of {0}+ tokens".format(MIN_DECODE_TOKENS)
+                    if st == "n/a" else f"p10 {v:.1f} tok/s (>= {lim:g})")
+        elif name == "failed requests":
+            cell = f"{c.get('count', 0)}/{c['n']} = {v:.1%} (<= {lim:.1%})"
+        else:
+            cell = (f"p{PERCENTILE} {v:.2f}x alone" + (
+                f" (<= {lim:g}x)" if lim is not None else ", not gating")
+                    if v is not None else "-")
+        out[name] = f"{cell}{' FAIL' if st == 'fail' else ''}"
+    return out
+
+
 def step_line(s: Step) -> str:
-    v = ("PASS" if s.passed else ("INCONCLUSIVE" if s.inconclusive else "FAIL")
+    v = ("PASS" if s.passed else ("INCONCLUSIVE" if s.inconclusive
+                                  else "FAIL")
          + " (" + "; ".join(s.reasons) + ")")
     sig = signals(s.server)
     failed = s.errors + s.unfinished
-    return (f"  {s.turns} turns, {s.requests} requests, {failed} failed | "
-            f"turn p90 {_x(s.slowdown_p90)}{_ci(s)} alone, mean {_x(s.slowdown_mean)} "
-            f"(vs one stream: p90 {_x(s.raw_p90)}, mean {_x(s.raw_mean)}) "
-            f"| turn time p50 {_s(s.turn_s_p50)} p90 {_s(s.turn_s_p90)} | "
-            f"{_f1(s.streams_mean)} requests in flight | {v}"
-            + (f"\n  server: {sig}" if sig else "")
-            + (f"\n  the limit is {ran_out(s.server)[1]}" if not s.passed
-               else ""))
+    cells = check_cells(s)
+    lines = [f"  {s.turns} turns, {s.requests} requests, {failed} failed, "
+             f"{_f1(s.streams_mean)} requests in flight | {v}"]
+    lines += [f"    {name}: {cell}" for name, cell in cells.items()]
+    if s.checks.get("evictions", {}).get("status") == "unknown":
+        lines.append("    " + UNKNOWN_CACHED)
+    if s.cold_requests:
+        lines.append(f"    cold requests: {s.cold_requests}, queueing p50 "
+                     f"{_sec(s.cold_queue_p50)} p{PERCENTILE} "
+                     f"{_sec(s.cold_queue_p90)} (time to first token less "
+                     "the idle estimate; not gated)")
+    lines.append(f"    information: turn p90 {_x(s.slowdown_p90)}{_ci(s)} "
+                 f"alone, mean {_x(s.slowdown_mean)} (vs one stream: p90 "
+                 f"{_x(s.raw_p90)}, mean {_x(s.raw_mean)}); turn time p50 "
+                 f"{_s(s.turn_s_p50)} p90 {_s(s.turn_s_p90)}")
+    if len(s.url_requests) > 1:
+        lines.append("    requests per URL: " + ", ".join(
+            f"#{i} {n}" for i, n in enumerate(s.url_requests)))
+    if s.chat:
+        lines.append("    " + chat_line(s.chat))
+    if sig:
+        lines.append(f"    server: {sig}")
+    for i, srv in enumerate(s.servers if len(s.servers) > 1 else ()):
+        lines.append(f"    server #{i}: {signals(srv) or 'no reading'}")
+    if not s.passed:
+        lines.append(f"    the limit is {ran_out(s.server)[1]}")
+    return "\n".join(lines)
+
+
+def chat_line(c: dict) -> str:
+    d = c.get("decode_p10")
+    t = c.get("ttft_p90")
+    return (f"background chat: {c['requests']} requests, {c.get('failed', 0)} "
+            f"failed, p{PERCENTILE} time to first token "
+            f"{_sec(t) if t is not None else '-'}, p10 decode speed "
+            + (f"{d:.1f} tok/s" if d is not None else "-")
+            + " (not judged)")
+
+
+def _sec(v: float) -> str:
+    return f"{v:.2f} s" if v is not None and math.isfinite(v) else "-"
 
 
 def _ci(s: Step) -> str:
@@ -1018,13 +1477,33 @@ def _s(v: float) -> str:
     return f"{v:.0f} s" if math.isfinite(v) else "-"
 
 
+def failed_checks(step: dict) -> list[str]:
+    """The names of the checks a step (as in a record) failed."""
+    return [n for n in CHECKS if (step.get("checks") or {}).get(n, {}
+                                                                ).get("status") == "fail"]
+
+
+def rule_words(plan: dict) -> str:
+    """The pass rule of a record's plan, in words. A record from before the
+    checks held the turn slowdown and 5% failed requests."""
+    if "max_warm_ttft_s" not in plan:
+        return (f"p{PERCENTILE} turn <= {plan['max_slowdown']:g}x alone")
+    words = (f"evictions <= {plan['max_eviction_share']:.1%} of warm "
+             f"requests, warm time to first token p{PERCENTILE} <= "
+             f"{plan['max_warm_ttft_s']:g} s, decode speed p10 >= "
+             f"{plan['min_decode_tok_s']:g} tok/s, failed requests <= "
+             f"{plan['max_failed_share']:.1%}")
+    if plan.get("max_slowdown") is not None:
+        words += f", p{PERCENTILE} turn <= {plan['max_slowdown']:g}x alone"
+    return words
+
+
 def headline(rec: dict) -> str:
     a = rec["answer"]
-    ms = rec["plan"]["max_slowdown"]
+    rule = rule_words(rec["plan"])
     if a["fails_at"] is None and a["serves"]:
-        return (f"serves at least {a['serves']} sessions at p{PERCENTILE} "
-                f"turn <= {ms:g}x alone (the --max-sessions cap; nothing "
-                "failed)")
+        return (f"serves at least {a['serves']} sessions within {rule} (the "
+                "--max-sessions cap; nothing failed)")
     out = ""
     bad = next((st for st in rec.get("steps", ())
                 if st.get("sessions") == a["fails_at"]), None)
@@ -1032,15 +1511,18 @@ def headline(rec: dict) -> str:
         key, words = ran_out(bad.get("server"))
         out = (f"; at {a['fails_at']} the limit is {words}" if key != "unknown"
                else "; the limit is unknown (no /metrics reading)")
+        names = failed_checks(bad)
+        if names:
+            out = f"; at {a['fails_at']} failed: {', '.join(names)}" + out
         if bad.get("inconclusive"):
             out = (f"; the step at {a['fails_at']} is INCONCLUSIVE ("
                    f"{bad.get('turns')} turns judged, too few to call it a "
                    "fail; counted as one for the search)")
     if a["serves"] == 0:
-        return (f"serves no session at p{PERCENTILE} turn <= {ms:g}x alone "
-                f"(one session already fails: see the step above){out}")
-    return (f"serves {a['serves']} sessions at p{PERCENTILE} turn <= {ms:g}x "
-            f"alone; fails at {a['fails_at']}{out}")
+        return (f"serves no session within {rule} (one session already "
+                f"fails: see the step above){out}")
+    return f"serves {a['serves']} sessions within {rule}; fails at " \
+           f"{a['fails_at']}{out}"
 
 
 def print_report(rec: dict, out=None) -> None:
@@ -1055,6 +1537,10 @@ def print_report(rec: dict, out=None) -> None:
       f"{tr['requests']} requests")
     w(f"         {rec['endpoint']['base_url']}  model="
       f"{rec['endpoint']['model'] or '<server default>'}")
+    eps = rec.get("endpoints") or []
+    if len(eps) > 1:
+        w(f"         {len(eps)} URLs, routing {rec['plan'].get('routing')}: "
+          + ", ".join(e["base_url"] for e in eps))
     w("=" * 78)
     sp = Speed.from_dict(rec["speed"])
     pl = rec["plan"]
@@ -1090,11 +1576,32 @@ def print_report(rec: dict, out=None) -> None:
           f"{_x(s.slowdown_p90) + _ci(s):>21} {_x(s.slowdown_mean):>6} "
           f"{_x(s.raw_p90):>12} {_s(s.turn_s_p50):>7}/{_s(s.turn_s_p90):<7} "
           f"{_f1(s.streams_mean):>9}  {v}")
+    if any(s.checks for s in steps):
+        w(f"\nthe checks per step (pass rule: {rule_words(pl)})")
+        for s in steps:
+            for name, cell in check_cells(s).items():
+                w(f"{s.sessions:>8}  {name}: {cell}")
+            if s.cold_requests:
+                w(f"{s.sessions:>8}  cold requests: {s.cold_requests}, "
+                  f"queueing p50 {_sec(s.cold_queue_p50)} p{PERCENTILE} "
+                  f"{_sec(s.cold_queue_p90)} (not gated)")
+            if len(s.url_requests) > 1:
+                w(f"{s.sessions:>8}  requests per URL: " + ", ".join(
+                    f"#{i} {n}" for i, n in enumerate(s.url_requests)))
+            if s.chat:
+                w(f"{s.sessions:>8}  {chat_line(s.chat)}")
+        if any(c["status"] == "unknown" for s in steps
+               for c in [s.checks.get("evictions", {})]):
+            w(f"\n{UNKNOWN_CACHED}")
     sig = [(s.sessions, signals(s.server)) for s in steps if s.server]
     if sig:
         w("\nwhat the server showed (--metrics-url)")
         for n, line in sig:
             w(f"{n:>8}  {line}")
+            if len(s_ := next(x for x in steps if x.sessions == n
+                              ).servers) > 1:
+                for i, srv in enumerate(s_):
+                    w(f"{'':>8}    URL #{i}: {signals(srv) or 'no reading'}")
         w(f"  {RAN_OUT_RULES}")
     w()
     w(headline(rec))
@@ -1196,7 +1703,20 @@ def cmd_replay(args) -> int:
         print(f"ws replay: {args.trace} holds no session", file=sys.stderr)
         return 2
     key = os.environ.get(args.api_key_env, "") if args.api_key_env else ""
-    base = args.base_url.rstrip("/")
+    bases = [b.rstrip("/") for b in (args.base_url or [DEFAULT_BASE_URL])]
+    base = bases[0]
+    murls = list(args.metrics_url or [])
+    if murls and len(murls) != len(bases):
+        print(f"ws replay: {len(murls)} --metrics-url for {len(bases)} "
+              "--base-url: give one per base URL, in the same order",
+              file=sys.stderr)
+        return 2
+    for flag, v, lo in (("--output-scale", args.output_scale, 0.0),
+                        ("--chat-rate", args.chat_rate, -1e-9)):
+        if not v > lo:
+            print(f"ws replay: {flag} must be positive" if lo == 0.0 else
+                  f"ws replay: {flag} cannot be negative", file=sys.stderr)
+            return 2
     info = _endpoint_info(base, key)       # a dry run reads it too
     cap = args.max_model_len or info.get("max_model_len") or max(
         r.prompt_tokens + r.output_tokens for s in trace.sessions for r in s)
@@ -1207,6 +1727,17 @@ def cmd_replay(args) -> int:
     elif cpt is None:
         cpt, cpt_source = 4.0, "default"
     plan = Plan(trace_path=args.trace, max_slowdown=args.max_slowdown,
+                max_eviction_share=args.max_eviction_share,
+                max_warm_ttft_s=args.max_warm_ttft_s,
+                min_decode_tok_s=args.min_decode_tok_s,
+                max_failed_share=args.max_failed_share,
+                warm_new_tokens=args.warm_new_tokens,
+                kv_block_tokens=args.kv_block_tokens,
+                routing=args.routing or "sticky",
+                output_scale=args.output_scale, chat_rate=args.chat_rate,
+                chat_prompt_tokens=args.chat_prompt_tokens,
+                chat_output_tokens=args.chat_output_tokens,
+                chat_sigma=args.chat_sigma,
                 max_sessions=args.max_sessions, ramp_s=args.ramp_s,
                 measure_s=args.measure_s, min_turns=args.min_turns,
                 max_measure_s=args.max_measure_s,
@@ -1219,8 +1750,10 @@ def cmd_replay(args) -> int:
                 request_timeout_s=args.request_timeout_s,
                 calibrate_requests=CALIBRATE_REQUESTS,
                 calibrate_max_s=CALIBRATE_MAX_S)
-    ep = EndpointSpec(base_url=base, model=args.model or info.get("model", ""),
-                      api_key=key, api=args.api)
+    model = args.model or info.get("model", "")
+    eps = [EndpointSpec(base_url=b, model=model, api_key=key, api=args.api)
+           for b in bases]
+    ep = eps[0]
     pred = None
     if args.config:
         try:
@@ -1248,8 +1781,22 @@ def cmd_replay(args) -> int:
         print(f"  {len(root_sessions(trace))} sessions start a seat; the "
               f"other {kids} are subagents, launched from their parent where "
               "it spawned them")
-    print(f"  target: p{PERCENTILE} turn <= {plan.max_slowdown:g}x the "
-          f"endpoint alone, <= {MAX_ERROR_SHARE:.0%} failed requests")
+    print(f"  a step passes when: "
+          f"{rule_words(asdict(plan))}")
+    if len(eps) > 1:
+        print(f"  {len(eps)} URLs, routing {plan.routing}: "
+              + ", ".join(e.base_url for e in eps)
+              + ("; a session tree stays on the URL its seat id hashes to"
+                 if plan.routing == "sticky" else
+                 "; every request goes to the next URL"))
+    if plan.output_scale != 1.0:
+        print(f"  replies and the context they add scaled by "
+              f"{plan.output_scale:g}")
+    if plan.chat_rate > 0:
+        print(f"  background chat: {plan.chat_rate:g} requests/s, mean "
+              f"{plan.chat_prompt_tokens:,} prompt and "
+              f"{plan.chat_output_tokens:,} output tokens (lognormal, sigma "
+              f"{plan.chat_sigma:g}); reported apart, not judged")
     print(f"  steps: 1, 2, 4, ... sessions until one fails, then halved to "
           f"{RESOLUTION:.0%}; each {plan.ramp_s:g} s ramp + "
           f"{plan.measure_s:g} s measured, longer (up to "
@@ -1266,22 +1813,22 @@ def cmd_replay(args) -> int:
         return 0
 
     metrics = None
-    if args.metrics_url:
-        from .test_cmd import open_metrics, _maybe
-        metrics = open_metrics(args.metrics_url, args.engine,
-                               metrics_headers(args.metrics_header, key,
-                                               base, args.metrics_url))
+    if murls:
+        from .test_cmd import open_metrics
+        metrics = [open_metrics(u, args.engine,
+                                metrics_headers(args.metrics_header, key, b,
+                                                u))
+                   for b, u in zip(bases, murls)]
 
     async def go():
-        if metrics is not None:
-            from .test_cmd import _maybe
-            await _maybe(metrics, "start", "open")
+        from .test_cmd import _maybe
+        for m in metrics or ():
+            await _maybe(m, "start", "open")
         try:
-            return await run(ep, plan, metrics)
+            return await run(eps, plan, metrics)
         finally:
-            if metrics is not None:
-                from .test_cmd import _maybe
-                await _maybe(metrics, "stop", "aclose", "close")
+            for m in metrics or ():
+                await _maybe(m, "stop", "aclose", "close")
 
     try:
         res = asyncio.run(go())
@@ -1295,6 +1842,7 @@ def cmd_replay(args) -> int:
            "trace": {"path": args.trace, "sessions": len(trace.sessions),
                      "requests": trace.n_requests},
            "endpoint": ep.redacted(), "plan": asdict(plan),
+           "endpoints": [e.redacted() for e in eps],
            "run_nonce": res["nonce"],
            "speed": res["speed"].to_dict(),
            "turn_alone_s": _turns_alone(trace, res["speed"], plan),
@@ -1309,7 +1857,7 @@ def cmd_replay(args) -> int:
         Path(args.out).write_text(json.dumps(rec, indent=1) + "\n",
                                   encoding="utf-8")
     print_report(rec)
-    if args.metrics_url and not any(s.server for s in res["steps"]):
+    if murls and not any(s.server for s in res["steps"]):
         print("\nwarning: --metrics-url gave no reading (unreachable, or "
               "refused without credentials): the verdict above stands, but it "
               "cannot say what ran out", file=sys.stderr)
@@ -1328,29 +1876,91 @@ def add_subparser(sub) -> None:
         "replay", help="how many recorded agent sessions an endpoint serves",
         description="Replay recorded agent sessions (`ws trace pi`) against "
                     "an OpenAI-compatible endpoint, at 1, 2, 4, ... sessions "
-                    "at once, and report the most it serves with the p90 "
-                    "turn at most --max-slowdown times as long as the "
-                    "endpoint alone. Needs no config: nothing in the answer "
-                    "comes from the model.",
+                    "at once, and report the most it serves while every "
+                    "check of the pass rule holds (mid-session evictions, "
+                    "warm time to first token, decode speed, failed "
+                    "requests: see the flags below). Needs no config: "
+                    "nothing in the answer comes from the model.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
                "  ws replay trace.json --base-url http://gpu:8000/v1 "
                "--out run.json\n"
                "  ws replay trace.json --base-url http://gpu:8000/v1 "
-               "--metrics-url http://gpu:8000/metrics --max-slowdown 1.3\n"
+               "--metrics-url http://gpu:8000/metrics --max-warm-ttft-s 2\n"
+               "  ws replay trace.json --base-url http://a:8000/v1 "
+               "--base-url http://b:8000/v1 --routing round-robin\n"
                "  ws report run.json\n")
     p.add_argument("trace", help="agent trace from `ws trace pi`")
-    p.add_argument("--base-url", default="http://localhost:8000/v1")
+    p.add_argument("--base-url", action="append", default=None,
+                   help="the endpoint (default http://localhost:8000/v1). "
+                        "Repeat it to bench a data-parallel deployment: "
+                        "--routing says how requests are spread")
+    p.add_argument("--routing", choices=ROUTINGS, default=None,
+                   help="with several --base-url: sticky (default) pins a "
+                        "session tree to one URL by a stable hash of its "
+                        "seat id, as a session-affine router does; "
+                        "round-robin sends each request to the next URL, "
+                        "as a router without affinity does")
     p.add_argument("--model", help="served model id (default: the first one "
                                    "/models lists)")
     p.add_argument("--api-key-env", default="VLLM_API_KEY",
                    help="environment variable holding the API key")
     p.add_argument("--api", choices=("completions", "chat"),
                    default="completions")
-    p.add_argument("--max-slowdown", type=float, default=DEFAULT_MAX_SLOWDOWN,
-                   help=f"the target: p{PERCENTILE} turn at most this many "
-                        f"times as long as alone (default "
-                        f"{DEFAULT_MAX_SLOWDOWN:g})")
+    g = p.add_argument_group(
+        "pass rule", "A step of N sessions passes when every check holds "
+                     "over its window. Each threshold is a flag.")
+    g.add_argument("--max-eviction-share", type=float,
+                   default=MAX_EVICTION_SHARE,
+                   help="mid-session evictions at most this share of warm "
+                        "requests (default %(default)s). An eviction: the "
+                        "server's usage.prompt_tokens_details.cached_tokens "
+                        "is more than one block under the tokens the "
+                        "request shares with its session's previous "
+                        "request. Needs vLLM --enable-prompt-tokens-details; "
+                        "a server that reports none leaves the check "
+                        "'unknown', and it does not gate")
+    g.add_argument("--max-warm-ttft-s", type=float, default=MAX_WARM_TTFT_S,
+                   help="p90 time to first token of warm requests, seconds "
+                        "(default %(default)s)")
+    g.add_argument("--warm-new-tokens", type=int, default=WARM_NEW_TOKENS,
+                   help="a request is warm when its session's previous "
+                        "request exists, no compaction or reset lies "
+                        "between, and it adds at most this many new tokens "
+                        "(default %(default)s)")
+    g.add_argument("--kv-block-tokens", type=int, default=KV_BLOCK_TOKENS,
+                   help="the server's KV cache block size: the shared prefix "
+                        "rounds down to it and the eviction test tolerates "
+                        "one block (default %(default)s)")
+    g.add_argument("--min-decode-tok-s", type=float, default=MIN_DECODE_TOK_S,
+                   help="p10 decode speed per request, (output - 1) / (last "
+                        "- first token time), over requests of at least "
+                        f"{MIN_DECODE_TOKENS} output tokens (default "
+                        "%(default)s tok/s)")
+    g.add_argument("--max-failed-share", type=float, default=MAX_ERROR_SHARE,
+                   help="failed or unfinished requests at most this share "
+                        "(default %(default)s)")
+    g.add_argument("--max-slowdown", type=float, default=None,
+                   help=f"also require the p{PERCENTILE} turn to take at "
+                        "most this many times as long as the endpoint alone. "
+                        "Without it the slowdown is reported, not gated")
+    p.add_argument("--output-scale", type=float, default=1.0,
+                   help="multiply every recorded reply length, and the "
+                        "context those replies add to the session's later "
+                        "prompts, by this (default 1): replays a model that "
+                        "writes more or less per task")
+    p.add_argument("--chat-rate", type=float, default=0.0,
+                   help="background chat requests per second, Poisson, each "
+                        "with its own prompt (default 0: none). Reported "
+                        "apart (count, p90 time to first token, p10 decode "
+                        "speed), never judged")
+    p.add_argument("--chat-prompt-tokens", type=int, default=2000,
+                   help="mean prompt tokens of a chat request (lognormal)")
+    p.add_argument("--chat-output-tokens", type=int, default=300,
+                   help="mean output tokens of a chat request (lognormal)")
+    p.add_argument("--chat-sigma", type=float, default=CHAT_SIGMA,
+                   help="sigma of the lognormal chat lengths "
+                        "(default %(default)s)")
     p.add_argument("--max-sessions", type=int, default=256)
     p.add_argument("--min-turns", type=int, default=30,
                    help="a step measures past --measure-s until it has this "
@@ -1363,8 +1973,10 @@ def add_subparser(sub) -> None:
                    help="seconds sessions start over, not measured")
     p.add_argument("--measure-s", type=float, default=300.0,
                    help="seconds measured per step")
-    p.add_argument("--metrics-url", help="the server's Prometheus /metrics, "
-                                         "to say what ran out")
+    p.add_argument("--metrics-url", action="append", default=None,
+                   help="the server's Prometheus /metrics, to say what ran "
+                        "out. Repeat it once per --base-url, in the same "
+                        "order")
     p.add_argument("--engine", help="one engine of a multi-engine /metrics")
     p.add_argument("--tokenizer", help="size the synthetic text with this "
                                        "model's tokenizer (needs toklen)")

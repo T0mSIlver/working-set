@@ -115,7 +115,7 @@ def test_requests_left_running_fail_the_step_and_are_censored():
     s = B.judge(B.Step(1, ok + [stuck], window=(0.0, 10.0), drain_s=5.0),
                 FLAT, 1.5)
     assert s.unfinished == 1 and not s.passed
-    assert any("1 of 6 requests failed" in r and "still running" in r
+    assert any("1 of 6 failed" in r and "still running" in r
                for r in s.reasons)
     assert s.slowdown_p90 > 5            # the stuck one counts 14x, not nothing
 
@@ -143,12 +143,12 @@ def test_a_request_still_running_counts_with_its_time_so_far():
     assert s.slowdown_p90 == pytest.approx(12.0) and not s.passed
 
 
-def test_failed_requests_fail_the_step_past_five_percent():
+def test_failed_requests_fail_the_step_past_one_percent():
     ok = [_row(1, 1, 1, 1.0, 1.0, turn=k) for k in range(10)]
     bad = B.Row(0, 99, "hit", 1, 1, 1, sent=1.0, error="HTTP 500", done=True)
     s = B.judge(B.Step(1, ok + [bad], window=(0.0, 10.0)), FLAT, 1.5)
     assert s.errors == 1 and not s.passed
-    assert s.reasons == ["1 of 11 requests failed (first: HTTP 500)"]
+    assert s.reasons == ["failed requests: 1 of 11 failed (first: HTTP 500)"]
 
 
 def test_a_step_where_every_request_failed_says_why():
@@ -321,7 +321,7 @@ def test_the_dry_run_sends_nothing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(B, "make_client", lambda: pytest.fail("sent"))
     assert main(["replay", str(path), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "dry run: nothing sent" in out and "p90 turn <= 1.5x" in out
+    assert "dry run: nothing sent" in out and "warm time to first token p90 <= 3 s" in out
 
 
 def test_the_models_prediction_is_printed_not_used(tmp_path, monkeypatch,

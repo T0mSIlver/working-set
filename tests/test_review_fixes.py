@@ -70,6 +70,7 @@ def test_replay_grandchild_requests_file_under_the_root_turn():
     class Seat:
         uid, n_turn, _s, _pos = 7, 0, 3, 0
         last = (10, 10, 1, False)
+        cold = False
 
         def think_s(self, wl):
             return 0.0
