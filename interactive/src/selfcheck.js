@@ -1,6 +1,6 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
          dcpSize, effective_bw, kvReplication, kv_pool_tokens, makeGrid, makeTopo, minTpFor,
-         servableKv, state_traffic, tpEff, withGpu, withKvDtype, draftPasses } from './config.js';
+         servableKv, state_traffic, tokensPerStep, tpEff, withGpu, withKvDtype, draftPasses } from './config.js';
 import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, capacityLimit, coldRequestSeconds,
          contextStats, liveThink, liveTurn, maxUsersColdWait, maxUsersLatency, maxUsersSaturation,
          maxUsersSlowed, mfuEff, missContextSeconds, missShareAt, prefillContextSeconds, prefillSeconds,
@@ -306,11 +306,13 @@ export function unitChecks(){
     "DSV4F NVFP4 resident delta is the expert delta alone");
   // DSv4-Flash-Vision-Exp (research/model_dsv4flash_vision.md; mirror
   // _selfcheck): 0731's text backbone, so every field but the name, the
-  // resident bytes and the NVFP4 arm is DSV4F's
-  const ds4v = CONFIG.MODELS["DSV4FV"], SAME_V = ["name", "w_resident", "nvfp4_w"];
+  // resident bytes, the NVFP4 arm, the draft depth (each card serves its own)
+  // and the explorer's display copy is DSV4F's
+  const ds4v = CONFIG.MODELS["DSV4FV"],
+        SAME_V = ["name", "w_resident", "nvfp4_w", "spec_tokens", "explorer"];
   console.assert(Object.keys(ds4).every(k => SAME_V.includes(k) || ds4v[k] === ds4[k])
                  && Object.keys(ds4v).every(k => k in ds4),
-    "DSV4FV = DSV4F but for the name, the resident bytes and the NVFP4 arm");
+    "DSV4FV = DSV4F but for the name, the resident bytes, the NVFP4 arm, the draft depth and the display copy");
   console.assert(ds4v.w_resident === 166878536440 + (823685120 + 109068288 + 32768 + 46*256*4 + 3*256*4),
     "DSV4FV resident = 0731's measured total + ViT + aligner + image embeddings + fp32 gate biases");
   // DSv4.1-Flash identities (research/model_dsv41flash.md; mirror _selfcheck)
@@ -591,7 +593,11 @@ export function prefillSampledChecks(){
   {
     const f0 = wlRef.invalidation;
     const mo = prefillServiceMoments(CONFIG.MODELS["27B"], tp2H, wlRef, csRef);
-    const steps = slowedSteps(CONFIG.MODELS["27B"], tp2H, csRef, PREFILL_CHUNK, 40);
+    // tokens_per_step is baked on by render.js's modelFor at run time, so the
+    // bare catalogue entry has none: price the step the way modelFor does
+    const m27 = CONFIG.MODELS["27B"];
+    const steps = slowedSteps({ ...m27, tokens_per_step: tokensPerStep(m27.acceptance, m27.spec_tokens) },
+                              tp2H, csRef, PREFILL_CHUNK, 40);
     const W = 150, knee = W/(1 - f0);
     const lims = [x => maxUsersColdWait(mo, x, 5, 30, 0.10, '95'),
                   x => maxUsersSlowed(mo, steps, x, 0.15, 30, 0.10),
