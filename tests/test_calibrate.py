@@ -196,3 +196,18 @@ def test_mfu_ignores_concurrent_tree_rows():
         rows.append(dict(base, phase="tree", ttft=0.05 + 3 * f / (M.peak_flops(t) * 0.45)))
     fit = C.fit_mfu([{"speed": {}, "calibration": rows, "steps": []}], cfg)
     assert fit.value == pytest.approx(0.45, rel=1e-6)
+
+
+def test_mixed_windows_are_recorded_but_not_fitted():
+    """The step equation has no prefill term: a record with `mixed_windows`
+    fits exactly as the same record without them."""
+    cfg = _cfg(2)
+    recs = [_sweep(cfg, 1), _sweep(cfg, 2), _sweep(cfg, 2, k=0)]
+    plain = C.calibrate(cfg, recs)
+    for rec in recs:
+        for r in rec["rungs"]:
+            r["pure_step_s"] = r["server"]["step_time_s"]
+            r["mixed_windows"] = [{"kind": "tokens", "prefill_tokens": 8192, "ok": True,
+                                   "mixed": {"mixed_step_s": 9.0}}]
+    mixed = C.calibrate(cfg, recs)
+    assert {k: f.value for k, f in plain.items()} == {k: f.value for k, f in mixed.items()}

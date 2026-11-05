@@ -49,12 +49,15 @@ from pathlib import Path
 
 from .metrics.parse import HistogramMismatch, HistogramReset, parse_text
 from .metrics.vllm import detect_adapter
+from .sweep_mixed import (classify, depth_profile, format_row, judge_mixed,
+                          stream_gaps, summarize, summary_rows, SUMMARY_HEADER)
 
 FORMAT = "workingset-decode-sweep"
-VERSION = 1
+VERSION = 1   # additive fields (mixed_windows, pure_step_s) keep v1 records readable
 DEFAULT_BATCHES = "1,8,32,64,128,256,512"
 MIN_RUNNING_SHARE = 0.95
 _COMPLETION_TOKENS = re.compile(r'"completion_tokens"\s*:\s*(\d+)')
+_PROMPT_TOKENS = re.compile(r'"prompt_tokens"\s*:\s*(\d+)')
 _ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
 
@@ -65,6 +68,16 @@ def parse_batches(s: str) -> list[int]:
     ns = [int(x) for x in s.split(",") if x.strip()]
     if not ns or min(ns) < 1:
         raise ValueError("--batch needs a comma list of batch sizes >= 1")
+    return sorted(set(ns))
+
+
+def parse_sizes(s: str | None, flag: str) -> list[int]:
+    """A comma list of token counts, or nothing."""
+    if not s:
+        return []
+    ns = [int(x) for x in s.split(",") if x.strip()]
+    if not ns or min(ns) < 1:
+        raise ValueError(f"{flag} needs a comma list of token counts >= 1")
     return sorted(set(ns))
 
 
@@ -227,7 +240,9 @@ class Endpoint:
 class Streams:
     """Running counts per stream, written by the stream tasks."""
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, record: bool = False):
+        # (monotonic time, running token count) per event, for mixed-step gaps
+        self.ts: list[list[tuple[float, int]]] | None = [[] for _ in range(n)] if record else None
         self.tok = [0] * n
         self.ev = [0] * n
         self.first = [False] * n
@@ -254,6 +269,8 @@ async def _stream(ep: Endpoint, body: dict, i: int, st: Streams) -> None:
                 m = _COMPLETION_TOKENS.search(line)
                 if m:
                     st.tok[i] = int(m.group(1))
+                if st.ts is not None:
+                    st.ts[i].append((time.monotonic(), st.tok[i]))
     except httpx.HTTPError as e:
         st.err.append(f"{type(e).__name__}: {e}")
 
@@ -335,6 +352,99 @@ async def calibrate(ep: Endpoint, args) -> float:
     return len(probe) / await ep.complete(probe, 1)
 
 
+async def cold_request(ep: Endpoint, args, prompt: str, timeout: float) -> dict:
+    """One cold, one-token streamed request: when it was sent and when its first
+    token came back (the interval whose steps carry its prefill)."""
+    import httpx
+    t_send, first, ptoks, err = time.monotonic(), None, None, None
+    body = {"model": args.model, "prompt": prompt, "max_tokens": 1, "temperature": 0.0,
+            "stream": True,
+            "stream_options": {"include_usage": True, "continuous_usage_stats": True}}
+
+    async def go():
+        nonlocal first, ptoks
+        async with ep.c.stream("POST", "/completions", json=body,
+                               timeout=httpx.Timeout(None, connect=60.0)) as r:
+            if r.status_code != 200:
+                raise RuntimeError(f"HTTP {r.status_code}: "
+                                   f"{(await r.aread())[:200].decode(errors='replace')}")
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                if line[5:].strip() == "[DONE]":
+                    return
+                if first is None:
+                    first = time.monotonic()
+                m = _PROMPT_TOKENS.search(line)
+                if m:
+                    ptoks = int(m.group(1))
+    try:
+        await asyncio.wait_for(go(), timeout)
+    except (httpx.HTTPError, RuntimeError, asyncio.TimeoutError) as e:
+        err = f"{type(e).__name__}: {e}"
+    return {"send": t_send, "first": first, "prompt_tokens": ptoks, "error": err}
+
+
+async def mixed_window(ep: Endpoint, args, pr: Prompts, n: int, st: Streams,
+                       kind: str, value: int, pure_s: float | None, tag: int) -> dict:
+    """One window with the n held streams decoding and cold prefill requests in
+    flight: `kind` "tokens" keeps a stream of `value`-token requests, one at a
+    time, for --hold seconds; "depth" sends one `value`-token request, which
+    the server chunks."""
+    gauges = {"running": [], "waiting": [], "kv": []}
+    stop_g = asyncio.Event()
+    g = asyncio.create_task(_gauges(ep, stop_g, gauges))
+    err0, done0 = len(st.err), sum(st.done)
+    ta, sa, _ = await ep.scrape()
+    reqs: list[dict] = []
+
+    def prompt(i: int) -> str:
+        rnd = random.Random(f"{args.seed}/cold/{n}/{kind}/{value}/{tag}/{i}")
+        return random_words(rnd, int(value * pr.cpt))
+
+    if kind == "tokens":
+        while time.monotonic() < ta + args.hold:
+            reqs.append(await cold_request(ep, args, prompt(len(reqs)), args.prefill_timeout))
+            if reqs[-1]["error"]:
+                break
+    else:
+        reqs.append(await cold_request(ep, args, prompt(0), args.prefill_timeout))
+        await asyncio.sleep(1.0)   # a pure tail after the last chunk
+    tb, sb, _ = await ep.scrape()
+    stop_g.set()
+    await g
+    dt = tb - ta
+    good = [r for r in reqs if r["first"] is not None and not r["error"]]
+    intervals = [(r["send"], r["first"]) for r in good]
+    have_tok = any(t[-1][1] for t in st.ts if t)
+    per = [classify(stream_gaps(ev, ta, tb, have_tok), intervals) for ev in st.ts]
+    pt = [r["prompt_tokens"] for r in good if r["prompt_tokens"]]
+    w = {"kind": kind, "window_s": dt, "requests": len(good),
+         "request_errors": [r["error"] for r in reqs if r["error"]][:3],
+         "request_s_mean": (sum(r["first"] - r["send"] for r in good) / len(good)
+                            if good else None),
+         "prompt_tokens_mean": sum(pt) / len(pt) if pt else None,
+         "server": server_window(ep.ad, sa, sb, dt),
+         "mixed": summarize(per),
+         "running": {k: (min(v), sum(v) / len(v), max(v)) for k, v in gauges.items() if v}}
+    if kind == "tokens":
+        w["prefill_tokens"] = value
+    else:
+        w["prefill_depth"] = value
+        w["chunk_tokens"] = args.chunk_tokens
+        w["depth_profile"] = depth_profile(per, value, args.chunk_tokens)
+    # the server's mean step blends mixed and pure steps; with the mixed share
+    # known, what the mixed ones cost
+    s_step, share = w["server"]["step_time_s"], w["mixed"]["share_mixed"]
+    w["server_mixed_step_est_s"] = (
+        (s_step - (1 - share) * pure_s) / share
+        if s_step and pure_s and share and share > 0.05 else None)
+    w["ok"], w["why_not"] = judge_mixed(
+        n, gauges["running"], len(st.err) - err0, sum(st.done) - done0, len(good))
+    w["waiting_max"] = max(gauges["waiting"]) if gauges["waiting"] else None
+    return w
+
+
 async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
                    pool: int | None) -> dict:
     shared = not args.distinct
@@ -368,7 +478,7 @@ async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
         rec["server_idle"] = False
 
     # 2. start the batch
-    st = Streams(n)
+    st = Streams(n, record=bool(args.prefill_tokens or args.prefill_depth))
     gauges = {"running": [], "waiting": [], "kv": []}
     stop_g = asyncio.Event()
     tasks = [asyncio.create_task(_stream(ep, {
@@ -391,14 +501,26 @@ async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
     tb, sb, _ = await ep.scrape()
     c1 = (list(st.tok), list(st.ev), list(st.done))
     stop_g.set()
-    for t in tasks:
-        t.cancel()
-    await asyncio.gather(g, *tasks, return_exceptions=True)
+    await g
 
     dt = tb - ta
     started = list(st.first)
     drained = sum(1 for x in c1[2] if x)
     rec["server"] = server_window(ep.ad, sa, sb, dt)
+    rec["pure_step_s"] = rec["server"]["step_time_s"]
+    # 4. the same streams again, with cold prefill in the batch
+    rec["mixed_windows"] = []
+    loads = ([("tokens", p) for p in args.prefill_tokens]
+             + [("depth", d) for d in args.prefill_depth])
+    for tag, (kind, v) in enumerate(loads):
+        if st.err or drained:
+            break
+        w = await mixed_window(ep, args, pr, n, st, kind, v, rec["pure_step_s"], tag)
+        rec["mixed_windows"].append(w)
+        print(f"  n={n}: {w['kind']} {v:,} done, {w['requests']} cold requests", flush=True)
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
     rec["client"] = client_window(c0[0], c1[0], c0[1], c1[1], dt, started)
     rec["running"] = {k: (min(v), sum(v) / len(v), max(v)) for k, v in gauges.items() if v}
     rec["batch_ok"], rec["why_not"] = judge(
@@ -478,7 +600,11 @@ async def sweep(args) -> dict:
         pr = Prompts(args, cpt)
         print(f"{cpt:.2f} characters per token\n{HEADER}")
         rungs, rate = [], args.max_tok_s
-        span = args.settle + args.hold + args.ramp_allowance
+        # the streams outlast the pure window, every prefill-token window and
+        # an allowance per depth request (a stream that ends early voids its window)
+        span = (args.settle + args.hold + args.ramp_allowance
+                + len(args.prefill_tokens) * args.hold
+                + len(args.prefill_depth) * args.ramp_allowance)
         for n in args.batch:
             out = output_budget(rate, span)
             if max_len:
@@ -492,7 +618,9 @@ async def sweep(args) -> dict:
                 rate = min(rate, rec["tok_s_seq_server"])
             if await wait_idle(ep, args.idle_timeout) is False:
                 print("  server still busy after the idle timeout; next rung may be contaminated")
-        return {"format": FORMAT, "version": VERSION, "time": time.time(),
+        return {"format": FORMAT, "version": VERSION,
+                "prefill_tokens": args.prefill_tokens, "prefill_depth": args.prefill_depth,
+                "chunk_tokens": args.chunk_tokens, "min_tok_s": args.min_tok_s, "time": time.time(),
                 "model": args.model, "base_url": base, "metrics_url": args.metrics_url,
                 "context": args.context, "shared_context": not args.distinct,
                 "suffix_tokens": args.suffix_tokens, "temperature": args.temperature,
@@ -506,6 +634,12 @@ async def sweep(args) -> dict:
 def cmd_decode_sweep(args) -> int:
     import os
     args.batch = parse_batches(args.batch)
+    try:
+        args.prefill_tokens = parse_sizes(args.prefill_tokens, "--prefill-tokens")
+        args.prefill_depth = parse_sizes(args.prefill_depth, "--prefill-depth")
+    except ValueError as e:
+        print(f"ws: {e}", file=sys.stderr)
+        return 2
     if not args.api_key and args.api_key_env and not os.environ.get(args.api_key_env):
         print(f"ws: --api-key-env {args.api_key_env} is not set", file=sys.stderr)
         return 2
@@ -513,6 +647,12 @@ def cmd_decode_sweep(args) -> int:
     if args.out:
         Path(args.out).write_text(json.dumps(res, indent=1))
         print(f"\nwrote {args.out}")
+    rows = summary_rows(res, args.min_tok_s)
+    if rows:
+        print(f"\nmixed steps (cold prefill in the batch; pure ms = decode alone), "
+              f"floor {args.min_tok_s:g} tok/s per sequence\n{SUMMARY_HEADER}")
+        for r in rows:
+            print(format_row(r))
     bad = [r["n"] for r in res["rungs"] if not r.get("batch_ok") and not r.get("skipped")]
     if bad:
         print(f"rungs not OK (do not fit them): n = {bad}", file=sys.stderr)
@@ -550,6 +690,20 @@ def add_subparser(sub) -> None:
     p.add_argument("--temperature", type=float, default=0.6,
                    help="sampling temperature; at 0 identical prompts decode identical "
                         "tokens (default 0.6)")
+    p.add_argument("--prefill-tokens", metavar="P,P,...",
+                   help="for each n and each P, also measure with cold requests of P tokens "
+                        "(max_tokens=1) kept in flight one at a time while the n sequences "
+                        "decode: the mixed step. Needs max_num_seqs > n")
+    p.add_argument("--prefill-depth", metavar="D,D,...",
+                   help="for each n and each D, also measure one cold request of D tokens, "
+                        "which the server chunks: mixed step time against chunk position")
+    p.add_argument("--chunk-tokens", type=int, metavar="TOKENS",
+                   help="the server's max_num_batched_tokens, to place --prefill-depth steps "
+                        "(default: estimated as D over the mixed steps seen)")
+    p.add_argument("--prefill-timeout", type=float, default=300,
+                   help="longest a cold request may take, seconds (default 300)")
+    p.add_argument("--min-tok-s", type=float, default=50,
+                   help="per-sequence tok/s floor; mixed rows below it are marked (default 50)")
     p.add_argument("--hold", type=float, default=30, help="measured window, seconds (default 30)")
     p.add_argument("--settle", type=float, default=10,
                    help="seconds after every sequence has started before the window (default 10)")
