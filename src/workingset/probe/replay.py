@@ -70,16 +70,23 @@ class ReplaySession:
                  text_rng: random.Random,
                  gap_policy: str = DEFAULT_GAP_POLICY,
                  roots: tuple[int, ...] | None = None,
-                 start: tuple[int, int] | None = None):
+                 start: tuple[int, int] | None = None,
+                 output_scale: float = 1.0):
         """`roots` limits the recordings a session may start at or move on to
         (`ws replay` leaves subagent recordings to their parent); `start` =
-        (recording, request) fixes where it begins."""
+        (recording, request) fixes where it begins. `output_scale` multiplies
+        every recorded reply length, and the context those replies add to the
+        session's later prompts (so a model that writes more per task can be
+        replayed)."""
         self.trace, self.uid, self.is_sub = trace, uid, False
         self.prefix_text, self.prefix_tokens = prefix_text, prefix_tokens
         self.cpt, self.cap, self.max_gap_s = cpt, cap_tokens, max_gap_s
         self.rng, self.text_rng = rng, text_rng
         self.gap_policy, self.pool = gap_policy, _pool(trace)
         self.n_turn = 0
+        self.output_scale = output_scale
+        self._extra = 0         # tokens the scaled replies added since a reset
+        self.want = 0           # prompt tokens of the request being built
         self.turn_images: list = []
         self.n_new_images = 0
         self._text = ""
@@ -100,24 +107,37 @@ class ReplaySession:
     def _chars(self, tokens: float) -> int:
         return int(tokens * self.cpt)
 
+    def out_tokens(self) -> int:
+        """The reply length this request asks for: the recorded one times
+        `output_scale`."""
+        return max(1, round(self._req.output_tokens * self.output_scale))
+
     def room(self) -> int:
         """The most prompt tokens this request may send: the context cap
         less the reply it asks for, since the server rejects a request whose
         prompt plus `max_tokens` passes the model length."""
-        return max(self.cap - max(1, self._req.output_tokens), 1)
+        return max(self.cap - self.out_tokens(), 1)
 
     def next_turn(self, force_miss: bool | None = None) -> tuple[str, str]:
         r = self._req
-        want = min(r.prompt_tokens, self.room())
+        prompt = r.prompt_tokens + self._extra
+        want = min(prompt, self.room())
         prev = self._prev
         if self._fresh or prev is None or want < prev[0] or \
-                r.prompt_tokens > self.room():
+                prompt > self.room():
+            if not (self._fresh or prev is None):
+                # a reset (compaction, branch): the recorded prompt is the
+                # whole context again, none of the extra replies are in it
+                self._extra = 0
+                prompt = r.prompt_tokens
+                want = min(prompt, self.room())
             kind = "first" if (self.n_turn == 0 or self._pos == 0) else "miss"
             n_prefix = min(self.prefix_tokens, want)
             self._text = (self.prefix_text[:self._chars(n_prefix)] + "\n"
                           + make_text(self.text_rng, max(want - n_prefix, 0),
                                       self.cpt))
             self._fresh = False
+            self._extra = 0
         else:
             kind = "hit"
             grow = want - prev[0] - prev[1]
@@ -127,17 +147,21 @@ class ReplaySession:
                 # the retained prompt + reply is longer than the recorded
                 # prompt: keep the prefix that fits (still a cache hit)
                 self._text = self._text[:self._chars(want)]
+        self.want = want
         return self._text, kind
 
     def commit(self, reply: str) -> None:
         r = self._req
+        out = self.out_tokens()
         self._text += reply
-        self._prev = (r.prompt_tokens, r.output_tokens)
+        self._prev = (r.prompt_tokens + self._extra, out)
+        self._extra += out - r.output_tokens
         self.n_turn += 1
         self._pos += 1
         if self._pos >= len(self.trace.sessions[self._s]):
             self._s = self.roots[self.rng.randrange(len(self.roots))]
             self._pos, self._prev, self._fresh = 0, None, True
+            self._extra = 0
 
     def think_s(self, wl) -> float:
         gap = replay_gap(self._req, self.gap_policy, self.max_gap_s,
@@ -151,7 +175,7 @@ class ReplaySession:
         return min(gap, self.max_gap_s)
 
     def output_tokens(self, wl) -> int:
-        return max(1, self._req.output_tokens)
+        return self.out_tokens()
 
     def intended_prompt_tokens(self, prompt: str) -> int:
         return int(len(prompt) / self.cpt)
