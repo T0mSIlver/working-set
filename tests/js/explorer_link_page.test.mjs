@@ -56,6 +56,39 @@ function cdp(method, params = {}, sessionId){
 }
 let session;
 
+async function stopChrome(){
+  if (chrome && chrome.exitCode === null && chrome.signalCode === null){
+    const exited = new Promise(r => chrome.once('exit', r));
+    try { process.kill(-chrome.pid); } catch { chrome.kill(); }
+    await Promise.race([exited, sleep(5000)]);
+  }
+  chrome = null;
+}
+
+// Starts headless Chrome on a fresh profile and waits for its DevTools port
+async function launchChrome(){
+  profile = mkdtempSync(join(tmpdir(), 'wslink-chrome-'));
+  chrome = spawn(CHROME, ['--headless', '--no-sandbox', '--disable-gpu',
+    '--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage',
+    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
+    // its own process group, so teardown can stop the helpers with it
+    { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
+  let chromeErr = '';
+  chrome.stderr.on('data', d => { chromeErr += d; });
+  // Chrome writes the port it picked here once DevTools listens; a cold start
+  // on a CI runner has taken over 10 s
+  const portFile = join(profile, 'DevToolsActivePort');
+  for (const t0 = Date.now(); Date.now() - t0 < 45000; await sleep(100)){
+    if (chrome.exitCode !== null || chrome.signalCode !== null)
+      throw new Error(`Chrome exited (${chrome.exitCode ?? chrome.signalCode}) before `
+                      + `DevTools came up:\n${chromeErr}`);
+    if (!existsSync(portFile)) continue;
+    const [port, path] = readFileSync(portFile, 'utf8').trim().split('\n');
+    if (port && path) return { port, path };   // the file can be seen half-written
+  }
+  throw new Error(`Chrome's DevTools did not come up within 45 s:\n${chromeErr}`);
+}
+
 before(async () => {
   if (skip) return;
   tmp = mkdtempSync(join(tmpdir(), 'wslink-'));
@@ -69,28 +102,18 @@ before(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}/`;
 
-  profile = mkdtempSync(join(tmpdir(), 'wslink-chrome-'));
-  chrome = spawn(CHROME, ['--headless', '--no-sandbox', '--disable-gpu',
-    '--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage',
-    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
-    // its own process group, so teardown can stop the helpers with it
-    { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
-  let chromeErr = '';
-  chrome.stderr.on('data', d => { chromeErr += d; });
-  // Chrome writes the port it picked here once DevTools listens; a cold start
-  // on a CI runner has taken over 10 s
-  const portFile = join(profile, 'DevToolsActivePort');
+  // A cold Chrome on a CI runner sometimes never opens DevTools (issue #133),
+  // so a failed launch is stopped and retried once on a fresh profile
   let port, path;
-  for (const t0 = Date.now(); Date.now() - t0 < 30000; await sleep(100)){
-    if (chrome.exitCode !== null || chrome.signalCode !== null)
-      throw new Error(`Chrome exited (${chrome.exitCode ?? chrome.signalCode}) before `
-                      + `DevTools came up:\n${chromeErr}`);
-    if (!existsSync(portFile)) continue;
-    [port, path] = readFileSync(portFile, 'utf8').trim().split('\n');
-    if (port && path) break;       // the file can be seen half-written
+  for (let attempt = 1; ; attempt++){
+    try { ({ port, path } = await launchChrome()); break; }
+    catch (e){
+      await stopChrome();
+      rmSync(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      if (attempt >= 2) throw e;
+      console.error(`Chrome launch ${attempt} failed, retrying: ${e.message}`);
+    }
   }
-  if (!(port && path))
-    throw new Error(`Chrome's DevTools did not come up within 30 s:\n${chromeErr}`);
   sock = new WebSocket(`ws://127.0.0.1:${port}${path}`);
   await new Promise((res, rej) => { sock.onopen = res; sock.onerror = rej; });
   sock.onmessage = e => {
@@ -112,11 +135,7 @@ after(async () => {
   // processes (renderer, utility, crashpad) outlive the browser's own exit
   // event and keep writing into Default/, so the whole process group is
   // stopped, not just the browser.
-  if (chrome && chrome.exitCode === null && chrome.signalCode === null){
-    const exited = new Promise(r => chrome.once('exit', r));
-    try { process.kill(-chrome.pid); } catch { chrome.kill(); }
-    await Promise.race([exited, sleep(5000)]);
-  }
+  await stopChrome();
   for (const d of [tmp, profile]) if (d)
     rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 });
