@@ -67,3 +67,35 @@ def test_planning_arithmetic():
     assert kv_need(10, 1000, 100, 400, True) == 1000 + 10 * 500
     assert kv_need(10, 1000, 100, 400, False) == 10 * 1500
     assert output_budget(100, 40) == 5000
+
+
+def test_cross_origin_metrics_scrape_carries_no_api_token():
+    import argparse
+    import asyncio
+
+    import httpx
+
+    from workingset.decode_sweep import Endpoint
+
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(200, text='vllm:generation_tokens_total{engine="0"} 1\n')
+
+    async def run():
+        t = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=t, base_url="https://api.example/v1",
+                                     headers={"Authorization": "Bearer SECRET"}) as c, \
+                httpx.AsyncClient(transport=t) as mc:
+            a = argparse.Namespace(metrics_url="https://metrics.other/metrics",
+                                   timeout=5.0, engine=None)
+            ep = Endpoint(c, a, {"X-Scrape": "1"}, mc)
+            try:
+                await ep.scrape()
+            except Exception:
+                pass
+
+    asyncio.run(run())
+    assert seen and "authorization" not in seen[0].headers
+    assert seen[0].headers["X-Scrape"] == "1"

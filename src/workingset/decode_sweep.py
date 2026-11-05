@@ -198,13 +198,16 @@ def judge(n: int, running: list[float], waiting: list[float], errors: int,
 # the endpoint
 # ---------------------------------------------------------------------------
 class Endpoint:
-    def __init__(self, client, args, headers_metrics: dict):
+    def __init__(self, client, args, headers_metrics: dict, metrics_client):
+        # `metrics_client` has no default headers: the API client's bearer
+        # token must not ride along to a /metrics on another host.
         self.c, self.a, self.mh = client, args, headers_metrics
+        self.mc = metrics_client
         self.ad = None
 
     async def scrape(self):
         t0 = time.monotonic()
-        r = await self.c.get(self.a.metrics_url, headers=self.mh, timeout=self.a.timeout)
+        r = await self.mc.get(self.a.metrics_url, headers=self.mh, timeout=self.a.timeout)
         r.raise_for_status()
         t1 = time.monotonic()
         s = parse_text(r.text)
@@ -445,8 +448,9 @@ async def sweep(args) -> dict:
     limits = httpx.Limits(max_connections=max(args.batch) + 32,
                           max_keepalive_connections=max(args.batch) + 32)
     async with httpx.AsyncClient(base_url=base, headers=hdr, limits=limits,
-                                 verify=_verify(args)) as c:
-        ep = Endpoint(c, args, mh)
+                                 verify=_verify(args)) as c, \
+            httpx.AsyncClient(limits=limits, verify=_verify(args)) as mc:
+        ep = Endpoint(c, args, mh, mc)
         _, s0, text0 = await ep.scrape()
         pool, prefix_on = pool_tokens(text0, ep)
         pool = args.kv_tokens or pool
