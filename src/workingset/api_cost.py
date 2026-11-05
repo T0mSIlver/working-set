@@ -118,6 +118,8 @@ def clipped_partial(median: float, sigma: float, lo: float, hi: float,
     a, b = max(a, -math.inf), min(b, math.inf)
     if b <= a:
         return 0.0, 0.0
+    if lo == hi:                           # a point mass of probability one
+        return (1.0, lo) if a < lo <= b else (0.0, 0.0)
     mu, s2 = math.log(median), sigma * sigma
     mean_x = median * math.exp(s2 / 2.0)
 
@@ -284,9 +286,13 @@ def _class_cost(offer: ApiOffer, opt_index: int, median: float, sigma: float,
         if p <= 0:
             continue
         opt = band.cache[opt_index]
-        d = min(delta, lo)                 # a fresh tail never longer than the prompt
-        read_tok = (1.0 - q) * (e - d * p)
-        write_tok = (1.0 - q) * d * p + q * e
+        # a fresh tail never longer than its own prompt: E[min(delta, L); band]
+        lb = band.above_tokens if i else -math.inf
+        p1, e1 = clipped_partial(median, sigma, lo, cap, lb, min(top, delta))
+        p2, _ = clipped_partial(median, sigma, lo, cap, max(lb, delta), top)
+        dp = e1 + delta * p2
+        read_tok = (1.0 - q) * (e - dp)
+        write_tok = (1.0 - q) * dp + q * e
         total += (opt.read * read_tok + opt.write * write_tok
                   + band.output * out_tokens * p) / 1e6
     return total

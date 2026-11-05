@@ -128,3 +128,18 @@ def test_ws_api_prints_every_row():
     for p in cat["plans"].values():
         assert p.name in out
     assert "40 active hours" in out and "limit not published" in out
+
+
+def test_clipped_partial_equal_bounds_is_a_point_mass():
+    p, e = A.clipped_partial(30_000, 1.0, 15_000, 15_000, -math.inf, math.inf)
+    assert p == 1.0 and e == 15_000
+    assert A.clipped_partial(30_000, 1.0, 15_000, 15_000, 20_000, math.inf) == (0.0, 0.0)
+
+
+def test_fresh_tail_is_clipped_against_each_prompt_not_the_prefix():
+    # one band, prefix 500 << warm turn 2000: prompts above 500 still carry 2000 fresh
+    offer = A.ApiOffer("t", "t", "t", "t", (A.PriceBand(0, 1.0, 0.0, (A.CacheOption(300, 0.1, 1.0),)),), None, None, {})
+    got = A._class_cost(offer, 0, 20_000, 0.5, 500, 1e9, 2000, 0.0, 0.0)
+    p, e = A.clipped_partial(20_000, 0.5, 500, 1e9, -math.inf, math.inf)
+    # all but ~0 mass is above 2000: fresh ~ 2000 at write 1.0, the rest at read 0.1
+    assert got == pytest.approx((0.1 * (e - 2000) + 1.0 * 2000) / 1e6, rel=1e-3)
