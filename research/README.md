@@ -20,6 +20,7 @@ data file rather than restating it elsewhere.
 | [model_dsv41flash.md](model_dsv41flash.md) | `MODELS["DSV41F"]` |
 | [model_qwen38flashnext.md](model_qwen38flashnext.md) | `MODELS["Q38FN"]` |
 | [model_mistral_large4.md](model_mistral_large4.md) | `MODELS["ML4"]` |
+| [model_kimi_k31pro.md](model_kimi_k31pro.md) | `MODELS["K31P"]` |
 | [gpu_catalogue.md](gpu_catalogue.md) | Nvidia's datacenter lineup: specs, rental bands, interconnect, the source for new `GPUS` rows |
 | [gpu_b300.md](gpu_b300.md) | `GPUS["B300"]` (the H200 row is the calibration anchor, see [docs/writeup.md](../docs/writeup.md)) |
 | [prefill.md](prefill.md) | MFU, the prefill FLOP model, TTFT |
