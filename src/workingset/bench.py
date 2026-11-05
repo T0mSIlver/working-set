@@ -211,6 +211,7 @@ class Row:
     ctok: int | None = None         # tokens it generated
     ended: float = float("nan")     # step seconds when it finished or failed
     child: bool = False             # a subagent's request (see `_tree`)
+    phase: str = "single"           # calibration: "single" stream alone | "tree" concurrent
 
     @property
     def generated(self) -> int:
@@ -737,6 +738,8 @@ async def calibrate(client, ep, plan: Plan, trace: AgentTrace,
     if spawn_points(trace):
         tree_rows = await calibrate_trees(client, ep, plan, trace,
                                           prefix_text, run_nonce)
+        for r in tree_rows:
+            r.phase = "tree"
         rows += tree_rows
         beta, n = fit_tree_beta(tree_rows, speed)
         speed = replace(speed, tree_beta=beta, tree_n=n)

@@ -181,3 +181,18 @@ def test_mfu_counts_attention_flops():
                      "ttft": 0.05 + f / (M.peak_flops(t) * 0.45)})
     fit = C.fit_mfu([{"speed": {}, "calibration": rows, "steps": []}], cfg)
     assert fit.value == pytest.approx(0.45, rel=1e-6)
+
+
+def test_mfu_ignores_concurrent_tree_rows():
+    """Rows of a session tree replayed with its streams in flight are slower
+    than a request alone; they must not enter the single-stream MFU fit."""
+    cfg = _cfg(2)
+    m, t = cfg.to_model(), cfg.to_topology()
+    rows = []
+    for u, prompt in ((4_000, 4_000), (16_000, 16_000), (64_000, 64_000), (20_000, 120_000)):
+        f = M.prefill_flops(m, u, prior=prompt - u)[2]
+        base = {"ok": True, "uncached": u, "prompt": prompt}
+        rows.append(dict(base, ttft=0.05 + f / (M.peak_flops(t) * 0.45)))
+        rows.append(dict(base, phase="tree", ttft=0.05 + 3 * f / (M.peak_flops(t) * 0.45)))
+    fit = C.fit_mfu([{"speed": {}, "calibration": rows, "steps": []}], cfg)
+    assert fit.value == pytest.approx(0.45, rel=1e-6)

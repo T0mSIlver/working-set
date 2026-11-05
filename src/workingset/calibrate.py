@@ -309,6 +309,8 @@ def fit_mfu(replays: list[dict], cfg: RunConfig) -> Fit | None:
         for r in rec.get("calibration", []):
             if not r.get("ok", True) or not r.get("ttft") or not r.get("uncached"):
                 continue
+            if r.get("phase", "single") != "single":    # a tree's streams share the GPU
+                continue
             u, prompt = float(r["uncached"]), float(r.get("prompt", r["uncached"]))
             f = M.prefill_flops(m, u, prior=max(prompt - u, 0.0))[2]   # GEMM + attention
             rows.append([1.0, f / peak])
