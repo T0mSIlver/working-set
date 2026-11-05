@@ -79,23 +79,39 @@ slot; else it queues and measures a wait, not a step).
 
 How mixed steps are told apart (`sweep_mixed.py`): each held stream logs the
 time and running token count of every event, and each cold request logs
-[send, first token]. A stream gap that starts after the send and ends by the
-first token (20 ms tolerance) is mixed; a gap clear of every such interval is
-pure; the gap straddling a send is dropped. A request of at most one chunk
-gives one mixed gap per stream, so `last_step_s` (the gap closing at the first
-token) is the robust figure; `mixed_step_p99_s` and the depth profile show the
-worst. Per-sequence speed is delivered tokens over time on mixed gaps, so
-speculative decoding counts accepted tokens.
+[send, first token]. Pure steps also fall inside that interval (tokenization,
+HTTP, scheduling), so the interval is not the measurement. A P-token prefill
+spans k = ceil(P / (chunk - n)) steps (`--chunk-tokens` is the server's
+`max_num_batched_tokens`; n tokens of each step's budget go to the decodes).
+Per stream and request, the mixed steps are the k longest gaps that start after
+the send and end by the first token (20 ms tolerance); the rest are pure. For
+`--prefill-depth` every chunk is a mixed step. Without `--chunk-tokens`, every
+gap in the interval counts and the mean is diluted: pass it.
+
+The headline is the median over requests of the mixed step (and the p90), so it
+does not depend on how fast the client sends. Tokens per second per sequence at
+a fully mixed step is delivered tokens per step over that step, so speculative
+decoding counts accepted tokens.
+
+Self-check: before the rungs, each P is sent once with nothing else running
+(best of two, `alone_s`). The mixed step should be about the pure step plus
+`alone_s / k`; a row whose ratio is off by more than 30% is marked.
 
 Per rung, `mixed_windows[]` holds, per P or D: `mixed` (`mixed_step_s`,
-`last_step_s`, `mixed_step_p99_s`, `tok_s_seq_mean`, `tok_s_seq_min`,
-`tok_s_worst_step`, `share_mixed`, gap counts), `server` (the engine's window,
-which blends both kinds of step), `server_mixed_step_est_s` (the server mean
-with the pure step taken out), `depth_profile` (`[{depth, step_s}]`),
-`requests`, `ok` and `why_not`. `pure_step_s` is the rung's pure server step.
-The run ends with a table of n, context, P or D, pure and mixed ms, tok/s per
-sequence and mixed share; rows below `--min-tok-s` (default 50) on the mean or
-on the p99 step are marked.
+`mixed_step_p90_s`, `tokens_per_step`, `tok_s_seq`, `tok_s_p90_step`,
+`pure_in_window_s`, gap counts), `alone_s`, `check` (`expected_s`, `ratio`,
+`ok`), `server` (the engine's window, which blends both kinds of step),
+`depth_profile` (`[{depth, step_s}]`), `requests`, `ok` and `why_not`.
+`pure_step_s` is the rung's pure server step. The run ends with a table of n,
+context, P or D, pure, mixed and p90 ms, tok/s per sequence, cold prefill alone
+and the self-check ratio; rows below `--min-tok-s` (default 50) at the median or
+p90 step, or failing the self-check, are marked.
+
+Output sizing: each stream's `max_tokens` covers the pure window, every P window
+and a depth allowance at the last clean rungs' speed (step time extrapolated
+linearly in n). When that over-reserves the KV pool it shrinks to what the
+windows need; a rung is skipped only when even that does not fit, and the
+message names `--max-tok-s`, `--hold`, `--context`, `--batch` and `--kv-fill`.
 
 `ws calibrate` ignores these fields. The step equation has no prefill term
 (the mixed step is `itl_spike`'s decode step plus the prefill pass), so there

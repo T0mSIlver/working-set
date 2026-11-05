@@ -49,8 +49,9 @@ from pathlib import Path
 
 from .metrics.parse import HistogramMismatch, HistogramReset, parse_text
 from .metrics.vllm import detect_adapter
-from .sweep_mixed import (classify, depth_profile, format_row, judge_mixed,
-                          stream_gaps, summarize, summary_rows, SUMMARY_HEADER)
+from .sweep_mixed import (SUMMARY_HEADER, chunk_steps, classify, depth_profile,
+                          format_row, judge_mixed, self_check, stream_gaps,
+                          summarize, summary_rows)
 
 FORMAT = "workingset-decode-sweep"
 VERSION = 1   # additive fields (mixed_windows, pure_step_s) keep v1 records readable
@@ -101,6 +102,23 @@ def output_budget(rate_bound: float, span_s: float, margin: float = 1.25) -> int
     """Tokens each stream may generate: enough that it outlasts the rung at
     `rate_bound` tok/s per sequence, so a stream never finishes in the window."""
     return max(64, int(rate_bound * span_s * margin))
+
+
+def rate_bound(clean: list[tuple[int, float]], n: int, cap: float,
+               margin: float = 1.1) -> float:
+    """Upper bound on the per-sequence tok/s of a rung of n sequences, from the
+    clean rungs so far as (n, tok/s). One rung bounds the next by its own rate
+    (speed only falls as n grows); two or more extrapolate step time (1/rate)
+    linearly in n, with `margin` on top. Never above `cap`."""
+    if not clean:
+        return cap
+    (n1, r1) = clean[-1]
+    bound = min(cap, r1)
+    if len(clean) >= 2 and n > n1:
+        (n0, r0) = clean[-2]
+        slope = max((1 / r1 - 1 / r0) / (n1 - n0), 0.0) if n1 > n0 else 0.0
+        bound = min(bound, margin / (1 / r1 + slope * (n - n1)))
+    return bound
 
 
 def kv_need(n: int, context: int, suffix: int, out_tokens: int, shared: bool) -> int:
@@ -386,7 +404,8 @@ async def cold_request(ep: Endpoint, args, prompt: str, timeout: float) -> dict:
 
 
 async def mixed_window(ep: Endpoint, args, pr: Prompts, n: int, st: Streams,
-                       kind: str, value: int, pure_s: float | None, tag: int) -> dict:
+                       kind: str, value: int, pure_s: float | None, tag: int,
+                       alone_s: float | None = None) -> dict:
     """One window with the n held streams decoding and cold prefill requests in
     flight: `kind` "tokens" keeps a stream of `value`-token requests, one at a
     time, for --hold seconds; "depth" sends one `value`-token request, which
@@ -417,7 +436,8 @@ async def mixed_window(ep: Endpoint, args, pr: Prompts, n: int, st: Streams,
     good = [r for r in reqs if r["first"] is not None and not r["error"]]
     intervals = [(r["send"], r["first"]) for r in good]
     have_tok = any(t[-1][1] for t in st.ts if t)
-    per = [classify(stream_gaps(ev, ta, tb, have_tok), intervals) for ev in st.ts]
+    steps = chunk_steps(value, args.chunk_tokens, n)
+    per = [classify(stream_gaps(ev, ta, tb, have_tok), intervals, steps) for ev in st.ts]
     pt = [r["prompt_tokens"] for r in good if r["prompt_tokens"]]
     w = {"kind": kind, "window_s": dt, "requests": len(good),
          "request_errors": [r["error"] for r in reqs if r["error"]][:3],
@@ -433,12 +453,10 @@ async def mixed_window(ep: Endpoint, args, pr: Prompts, n: int, st: Streams,
         w["prefill_depth"] = value
         w["chunk_tokens"] = args.chunk_tokens
         w["depth_profile"] = depth_profile(per, value, args.chunk_tokens)
-    # the server's mean step blends mixed and pure steps; with the mixed share
-    # known, what the mixed ones cost
-    s_step, share = w["server"]["step_time_s"], w["mixed"]["share_mixed"]
-    w["server_mixed_step_est_s"] = (
-        (s_step - (1 - share) * pure_s) / share
-        if s_step and pure_s and share and share > 0.05 else None)
+    w["steps_per_request"] = steps
+    if kind == "tokens":
+        w["alone_s"] = alone_s
+        w["check"] = self_check(w["mixed"]["mixed_step_s"], pure_s, alone_s, steps)
     w["ok"], w["why_not"] = judge_mixed(
         n, gauges["running"], len(st.err) - err0, sum(st.done) - done0, len(good))
     w["waiting_max"] = max(gauges["waiting"]) if gauges["waiting"] else None
@@ -446,7 +464,7 @@ async def mixed_window(ep: Endpoint, args, pr: Prompts, n: int, st: Streams,
 
 
 async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
-                   pool: int | None) -> dict:
+                   pool: int | None, alone: dict | None = None) -> dict:
     shared = not args.distinct
     ctx = args.context
     rec: dict = {"n": n, "context_target": ctx, "shared": shared,
@@ -454,8 +472,10 @@ async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
     need = kv_need(n, ctx, args.suffix_tokens, out_tokens, shared)
     rec["kv_need_tokens"] = need
     if pool and need > args.kv_fill * pool:
-        rec["skipped"] = (f"needs ~{need:,} KV tokens, over {args.kv_fill:.0%} of the "
-                          f"{pool:,}-token pool")
+        rec["skipped"] = (f"needs ~{need:,} KV tokens ({out_tokens:,} output per sequence, "
+                          f"sized from --max-tok-s and the window lengths), over "
+                          f"{args.kv_fill:.0%} of the {pool:,}-token pool; lower --max-tok-s, "
+                          f"--hold, --context or --batch, or raise --kv-fill")
         return rec
     base = pr.context(ctx, 0) if shared else None
     prompts = [(base if shared else pr.context(ctx, i)) + pr.suffix(i) for i in range(n)]
@@ -515,7 +535,8 @@ async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
     for tag, (kind, v) in enumerate(loads):
         if st.err or drained:
             break
-        w = await mixed_window(ep, args, pr, n, st, kind, v, rec["pure_step_s"], tag)
+        w = await mixed_window(ep, args, pr, n, st, kind, v, rec["pure_step_s"], tag,
+                               (alone or {}).get(v) if kind == "tokens" else None)
         rec["mixed_windows"].append(w)
         print(f"  n={n}: {w['kind']} {v:,} done, {w['requests']} cold requests", flush=True)
     for t in tasks:
@@ -599,23 +620,51 @@ async def sweep(args) -> dict:
         cpt = await calibrate(ep, args)
         pr = Prompts(args, cpt)
         print(f"{cpt:.2f} characters per token\n{HEADER}")
-        rungs, rate = [], args.max_tok_s
+        alone = {}
+        for P in args.prefill_tokens:
+            # each P's cold prefill with nothing else running: the self-check's
+            # expected prefill time (best of two)
+            ts = []
+            for i in range(2):
+                r = await cold_request(ep, args, random_words(
+                    random.Random(f"{args.seed}/alone/{P}/{i}"), int(P * cpt)),
+                    args.prefill_timeout)
+                if r["first"] is not None:
+                    ts.append(r["first"] - r["send"])
+            alone[P] = min(ts) if ts else None
+            await wait_idle(ep, args.idle_timeout)
+        if alone:
+            print("cold prefill alone: " + ", ".join(
+                f"P={p}: {v * 1e3:.0f} ms" for p, v in alone.items() if v))
+        rungs, clean = [], []
         # the streams outlast the pure window, every prefill-token window and
         # an allowance per depth request (a stream that ends early voids its window)
         span = (args.settle + args.hold + args.ramp_allowance
                 + len(args.prefill_tokens) * args.hold
                 + len(args.prefill_depth) * args.ramp_allowance)
         for n in args.batch:
+            rate = rate_bound(clean, n, args.max_tok_s)
             out = output_budget(rate, span)
+            if pool:
+                # over-reserving (60 s ramp allowance, 25% margin) must not
+                # skip a rung that fits: shrink to the pool, down to the
+                # tokens the windows themselves need at the rate bound
+                room = int((args.kv_fill * pool - (0 if args.distinct else args.context))
+                           // n) - args.suffix_tokens
+                if args.distinct:
+                    room = int(args.kv_fill * pool // n) - args.context - args.suffix_tokens
+                least = int(rate * (span - args.ramp_allowance + 10)) + 1
+                if out > room >= least:
+                    out = room
             if max_len:
                 out = min(out, max_len - args.context - args.suffix_tokens - 64)
-            rec = await run_rung(ep, args, pr, n, out, pool)
+            rec = await run_rung(ep, args, pr, n, out, pool, alone)
             rungs.append(rec)
             print(_row(rec), flush=True)
             if rec.get("batch_ok") and rec["tok_s_seq_server"]:
                 # per-sequence speed only falls as n grows: the last clean
                 # rung bounds the next one's output budget from above
-                rate = min(rate, rec["tok_s_seq_server"])
+                clean.append((n, rec["tok_s_seq_server"]))
             if await wait_idle(ep, args.idle_timeout) is False:
                 print("  server still busy after the idle timeout; next rung may be contaminated")
         return {"format": FORMAT, "version": VERSION,
