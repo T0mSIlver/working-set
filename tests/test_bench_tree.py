@@ -238,7 +238,8 @@ def test_a_trees_turn_is_judged_against_the_tree_alone():
     rows = [_kid(0, 0, 0.0, 1.5), _kid(0, 0, 0.1, 1.5, True),
             _kid(0, 0, 0.2, 1.5, True)]
     speed = B.Speed(a=1.0, tree_beta=0.25)
-    s = B.judge(B.Step(1, rows, window=(0.0, 10.0)), speed, 1.5)
+    s = B.judge(B.Step(1, rows, window=(0.0, 10.0)), speed,
+                B.Limits(max_slowdown=1.5, min_samples=0))
     assert s.slowdown_p90 == pytest.approx(1.0)      # as slow as it is alone
     assert s.raw_p90 == pytest.approx(1.5)           # vs one stream: kept
     assert s.passed
@@ -280,32 +281,54 @@ def test_tree_calibration_replays_a_whole_tree_from_its_first_spawn(
 
 
 # ---- a step measures until it can say something -----------------------------
-def test_a_step_with_too_few_turns_is_inconclusive_not_a_pass():
+LIM = B.Limits(max_slowdown=1.5, min_samples=0)
+QUEUED = {"waiting_max": 3.0, "waiting_mean": 1.0, "running_max": 8.0}
+
+
+def test_too_few_turns_is_no_evidence_when_idle_and_a_fail_when_queued():
     rows = [_row_(k, 0, 1.0) for k in range(4)]
-    s = B.judge(B.Step(4, rows, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
-                min_turns=30)
-    assert s.inconclusive and not s.passed
-    assert "inconclusive: 4 turns judged" in s.reasons[0]
+    idle = B.judge(B.Step(4, rows, window=(0.0, 10.0)), B.Speed(a=1.0), LIM,
+                   min_turns=30)
+    assert idle.no_evidence and not idle.passed and not idle.inconclusive
+    assert "no evidence: only 4 turns of 30" in idle.reasons[0]
+    busy = B.judge(B.Step(4, rows, window=(0.0, 10.0), server=QUEUED),
+                   B.Speed(a=1.0), LIM, min_turns=30)
+    assert busy.inconclusive and not busy.passed and not busy.no_evidence
+    assert "inconclusive: only 4 turns of 30" in busy.reasons[0]
     # a clear fail stays a fail
     slow = [_row_(k, 0, 9.0) for k in range(4)]
-    f = B.judge(B.Step(4, slow, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
+    f = B.judge(B.Step(4, slow, window=(0.0, 10.0)), B.Speed(a=1.0), LIM,
                 min_turns=30)
-    assert not f.inconclusive and not f.passed
+    assert not f.inconclusive and not f.no_evidence and not f.passed
     # enough turns: a pass
     many = [_row_(k, 0, 1.0) for k in range(30)]
-    assert B.judge(B.Step(4, many, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
+    assert B.judge(B.Step(4, many, window=(0.0, 10.0)), B.Speed(a=1.0), LIM,
                    min_turns=30).passed
 
 
-def test_the_search_treats_inconclusive_as_a_fail_and_the_headline_says_so():
+def test_the_search_skips_no_evidence_and_counts_inconclusive_as_a_fail():
     rows = [_row_(k, 0, 1.0) for k in range(4)]
-    st = B.judge(B.Step(4, rows, window=(0.0, 10.0)), B.Speed(a=1.0), 1.5,
-                 min_turns=30)
+    st = B.judge(B.Step(4, rows, window=(0.0, 10.0), server=QUEUED),
+                 B.Speed(a=1.0), LIM, min_turns=30)
     assert B.answer({2: True, 4: st.passed}, 64) == {
         "serves": 2, "fails_at": 4, "capped": False}
     rec = {"steps": [st.to_dict()], "plan": {"max_slowdown": 1.5},
            "answer": {"serves": 2, "fails_at": 4, "capped": False}}
     assert "INCONCLUSIVE" in B.headline(rec)
+    # idle steps are neither: doubling goes on past them, and the answer
+    # says what was not seen
+    res = {1: None}
+    assert B.next_sessions(res, 64) == 2
+    res[2] = None
+    assert B.next_sessions(res, 64) == 4
+    res[4] = True
+    assert B.next_sessions(res, 64) == 8
+    assert B.next_sessions({}, 64, start=4) == 4
+    assert B.answer({1: None, 2: True, 4: None}, 4) == {
+        "serves": 2, "fails_at": None, "capped": False, "no_evidence": [1, 4]}
+    rec = {"steps": [], "plan": {"max_slowdown": 1.5}, "answer": {
+        "serves": 0, "fails_at": None, "capped": False, "no_evidence": [1]}}
+    assert B.headline(rec).startswith("no verdict: every step had too few")
 
 
 def test_the_p90_has_a_bootstrap_interval():

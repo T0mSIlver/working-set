@@ -84,6 +84,7 @@ MAX_WARM_TTFT_S = 3.0
 MIN_DECODE_TOK_S = 50.0
 WARM_NEW_TOKENS = 8192
 KV_BLOCK_TOKENS = 16
+MIN_SAMPLES = 10            # a check with fewer requests than this is not judged
 MIN_DECODE_TOKENS = 32      # requests with fewer output tokens have no speed
 ROUTINGS = ("sticky", "round-robin")
 CHAT_SIGMA = 0.8
@@ -445,6 +446,7 @@ class Limits:
     warm_new_tokens: int = WARM_NEW_TOKENS
     kv_block_tokens: int = KV_BLOCK_TOKENS
     max_slowdown: float | None = None   # gates only when given
+    min_samples: int = MIN_SAMPLES
 
 
 # the checks, in the order they are reported
@@ -454,8 +456,9 @@ CHECKS = ("evictions", "warm time to first token", "decode speed",
 
 def _check(status: str, value: float = float("nan"), limit=None,
            n: int = 0, **extra) -> dict:
-    """status: pass | fail | unknown (not reported by the server) | n/a (no
-    request to judge) | info (reported, not gating)."""
+    """status: pass | fail | few (fewer samples than --min-samples: not
+    judged) | unknown (not reported by the server) | n/a (no request to
+    judge) | info (reported, not gating)."""
     return {"status": status, "n": n, "limit": limit,
             "value": value if math.isfinite(value) else None, **extra}
 
@@ -511,6 +514,9 @@ class Step:
     turn_s_p50: float = float("nan")
     turn_s_p90: float = float("nan")
     passed: bool = False
+    # too few requests to judge and nothing queued or failed: the sampled
+    # sessions sat idle. Neither a pass nor a fail; the search moves on
+    no_evidence: bool = False
     reasons: list = field(default_factory=list)
     # --- the checks (CHECKS -> {status, value, limit, n}); empty in records
     # from before them ---
@@ -582,6 +588,17 @@ def _in_window(r: Row, w0: float, w1: float, end_all: float) -> bool:
         return False
     end = r.end if r.done else end_all
     return not math.isfinite(end) or end >= w0
+
+
+def count_samples(step: Step, lim: Limits) -> tuple[int, int]:
+    """(warm requests, decode-eligible requests) finished in the window: what
+    the checks need `--min-samples` of. Cheap, like `count_turns`."""
+    w0, w1 = step.window
+    end_all = w1 + step.drain_s
+    rows = [r for r in step.rows if _in_window(r, w0, w1, end_all)]
+    warm = sum(1 for r in rows if r.warm and r.ok
+               and r.uncached <= lim.warm_new_tokens)
+    return warm, len(_decode_rates(rows, MIN_DECODE_TOKENS))
 
 
 def count_turns(step: Step) -> int:
@@ -672,16 +689,21 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     evicted = [r for r in known
                if r.cached < r.expected // block * block - block]
     step.evictions = len(evicted)
-    if not warm:
-        checks["evictions"] = _check("n/a", limit=lim.max_eviction_share)
-    elif not known:
+    ms = lim.min_samples
+    if warm and not known:
         checks["evictions"] = _check("unknown", limit=lim.max_eviction_share,
                                      n=len(warm))
+    elif not known and ms <= 0:
+        checks["evictions"] = _check("n/a", limit=lim.max_eviction_share)
+    elif len(known) < ms or not known:
+        share = len(evicted) / len(known) if known else float("nan")
+        checks["evictions"] = _check("few", share, lim.max_eviction_share,
+                                     len(known), count=len(evicted), min=ms)
     else:
         share = len(evicted) / len(known)
         checks["evictions"] = _check(
             "pass" if share <= lim.max_eviction_share else "fail", share,
-            lim.max_eviction_share, len(known), count=len(evicted))
+            lim.max_eviction_share, len(known), count=len(evicted), min=ms)
         if share > lim.max_eviction_share:
             step.reasons.append(
                 f"evictions: {len(evicted)} of {len(known)} warm requests "
@@ -693,14 +715,17 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     waits = [r.ttft if r.ok else max(end_all - r.sent, 0.0)
              for r in warm if r.ok or not r.done]
     ttft_p90 = _pct(waits, PERCENTILE)
-    if not waits:
+    if not waits and ms <= 0:
         checks["warm time to first token"] = _check(
             "n/a", limit=lim.max_warm_ttft_s)
+    elif len(waits) < ms or not waits:
+        checks["warm time to first token"] = _check(
+            "few", ttft_p90, lim.max_warm_ttft_s, len(waits), min=ms)
     else:
         bad = ttft_p90 > lim.max_warm_ttft_s
         checks["warm time to first token"] = _check(
             "fail" if bad else "pass", ttft_p90, lim.max_warm_ttft_s,
-            len(waits))
+            len(waits), min=ms)
         if bad:
             step.reasons.append(
                 f"warm time to first token: p{PERCENTILE} {ttft_p90:.2f} s "
@@ -711,10 +736,14 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     p10 = _pct(rates, 10)
     if not rates:
         checks["decode speed"] = _check("n/a", limit=lim.min_decode_tok_s)
+    elif len(rates) < ms:
+        checks["decode speed"] = _check(
+            "few", p10, lim.min_decode_tok_s, len(rates), min=ms)
     else:
         bad = p10 < lim.min_decode_tok_s
         checks["decode speed"] = _check(
-            "fail" if bad else "pass", p10, lim.min_decode_tok_s, len(rates))
+            "fail" if bad else "pass", p10, lim.min_decode_tok_s, len(rates),
+            min=ms)
         if bad:
             step.reasons.append(f"decode speed: p10 {p10:.1f} tok/s < "
                                 f"{lim.min_decode_tok_s:g} tok/s")
@@ -753,15 +782,6 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
                 f"turn slowdown: p{PERCENTILE} turn "
                 f"{step.slowdown_p90:.2f}x alone > {lim.max_slowdown:g}x")
 
-    if not step.turns:
-        step.reasons.append("no request completed in the window")
-    else:
-        need = max(1, math.ceil(MIN_TURN_SHARE * step.sessions))
-        if step.turns < need:
-            step.reasons.append(
-                f"only {step.turns} turns judged for {step.sessions} "
-                f"session(s), at least {need} needed (lengthen --measure-s)")
-
     # per URL, and the background chat
     n_url = max([len(step.servers), step.n_urls] + [r.url + 1 for r in step.rows]
                 + [r.url + 1 for r in step.chat_rows])
@@ -769,13 +789,35 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
                          for i in range(n_url)]
     step.chat = _chat_summary(step, w0, w1, end_all, n_url)
 
-    step.inconclusive = False
-    if not step.reasons and step.turns < min_turns:
-        step.inconclusive = True
-        step.reasons.append(
-            f"inconclusive: {step.turns} turns judged in "
-            f"{w1 - w0:.0f} s, {min_turns} wanted (counted as a fail; "
-            "--max-measure-s measures longer)")
+    step.inconclusive = step.no_evidence = False
+    need = max(1, math.ceil(MIN_TURN_SHARE * step.sessions), min_turns)
+    short = [f"{c['n']} {label} of {c['min']}" for name, label in (
+        ("evictions", "warm requests"),
+        ("warm time to first token", "warm waits"),
+        ("decode speed", "decode-eligible requests"))
+        if (c := checks[name])["status"] == "few"]
+    if step.turns < need:
+        short.insert(0, f"{step.turns} turns of {need}")
+    if not step.reasons and short:
+        # the server's own signals (`ran_out`): a queue that stayed or grew,
+        # preemptions, a full KV cache. One request waiting for a tick is not
+        queued = ran_out(step.server)[0] in ("kv", "queue")
+        if queued:
+            # requests waited on the server: the shortage is overload, and
+            # counts as a fail
+            step.inconclusive = True
+            step.reasons.append(
+                "inconclusive: only " + ", ".join(short) + f" judged in "
+                f"{w1 - w0:.0f} s while requests waited on the server "
+                "(counted as a fail; --max-measure-s measures longer)")
+        else:
+            # nothing failed, unfinished or queued: the sessions were idle
+            step.no_evidence = True
+            step.reasons.append(
+                "no evidence: only " + ", ".join(short) + f" in "
+                f"{w1 - w0:.0f} s, and nothing failed or queued, so idle, "
+                "not overloaded (the search goes on; --max-measure-s "
+                "measures longer)")
     step.passed = not step.reasons
     return step
 
@@ -834,18 +876,22 @@ def ran_out(server: dict | None) -> tuple[str, str]:
 # ============================================================================
 # the search
 # ============================================================================
-def next_sessions(results: dict[int, bool], max_sessions: int) -> int | None:
-    """The next step to run, or None when the answer is known. Doubles from
-    1 while every step passes, then halves the bracket between the largest
-    pass and the smallest fail until it is within RESOLUTION of the pass."""
+def next_sessions(results: dict, max_sessions: int,
+                  start: int = 1) -> int | None:
+    """The next step to run, or None when the answer is known. Starts at
+    `start`, doubles while every step passes (or shows no evidence: too few
+    requests, nothing failed or queued), then halves the bracket between the
+    largest pass and the smallest fail until it is within RESOLUTION of the
+    pass. A result is True (pass), False (fail) or None (no evidence)."""
     if not results:
-        return 1
-    passes = [n for n, ok in results.items() if ok]
-    fails = [n for n, ok in results.items() if not ok]
+        return max(1, min(start, max_sessions))
+    passes = [n for n, ok in results.items() if ok is True]
+    fails = [n for n, ok in results.items() if ok is False]
     hi = min(fails) if fails else None
     lo = max((n for n in passes if hi is None or n < hi), default=0)
     if hi is None:
-        nxt = min(max(lo, 1) * 2, max_sessions)
+        seen = max(results)
+        nxt = min(max(seen, 1) * 2, max_sessions)
         return None if nxt in results else nxt
     if lo == 0 or hi - lo <= max(1, math.floor(RESOLUTION * lo)):
         return None
@@ -853,13 +899,17 @@ def next_sessions(results: dict[int, bool], max_sessions: int) -> int | None:
     return None if mid in results else mid
 
 
-def answer(results: dict[int, bool], max_sessions: int) -> dict:
-    fails = [n for n, ok in results.items() if not ok]
+def answer(results: dict, max_sessions: int) -> dict:
+    fails = [n for n, ok in results.items() if ok is False]
     hi = min(fails) if fails else None
-    lo = max((n for n, ok in results.items() if ok
+    lo = max((n for n, ok in results.items() if ok is True
               and (hi is None or n < hi)), default=0)
-    return {"serves": lo, "fails_at": hi,
-            "capped": hi is None and lo >= max_sessions}
+    out = {"serves": lo, "fails_at": hi,
+           "capped": hi is None and lo >= max_sessions}
+    idle = sorted(n for n, ok in results.items() if ok is None)
+    if idle:
+        out["no_evidence"] = idle
+    return out
 
 
 # ============================================================================
@@ -869,6 +919,8 @@ def answer(results: dict[int, bool], max_sessions: int) -> dict:
 class Plan:
     trace_path: str
     max_slowdown: float | None = None   # gates only when given
+    min_samples: int = MIN_SAMPLES
+    start_sessions: int = 1
     max_eviction_share: float = MAX_EVICTION_SHARE
     max_warm_ttft_s: float = MAX_WARM_TTFT_S
     min_decode_tok_s: float = MIN_DECODE_TOK_S
@@ -903,7 +955,7 @@ class Plan:
         return Limits(self.max_eviction_share, self.max_warm_ttft_s,
                       self.min_decode_tok_s, self.max_failed_share,
                       self.warm_new_tokens, self.kv_block_tokens,
-                      self.max_slowdown)
+                      self.max_slowdown, self.min_samples)
 
     @property
     def measure_cap_s(self) -> float:
@@ -1219,9 +1271,17 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
     await asyncio.sleep(plan.ramp_s + plan.measure_s)
     # keep measuring until the window holds enough turns to say anything
     measured = plan.measure_s
-    while speed is not None and measured < plan.measure_cap_s and plan.min_turns:
-        if count_turns(Step(sessions=n, rows=list(rows), window=(
-                plan.ramp_s, plan.ramp_s + measured))) >= min_turns(plan, n):
+    lim = plan.limits()
+    decodes = any(r.output_tokens * plan.output_scale >= MIN_DECODE_TOKENS
+                  for sess in trace.sessions for r in sess)
+    while (speed is not None and measured < plan.measure_cap_s
+           and (plan.min_turns or plan.min_samples)):
+        now = Step(sessions=n, rows=list(rows), window=(
+            plan.ramp_s, plan.ramp_s + measured))
+        warm, dec = count_samples(now, lim)
+        if (count_turns(now) >= min_turns(plan, n)
+                and warm >= plan.min_samples
+                and (dec >= plan.min_samples or not decodes)):
             break
         more = min(plan.measure_s / 6, plan.measure_cap_s - measured, 30.0)
         await asyncio.sleep(max(more, 0.01))
@@ -1320,15 +1380,16 @@ async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
         speed, cal_rows = await calibrate(client, ep0, plan, trace, prefix,
                                           nonce)
         on_step(describe_speed(speed, trace, plan))
-        results: dict[int, bool] = {}
+        results: dict[int, bool | None] = {}
         steps: list[Step] = []
-        while (n := next_sessions(results, plan.max_sessions)) is not None:
+        while (n := next_sessions(results, plan.max_sessions,
+                                  plan.start_sessions)) is not None:
             on_step(f"\n--- {n} session{'s' if n != 1 else ''} ---")
             step = judge(await run_step(client, target, plan, trace, n, prefix,
                                         nonce, metrics, speed),
                          speed, plan.limits(), min_turns(plan, n))
             steps.append(step)
-            results[n] = step.passed
+            results[n] = None if step.no_evidence else step.passed
             on_step(step_line(step))
     return {"speed": speed, "calibration": cal_rows, "steps": steps,
             "answer": answer(results, plan.max_sessions), "nonce": nonce}
@@ -1383,6 +1444,11 @@ UNKNOWN_CACHED = ("WARNING: the server reports no cached_tokens (start vLLM "
                   "counted, that check is UNKNOWN and does not gate")
 
 
+def _word(s: Step) -> str:
+    return ("NO EVIDENCE" if s.no_evidence else
+            "INCONCLUSIVE" if s.inconclusive else "FAIL")
+
+
 def check_cells(s: Step) -> dict[str, str]:
     """Each check as a short cell: its value against its limit, or why it has
     none."""
@@ -1392,6 +1458,10 @@ def check_cells(s: Step) -> dict[str, str]:
         if c is None:
             continue
         st, v, lim = c["status"], c["value"], c["limit"]
+        if v is None and st != "n/a" and st != "unknown":
+            out[name] = (f"too few samples ({c['n']} < {c.get('min')}), "
+                         "not judged" if st == "few" else "-")
+            continue
         if name == "evictions":
             cell = {"unknown": "unknown", "n/a": "no warm request"}.get(st) or (
                 f"{c.get('count', 0)}/{c['n']} = {v:.1%} (<= {lim:.1%})")
@@ -1407,14 +1477,16 @@ def check_cells(s: Step) -> dict[str, str]:
             cell = (f"p{PERCENTILE} {v:.2f}x alone" + (
                 f" (<= {lim:g}x)" if lim is not None else ", not gating")
                     if v is not None else "-")
+        if st == "few":
+            cell = (f"too few samples ({c['n']} < {c['min']}), not judged"
+                    + (f": {cell}" if v is not None else ""))
         out[name] = f"{cell}{' FAIL' if st == 'fail' else ''}"
     return out
 
 
 def step_line(s: Step) -> str:
-    v = ("PASS" if s.passed else ("INCONCLUSIVE" if s.inconclusive
-                                  else "FAIL")
-         + " (" + "; ".join(s.reasons) + ")")
+    v = ("PASS" if s.passed else _word(s) + " ("
+         + "; ".join(s.reasons) + ")")
     sig = signals(s.server)
     failed = s.errors + s.unfinished
     cells = check_cells(s)
@@ -1501,9 +1573,19 @@ def rule_words(plan: dict) -> str:
 def headline(rec: dict) -> str:
     a = rec["answer"]
     rule = rule_words(rec["plan"])
-    if a["fails_at"] is None and a["serves"]:
-        return (f"serves at least {a['serves']} sessions within {rule} (the "
-                "--max-sessions cap; nothing failed)")
+    idle = a.get("no_evidence") or []
+    note = (f"; no evidence at {', '.join(map(str, idle))} (too few requests "
+            "in the window, nothing failed or queued: the sessions sat idle)"
+            if idle else "")
+    if a["fails_at"] is None and not a["serves"]:
+        return ("no verdict: every step had too few requests to judge"
+                + note + " (lengthen --measure-s and --max-measure-s, or "
+                "start higher with --start-sessions)")
+    if a["fails_at"] is None:
+        cap = ("the --max-sessions cap; nothing failed" if a["capped"]
+               else "nothing failed")
+        return (f"serves at least {a['serves']} sessions within {rule} "
+                f"({cap}){note}")
     out = ""
     bad = next((st for st in rec.get("steps", ())
                 if st.get("sessions") == a["fails_at"]), None)
@@ -1517,10 +1599,11 @@ def headline(rec: dict) -> str:
         if bad.get("inconclusive"):
             out = (f"; the step at {a['fails_at']} is INCONCLUSIVE ("
                    f"{bad.get('turns')} turns judged, too few to call it a "
-                   "fail; counted as one for the search)")
+                   "fail while requests waited; counted as a fail)")
+    out += note
     if a["serves"] == 0:
-        return (f"serves no session within {rule} (one session already "
-                f"fails: see the step above){out}")
+        return (f"serves no session within {rule} (the first step that "
+                f"had evidence already fails: see the step above){out}")
     return f"serves {a['serves']} sessions within {rule}; fails at " \
            f"{a['fails_at']}{out}"
 
@@ -1570,8 +1653,7 @@ def print_report(rec: dict, out=None) -> None:
       f"{'turn p90 [90% CI]':>21} {'mean':>6} {'vs 1 stream':>12} "
       f"{'turn s p50/p90':>15} {'in flight':>9}  verdict")
     for s in steps:
-        v = ("PASS" if s.passed else ("INCONCLUSIVE: " if s.inconclusive
-                                      else "FAIL: ") + "; ".join(s.reasons))
+        v = ("PASS" if s.passed else _word(s) + ": " + "; ".join(s.reasons))
         w(f"{s.sessions:>8} {s.turns:>6} {s.requests:>6} {s.errors:>5} "
           f"{_x(s.slowdown_p90) + _ci(s):>21} {_x(s.slowdown_mean):>6} "
           f"{_x(s.raw_p90):>12} {_s(s.turn_s_p50):>7}/{_s(s.turn_s_p90):<7} "
@@ -1706,6 +1788,11 @@ def cmd_replay(args) -> int:
     bases = [b.rstrip("/") for b in (args.base_url or [DEFAULT_BASE_URL])]
     base = bases[0]
     murls = list(args.metrics_url or [])
+    if not murls and len(bases) > 1:
+        from urllib.parse import urlsplit
+        murls = ["{0.scheme}://{0.netloc}/metrics".format(urlsplit(b))
+                 for b in bases]
+        print("  --metrics-url not given: reading " + ", ".join(murls))
     if murls and len(murls) != len(bases):
         print(f"ws replay: {len(murls)} --metrics-url for {len(bases)} "
               "--base-url: give one per base URL, in the same order",
@@ -1727,6 +1814,8 @@ def cmd_replay(args) -> int:
     elif cpt is None:
         cpt, cpt_source = 4.0, "default"
     plan = Plan(trace_path=args.trace, max_slowdown=args.max_slowdown,
+                min_samples=args.min_samples,
+                start_sessions=args.start_sessions,
                 max_eviction_share=args.max_eviction_share,
                 max_warm_ttft_s=args.max_warm_ttft_s,
                 min_decode_tok_s=args.min_decode_tok_s,
@@ -1910,6 +1999,17 @@ def add_subparser(sub) -> None:
     g = p.add_argument_group(
         "pass rule", "A step of N sessions passes when every check holds "
                      "over its window. Each threshold is a flag.")
+    g.add_argument("--min-samples", type=int, default=MIN_SAMPLES,
+                   help="a check judges only with this many requests (warm "
+                        "ones for evictions and time to first token, "
+                        "decode-eligible ones for decode speed); a step "
+                        "measures on, up to --max-measure-s, to reach them. "
+                        "A step that ends short with nothing failed or "
+                        "queued shows NO EVIDENCE: not a fail, the search "
+                        "goes on (default %(default)s)")
+    p.add_argument("--start-sessions", type=int, default=1,
+                   help="sessions of the first step (default 1); doubling "
+                        "goes on from there")
     g.add_argument("--max-eviction-share", type=float,
                    default=MAX_EVICTION_SHARE,
                    help="mid-session evictions at most this share of warm "
@@ -1965,8 +2065,9 @@ def add_subparser(sub) -> None:
     p.add_argument("--min-turns", type=int, default=30,
                    help="a step measures past --measure-s until it has this "
                         "many judged turns (default 30); with fewer by "
-                        "--max-measure-s it is inconclusive, which the "
-                        "search treats as a fail")
+                        "--max-measure-s it shows no evidence (idle: the "
+                        "search goes on), or is inconclusive (a fail) if "
+                        "requests waited on the server")
     p.add_argument("--max-measure-s", type=float, default=0.0,
                    help="longest a step measures (default 3 x --measure-s)")
     p.add_argument("--ramp-s", type=float, default=60.0,

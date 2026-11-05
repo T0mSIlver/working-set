@@ -120,11 +120,11 @@ def test_requests_left_running_fail_the_step_and_are_censored():
     assert s.slowdown_p90 > 5            # the stuck one counts 14x, not nothing
 
 
-def test_a_step_with_few_turns_for_its_sessions_fails():
+def test_a_step_with_few_turns_for_its_sessions_shows_no_evidence():
     rows = [_row(1, 1, 1, 1.0, 1.0, seat=k) for k in range(2)]
     s = B.judge(B.Step(8, rows, window=(0.0, 10.0)), FLAT, 1.5)
-    assert not s.passed
-    assert "only 2 turns judged for 8 session(s)" in s.reasons[0]
+    assert not s.passed and s.no_evidence
+    assert "only 2 turns of 4" in s.reasons[0]
 
 
 def test_the_mean_requests_in_flight_over_the_window():
@@ -268,7 +268,7 @@ def _run(tmp_path, monkeypatch, handler, *extra):
     monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 10)
     out = tmp_path / "run.json"
     rc = main(["replay", str(path), "--base-url", "http://fake/v1",
-               "--ramp-s", "0.05", "--measure-s", "0.5", "--min-turns", "0",
+               "--ramp-s", "0.05", "--min-samples", "1", "--measure-s", "0.5", "--min-turns", "0",
                "--out", str(out),
                *extra])
     assert rc == 0

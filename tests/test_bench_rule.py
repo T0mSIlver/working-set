@@ -30,7 +30,7 @@ def _r(seat=0, turn=0, kind="hit", u=100, prompt=1000, out=100, sent=1.0,
 
 def _judge(rows, lim=None, sessions=1, chat=()):
     return B.judge(B.Step(sessions, rows, chat_rows=list(chat),
-                          window=(0.0, 10.0)), FLAT, lim or B.Limits())
+                          window=(0.0, 10.0)), FLAT, lim or B.Limits(min_samples=1))
 
 
 # ============================================================================
@@ -73,9 +73,9 @@ def test_a_cold_or_big_request_is_not_warm():
     cold = _r(kind="first", warm=False, cold=True, cached=0, expected=0)
     big = _r(turn=1, u=9000, cached=0, expected=1000)    # > --warm-new-tokens
     s = _judge([cold, big])
-    assert s.warm_requests == 0 and s.checks["evictions"]["status"] == "n/a"
+    assert s.warm_requests == 0 and s.checks["evictions"]["status"] == "few"
     s = B.judge(B.Step(1, [cold, big], window=(0.0, 10.0)), FLAT,
-                B.Limits(warm_new_tokens=10_000))
+                B.Limits(min_samples=1, warm_new_tokens=10_000))
     assert s.warm_requests == 1 and s.evictions == 1
 
 
@@ -88,7 +88,7 @@ def test_warm_time_to_first_token_p90_gates():
     s = _judge(ok[:8] + slow * 2)   # p90 = 3.5
     assert not s.passed
     assert "warm time to first token: p90 3.50 s > 3 s" in s.reasons[0]
-    s = _judge(ok[:8] + slow * 2, B.Limits(max_warm_ttft_s=4.0))
+    s = _judge(ok[:8] + slow * 2, B.Limits(min_samples=1, max_warm_ttft_s=4.0))
     assert s.passed
 
 
@@ -136,7 +136,7 @@ def test_slowdown_is_information_unless_asked_for():
     s = _judge([_r(ttft=2.0, service=2.0, span=0.0, out=1, ctok=1)])
     assert s.passed and s.slowdown_p90 == pytest.approx(2.0)
     s = _judge([_r(ttft=2.0, service=2.0, span=0.0, out=1, ctok=1)],
-               B.Limits(max_slowdown=1.5))
+               B.Limits(min_samples=1, max_slowdown=1.5))
     assert not s.passed and s.reasons[0].startswith("turn slowdown: p90 turn")
 
 
@@ -337,9 +337,11 @@ def _run(tmp_path, monkeypatch, handler, *extra, urls=("http://fake/v1",)):
         transport=httpx.MockTransport(handler)))
     monkeypatch.setattr(B, "_endpoint_info", lambda *a: {"model": "m"})
     monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 10)
+    monkeypatch.setattr("workingset.test_cmd.open_metrics",
+                        lambda *a, **k: None)      # no /metrics behind a fake
     out = tmp_path / "run.json"
     flags = [f for u in urls for f in ("--base-url", u)]
-    rc = main(["replay", str(path), *flags, "--ramp-s", "0.05",
+    rc = main(["replay", str(path), *flags, "--ramp-s", "0.05", "--min-samples", "1",
                "--measure-s", "0.6", "--min-turns", "0", "--out", str(out),
                *extra])
     assert rc == 0
@@ -455,3 +457,62 @@ def test_the_flags_reach_the_plan(tmp_path, monkeypatch):
             pl["warm_new_tokens"], pl["kv_block_tokens"],
             pl["max_slowdown"]) == (0.05, 9, 5, 0.2, 100, 32, 50)
     assert math.isfinite(rec["steps"][0]["slowdown_p90"])
+
+
+# ============================================================================
+# too few samples, idle steps, where the search starts
+# ============================================================================
+def test_a_check_with_fewer_samples_than_min_samples_is_not_judged():
+    rows = _warm(3, cached=0, ttft=9.0, out=101, ctok=101, span=9.0)
+    s = B.judge(B.Step(1, rows, window=(0.0, 10.0)), FLAT, B.Limits())
+    assert [c["status"] for n, c in s.checks.items()
+            if n != "turn slowdown" and n != "failed requests"] == ["few"] * 3
+    # nothing queued or failed: idle, not overloaded
+    assert s.no_evidence and not s.passed and not s.inconclusive
+    assert s.reasons[0].startswith("no evidence: only ")
+    assert "too few samples (3 < 10)" in B.step_line(s)
+    # the same rows with ten samples are judged, and fail
+    s = B.judge(B.Step(1, _warm(10, cached=0, ttft=9.0, out=101, ctok=101,
+                                span=9.0), window=(0.0, 10.0)), FLAT,
+                B.Limits())
+    assert not s.no_evidence and B.failed_checks(s.to_dict()) == [
+        "evictions", "warm time to first token", "decode speed"]
+
+
+def test_few_samples_with_requests_waiting_is_a_fail_not_idleness():
+    s = B.judge(B.Step(1, _warm(3, 1000), window=(0.0, 10.0),
+                       server={"waiting_max": 2.0, "waiting_mean": 0.8}),
+                FLAT, B.Limits())
+    assert s.inconclusive and not s.no_evidence and not s.passed
+
+
+def test_a_failed_request_is_a_fail_even_with_few_samples():
+    bad = B.Row(0, 5, "hit", 1, 1, 1, sent=1.0, error="HTTP 500", done=True)
+    s = B.judge(B.Step(1, [bad] + _warm(2, 1000), window=(0.0, 10.0)), FLAT,
+                B.Limits())
+    assert not s.no_evidence and not s.passed
+    assert B.failed_checks(s.to_dict()) == ["failed requests"]
+
+
+def test_an_idle_run_moves_on_and_starts_where_asked(tmp_path, monkeypatch,
+                                                     capsys):
+    # --min-samples 1000 can never be met: every step shows no evidence, and
+    # the search still tries each N rather than stopping at the first
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--min-samples",
+               "1000", "--start-sessions", "2", "--max-sessions", "8",
+               "--measure-s", "0.3", "--max-measure-s", "0.3")
+    assert [s["sessions"] for s in rec["steps"]] == [2, 4, 8]
+    assert all(s["no_evidence"] for s in rec["steps"])
+    assert rec["answer"] == {"serves": 0, "fails_at": None, "capped": False,
+                             "no_evidence": [2, 4, 8]}
+    assert "no verdict: every step had too few requests" in \
+        capsys.readouterr().out
+
+
+def test_several_urls_default_their_metrics_to_each_origin(tmp_path, capsys):
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps(_trace().to_dict()))
+    assert main(["replay", str(path), "--base-url", "http://a:8000/v1",
+                 "--base-url", "https://b.example/api/v1", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "reading http://a:8000/metrics, https://b.example/metrics" in out

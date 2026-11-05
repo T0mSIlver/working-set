@@ -126,6 +126,15 @@ uv run ws report run.json                 # re-print it
    - At most 1% of requests failed or were left unfinished
      (`--max-failed-share`).
 
+   A check judges only with `--min-samples` (10) requests: warm ones for
+   evictions and time to first token, decode-eligible ones for decode speed.
+   A step measures on, up to `--max-measure-s`, to reach them. If it still
+   falls short and nothing failed, was unfinished, or queued on the server, the
+   sessions sat idle (long think gaps): the step shows NO EVIDENCE, which is
+   neither a pass nor a fail, and the search goes on to the next N. A short step
+   with a queue or preempted requests is a fail. `--start-sessions N` begins
+   the search at N.
+
    The turn slowdown (time its requests took over what the fitted speed gives
    alone) is reported, and gates only under an explicit `--max-slowdown`. A
    cold request (a session's first, or after a compaction) reports its time
@@ -143,7 +152,8 @@ with the same trace and `--seed` compare directly.
 Other flags shape the load:
 
 - `--base-url` repeated benches a data-parallel deployment (give one
-  `--metrics-url` per base URL, in the same order). `--routing sticky`, the
+  `--metrics-url` per base URL, in the same order; without any, each
+  defaults to `<origin of the base URL>/metrics`). `--routing sticky`, the
   default, pins a session tree to one URL by a stable hash of its seat id, as
   a session-affine router does; `--routing round-robin` sends each request to
   the next URL. The report counts requests and shows server metrics per URL.
