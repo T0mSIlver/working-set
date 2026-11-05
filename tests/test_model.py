@@ -275,3 +275,19 @@ def test_token_debt_counts_tokens_not_steps():
     v_mixed = v_normal * d_ms / x_ms    # same tokens per step, longer steps
     assert per_user == pytest.approx(drain * (v_normal - v_mixed), rel=1e-9)
     assert total == pytest.approx(64 * per_user)
+
+
+def test_expert_union_counts_speculative_verify_positions():
+    """Issue #91: with draft depth k each sequence verifies 1 + k positions per
+    step and every one routes through the experts, so the linear (no-overlap)
+    union saturates at E/(k_e (1 + k)) sequences, not E/k_e."""
+    m = M.MODELS["DSV41F"]                     # 384 experts / 6 routed, 5 drafts
+    k = m.spec_tokens
+    assert k == 5
+    below, above = 10, 11                      # 10 x 6 = 60 < 64 <= 11 x 6
+    assert m.w_decode(below * (1 + k), "linear") == pytest.approx(
+        m.w_decode_shared + below * (1 + k) * m.w_route_pertok)
+    assert m.w_decode(above * (1 + k), "linear") == pytest.approx(
+        m.w_decode_shared + m.w_route_total)
+    dense = M.MODELS["27B"]                    # no experts: drafts change nothing
+    assert dense.w_decode(1) == dense.w_decode(600) == dense.w_decode_shared
