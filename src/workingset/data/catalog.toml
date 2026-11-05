@@ -813,3 +813,90 @@ flags = ["--tokenizer-mode mistral --config-format mistral --load-format mistral
 [[models.ML4.explorer.recipe]]
 note = "Mistral-Large-4 ships in the vllm/vllm-openai:mistral-large-4 image only (no vLLM release includes it yet, 2026-11-04); the recipe validates --max-model-len 262144"
 
+
+# MoE 2.8T-A104B (103.2B active excluding embeddings and lm_head), open
+# weights 2026-11-04 under the Kimi K3.1 Pro License (MIT terms plus a
+# separate agreement for Model-as-a-Service operators above $20M a year and
+# a display rule above 100M users; internal use is exempt). Kimi K3's
+# layout (69 KDA linear-attention layers, latent MoE, 896 experts / 16
+# routed: kink n = 56) with its 24 gated MLA layers replaced by gated DSA
+# (MLA latents plus a top-2048 indexer on every one, at 1-indexed layers
+# 4, 8, ..., 92 and 93), and block Attention Residuals (12 layers a block).
+# The checkpoint ships MXFP4 routed experts (quantization-aware trained)
+# and keeps everything else BF16, so the always-active read is the study's
+# heaviest: 111.5 GB per step, 61.3 GB of it the KDA projections.
+# 1,566.6 GB resident with the DSpark drafter: no 8xH200 node, 8xB300 only.
+# research/model_kimi_k31pro.md.
+[models.K31P]
+name = "Kimi-K3.1-Pro (MoE 2.8T-A104B, KDA+DSA)"
+kv_bpt = 19_872                  # 24 x 576 (fp8_e4m3 latent) + 24 x 132 (indexer keys)
+                                 # + 5 x 576 (the dense DSpark drafter's latents, which share
+                                 # vLLM's block row: dense_mla_draft_bytes_per_token)
+deltanet_state = 237_404_160     # 69 KDA layers x 96 heads x 128x128 bf16 + q/k/v conv
+                                 # (3 x 12,288 x 4 bf16), the GLM53F convention
+w_resident = 1_566_590_881_794   # metadata.total_size 1,561,217,377,280 (shard-header-verified)
+                                 # + the BF16 DSpark drafter 5,373,504,514 (its own checkpoint)
+w_decode_shared = 111_517_783_040 # exact ledger, all BF16: KDA 61.26 + shared exp 24.31
+                                 # + MLA 11.15 + latent MoE projections 9.45 + lm_head 2.35
+                                 # + dense MLP 1.45 + routers 1.18 + indexers 0.36 + norms
+w_route_pertok = 25_829_572_608  # 16 experts x 17,547,264 B (MXFP4 + UE8M0 group-32) x 92
+w_route_total = 1_446_456_066_048 # 896 experts (kink at n = 896/16 = 56)
+layers = 93
+rec_layers = 69
+draft_layers = 5
+# draft pass: the 5-layer dense DSpark drafter 5,373,504,514 B BF16 (MEASURED,
+# incl. its Markov head) + the target's lm_head 2,348,810,240 B BF16, which it
+# shares (research/model_kimi_k31pro.md #5)
+w_draft = 7.722e9
+w_draft_route_pertok = 0.0
+# one draft pass per step: a block drafter, "7 tokens per forward pass"
+# (Inferact/Kimi-K3.1-Pro-DSpark-preview README)
+draft_passes = 1
+# acceptance MEASURED (outside): InferenceX's golden accepted length for this
+# drafter on B300, SPEED-Bench coding, thinking on, probabilistic drafting with
+# block verification: 3.08 at 5 drafts -> geometric a = 0.721
+acceptance = 0.721
+acceptance_measured = true
+spec_tokens = 5                  # num_speculative_tokens: the vLLM recipe's DSpark config
+draft_method = "dspark"
+kv_decode_bpt = 6_048            # per CONTEXT token per step: 24 indexer scans x 132 B
+                                 # + the drafter's dense read, 5 x 576 B (one pass)
+kv_decode_const = 28_311_552     # B300: 24 layers x top-2048 x 576 B per active seq
+kv_decode_topk = 2_048           # index_topk, read in token space
+# H200: vLLM's K3.1 verifier picks fp8_ds_mla off SM10x, 656 B per latent
+# (the drafter's rows too). No Hopper recipe exists and no 8xH200 node
+# holds the weights; the row keeps Python's multi-node arithmetic honest.
+kv_hopper_fp8 = [
+    22_192,  # 24 x 656 + 24 x 132 + 5 x 656
+    32_243_712,  # 24 x 2048 x 656
+]
+max_ctx = 1_048_576              # native 1M; the recipe runs --max-model-len 1048576
+# prefill: active GEMM params excl embed/lm_head (103.19e9 ledger; card
+# "104B activated"). Quadratic term priced as DENSE attention on the 24 DSA
+# layers, as GLM-5.3: an upper bound. 96 heads, QK^T at 192 (nope 128 +
+# rope 64) and AV at 128: attn_d is their mean width x heads.
+params_prefill = 103.19e9
+attn_layers = 24
+attn_d = 15360                   # = 96 * (192 + 128) / 2
+kv_heads = 1                     # MLA: one latent per token; the KDA state shards (96 heads)
+
+[models.K31P.quality]  # AA's default variant (unlabelled), read 2026-11-05; no 2.1 run
+tb40 = [133, 198]
+aa = "kimi-k3-1-pro"
+
+[models.K31P.explorer]
+short = "Kimi-K3.1-Pro"
+weights = "MXFP4"
+tip = "Kimi-K3.1-Pro — 2.8T-A104B MoE: 69 KDA linear-attention layers and 24 gated DSA layers (MLA latents plus a top-2048 indexer), the routed experts in a 3,584-wide latent space (896 experts / 16 routed, kink n = 56). 19.4 KiB/token stored on B300 (24 latents of 576 B, 24 indexer keys, and the DSpark drafter's 5 dense latents) plus a 226 MiB bf16 KDA state per session, the study's heaviest. The checkpoint ships MXFP4 experts and BF16 everything else, so every step reads 111.5 GB of always-active weights (61 GB of it KDA projections) on top of 25.8 GB of experts per token. 1,566.6 GB resident with the drafter: no 8×H200 node holds it; 8×B300 at TP8, the vLLM recipe's single-node layout. No NVFP4 checkpoint. Terminal-Bench 67.2% on 4.0 (AA); AA has no 2.1 run. 1M native context. License: Kimi K3.1 Pro (MIT terms plus a separate agreement for Model-as-a-Service operators above $20M a year)."
+kv_tip = "Kimi-K3.1-Pro's FP8 cache row depends on the GPU, as GLM-5.3's: on B300 vLLM serves its DSA layers through FlashInfer as plain fp8_e4m3, 576 B per latent; off Blackwell it picks fp8_ds_mla, 656 B. The indexer keys stay fp8 (132 B) in every arm. FP16 is BF16 KV, which vLLM accepts when asked for (auto becomes fp8 on Blackwell) but the recipe does not document: double the latent rows and doubled top-k reads."
+speculative_config = '{"model":"Inferact/Kimi-K3.1-Pro-DSpark-preview","num_speculative_tokens":5,"method":"dspark","draft_sample_method":"probabilistic"}'
+spec_with_dcp = true                # the recipe's AgentX preset runs DCP8 with this draft
+# vLLM turns auto into fp8_e4m3 on Blackwell, so the BF16 arm must say bfloat16
+kv_cache_dtype = { fp8_hopper = "fp8_ds_mla", fp16 = "bfloat16" }
+
+[[models.K31P.explorer.recipe]]
+at = 1
+flags = ["--trust-remote-code"]
+
+[[models.K31P.explorer.recipe]]
+note = "Kimi-K3.1-Pro ships in the vllm/vllm-openai:kimi-k31 image only (no vLLM wheel includes it yet, vllm#65685, 2026-11-05); the recipe adds --load-format fastsafetensors on Blackwell to load the 1.56 TB faster"

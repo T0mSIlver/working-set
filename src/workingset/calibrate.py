@@ -126,8 +126,9 @@ def decode_rows(runs: list[dict], cfg: RunConfig, mfu: float) -> list[dict]:
                    if m.kv_decode_const and m.kv_decode_topk else m.kv_decode_const)
             kv = n * (ctx * kv_bpt + top + m.state_traffic)
             union = cfg.calibration.union
-            bytes_ = m.w_decode(n * (1 + k), union) + k * m.draft_pass_bytes(n, union) + kv
-            layers = m.layers + k * m.draft_layers
+            bytes_ = (m.w_decode(n * (1 + k), union)
+                      + m.passes(k) * m.draft_pass_bytes(n, union) + kv)
+            layers = m.layers + m.passes(k) * m.draft_layers
             rows.append({
                 "x": [bytes_ / (tp * topo.gpu.hbm_bw), layers,
                       layers if tp > 1 else 0.0, m.rec_layers * (1 + k)],

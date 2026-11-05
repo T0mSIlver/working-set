@@ -8,7 +8,7 @@
   "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
   "hypothesis": "one line on the cause"
  },
- "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 814 vectors / 46,398 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 176 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself. 2026-09-10 (KV layout): +16 vectors on the kvshard axis (three anchors' sweeps and three replicate+offload combinations); no band or entry moved. 2026-11-02 (issue #117, the cache as a hit rate): 955 vectors / 67,805 comparisons, 298 allowlisted, 84 compared as lower bounds on censored explorer fills. Every at-load figure is priced at the miss share at the state's users and the four latency ceilings are capacity-aware at W, so 23 entries gated on _miss_share_swing (just past the knee) and _warm_p5 (a handful of sessions past it) are new, and five entries that match nothing any more are gone (the ceilings' widened bands and the duty moving with the share cover them). 2026-11-04 (Mistral-Large-4): 979 vectors / 69,509 comparisons; the 28th SPREAD_PROBE entry (ML4 8xB300 TP8 FP8) narrowed the max_users_decode band from 3.5% to 3.4% and ttft_hit_ps's from 3.4% to 3.3%, so the integer-bisection gate widens from a ceiling of 25 to 29 and one past-knee ttft_hit_ps entry is new; no vector of another model moved. 2026-11-04 (issue #122, vLLM's real MLA rows): 1,001 vectors / 71,071 comparisons. GLM-5.3's H200 FP8 vectors (27) and every Mistral-Large-4 vector (16) moved, and GLM-5.3's FP16 arm added 22; no other vector changed. The new FP16 states land in two known regimes at once (past the knee at duty 0.82), in GLM-5.3's dense-priced heavy tail, and at the steady cap's edge: 14 entries are new and one is widened, each gated on its cause. 2026-11-04 (WS-9/WS-10, one decode step equation and tokens per step from acceptance and draft depth): 1,006 vectors; every decode figure moved. The JS mirror agrees on every new quantity (decode_step_n8_ms exact), and eight entries matched nothing any more and are gone: the duty-band ttft_*, spike_tolerance* and burst_drain_seconds_b32 entries, four GLM-5.3 dense-priced-tail entries, and the steady-cap-edge steady_saturated entry.",
+ "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 814 vectors / 46,398 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 176 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself. 2026-09-10 (KV layout): +16 vectors on the kvshard axis (three anchors' sweeps and three replicate+offload combinations); no band or entry moved. 2026-11-02 (issue #117, the cache as a hit rate): 955 vectors / 67,805 comparisons, 298 allowlisted, 84 compared as lower bounds on censored explorer fills. Every at-load figure is priced at the miss share at the state's users and the four latency ceilings are capacity-aware at W, so 23 entries gated on _miss_share_swing (just past the knee) and _warm_p5 (a handful of sessions past it) are new, and five entries that match nothing any more are gone (the ceilings' widened bands and the duty moving with the share cover them). 2026-11-04 (Mistral-Large-4): 979 vectors / 69,509 comparisons; the 28th SPREAD_PROBE entry (ML4 8xB300 TP8 FP8) narrowed the max_users_decode band from 3.5% to 3.4% and ttft_hit_ps's from 3.4% to 3.3%, so the integer-bisection gate widens from a ceiling of 25 to 29 and one past-knee ttft_hit_ps entry is new; no vector of another model moved. 2026-11-04 (issue #122, vLLM's real MLA rows): 1,001 vectors / 71,071 comparisons. GLM-5.3's H200 FP8 vectors (27) and every Mistral-Large-4 vector (16) moved, and GLM-5.3's FP16 arm added 22; no other vector changed. The new FP16 states land in two known regimes at once (past the knee at duty 0.82), in GLM-5.3's dense-priced heavy tail, and at the steady cap's edge: 14 entries are new and one is widened, each gated on its cause. 2026-11-04 (WS-9/WS-10, one decode step equation and tokens per step from acceptance and draft depth): 1,006 vectors; every decode figure moved. The JS mirror agrees on every new quantity (decode_step_n8_ms exact), and eight entries matched nothing any more and are gone: the duty-band ttft_*, spike_tolerance* and burst_drain_seconds_b32 entries, four GLM-5.3 dense-priced-tail entries, and the steady-cap-edge steady_saturated entry. 2026-11-05 (Kimi-K3.1-Pro): 1017 vectors / 73,224 comparisons; the 29th SPREAD_PROBE entry (K31P 8xB300 TP8) narrowed ttft_hit_ps's band from 3.3% to 3.2%, ttft_hit_fcfs's from 6.1% to 5.9% and power_d_d's from 5.1% to 4.6%, so one existing state of each is new here; no vector of another model moved.",
  "entries": [
   {
    "quantity": "steady_n",
@@ -1070,6 +1070,55 @@
    "observed_rel": 0.0684,
    "max_rel": 0.083,
    "hypothesis": "past the knee at prefill duty > 1 on Mistral-Medium's small warm pool, the capacity-aware fixed point moves in whole sessions; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "ttft_hit_ps",
+   "where": {
+    "model": "ML4",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 8,
+    "tp": 8,
+    "chunk": "32768",
+    "eta": 0.2,
+    "mfu": 0.35
+   },
+   "observed_rel": 0.0323,
+   "max_rel": 0.034,
+   "hypothesis": "Monte-Carlo noise at the band's edge: 3.23% on one inside-the-knee state whose vector is unchanged since 2026-11-04, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 3.3% to 3.2% (2026-11-05)."
+  },
+  {
+   "quantity": "ttft_hit_fcfs",
+   "where": {
+    "model": "GLM52",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 7,
+    "tp": 7,
+    "chunk": "2048",
+    "eta": 0.4
+   },
+   "observed_rel": 0.0594,
+   "max_rel": 0.062,
+   "hypothesis": "Monte-Carlo noise at the band's edge: 5.94% on one state whose vector is unchanged, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 6.1% to 5.9% (2026-11-05)."
+  },
+  {
+   "quantity": "power_d_d",
+   "where": {
+    "model": "Q38FN",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 4,
+    "tp": 2,
+    "chunk": "4096",
+    "eta": 0.3
+   },
+   "observed_rel": 0.0508,
+   "max_rel": 0.052,
+   "hypothesis": "Monte-Carlo noise at the band's edge: 5.08% on one state whose vector is unchanged, now past the band the Kimi-K3.1-Pro probe entry narrowed from 5.1% to 4.6% (2026-11-05)."
   }
  ]
 }

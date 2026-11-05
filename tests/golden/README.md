@@ -97,7 +97,7 @@ edited once, a dropped term, a different rounding convention.
 mulberry32 with Box-Muller normals. The two will never agree exactly, and the
 band has to say how close is close enough.
 
-The bands are measured, not guessed. `scripts/golden.py` runs the 28 states
+The bands are measured, not guessed. `scripts/golden.py` runs the 29 states
 named in `SPREAD_PROBE` at three seeds and two sampling scales, and records
 both the probe (each entry a deployment plus the knobs that differ from the
 defaults) and the p50 / p90 / max relative spread of every sampled quantity in
@@ -370,7 +370,10 @@ its return, a 27th, DSV4FV's — the logged 2×B300 TP2 deployment — on
 2026-10-02, tightening a few bands by ≤ 0.002, and a 28th, ML4's — the vLLM
 recipe's 8×B300 TP8 FP8 layout — on 2026-11-04, tightening a few bands by
 ≤ 0.002 and pushing two integer-bisection pairs and one past-knee
-`ttft_hit_ps` pair onto the allowlist), so adding a sweep axis or a
+`ttft_hit_ps` pair onto the allowlist, and a 29th, K31P's — the vLLM recipe's
+8×B300 TP8 layout — on 2026-11-05, tightening three bands by up to 0.005 and
+pushing one edge-of-band pair each of `ttft_hit_ps`, `ttft_hit_fcfs` and
+`power_d_d` onto the allowlist), so adding a sweep axis or a
 state key no longer changes which states derive every `mc` band. What the
 coverage rule guarantees is a floor, not a cross-product: every model and GPU
 appears at least once, and a new model is represented only by the entry

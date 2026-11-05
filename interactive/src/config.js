@@ -23,7 +23,8 @@ const CATALOG_QUALITY = Object.fromEntries(Object.entries(CATALOG.models)
 // DECODE: one step-time equation (mirrors workingset.model DECODE_ETA and
 // decode_step_seconds):
 //   t_step = B / (eta x tp x hbm_bw) + n (1 + k) c_tok
-//          + (tau_0 + [tp > 1] tau_ar)(L + k L_d) + tau_rec L_rec (1 + k)
+//          + (tau_0 + [tp > 1] tau_ar)(L + p L_d) + tau_rec L_rec (1 + k)
+// p is draftPasses(m, k): k, or 1 for a block drafter
 // eta is the achieved fraction of RAW HBM bandwidth; tau_0 and tau_ar are
 // priors and tau_rec is solved from the 27B anchor's measured 2.7 ms
 // intercept (decodePriors). Each sequence advances tokensPerStep(acceptance,
@@ -147,6 +148,11 @@ function routedUnion(m, positions, perTok, union){
 export function w_decode(m, positions, union = "coverage"){
   return m.w_decode_shared + routedUnion(m, positions, m.w_route_pertok, union);
 }
+// draft passes one step runs at depth k (mirrors Model.passes): one per draft
+// token unless the model is a block drafter (draft_passes, Kimi-K3.1-Pro: 1)
+export function draftPasses(m, k){
+  return k > 0 ? (m.draft_passes == null ? k : Math.min(m.draft_passes, k)) : 0;
+}
 // bytes one draft pass streams for n sequences (mirrors Model.draft_pass_bytes)
 export function draftPassBytes(m, n, union = "coverage"){
   return (m.w_draft || 0) + routedUnion(m, n, m.w_draft_route_pertok || 0, union);
@@ -160,7 +166,7 @@ export function tokensPerStep(acceptance, k){
   return m;
 }
 function fixedSeconds(m, tp, k, [t0, tar, trec]){
-  return (t0 + (tp > 1 ? tar : 0)) * ((m.layers || 0) + k * (m.draft_layers || 0))
+  return (t0 + (tp > 1 ? tar : 0)) * ((m.layers || 0) + draftPasses(m, k) * (m.draft_layers || 0))
        + trec * (m.rec_layers || 0) * (1 + k);
 }
 let PRIORS = null;
@@ -168,7 +174,7 @@ let PRIORS = null;
 export function decodePriors(){
   if (!PRIORS){
     const m = CONFIG.MODELS["27B"], k = ANCHOR_SPEC_TOKENS;
-    const draftS = k * draftPassBytes(m, 0) / (4 * CONFIG.GPUS["H200"].hbm_bw * DECODE_ETA);
+    const draftS = draftPasses(m, k) * draftPassBytes(m, 0) / (4 * CONFIG.GPUS["H200"].hbm_bw * DECODE_ETA);
     const left = ANCHOR_FIXED_S - draftS - fixedSeconds(m, 4, k, [TAU_0, TAU_AR, 0]);
     PRIORS = [TAU_0, TAU_AR, left / (m.rec_layers * (1 + k))];
   }
@@ -194,7 +200,7 @@ export function decodeConstants({ eta = DECODE_ETA, t0 = null, tar = null, trec 
 export function decodeStepSeconds(m, topo, n, kvBytes, dc, k = m.spec_tokens){
   const gpu = topo.gpu || CONFIG.GPUS["H200"];
   const pos = n * (1 + k);
-  const bytes = w_decode(m, pos, dc.union) + k * draftPassBytes(m, n, dc.union) + kvBytes;
+  const bytes = w_decode(m, pos, dc.union) + draftPasses(m, k) * draftPassBytes(m, n, dc.union) + kvBytes;
   return bytes / (dc.eta * topo.tp * gpu.hbm_bw)
        + pos * decodeTokenSeconds(m, topo, dc.mfu)
        + fixedSeconds(m, topo.tp, k, dc.taus);

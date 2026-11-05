@@ -72,6 +72,7 @@ const LEDGER = {
   "Q38FN":  { tb21: 230, tb40:  50 },
   "GLM53F": { tb21: 225, tb40:  65 },
   "ML4":    { tb21: null, tb40:  49 },
+  "K31P":   { tb21: null, tb40: 133 },
 };
 
 test('CONFIG.QUALITY is the ledger in research/terminal_bench.md', () => {

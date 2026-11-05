@@ -1,6 +1,6 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
          dcpSize, effective_bw, kvReplication, kv_pool_tokens, makeGrid, makeTopo, minTpFor,
-         servableKv, state_traffic, tpEff, withGpu, withKvDtype } from './config.js';
+         servableKv, state_traffic, tpEff, withGpu, withKvDtype, draftPasses } from './config.js';
 import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, capacityLimit, coldRequestSeconds,
          contextStats, liveThink, liveTurn, maxUsersColdWait, maxUsersLatency, maxUsersSaturation,
          maxUsersSlowed, mfuEff, missContextSeconds, missShareAt, prefillContextSeconds, prefillSeconds,
@@ -97,10 +97,12 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["GLM53F"],"B300")===2 &&
                  minTpFor(CONFIG.MODELS["ML4"],"H200")===9 &&
                  minTpFor(CONFIG.MODELS["ML4"],"B300")===5 &&
-                 minTpFor({...CONFIG.MODELS["ML4"], w_resident: CONFIG.MODELS["ML4"].nvfp4_w[0]},"B300")===3, "min TP per model/part");
+                 minTpFor({...CONFIG.MODELS["ML4"], w_resident: CONFIG.MODELS["ML4"].nvfp4_w[0]},"B300")===3 &&
+                 minTpFor(withGpu(CONFIG.MODELS["K31P"],"H200"),"H200")===13 &&
+                 minTpFor(CONFIG.MODELS["K31P"],"B300")===7, "min TP per model/part");
   // (GLM-5.3-Flash prices as its BF16-KV arm on any H200 topology — the fp8
   // arm THROWS there, asserted below with the rest of its identities)
-  for (const mk of ["MM35","GLM52","DSV4F","DSV4FV","DSV41F","Q38FN","GLM53F","ML4"])
+  for (const mk of ["MM35","GLM52","DSV4F","DSV4FV","DSV41F","Q38FN","GLM53F","ML4","K31P"])
     for (const n of [1,2,4,8])
       console.assert(kv_pool_tokens(
           withGpu(mk==="GLM53F" ? withKvDtype(CONFIG.MODELS[mk],"fp16") : CONFIG.MODELS[mk], "H200"),
@@ -119,7 +121,7 @@ export function unitChecks(){
   // every default ("dcp") topology at a TP the KV heads divide stores ONE
   // copy; "replicate" pays tp/kv_heads copies past the heads, and the
   // single-latent models pay it at every tp > 1
-  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV4F",1],["DSV4FV",1],["DSV41F",1],["Q38FN",2],["GLM53F",1],["ML4",1]]){
+  for (const [mk, heads] of [["27B",4],["35BA3B",2],["MM35",8],["GLM52",1],["DSV4F",1],["DSV4FV",1],["DSV41F",1],["Q38FN",2],["GLM53F",1],["ML4",1],["K31P",1]]){
     const m = CONFIG.MODELS[mk];
     console.assert(m.kv_heads === heads, mk+" kv_heads");
     for (const tp of [1,2,4,8]){
@@ -198,8 +200,8 @@ export function unitChecks(){
     let threw = false; try { bad(); } catch(e){ threw = true; }
     console.assert(threw, "GLM52 must refuse: " + what);
   }
-  console.assert(Object.keys(CONFIG.MODELS).every(k => k === "GLM52" || !CONFIG.MODELS[k].kv_hopper_fp8),
-    "only GLM-5.3's FP8 row depends on the GPU");
+  console.assert(Object.keys(CONFIG.MODELS).every(k => k === "GLM52" || k === "K31P" || !CONFIG.MODELS[k].kv_hopper_fp8),
+    "only GLM-5.3's and Kimi-K3.1-Pro's FP8 rows depend on the GPU");
   console.assert(mm.spec_tokens === 0, "MM35 has no MTP module");
   console.assert(Math.abs(glm.w_route_total/glm.w_route_pertok - 32) < 1e-9, "GLM kink n=32");
   // B300 + NVFP4: pool ordering, gate, and the ~465 GB GLM checkpoint check
@@ -210,10 +212,11 @@ export function unitChecks(){
   console.assert(glm.nvfp4_w[3] === 256*21233688*75 &&
                  glm.nvfp4_w[1] === glm.w_decode_shared + 15891309576,
     "GLM-5.3 NVFP4: measured expert bytes; always-active = FP8 + BF16-upcast delta");
-  // every model but DSv4-Flash-Vision has a measured NVFP4 checkpoint
-  // (research/nvfp4_2026-10.md); it has community repacks only (2026-10-02)
-  // and is deliberately unpriced
-  const NO_NVFP4 = ["DSV4FV"];
+  // every model but DSv4-Flash-Vision and Kimi-K3.1-Pro has a measured NVFP4
+  // checkpoint (research/nvfp4_2026-10.md): DSv4-Flash-Vision has community
+  // repacks only (2026-10-02) and is deliberately unpriced; Kimi-K3.1-Pro has
+  // none (2026-11-05), its experts ship MXFP4
+  const NO_NVFP4 = ["DSV4FV", "K31P"];
   for (const mk of Object.keys(CONFIG.MODELS))
     console.assert(NO_NVFP4.includes(mk) ? CONFIG.MODELS[mk].nvfp4_w == null : !!CONFIG.MODELS[mk].nvfp4_w,
       NO_NVFP4.includes(mk) ? mk+" must have NO NVFP4 arm" : mk+" must be NVFP4-selectable");
@@ -422,6 +425,20 @@ export function unitChecks(){
     "ML4 NVFP4: only the routed experts change (ModelOpt NVFP4, measured)");
   console.assert(ml4.kv_fp16_ok === false && !ml4.kv_fp8_blackwell_only,
     "ML4: fp8_ds_mla latent cache only, servable on Hopper and Blackwell");
+  // Kimi-K3.1-Pro (research/model_kimi_k31pro.md; mirror _selfcheck): 69 KDA
+  // + 24 DSA layers; the 5-layer dense DSpark drafter's latents share the row
+  const k31 = CONFIG.MODELS["K31P"], k31e = 3*3072*3584/2 + 3*3072*3584/32;
+  console.assert(k31.kv_bpt === 24*576 + 24*132 + 5*576 && k31.kv_decode_bpt === 24*132 + 5*576 &&
+                 k31.kv_decode_const === 24*2048*576 && k31.kv_decode_topk === 2048 &&
+                 k31.kv_hopper_fp8[0] === 24*656 + 24*132 + 5*656 && k31.kv_hopper_fp8[1] === 24*2048*656,
+    "K31P caches: 24 latents + 24 indexers + 5 drafter latents stored; 24 scans + the drafter's dense read + 24 top-k gathers read");
+  console.assert(k31.deltanet_state === 69*96*128*128*2 + 69*3*12288*4*2 && state_traffic(k31) === 2*k31.deltanet_state,
+    "K31P per-session state = bf16 KDA state + q/k/v conv state, read and written each step");
+  console.assert(k31.w_route_pertok === 16*k31e*92 && k31.w_route_total === 896*k31e*92 &&
+                 k31.w_route_total/k31.w_route_pertok === 56 && k31.nvfp4_w === undefined,
+    "K31P expert bytes (MXFP4 + UE8M0 group-32 scales); kink at n = 896/16 = 56; no NVFP4 checkpoint");
+  console.assert(draftPasses(k31, 5) === 1 && draftPasses(k31, 0) === 0 && draftPasses(ml4, 3) === 3,
+    "K31P drafts in one block pass; other drafters run one pass per draft token");
   // zero-pool honesty: weights that don't fit report ZERO warm even with a
   // large CPU-offload buffer (the guard fires before the workload is touched)
   const zr = warmCapacity(glmH, makeTopo("tp",1,"H200"), null, 512, 3, 1000);

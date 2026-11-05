@@ -52,12 +52,15 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   const kvDt = { fp8: 'fp8_e4m3', fp16: 'auto', ...ex.kv_cache_dtype };
   const hopper = !CONFIG.GPUS[state.gpu].supports_nvfp4;
   const kvFlag = state.kv === 'fp8' ? (hopper && kvDt.fp8_hopper || kvDt.fp8) : kvDt.fp16;
+  // the base checkpoint's weight format: FP8 unless the catalogue names the
+  // model's own (Kimi-K3.1-Pro ships MXFP4 experts and BF16 elsewhere)
+  const wName = state.wdt === 'nvfp4' ? 'NVFP4' : (ex.weights ?? 'FP8');
 
   // ONE replica group's command. The model prices DP as INDEPENDENT groups
   // behind a sticky router — which vLLM's internal DP load balancer is not —
   // so DP is "run N of these", never --data-parallel-size.
   const lines = [
-    `vllm serve "<${base} ${state.wdt==='nvfp4'?'NVFP4':'FP8'} checkpoint>"`,
+    `vllm serve "<${base} ${wName} checkpoint>"`,
     `  --tensor-parallel-size ${topo.tp}`,
     // Mistral-Large-4's FlashMLA sparse path names its own FP8 layout (its
     // NVFP4 card: "needed for this checkpoint"). GLM-5.3's recipe passes fp8
@@ -110,7 +113,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
 
   const spec = [
     ['Model', esc(base)],
-    ['Weights', (state.wdt==='nvfp4'?'NVFP4':'FP8') + (state.wover==='p15'?' (+15% deployed)':'')],
+    ['Weights', wName + (state.wover==='p15'?' (+15% deployed)':'')],
     ['Hardware', esc(topo.name)],
     ['KV cache', state.kv==='fp8'?'FP8 (fp8_e4m3)':'FP16 (auto)'],
     ['max_model_len', `${fmt(wl.cap,0)} tok`],

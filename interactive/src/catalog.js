@@ -574,6 +574,67 @@ export const CATALOG = {
      }
     ]
    }
+  },
+  "K31P": {
+   "name": "Kimi-K3.1-Pro (MoE 2.8T-A104B, KDA+DSA)",
+   "kv_bpt": 19872,
+   "deltanet_state": 237404160,
+   "w_resident": 1566590881794,
+   "w_decode_shared": 111517783040,
+   "w_route_pertok": 25829572608,
+   "w_route_total": 1446456066048,
+   "layers": 93,
+   "rec_layers": 69,
+   "draft_layers": 5,
+   "w_draft": 7722000000.0,
+   "w_draft_route_pertok": 0.0,
+   "draft_passes": 1,
+   "acceptance": 0.721,
+   "acceptance_measured": true,
+   "spec_tokens": 5,
+   "draft_method": "dspark",
+   "kv_decode_bpt": 6048,
+   "kv_decode_const": 28311552,
+   "kv_decode_topk": 2048,
+   "kv_hopper_fp8": [
+    22192,
+    32243712
+   ],
+   "max_ctx": 1048576,
+   "params_prefill": 103190000000.0,
+   "attn_layers": 24,
+   "attn_d": 15360,
+   "kv_heads": 1,
+   "quality": {
+    "tb40": [
+     133,
+     198
+    ],
+    "aa": "kimi-k3-1-pro"
+   },
+   "explorer": {
+    "short": "Kimi-K3.1-Pro",
+    "weights": "MXFP4",
+    "tip": "Kimi-K3.1-Pro — 2.8T-A104B MoE: 69 KDA linear-attention layers and 24 gated DSA layers (MLA latents plus a top-2048 indexer), the routed experts in a 3,584-wide latent space (896 experts / 16 routed, kink n = 56). 19.4 KiB/token stored on B300 (24 latents of 576 B, 24 indexer keys, and the DSpark drafter's 5 dense latents) plus a 226 MiB bf16 KDA state per session, the study's heaviest. The checkpoint ships MXFP4 experts and BF16 everything else, so every step reads 111.5 GB of always-active weights (61 GB of it KDA projections) on top of 25.8 GB of experts per token. 1,566.6 GB resident with the drafter: no 8×H200 node holds it; 8×B300 at TP8, the vLLM recipe's single-node layout. No NVFP4 checkpoint. Terminal-Bench 67.2% on 4.0 (AA); AA has no 2.1 run. 1M native context. License: Kimi K3.1 Pro (MIT terms plus a separate agreement for Model-as-a-Service operators above $20M a year).",
+    "kv_tip": "Kimi-K3.1-Pro's FP8 cache row depends on the GPU, as GLM-5.3's: on B300 vLLM serves its DSA layers through FlashInfer as plain fp8_e4m3, 576 B per latent; off Blackwell it picks fp8_ds_mla, 656 B. The indexer keys stay fp8 (132 B) in every arm. FP16 is BF16 KV, which vLLM accepts when asked for (auto becomes fp8 on Blackwell) but the recipe does not document: double the latent rows and doubled top-k reads.",
+    "speculative_config": "{\"model\":\"Inferact/Kimi-K3.1-Pro-DSpark-preview\",\"num_speculative_tokens\":5,\"method\":\"dspark\",\"draft_sample_method\":\"probabilistic\"}",
+    "spec_with_dcp": true,
+    "kv_cache_dtype": {
+     "fp8_hopper": "fp8_ds_mla",
+     "fp16": "bfloat16"
+    },
+    "recipe": [
+     {
+      "at": 1,
+      "flags": [
+       "--trust-remote-code"
+      ]
+     },
+     {
+      "note": "Kimi-K3.1-Pro ships in the vllm/vllm-openai:kimi-k31 image only (no vLLM wheel includes it yet, vllm#65685, 2026-11-05); the recipe adds --load-format fastsafetensors on Blackwell to load the 1.56 TB faster"
+     }
+    ]
+   }
   }
  },
  "defaults": {

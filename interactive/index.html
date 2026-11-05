@@ -592,7 +592,7 @@ details.more .more-body{padding:0 0 16px}
           <label class="flabel"><span class="tip" id="acc-tip" data-tip="">Draft acceptance</span> <span class="val"><span id="v-acc">0.971</span> · <span id="v-tps">3.83</span> tok/step</span></label>
           <input type="range" id="s-acc" min="0" max="1" step="0.001" value="0.971">
           <div class="latrow">
-            <label><span class="tip" data-tip="Draft tokens verified per sequence per step (vLLM num_speculative_tokens; 0 is off). Each one adds a draft pass, a verify position per sequence and, on a MoE, more experts read. Defaults to the model's recipe. Mirrors [calibration] spec_tokens.">Draft tokens</span>
+            <label><span class="tip" data-tip="Draft tokens verified per sequence per step (vLLM num_speculative_tokens; 0 is off). Each one adds a draft pass (a block drafter such as Kimi-K3.1-Pro's runs one pass for all of them), a verify position per sequence and, on a MoE, more experts read. Defaults to the model's recipe. Mirrors [calibration] spec_tokens.">Draft tokens</span>
               <input type="number" id="i-dspec" min="0" max="16" step="1" value="3"></label>
           </div>
         </div>
@@ -750,7 +750,7 @@ details.more .more-body{padding:0 0 16px}
     <div class="panel card">
       <p class="ct">Price per seat against capability</p>
       <div class="field" style="margin:6px 0 8px">
-        <label class="flabel"><span class="tip" id="bench-axis-label" data-tip="Which Terminal-Bench version is on the x-axis. Both are Artificial Analysis pass@1: 2.1 is 89 tasks × 3 in Terminus 2, with a run for every model but Mistral-Large-4; 4.0 is 66 tasks × 3 in mini-SWE-agent v2.4.6, with a run for every model. DeepSeek-V4.1-Flash has no AA run on 2.1 and uses its vendor card&#x27;s 90.6 there. Only this chart changes.">chart axis</span></label>
+        <label class="flabel"><span class="tip" id="bench-axis-label" data-tip="Which Terminal-Bench version is on the x-axis. Both are Artificial Analysis pass@1: 2.1 is 89 tasks × 3 in Terminus 2, with a run for every model but Mistral-Large-4 and Kimi-K3.1-Pro; 4.0 is 66 tasks × 3 in mini-SWE-agent v2.4.6, with a run for every model. DeepSeek-V4.1-Flash has no AA run on 2.1 and uses its vendor card&#x27;s 90.6 there. Only this chart changes.">chart axis</span></label>
         <div class="seg" id="seg-bench" role="group" aria-labelledby="bench-axis-label">
           <button data-v="tb21" aria-pressed="false">TB 2.1</button>
           <button data-v="tb40" aria-pressed="true">TB 4.0</button>

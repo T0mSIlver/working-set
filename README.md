@@ -10,7 +10,7 @@ for agentic coding workloads.
 live sliders for the workload, model (Qwen3.8-27B / 35B-A3B /
 Mistral-Medium-3.5 / GLM-5.3 / DeepSeek-V4-Flash /
 DeepSeek-V4-Flash-Vision-Exp / DeepSeek-V4.1-Flash / Qwen3.8-Flash-Next /
-GLM-5.3-Flash / Mistral-Large-4), GPU (H200 / B300), weight & KV dtypes, and DP × TP
+GLM-5.3-Flash / Mistral-Large-4 / Kimi-K3.1-Pro), GPU (H200 / B300), weight & KV dtypes, and DP × TP
 topology. It answers as a decision tool: a binding-constraint verdict, a
 deploy recipe (vLLM flags), the **bill** (€/GPU-hour and €/kWh sliders:
 hardware plus a duty-cycle power model), a **sensitivity panel** showing which assumption
