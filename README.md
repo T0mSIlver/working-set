@@ -106,20 +106,54 @@ uv run ws report run.json                 # re-print it
    waits, a 60 s ramp and a 300 s measured window each, until one step
    fails. Then the bracket between the last pass and the first fail is
    halved until it is within 10%.
-3. **Verdict.** A turn is what the agent did between two messages from the
-   person. Its slowdown is the time its requests took, send to last token,
-   over what the fitted speed gives for the same requests alone. A step
-   passes when the p90 turn is at most `--max-slowdown` (1.5) times as long
-   as alone and at most 5% of requests failed. A prefix the server evicted
-   under load is priced alone as the cache hit it was meant to be, so the
-   eviction shows as slowdown.
+3. **Verdict.** A step of N sessions passes when all of these hold over its
+   window. Each threshold is a flag.
+   - Mid-session evictions are at most 1% of warm requests
+     (`--max-eviction-share`). A request is warm when its session's previous
+     request exists, no compaction lies between, and it adds at most 8192
+     tokens (`--warm-new-tokens`). The replay knows what it sent, so the
+     tokens a request shares with its session's previous prompt (rounded down
+     to a `--kv-block-tokens` block, 16) are what the server should have
+     cached. It is an eviction when `usage.prompt_tokens_details.cached_tokens`
+     is more than a block short. vLLM reports that with
+     `--enable-prompt-tokens-details`; a server that does not leaves the check
+     "unknown", with a warning, and it does not gate.
+   - The p90 time to first token of warm requests is at most 3 s
+     (`--max-warm-ttft-s`).
+   - The p10 decode speed per request, (output tokens - 1) / (last token
+     time - first token time) over requests of 32 output tokens or more, is
+     at least 50 tok/s (`--min-decode-tok-s`).
+   - At most 1% of requests failed or were left unfinished
+     (`--max-failed-share`).
 
-The answer reads `serves 15 sessions at p90 turn <= 1.5x alone; fails at
-16`, with the turn times at each step and, with `--metrics-url`, what the
-server showed (queue, preemptions, KV use, running requests, prefix hits).
+   The turn slowdown (time its requests took over what the fitted speed gives
+   alone) is reported, and gates only under an explicit `--max-slowdown`. A
+   cold request (a session's first, or after a compaction) reports its time
+   to first token less the idle-speed estimate, which is queueing; it is not
+   gated.
+
+The answer reads `serves 15 sessions within <the rule>; fails at 16`, naming
+the checks the failing step missed, with the numbers at each step and, with
+`--metrics-url`, what the server showed (queue, preemptions, KV use, running
+requests, prefix hits).
 `--config workingset.toml` prints the model's prediction for the trace's
 averages next to it, and never feeds the verdict. Two deployments replayed
 with the same trace and `--seed` compare directly.
+
+Other flags shape the load:
+
+- `--base-url` repeated benches a data-parallel deployment (give one
+  `--metrics-url` per base URL, in the same order). `--routing sticky`, the
+  default, pins a session tree to one URL by a stable hash of its seat id, as
+  a session-affine router does; `--routing round-robin` sends each request to
+  the next URL. The report counts requests and shows server metrics per URL.
+- `--output-scale F` multiplies every recorded reply length and the context
+  those replies add to the session's later prompts, to replay a model that
+  writes more or less per task.
+- `--chat-rate R` adds background chat requests (R per second, Poisson, each
+  with its own prompt; mean lengths `--chat-prompt-tokens` and
+  `--chat-output-tokens`, lognormal with `--chat-sigma`). They are reported
+  apart (count, p90 time to first token, p10 decode speed) and never judged.
 
 The synthetic sessions of `ws test` send a request every `think_time_s` on
 average, spread evenly. A real coding agent works in bursts instead: a
