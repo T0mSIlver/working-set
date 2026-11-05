@@ -206,12 +206,13 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 #
 #   t_step = B / (eta x tp x hbm_bw)                      streamed bytes
 #          + n (1 + k) x c_tok                             verify GEMMs
-#          + (tau_0 + [tp > 1] tau_ar) x (L + k L_d)       per-layer fixed cost
+#          + (tau_0 + [tp > 1] tau_ar) x (L + p L_d)       per-layer fixed cost
 #          + tau_rec x L_rec x (1 + k)                     serial recurrent updates
 #
 #   B = w_decode_shared + routed-expert union over P = n (1 + k) positions
-#     + k x draft-pass bytes (draft layers, the lm_head they re-read, their
-#       routed experts over n positions)
+#     + p x draft-pass bytes (draft layers, the lm_head they re-read, their
+#       routed experts over n positions); p = Model.passes(k), the draft
+#       passes per step: k, or 1 for a block drafter that writes all k at once
 #     + KV reads + recurrent/window state traffic (both independent of k: the
 #       1 + k positions of a sequence share one KV read and one state pass)
 #   c_tok = 2 x params_prefill / (tp x peak_flops_fp8 x MFU)
@@ -268,6 +269,11 @@ class Model:
     layers: int = 0
     rec_layers: int = 0
     draft_layers: int = 0
+    # Draft passes per decode step. None: one per draft token (an MTP head or
+    # an autoregressive drafter runs k times). A block drafter writes all k
+    # draft tokens in one forward pass and sets 1 (Kimi-K3.1-Pro's DSpark
+    # draft: "7 tokens per forward pass").
+    draft_passes: int | None = None
     # Bytes ONE draft pass streams beyond w_decode_shared: the draft layers'
     # always-active weights plus the lm_head they re-read for the draft
     # logits (w_draft), and their routed experts per position
@@ -413,6 +419,12 @@ class Model:
         """Target-model weight bytes one decode step reads when `positions`
         tokens route through it (n sequences x (1 + k) verify positions)."""
         return self.w_decode_shared + self._union(positions, self.w_route_pertok, union)
+
+    def passes(self, k: int) -> int:
+        """Draft passes one step runs at draft depth k."""
+        if k <= 0:
+            return 0
+        return k if self.draft_passes is None else min(self.draft_passes, k)
 
     def draft_pass_bytes(self, n: float, union: str = "coverage") -> float:
         """Bytes one draft pass streams for n sequences: the draft layers, the
@@ -2014,7 +2026,7 @@ def _fixed_seconds(model: Model, tp: int, k: int, taus: tuple) -> float:
     """Per-layer fixed cost plus serial recurrent updates of one step."""
     tau_0, tau_ar, tau_rec = taus
     tau_l = tau_0 + (tau_ar if tp > 1 else 0.0)
-    return (tau_l * (model.layers + k * model.draft_layers)
+    return (tau_l * (model.layers + model.passes(k) * model.draft_layers)
             + tau_rec * model.rec_layers * (1 + k))
 
 
@@ -2028,7 +2040,7 @@ def decode_priors() -> tuple:
     if _PRIORS is None:
         m = MODELS["27B"]
         k = _ANCHOR_SPEC_TOKENS
-        draft_s = k * m.draft_pass_bytes(0) / (4 * GPUS["H200"].hbm_bw * DECODE_ETA)
+        draft_s = m.passes(k) * m.draft_pass_bytes(0) / (4 * GPUS["H200"].hbm_bw * DECODE_ETA)
         left = _ANCHOR_FIXED_S - draft_s - _fixed_seconds(m, 4, k, (TAU_0, TAU_AR, 0.0))
         if left <= 0:
             raise ValueError("anchor: draft bytes and the tau priors exceed the "
@@ -2046,7 +2058,7 @@ def decode_step_seconds(model: Model, topo: Topology, n: int, kv_bytes,
     k = model.spec_tokens if k is None else k
     positions = n * (1 + k)
     step_bytes = (model.w_decode(positions, dc.union)
-                  + k * model.draft_pass_bytes(n, dc.union) + kv_bytes)
+                  + model.passes(k) * model.draft_pass_bytes(n, dc.union) + kv_bytes)
     t = step_bytes / (dc.eta * topo.tp * topo.gpu.hbm_bw)
     if dc.compute:
         t = t + positions * decode_token_seconds(model, topo, dc.mfu)
@@ -3579,7 +3591,7 @@ def _selfcheck():
         return with_gpu(m_, gk)
     for mdl in (MODELS["MM35"], _arm("GLM52", "H200"), MODELS["DSV4F"], MODELS["DSV4FV"],
                 MODELS["DSV41F"], MODELS["Q38FN"], _arm("GLM53F", "H200"),
-                MODELS["ML4"]):
+                MODELS["ML4"], _arm("K31P", "H200")):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
     # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
@@ -3606,6 +3618,10 @@ def _selfcheck():
     assert min_tp_for(MODELS["ML4"], "H200") == 9
     assert min_tp_for(MODELS["ML4"], "B300") == 5
     assert min_tp_for(with_weight_dtype(MODELS["ML4"], "nvfp4"), "B300") == 3
+    # Kimi-K3.1-Pro: 1,566.6 GB with its drafter needs 13 usable H200 and
+    # 7 B300, so TP8 on one 8xB300 node is its only single-node fit
+    assert min_tp_for(_arm("K31P", "H200"), "H200") == 13
+    assert min_tp_for(MODELS["K31P"], "B300") == 7
     assert kv_pool_tokens(MODELS["MM35"], topology_grid(4, 2)) > 0    # DP4xTP2
     assert kv_pool_tokens(MODELS["GLM52"], topology_grid(2, 4, "B300")) > 0
     # min_tp is exactly the boundary: one GPU less holds nothing
@@ -3616,7 +3632,8 @@ def _selfcheck():
                    ("DSV41F", "H200"), ("DSV41F", "B300"),
                    ("Q38FN", "H200"), ("Q38FN", "B300"),
                    ("GLM53F", "H200"), ("GLM53F", "B300"),
-                   ("ML4", "H200"), ("ML4", "B300")):
+                   ("ML4", "H200"), ("ML4", "B300"),
+                   ("K31P", "H200"), ("K31P", "B300")):
         need = min_tp_for(_arm(mk, gk), gk)
         assert kv_pool_tokens(_arm(mk, gk), topology_grid(1, need, gk)) > 0
         if need > 1:
@@ -3637,7 +3654,9 @@ def _selfcheck():
                          ("GLM53F", "H200", [(2, 4), (1, 8)]),
                          ("GLM53F", "B300", [(4, 2), (2, 4), (1, 8)]),
                          ("ML4", "H200", []),
-                         ("ML4", "B300", [(1, 8)])):
+                         ("ML4", "B300", [(1, 8)]),
+                         ("K31P", "H200", []),
+                         ("K31P", "B300", [(1, 8)])):
         got = [(t.dp, t.tp) for t in node_splits(_arm(mk, gk), gk, node=8)]
         assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
         for t in node_splits(_arm(mk, gk), gk, node=8):
@@ -3737,10 +3756,12 @@ def _selfcheck():
     assert glm_4.w_route_total == 256 * 21_233_688 * 75
     assert abs(glm_4.w_route_total / glm_4.w_route_pertok - 32) < 1e-9
     assert glm_4.w_decode_shared == glm.w_decode_shared + 15_891_309_576
-    # every model but DSv4-Flash-Vision has an official NVFP4 checkpoint
-    # (research/nvfp4_2026-10.md); it has community repacks only (2026-10-02)
+    # every model but DSv4-Flash-Vision and Kimi-K3.1-Pro has an official
+    # NVFP4 checkpoint (research/nvfp4_2026-10.md): DSv4-Flash-Vision has
+    # community repacks only (2026-10-02), Kimi-K3.1-Pro none (2026-11-05;
+    # its experts already ship MXFP4)
     for mk in MODELS:
-        assert (MODELS[mk].nvfp4_w is None) == (mk == "DSV4FV"), mk
+        assert (MODELS[mk].nvfp4_w is None) == (mk in ("DSV4FV", "K31P")), mk
 
     # published-config KV identities for the new models
     assert mm.kv_bpt == 88 * 8 * 128 * 2 * 1                    # 176 KiB/token FP8
@@ -3758,7 +3779,7 @@ def _selfcheck():
             bad_call(); raise AssertionError("expected ValueError")
         except ValueError:
             pass
-    assert all(MODELS[k].kv_hopper_fp8 is None for k in MODELS if k != "GLM52")
+    assert all(MODELS[k].kv_hopper_fp8 is None for k in MODELS if k not in ("GLM52", "K31P"))
     assert mm.spec_tokens == 0 and mm.tokens_per_step == 1.0, "no MTP module on Mistral Medium 3.5"
     assert mm.deltanet_state == 0.0 and glm.deltanet_state == 0.0
 
@@ -3897,13 +3918,35 @@ def _selfcheck():
     # active GEMM params: card "49B" (52B with embeddings and lm_head)
     assert 49e9 < ml4.params_prefill < 50e9
 
+    # Kimi-K3.1-Pro identities (research/model_kimi_k31pro.md): 69 KDA + 24
+    # DSA layers; the 5-layer dense DSpark drafter's latents share the row
+    k31 = MODELS["K31P"]
+    assert k31.kv_bpt == 24 * 576 + 24 * 132 + 5 * 576          # B300: fp8_e4m3 rows
+    assert k31.kv_hopper_fp8 == (24 * 656 + 24 * 132 + 5 * 656, 24 * 2048 * 656)
+    assert k31.kv_decode_bpt == 24 * 132 + 5 * 576              # scans + the drafter's dense read
+    assert k31.kv_decode_const == 24 * 2048 * 576
+    assert k31.deltanet_state == 69 * 96 * 128 * 128 * 2 + 69 * 3 * 12_288 * 4 * 2
+    assert k31.rec_layers == 69 and k31.layers == 93 and k31.kv_heads == 1
+    # an expert is 3 x (3072 x 3584) MXFP4: values packed two per byte plus one
+    # UE8M0 scale per 32 (shard headers, 2026-11-05)
+    _ek = 3 * 3072 * 3584 // 2 + 3 * 3072 * 3584 // 32
+    assert k31.w_route_pertok == 16 * _ek * 92 and k31.w_route_total == 896 * _ek * 92
+    assert k31.w_route_total / k31.w_route_pertok == 56         # kink at n = 56
+    # closing identity: shared read + experts + embeddings + vision tower
+    # = the index's total_size, and the drafter's checkpoint on top
+    assert (k31.w_decode_shared + k31.w_route_total + 2_348_810_240 + 894_717_952
+            == 1_561_217_377_280 == k31.w_resident - 5_373_504_514)
+    # a block drafter: one pass per step whatever the depth
+    assert k31.passes(5) == 1 and k31.passes(0) == 0 and ml4.passes(3) == 3
+    assert 103e9 < k31.params_prefill < 104e9                    # card "104B activated"
+
     # KV sharding under TP (research/kv_tp_sharding.md): every default
     # ("dcp") topology at a TP the KV heads divide stores ONE copy, so every
     # published number is untouched; the "replicate" arm pays tp/kv_heads
     # copies past the heads, and the single-latent models pay it at every tp > 1
     for mk, heads in (("27B", 4), ("35BA3B", 2), ("MM35", 8), ("GLM52", 1),
                       ("DSV4F", 1), ("DSV4FV", 1), ("DSV41F", 1), ("Q38FN", 2),
-                      ("GLM53F", 1), ("ML4", 1)):
+                      ("GLM53F", 1), ("ML4", 1), ("K31P", 1)):
         assert MODELS[mk].kv_heads == heads, mk
         for tp_ in (1, 2, 4, 8):
             assert kv_replication(MODELS[mk], topology_grid(1, tp_, "B300")) == (1.0, 1.0)
@@ -4479,7 +4522,8 @@ def _selfcheck():
     # measured 2.7 ms intercept.
     tp4 = topology("tp", 4, "H200")
     k_a = _ANCHOR_SPEC_TOKENS
-    intercept = (k_a * m27.draft_pass_bytes(0) / (DECODE_ETA * tp4.tp * tp4.gpu.hbm_bw)
+    intercept = (m27.passes(k_a) * m27.draft_pass_bytes(0)
+                 / (DECODE_ETA * tp4.tp * tp4.gpu.hbm_bw)
                  + _fixed_seconds(m27, 4, k_a, decode_priors()))
     assert abs(intercept - _ANCHOR_FIXED_S) < 1e-12, "the tau priors must close on the anchor"
     assert decode_priors()[2] > 0, "the anchor must leave a positive recurrent cost"

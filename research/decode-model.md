@@ -14,11 +14,11 @@ depth k costs
 ```
 t_step = B / (eta · tp · hbm_bw)                  streamed bytes
        + n (1 + k) · c_tok                         verify GEMMs
-       + (tau_0 + [tp > 1] tau_ar) (L + k L_d)     per-layer fixed cost
+       + (tau_0 + [tp > 1] tau_ar) (L + p L_d)     per-layer fixed cost
        + tau_rec · L_rec · (1 + k)                 serial recurrent updates
 
 B = w_decode_shared + expert union over P = n (1 + k) positions
-  + k · (draft layers + the lm_head they re-read + their experts over n)
+  + p · (draft layers + the lm_head they re-read + their experts over n)
   + KV reads + state traffic                        (independent of k)
 c_tok = 2 · params_prefill / (tp · peak_flops_fp8 · MFU)
 ```
@@ -133,6 +133,10 @@ from the raw eta and the 27B's measured k = 3 depth.
   read of Qwen3.6-27B-FP8's MTP layer settles them.
 - Acceptance for every row flagged unmeasured: `ws decode-sweep
   --prompt-file` on coding text, `/metrics` per-position counts.
-- Whether one DSpark draft pass runs all three stages; the equation assumes
-  it does.
+- Draft passes per step: `p = k` unless the catalogue sets `draft_passes`.
+  Kimi-K3.1-Pro's DSpark drafter writes all its drafts in one forward pass
+  (its README: "7 tokens per forward pass"), so it sets 1. Mistral-Large-4's
+  and the DeepSeek Flash models' DSpark drafters still price one pass per
+  draft token, each running every stage; whether they also draft in one pass
+  is unchecked.
 - The step jump past n ≈ 64 (#74) is still unpriced.

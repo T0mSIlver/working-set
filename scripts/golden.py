@@ -818,6 +818,11 @@ SPREAD_PROBE = [
     # single-node FP8 layout, the only split of one node it fits
     # (research/model_mistral_large4.md).
     dict(model='ML4', gpu='B300', wdt='fp8', kv='fp8', ngpu=8, tp=8),
+    # B300 KDA + DSA MoE with MXFP4 experts on TP8, the vLLM recipe's
+    # single-node layout and the only split of one node it fits; its
+    # DSpark drafter writes all five drafts in one pass
+    # (research/model_kimi_k31pro.md).
+    dict(model='K31P', gpu='B300', wdt='fp8', kv='fp8', ngpu=8, tp=8),
 ]
 # how many knobs of the sweep each anchor gets (the first anchor gets all of
 # them; the others cover the knobs most likely to interact with topology)
