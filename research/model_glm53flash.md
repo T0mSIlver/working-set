@@ -192,8 +192,10 @@ official recipe.
   1.7× **transplanted** fit (module present, acceptance unmeasured).
 - Positioning (card): "320B total parameters and just 18B active …
   outperforms GLM-5.2 … at one-tenth the price"; the KDA+NoPE-MLA hybrid
-  is GLM-5.2's DSA married to a Qwen-style linear-attention backbone, with
-  mHC hyper-connections (arXiv 2602.15763). MIT license.
+  is GLM-5.2's DSA married to a Kimi Linear-style backbone (KDA is
+  Moonshot's, arXiv 2510.26692), with mHC hyper-connections (DeepSeek,
+  arXiv 2512.24880; the card's arXiv 2602.15763 is the GLM-5 report).
+  MIT license.
 
 ## 6. Remaining assumptions / re-verification ledger
 
