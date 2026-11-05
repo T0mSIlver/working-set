@@ -8,7 +8,7 @@
   "max_rel": "the ceiling this entry buys; a known 4% difference must not license a 40% one",
   "hypothesis": "one line on the cause"
  },
- "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 814 vectors / 46,398 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 176 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself. 2026-09-10 (KV layout): +16 vectors on the kvshard axis (three anchors' sweeps and three replicate+offload combinations); no band or entry moved. 2026-11-02 (issue #117, the cache as a hit rate): 955 vectors / 67,805 comparisons, 298 allowlisted, 84 compared as lower bounds on censored explorer fills. Every at-load figure is priced at the miss share at the state's users and the four latency ceilings are capacity-aware at W, so 23 entries gated on _miss_share_swing (just past the knee) and _warm_p5 (a handful of sessions past it) are new, and five entries that match nothing any more are gone (the ceilings' widened bands and the duty moving with the share cover them). 2026-11-04 (Mistral-Large-4): 979 vectors / 69,509 comparisons; the 28th SPREAD_PROBE entry (ML4 8xB300 TP8 FP8) narrowed the max_users_decode band from 3.5% to 3.4% and ttft_hit_ps's from 3.4% to 3.3%, so the integer-bisection gate widens from a ceiling of 25 to 29 and one past-knee ttft_hit_ps entry is new; no vector of another model moved. 2026-11-04 (issue #122, vLLM's real MLA rows): 1,001 vectors / 71,071 comparisons. GLM-5.3's H200 FP8 vectors (27) and every Mistral-Large-4 vector (16) moved, and GLM-5.3's FP16 arm added 22; no other vector changed. The new FP16 states land in two known regimes at once (past the knee at duty 0.82), in GLM-5.3's dense-priced heavy tail, and at the steady cap's edge: 14 entries are new and one is widened, each gated on its cause.",
+ "_measured_at": "2026-09-10, tests/golden/vectors.json schema 1, 814 vectors / 46,398 comparisons (the DSv4.1-Flash swap: 5xH200 / 2xB300 minimum fits, no NVFP4 arm; step 3 of build_states now seeds each deployment's knob draw by its own key, and the spread probe is pinned into the state set), against src/workingset/model.py with steady_decode_point capped at the GPU-resident population on both sides. 176 comparisons are allowlisted; 8 censored explorer warm fills (DSv4.1-Flash at 890 B/token, >60,000 sessions per fill) are compared as lower bounds by the test itself. 2026-09-10 (KV layout): +16 vectors on the kvshard axis (three anchors' sweeps and three replicate+offload combinations); no band or entry moved. 2026-11-02 (issue #117, the cache as a hit rate): 955 vectors / 67,805 comparisons, 298 allowlisted, 84 compared as lower bounds on censored explorer fills. Every at-load figure is priced at the miss share at the state's users and the four latency ceilings are capacity-aware at W, so 23 entries gated on _miss_share_swing (just past the knee) and _warm_p5 (a handful of sessions past it) are new, and five entries that match nothing any more are gone (the ceilings' widened bands and the duty moving with the share cover them). 2026-11-04 (Mistral-Large-4): 979 vectors / 69,509 comparisons; the 28th SPREAD_PROBE entry (ML4 8xB300 TP8 FP8) narrowed the max_users_decode band from 3.5% to 3.4% and ttft_hit_ps's from 3.4% to 3.3%, so the integer-bisection gate widens from a ceiling of 25 to 29 and one past-knee ttft_hit_ps entry is new; no vector of another model moved. 2026-11-04 (issue #122, vLLM's real MLA rows): 1,001 vectors / 71,071 comparisons. GLM-5.3's H200 FP8 vectors (27) and every Mistral-Large-4 vector (16) moved, and GLM-5.3's FP16 arm added 22; no other vector changed. The new FP16 states land in two known regimes at once (past the knee at duty 0.82), in GLM-5.3's dense-priced heavy tail, and at the steady cap's edge: 14 entries are new and one is widened, each gated on its cause. 2026-11-04 (WS-9/WS-10, one decode step equation and tokens per step from acceptance and draft depth): 1,006 vectors; every decode figure moved. The JS mirror agrees on every new quantity (decode_step_n8_ms exact), and eight entries matched nothing any more and are gone: the duty-band ttft_*, spike_tolerance* and burst_drain_seconds_b32 entries, four GLM-5.3 dense-priced-tail entries, and the steady-cap-edge steady_saturated entry. 2026-11-05 (Kimi-K3.1-Pro): 1017 vectors / 73,224 comparisons; the 29th SPREAD_PROBE entry (K31P 8xB300 TP8) narrowed ttft_hit_ps's band from 3.3% to 3.2%, ttft_hit_fcfs's from 6.1% to 5.9% and power_d_d's from 5.1% to 4.6%, so one existing state of each is new here; no vector of another model moved.",
  "entries": [
   {
    "quantity": "steady_n",
@@ -20,6 +20,17 @@
    "observed_rel": 0.167,
    "max_rel": 0.2,
    "hypothesis": "SATURATED ON BOTH SIDES, and both say so: past the cap each side reports n = floor(its own GPU-resident warm p95), and the two p95 draws come from different samplers (numpy vs mulberry32) at different iteration counts. The residual is that draw difference, worst on small populations (9 against 10 is 11%). 132 states at ratio >= 1, the flag identical on every one - which is why steady_saturated needs no entry. A population of 5-6 sequences puts one apart at 17% (GLM-5.3 FP16 KV, 3xB300, 2026-11-04)."
+  },
+  {
+   "quantity": "steady_per_user_tok_s",
+   "where": {
+    "_steady_cap_ratio": {
+     "gte": 1.0
+    }
+   },
+   "observed_rel": 0.101,
+   "max_rel": 0.15,
+   "hypothesis": "aggregate/n at each side's own floor(p95); same cap-draw residual as steady_n"
   },
   {
    "quantity": "steady_n",
@@ -74,23 +85,6 @@
    "observed_rel": 0.333,
    "max_rel": 0.4,
    "hypothesis": "the same integer-bisection noise, at the floors the slider reaches away from 40, where it is far larger: a low floor puts the decode ceiling in the single digits, and one step of three is a third of the capacity. Gated on the ceiling as well as the floor, since the ceiling is the cause and the floor only selects for it; 45 is the largest ceiling that exhibits it, and above that the quantity is inside its band everywhere. Replaces the pre-fix `decode_floor != 40` entry, which licensed 87.5% on any state at any ceiling: the floor is a power_draw parameter now, so the two sides price the same cap and only the ceiling's own noise is left. 14 states, worst 33%."
-  },
-  {
-   "quantity": "energy_eur_month",
-   "where": {
-    "decode_floor": {
-     "ne": 40
-    },
-    "_decode_ceiling": {
-     "lte": 45
-    },
-    "_duty": {
-     "lte": 0.85
-    }
-   },
-   "observed_rel": 0.104,
-   "max_rel": 0.15,
-   "hypothesis": "the electricity line is power_kw x 720 x eur_kwh, so it inherits the small-ceiling noise above one-for-one, diluted by the flat host_w adder. energy_total_month does not fail: the hardware line dominates the bill. 2 states, worst 10.4%."
   },
   {
    "quantity": "power_d_d",
@@ -151,42 +145,6 @@
    "observed_rel": "Infinity",
    "max_rel": "Infinity",
    "hypothesis": "ILL-CONDITIONED: the Pollaczek-Khinchine wait carries 1/(1 - rho), which is ~2,700 at the rho = 0.9996 the worst state sits at, so a 0.04% difference in E[S] between the two samplers decides whether the queue has a steady state at all - one side returns 939 s and the other Infinity. The closed forms match term for term."
-  },
-  {
-   "quantity": "ttft_*",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    }
-   },
-   "observed_rel": 0.123,
-   "max_rel": 0.2,
-   "hypothesis": "the same 1/(1 - rho) amplification, away from the cliff and therefore BOUNDED: at duty 0.70-0.85 the factor is 3.3-6.7x, so the 0.7% the two samplers disagree on in the duty reads as 4-12% in every queue figure. Three states on the 2026-09-10 set, worst 12.3% at duty 0.822; above the 0.85 gate the entries above take over."
-  },
-  {
-   "quantity": "spike_tolerance*",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    }
-   },
-   "observed_rel": 0.116,
-   "max_rel": 0.2,
-   "hypothesis": "B* is linear in (1 - rho): the duty's 0.7% sampling difference is 4-5% of (1 - rho) at duty 0.82-0.85, on top of E[S|miss]'s own band"
-  },
-  {
-   "quantity": "burst_drain_seconds_b32",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    }
-   },
-   "observed_rel": 0.116,
-   "max_rel": 0.2,
-   "hypothesis": "B x E[S|miss] / (1 - rho); the same bounded amplification"
   },
   {
    "quantity": "queue_wait_seconds",
@@ -437,17 +395,6 @@
    "observed_rel": 0.491,
    "max_rel": 0.7,
    "hypothesis": "just past the knee W / (1 - f0) the at-load miss share is 1 - W/U, a difference of two near numbers, and each side prices it on its own W (issue #117): a 2% difference in W moves the share by 2% x (W/U)/f, 30% at a swing of 1.5. d_p is the duty clamped at 1, and d_d is what 1 - d_p leaves, so a duty near 0.8 moves d_d by four times its own error. worst 27B/1xH200 at 64 users on W = 60"
-  },
-  {
-   "quantity": "energy_eur_month",
-   "where": {
-    "_miss_share_swing": {
-     "gte": 0.5
-    }
-   },
-   "observed_rel": 0.043,
-   "max_rel": 0.08,
-   "hypothesis": "just past the knee W / (1 - f0) the at-load miss share is 1 - W/U, a difference of two near numbers, and each side prices it on its own W (issue #117): a 2% difference in W moves the share by 2% x (W/U)/f, 30% at a swing of 1.5. the electricity line follows the GPU watts, damped by the idle and host terms. 2 states"
   },
   {
    "quantity": "slowed_share",
@@ -822,52 +769,356 @@
    "hypothesis": "the miss rate that meets the 10 s budget solves a linear equation in the P-K wait, which carries 1/(1 - rho) = 43 at duty 0.98, so the samplers' 0.1% duty difference reaches it at 10%. GLM-5.3 NVFP4 FP16-KV, DP3xTP2 on 6xB300, 2026-11-04."
   },
   {
-   "quantity": "moments_miss_sq",
+   "quantity": "decode_ceiling",
    "where": {
-    "model": "GLM52"
+    "model": "GLM52",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp8",
+    "ngpu": 2,
+    "tp": 2,
+    "_steady_cap_ratio": {
+     "gte": 1.019,
+     "lt": 1.079
+    }
    },
-   "observed_rel": 0.128,
-   "max_rel": 0.2,
-   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
-  },
-  {
-   "quantity": "queue_wait_seconds",
-   "where": {
-    "model": "GLM52"
-   },
-   "observed_rel": 0.126,
-   "max_rel": 0.2,
-   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
-  },
-  {
-   "quantity": "cold_wait_seconds",
-   "where": {
-    "model": "GLM52"
-   },
-   "observed_rel": 0.124,
-   "max_rel": 0.2,
-   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
-  },
-  {
-   "quantity": "ttft_hit_fcfs",
-   "where": {
-    "model": "GLM52"
-   },
-   "observed_rel": 0.087,
-   "max_rel": 0.2,
-   "hypothesis": "GLM-5.3's miss service is the most tail-driven in the study: its attention is priced as dense MLA over 78 layers at 16,384 wide, so S grows as L^2 and E[S^2] as L^4. The statistic does not depend on the KV dtype (identical on the FP8 and FP16 arms) and at the explorer's 20,000 draws the same state swings 0.47-0.53 across three seeds against Python's 0.448 at 200,000 (2026-11-04). Two FP16-KV states with short median contexts (12k), first priced when the arm became servable."
+   "observed_rel": 0.1344,
+   "max_rel": 0.162,
+   "hypothesis": "same state as the steady_saturated edge: the capped ceiling reads the slot count off a batch at the cap; JS draws reseeded (WS-10)"
   },
   {
    "quantity": "steady_saturated",
    "where": {
+    "model": "GLM52",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp8",
+    "ngpu": 2,
+    "tp": 2,
     "_steady_cap_ratio": {
-     "gte": 0.98,
-     "lt": 1.02
+     "gte": 1.019,
+     "lt": 1.079
     }
    },
    "observed_rel": 1.0,
    "max_rel": 1.0,
-   "hypothesis": "the flag says whether the steady batch reached the GPU-resident cap; at a ratio of 1.002 the two samplers' resident p95 land on either side of it. Mistral-Large-4 NVFP4 on 7xB300, whose cache shrank 11% with the 656-B row (2026-11-04)."
+   "hypothesis": "the steady batch sits at the GPU-resident cap's edge (steady_cap_ratio near 1): Python's integer bisection and the explorer's interpolated aggregate land on either side; JS draws reseeded when samplingSig took the decode knobs (WS-10)"
+  },
+  {
+   "quantity": "moments_miss_sq",
+   "where": {
+    "model": "GLM53F",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp8",
+    "ngpu": 7,
+    "tp": 7,
+    "users": 128,
+    "inval": 10.0,
+    "chunk": "8192",
+    "_duty": {
+     "gte": 0.1504,
+     "lt": 0.1598
+    }
+   },
+   "observed_rel": 0.0973,
+   "max_rel": 0.117,
+   "hypothesis": "second moment of the miss service time is tail-dominated; the JS context draw was reseeded when samplingSig took the decode knobs (WS-10) and lands just outside the band"
+  },
+  {
+   "quantity": "queue_wait_seconds",
+   "where": {
+    "model": "GLM53F",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp8",
+    "ngpu": 7,
+    "tp": 7,
+    "users": 128,
+    "inval": 10.0,
+    "chunk": "8192",
+    "_duty": {
+     "gte": 0.1504,
+     "lt": 0.1598
+    }
+   },
+   "observed_rel": 0.0897,
+   "max_rel": 0.108,
+   "hypothesis": "follows moments_miss_sq on the same state (the queue reads the second moment); JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "model": "GLM53F",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp8",
+    "ngpu": 7,
+    "tp": 7,
+    "users": 128,
+    "inval": 10.0,
+    "chunk": "8192",
+    "_duty": {
+     "gte": 0.1504,
+     "lt": 0.1598
+    }
+   },
+   "observed_rel": 0.0895,
+   "max_rel": 0.108,
+   "hypothesis": "follows moments_miss_sq or the queue's onset on the same state; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "cold_wait_seconds",
+   "where": {
+    "model": "GLM53F",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp8",
+    "ngpu": 8,
+    "tp": 2,
+    "_wait_margin": {
+     "gte": -0.01,
+     "lt": 0.01
+    }
+   },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "follows moments_miss_sq or the queue's onset on the same state; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "power_d_d",
+   "where": {
+    "model": "Q38FN",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 6,
+    "tp": 1,
+    "users": 16,
+    "inval": 35.0,
+    "chunk": "8192",
+    "_duty": {
+     "gte": 0.0279,
+     "lt": 0.0296
+    }
+   },
+   "observed_rel": 0.0658,
+   "max_rel": 0.079,
+   "hypothesis": "decode duty reads the decode p50 at the steady batch on a lightly loaded DP replica; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "steady_saturated",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp16",
+    "ngpu": 6,
+    "tp": 2,
+    "_steady_cap_ratio": {
+     "gte": 0.945,
+     "lt": 1.005
+    }
+   },
+   "observed_rel": 1.0,
+   "max_rel": 1.0,
+   "hypothesis": "the steady batch sits at the GPU-resident cap's edge (steady_cap_ratio near 1): Python's integer bisection and the explorer's interpolated aggregate land on either side; JS draws reseeded when samplingSig took the decode knobs (WS-10)"
+  },
+  {
+   "quantity": "moments_miss_sq",
+   "where": {
+    "model": "35BA3B",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 2,
+    "tp": 2,
+    "users": 32,
+    "inval": 35.0,
+    "chunk": "65536",
+    "_duty": {
+     "gte": 0.0209,
+     "lt": 0.0222
+    }
+   },
+   "observed_rel": 0.0869,
+   "max_rel": 0.105,
+   "hypothesis": "second moment of the miss service time is tail-dominated; the JS context draw was reseeded when samplingSig took the decode knobs (WS-10) and lands just outside the band"
+  },
+  {
+   "quantity": "queue_wait_seconds",
+   "where": {
+    "model": "35BA3B",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 2,
+    "tp": 2,
+    "users": 32,
+    "inval": 35.0,
+    "chunk": "65536",
+    "_duty": {
+     "gte": 0.0209,
+     "lt": 0.0222
+    }
+   },
+   "observed_rel": 0.0866,
+   "max_rel": 0.104,
+   "hypothesis": "follows moments_miss_sq on the same state (the queue reads the second moment); JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "max_users_cold_wait",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp16",
+    "ngpu": 4,
+    "tp": 2,
+    "users": 400,
+    "inval": 35.0,
+    "chunk": "2048",
+    "_duty": {
+     "gte": 2.0104,
+     "lt": 2.1347
+    }
+   },
+   "observed_rel": 0.1016,
+   "max_rel": 0.122,
+   "hypothesis": "past the knee at prefill duty > 1 on Mistral-Medium's small warm pool, the capacity-aware fixed point moves in whole sessions; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "power_per_gpu_w",
+   "where": {
+    "model": "Q38FN",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 3,
+    "tp": 3,
+    "users": 400,
+    "inval": 35.0,
+    "chunk": "4096",
+    "_duty": {
+     "gte": 0.6091,
+     "lt": 0.6468
+    }
+   },
+   "observed_rel": 0.0203,
+   "max_rel": 0.025,
+   "hypothesis": "follows the decode duty on the same state, just past a 2% band; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "max_users_saturation",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 4,
+    "tp": 1,
+    "users": 64,
+    "inval": 3.0,
+    "chunk": "65536",
+    "_duty": {
+     "gte": 5.3182,
+     "lt": 5.6472
+    }
+   },
+   "observed_rel": 0.1765,
+   "max_rel": 0.212,
+   "hypothesis": "Mistral-Medium on 1xB300 replicas holds 7 warm sessions: the fixed point moves in whole sessions at duty 5.5; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "max_users_slowed",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 4,
+    "tp": 1,
+    "users": 64,
+    "inval": 3.0,
+    "chunk": "65536",
+    "_duty": {
+     "gte": 5.3182,
+     "lt": 5.6472
+    }
+   },
+   "observed_rel": 0.213,
+   "max_rel": 0.256,
+   "hypothesis": "Mistral-Medium on 1xB300 replicas holds 7 warm sessions: the fixed point moves in whole sessions at duty 5.5; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "max_users_cold_wait",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "kv": "fp8",
+    "ngpu": 6,
+    "tp": 1,
+    "users": 400,
+    "inval": 35.0,
+    "chunk": "4096",
+    "_duty": {
+     "gte": 25.5259,
+     "lt": 27.1048
+    }
+   },
+   "observed_rel": 0.0684,
+   "max_rel": 0.083,
+   "hypothesis": "past the knee at prefill duty > 1 on Mistral-Medium's small warm pool, the capacity-aware fixed point moves in whole sessions; JS draws reseeded (WS-10)"
+  },
+  {
+   "quantity": "ttft_hit_ps",
+   "where": {
+    "model": "ML4",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 8,
+    "tp": 8,
+    "chunk": "32768",
+    "eta": 0.2,
+    "mfu": 0.35
+   },
+   "observed_rel": 0.0323,
+   "max_rel": 0.034,
+   "hypothesis": "Monte-Carlo noise at the band's edge: 3.23% on one inside-the-knee state whose vector is unchanged since 2026-11-04, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 3.3% to 3.2% (2026-11-05)."
+  },
+  {
+   "quantity": "ttft_hit_fcfs",
+   "where": {
+    "model": "GLM52",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 7,
+    "tp": 7,
+    "chunk": "2048",
+    "eta": 0.4
+   },
+   "observed_rel": 0.0594,
+   "max_rel": 0.062,
+   "hypothesis": "Monte-Carlo noise at the band's edge: 5.94% on one state whose vector is unchanged, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 6.1% to 5.9% (2026-11-05)."
+  },
+  {
+   "quantity": "power_d_d",
+   "where": {
+    "model": "Q38FN",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 4,
+    "tp": 2,
+    "chunk": "4096",
+    "eta": 0.3
+   },
+   "observed_rel": 0.0508,
+   "max_rel": 0.052,
+   "hypothesis": "Monte-Carlo noise at the band's edge: 5.08% on one state whose vector is unchanged, now past the band the Kimi-K3.1-Pro probe entry narrowed from 5.1% to 4.6% (2026-11-05)."
   }
  ]
 }

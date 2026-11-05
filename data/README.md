@@ -18,3 +18,5 @@ DATA_DIR=/path/to/csvs python scripts/real_mns.py
 
 `warm_capacity.py` is fully synthetic (it sweeps hypothetical distributions in
 its `HYPOTHESES` block) and needs no CSVs.
+
+Outside numbers (benchmarks, deployments, calculators) live in `external/`; see `external/README.md`.

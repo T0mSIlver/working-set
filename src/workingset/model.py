@@ -34,9 +34,22 @@ two in sync.
 from __future__ import annotations
 import math
 import numpy as np
+import tomllib
 from dataclasses import dataclass, field, fields, replace
+from importlib import resources
 
 KIB, MIB, GIB = 1024, 1024**2, 1024**3
+
+
+def load_catalog() -> dict:
+    """The model and GPU catalogue (data/catalog.toml), parsed."""
+    with resources.files("workingset").joinpath("data/catalog.toml").open("rb") as f:
+        return tomllib.load(f)
+
+
+CATALOG = load_catalog()
+# catalog keys that are not Model fields (tables only the explorer reads)
+CATALOG_EXTRA_KEYS = frozenset({"explorer", "quality"})
 
 # ============================================================================
 # HARDWARE
@@ -121,48 +134,17 @@ class GPU:
     # explorer slider's 0.10 step. A market snapshot, not a measurement and not
     # a cost of ownership. NVIDIA publishes no list price for either part.
     # Mirrors CONFIG.GPUS[].eur_gpu_h in the explorer, where a slider overrides
-    # it. Convention: a rental rate is all-in (power included), so for a rented
-    # GPU the electricity line double-counts; for owned hardware substitute an
-    # amortised figure and both lines apply.
+    # it. A rental rate is all-in: power, cooling and the host are in the rent,
+    # so a rented GPU carries no electricity line (energy_cost, pay="rent").
     eur_gpu_h: float = 0.0
+    # ---- PURCHASE price, EUR per GPU -- used ONLY by energy_cost(pay="own") ----
+    # A complete 8-GPU server's price over 8 (the host, CPUs, memory and NICs
+    # included), at the ECB rate of the day it was read. NVIDIA publishes none;
+    # research/gpu_costs in catalog.toml's comments has the sources.
+    eur_capex_gpu: float = 0.0
 
 
-GPUS = {
-    # peak_flops_fp8: 1,979 TFLOPS DENSE. NVIDIA's H200 datasheet leads with
-    # "3,958 TFLOPS FP8" — that figure is WITH 2:4 structured sparsity, which
-    # no dense LLM GEMM reaches. Halve it. research/prefill.md #1.
-    "H200": GPU("H200", 141e9, 4.8e12, supports_nvfp4=False,
-                peak_flops_fp8=1.979e15,
-                # power (research/power.md #1): spec plate 700 W SXM; idle a
-                # measured H100 proxy +10%; decode/prefill the measured Hopper
-                # fractions 0.55 / 0.90 of TDP; host the DGX H200 spec adder
-                tdp_w=700.0, idle_w=80.0, p_decode_w=385.0, p_prefill_w=630.0,
-                host_w=575.0, eur_gpu_h=3.80),
-    # Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores.
-    # vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
-    # quickstart, driver 590.48.01) shows 275,040 MiB = 288.4e9 B per GPU:
-    # the B300 delivers nominal decimal bytes with NO Hopper-style ~7%
-    # over-provision. reserve_extra: the measured H200 hidden margin that the
-    # transferred reserve must therefore add back (research/gpu_b300.md #3 —
-    # formerly a flagged sensitivity, now the measured central case).
-    # peak_flops_fp8: 4.5 PFLOPS dense. The DGX B300 datasheet quotes
-    # "72 PFLOPS FP8" for 8 GPUs WITH 2:4 sparsity -> 9 PFLOPS sparse/GPU ->
-    # 4.5 dense (corroborated by third-party spec tables listing HGX B300
-    # FP8 dense at 4,500 TFLOPS). NOTE the trap this replaces: Blackwell
-    # Ultra's 1.5x FP4 uplift (13.5 PFLOPS dense, research/gpu_b300.md) did
-    # NOT carry to FP8 — "FP8 = half of FP4", true on Hopper, over-credits
-    # the B300 by 1.5x. Never measured here. research/prefill.md #1.
-    "B300": GPU("B300", 288.4e9, 8.0e12, supports_nvfp4=True,
-                reserve_extra=9.75e9, peak_flops_fp8=4.5e15,
-                # power: ENTIRELY EXTRAPOLATED — no Blackwell Ultra power-state
-                # measurement exists. Rule (power.md #3): transfer Hopper's
-                # fractions of TDP (idle ~10.5%, decode 0.55, prefill 0.90)
-                # onto the 1,400 W plate; host_w is the mid of the DGX B300
-                # spec bracket (410-710 W/GPU). If the target is the 1,100 W
-                # air-cooled SXM6 AC part, scale the three GPU wattages ~0.79.
-                tdp_w=1400.0, idle_w=150.0, p_decode_w=770.0,
-                p_prefill_w=1260.0, host_w=500.0, eur_gpu_h=6.80),
-}
+GPUS = {k: GPU(**row) for k, row in CATALOG["gpus"].items()}
 
 VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
 HBM_BW         = GPUS["H200"].hbm_bw
@@ -200,122 +182,64 @@ MEASURED_POOL_TOKENS_27B_TP2_FP16 = 3_233_564
 # w_route_pertok  : routed-expert weight bytes activated by ONE decoding token
 # w_route_total   : total routed-expert weight bytes (the saturation ceiling as
 #                   the batch's union of experts approaches "all of them")
-# mtp             : effective decode speedup from Multi-Token Prediction
+# spec_tokens/acceptance: draft depth k and per-draft acceptance; the
+#                   speedup is tokens_per_step(acceptance, k), never a constant
 #
 # Dense model  => w_decode_shared = w_resident, w_route_* = 0 (reads all weights).
-# MoE model    => decode reads w_decode_shared + routed-expert union bytes:
-#   union="linear"   : min(n*(1+s)*w_route_pertok, w_route_total) -- no-overlap
-#                      upper bound on bytes (CONSERVATIVE: slow-side; default).
-#                      s = spec_tokens while speculative decoding is on: the
-#                      verify routes every draft position too (issue #91)
-#   union="coverage" : w_route_total * (1-(1-k/E)^n)          -- expected union
-#                      of one draw per SEQUENCE under uniform independent
-#                      routing (OPTIMISTIC: a sequence's drafts route like its
-#                      own token, and real routing is correlated)
-# The "kink at n = E/k" in the model comments below is the linear union's
-# saturation with speculation off; on, it moves to E/(k x (1+s)) sequences.
-# The two bracket reality; figures show both.
+# MoE model    => decode reads w_decode_shared + the routed-expert union over
+# P = n x (1 + k) positions (every verify position routes, accepted or not):
+#   union="coverage" : total x (1-(1-k_e/E)^P)   -- expectation under
+#                      independent routing; the DEFAULT. One sequence's
+#                      positions route with correlation, so the real union
+#                      sits below it
+#   union="linear"   : min(P x per-token, total) -- no-overlap upper bound
+# A spec-on/spec-off pair at one n measures where reality sits.
 #
 # All 35B-A3B constants come from the PUBLISHED Qwen/Qwen3.6-35B-A3B-FP8
 # config.json (40 layers = 30 DeltaNet + 10 full-attn, 2 KV heads x 256,
 # 256 experts / 8 routed + 1 shared, vocab 248,320). Full derivations and
 # the assumption ledger: research/model_35ba3b.md.
 # ============================================================================
-# ---- DECODE efficiency: MFU's counterpart, and the study's newest constant ----
-# Decode was first priced as a PURE roofline: bytes / effective_bw, with no
-# efficiency term at all, while prefill carried an MFU anchor. A measurement
-# not published in this repo found that roofline optimistic on the reference
-# row, and ONE multiplicative constant fits it across batch sizes 1-25.
+# ---- DECODE: one step-time equation ----------------------------------------
+# A decode step of one replica group (tp GPUs) holding n sequences at draft
+# depth k (the model's spec_tokens) costs
 #
-# CONVENTION, as in prefill.md: this is the MODEL-convention figure, i.e.
-# already divided by tp_efficiency, so it multiplies effective_bw() directly.
-# Quote the convention whenever quoting the number.
+#   t_step = B / (eta x tp x hbm_bw)                      streamed bytes
+#          + n (1 + k) x c_tok                             verify GEMMs
+#          + (tau_0 + [tp > 1] tau_ar) x (L + p L_d)       per-layer fixed cost
+#          + tau_rec x L_rec x (1 + k)                     serial recurrent updates
 #
-# WHAT IT ABSORBS, and why that matters: the constant is fitted on a HYBRID
-# model (48 Gated-DeltaNet layers of 64) running speculative decoding at
-# num_speculative_tokens=2. It therefore absorbs both the streaming
-# inefficiency and whatever the speculative verify costs on a sequential
-# recurrence -- a black-box measurement cannot separate those.
-# Two consequences:
-#   * MBU and the model's `mtp` TRAVEL TOGETHER. The 27B's mtp is the measured
-#     accepted length at k=2; changing one without the other breaks the fit.
-#   * It is NOT a hardware constant. A dense model has no recurrence to
-#     serialise and should sit higher; nothing in this study measures one.
-# ONE deployment, ONE model, ONE spec config -- an anchor, not a bracket. The
-# LOW/HIGH pair spans the residual spread, not independent measurements.
+#   B = w_decode_shared + routed-expert union over P = n (1 + k) positions
+#     + p x draft-pass bytes (draft layers, the lm_head they re-read, their
+#       routed experts over n positions); p = Model.passes(k), the draft
+#       passes per step: k, or 1 for a block drafter that writes all k at once
+#     + KV reads + recurrent/window state traffic (both independent of k: the
+#       1 + k positions of a sequence share one KV read and one state pass)
+#   c_tok = 2 x params_prefill / (tp x peak_flops_fp8 x MFU)
 #
-# EXTRAPOLATION BIAS -- the sharpest limitation, and it bites where the study
-# cares most. The constant was fitted over n = 1-25, where WEIGHTS are 80-95%
-# of the step. Folding a weight-side inefficiency into a multiplier on the
-# WHOLE ledger then over-charges the KV term, and the decode ceiling lives at
-# n ~ 100-250 where KV dominates instead. Against the two candidate mechanisms
-# (A: the verify multiplies the weight reads; B: it serialises as latency),
-# both anchored to the same n=1 point, the 27B / 4xH200 decode ceiling reads:
-#     this single-constant fold      108 users
-#     reading A (weights x(1+k))     238 users
-#     reading B (serial latency)     154 users
-# against a cache ceiling of 249. So the CEILING IS NOT IDENTIFIED by this
-# measurement, and neither is the binding order: A leaves H7 standing, B and
-# the fold overturn it. What IS identified is the per-user speed near the
-# fitted mix (n = 1-25), where all three agree to ~10%.
-# Quote decode ceilings from this model as a range, not a point, until a
-# spec-off / k-sweep A/B settles which mechanism holds.
-# ONE value for EVERY model. A dense or MLA row has no recurrence to serialise
-# and should sit higher, but nothing in this study measures one, and a
-# per-model guess would rank configurations on the guess. Mirrors DECODE_MBU
-# in the explorer, where the slider moves every row at once.
-MBU_LOW, MBU_DEFAULT, MBU_HIGH = 0.15, 0.22, 0.30
-
-
-# ----------------------------------------------------------------------------
-# OPT-IN decode pricing: bytes + compute + latency. NOT the default: every
-# published decode figure still comes from the single-constant fold above.
-# This is the form a held-batch sweep to n=64
-# at two context lengths supports, offered as a CALIBRATION a deployment can
-# select ([calibration] decode_pricing = "latency") until a second deployment
-# says whether its constants travel.
+# and yields tokens_per_step(acceptance, k) = 1 + a + ... + a^k tokens per
+# sequence. Spec: research/decode-model.md; decisions on the priors below:
+# research/decode-model.md "Priors".
 #
-#     t_step = step_bytes / (effective_bw x bw_eff)      every byte, ONE efficiency
-#            + n x (1 + spec_tokens) x t_token            the verify is compute
-#            + fixed_s                                     collectives, draft, launches
-#     per-user tok/s = mtp / t_step
-#
-# The fold misfits (it returns a NEGATIVE fixed cost on every batch sweep)
-# because it has the bytes and nothing else:
-#   * speculative decoding verifies 1 + k positions per sequence per step.
-#     That is 1 + k tokens of GEMM compute per sequence, priced here at the
-#     SAME per-token time prefill achieves (2 x params / (peak x mfu)) — an
-#     independent measurement, which predicts the fitted per-sequence slope to
-#     ~10% without having been fitted to it;
-#   * a TP group pays two all-reduces per layer whatever the batch, and the
-#     draft head runs k more passes: a latency, not a byte count.
-# With those two terms present ONE bandwidth efficiency serves weights and KV
-# alike — reading B above, and its parsimony argument, confirmed.
-#
-# NOT modelled: above ~64 sequences the step jumps in the measurements behind
-# this fit (not published in this repo; mechanism unknown). Ceilings from this
-# pricing are therefore the LINEAR regime's and optimistic past that batch.
-# ----------------------------------------------------------------------------
-DECODE_BW_EFF = 0.36        # model convention: already divided by tp_efficiency
-DECODE_FIXED_S = 2.7e-3     # TP4, 64 layers, MTP depth 3: what bytes and compute leave over
-DECODE_SPEC_TOKENS = 3      # the depth the constants above were read at
-
-
-@dataclass(frozen=True)
-class DecodeLatency:
-    """Constants of the opt-in latency pricing (see the block above)."""
-    bw_eff: float = DECODE_BW_EFF
-    fixed_s: float = DECODE_FIXED_S
-    spec_tokens: int = DECODE_SPEC_TOKENS
-    mfu: float = None           # None = MFU_DEFAULT; the per-token compute leg
-
-    def __post_init__(self):
-        if not 0 < self.bw_eff <= 1:
-            raise ValueError(f"bw_eff must be in (0, 1], got {self.bw_eff!r}")
-        if self.fixed_s < 0:
-            raise ValueError("fixed_s must be >= 0")
-        if self.spec_tokens < 0:
-            raise ValueError("spec_tokens must be >= 0")
+# The constants are kernel and interconnect properties, shared by every model:
+#   DECODE_ETA   achieved fraction of RAW HBM bandwidth (no tp_efficiency
+#                haircut: the all-reduce cost is tau_ar). 0.29 = the 0.36 the
+#                held-batch sweep read in the old model convention x 0.81, the
+#                TP4 haircut it was divided by.
+#   TAU_0        per-layer launch cost, 5 us: a prior.
+#   TAU_AR       per-layer cost of tp > 1: two one-shot NVLink all-reduces at
+#                ~5 us each (research/gpu_catalogue.md); a prior until the link
+#                model (WS-7) derives it per part.
+#   tau_rec      SOLVED so the anchor (27B, 4xH200 TP4, k = 3) reproduces the
+#                held-batch sweep's measured 2.7 ms intercept once its draft
+#                passes are priced as bytes and the two priors above are
+#                spent: what the intercept leaves, per recurrent update.
+# `ws calibrate` fits all four from a decode sweep (research/calibrate.md).
+DECODE_ETA = 0.29
+TAU_0 = 5e-6
+TAU_AR = 10e-6
+_ANCHOR_FIXED_S = 2.7e-3                # measured intercept: 27B, 4xH200 TP4, k = 3
+_ANCHOR_SPEC_TOKENS = 3
 
 
 @dataclass
@@ -327,12 +251,39 @@ class Model:
     w_decode_shared: float
     w_route_pertok: float
     w_route_total: float
-    mtp: float = 1.7
-    # num_speculative_tokens of the model's serving recipe (0 = no drafter).
-    # While speculative decoding is on (mtp > 1) a decode step verifies
-    # 1 + spec_tokens positions per sequence, and every one routes through
-    # the experts: see w_decode.
+    # Draft tokens per step the model's serving recipe runs
+    # (num_speculative_tokens; 0 = no draft model ships with it) and how they
+    # are drafted: "mtp" (a built-in MTP module), "dspark" (DeepSeek's DSpark
+    # stages) or "eagle" (no module; an external EAGLE-style draft).
     spec_tokens: int = 0
+    draft_method: str = "mtp"
+    # Per-draft acceptance (accept until the first rejection): a scalar, or
+    # one figure per draft position. 0.971 is Qwen3.6-27B's measured value at
+    # k = 2 (geometric to three decimals); every other model carries it until
+    # `ws decode-sweep` measures its own (acceptance_measured False).
+    acceptance: float | tuple = 0.971
+    acceptance_measured: bool = False
+    # Layer counts the step equation's fixed terms read: target layers run per
+    # step, recurrent (DeltaNet / KDA) layers among them, and draft-model
+    # layers run per draft pass (MTP head 1, DSpark drafter 3).
+    layers: int = 0
+    rec_layers: int = 0
+    draft_layers: int = 0
+    # Draft passes per decode step. None: one per draft token (an MTP head or
+    # an autoregressive drafter runs k times). A block drafter writes all k
+    # draft tokens in one forward pass and sets 1 (Kimi-K3.1-Pro's DSpark
+    # draft: "7 tokens per forward pass").
+    draft_passes: int | None = None
+    # Bytes ONE draft pass streams beyond w_decode_shared: the draft layers'
+    # always-active weights plus the lm_head they re-read for the draft
+    # logits (w_draft), and their routed experts per position
+    # (w_draft_route_pertok; union over the batch with the target's k/E).
+    w_draft: float = 0.0
+    w_draft_route_pertok: float = 0.0
+    # True when w_resident is already the measured AS-DEPLOYED footprint, so
+    # the +15% weight-overhead allowance (calibrated on exactly that figure)
+    # must not be added on top.
+    weights_as_deployed: bool = False
     weight_dtype: str = "fp8"   # set via with_weight_dtype(); gates GPU choice
     # NVFP4-checkpoint weight bytes (w_resident, w_decode_shared,
     # w_route_pertok, w_route_total), or None if no NVFP4 variant exists.
@@ -441,496 +392,82 @@ class Model:
         return self.w_route_total > 0
 
     @property
+    def tokens_per_step(self) -> float:
+        """Tokens one sequence advances per decode step: m(acceptance, k)."""
+        return tokens_per_step(self.acceptance, self.spec_tokens)
+
+    @property
     def state_traffic(self) -> float:
         """Recurrent-state bytes moved per active sequence per decode step."""
         return (2.0 * self.deltanet_state if self.state_step_bytes is None
                 else self.state_step_bytes)
 
-    @property
-    def verify_positions(self) -> int:
-        """Positions one sequence routes per decode step: its own token, plus
-        its drafts while speculative decoding is on (mtp > 1)."""
-        return 1 + self.spec_tokens if self.mtp > 1 else 1
-
-    def w_decode(self, n: int, union: str = "linear") -> float:
-        """Weight bytes read per decode step with n concurrent decoders.
-
-        "linear" counts every verified position, n x verify_positions, as an
-        independent draw: the no-overlap upper bound. A sequence's drafts
-        route much like its own token, so the true union sits between that
-        and one draw per sequence, which is what "coverage" keeps.
-        """
-        if not self.is_moe:
-            return self.w_decode_shared
+    def _union(self, positions: float, per_tok: float, union: str) -> float:
+        """Routed-expert bytes read by `positions` routed tokens."""
+        if per_tok <= 0 or not self.is_moe:
+            return 0.0
+        total = per_tok * self.w_route_total / self.w_route_pertok   # E/k_e x per token
         if union == "coverage":
-            frac_new = self.w_route_pertok / self.w_route_total   # = k/E
-            routed = self.w_route_total * (1.0 - (1.0 - frac_new) ** n)
-        else:
-            routed = min(n * self.verify_positions * self.w_route_pertok,
-                         self.w_route_total)
-        return self.w_decode_shared + routed
+            # expectation under independent routing: overstates the union a
+            # little, since one sequence's positions route with correlation
+            return total * (1.0 - (1.0 - per_tok / total) ** positions)
+        if union == "linear":
+            return min(positions * per_tok, total)            # no-overlap bound
+        raise ValueError(f"union must be 'coverage' or 'linear', got {union!r}")
+
+    def w_decode(self, positions: float, union: str = "coverage") -> float:
+        """Target-model weight bytes one decode step reads when `positions`
+        tokens route through it (n sequences x (1 + k) verify positions)."""
+        return self.w_decode_shared + self._union(positions, self.w_route_pertok, union)
+
+    def passes(self, k: int) -> int:
+        """Draft passes one step runs at draft depth k."""
+        if k <= 0:
+            return 0
+        return k if self.draft_passes is None else min(self.draft_passes, k)
+
+    def draft_pass_bytes(self, n: float, union: str = "coverage") -> float:
+        """Bytes one draft pass streams for n sequences: the draft layers, the
+        lm_head they re-read, and their routed experts over n positions."""
+        return self.w_draft + self._union(n, self.w_draft_route_pertok, union)
 
 
-MODELS = {
-    # Baseline dense sibling — numbers straight from the original study. The
-    # published Qwen3.6-27B config (64 layers, interval 4 -> 16 full-attn x
-    # 4 KV heads x 256) reproduces the baseline's 32 KiB/token exactly.
-    # Named Qwen3.8-27B since 2026-09-05: its config and its FP8 checkpoint
-    # (1,606 tensors, dtypes and shapes) are identical to Qwen3.6-27B's, so
-    # every architecture-determined constant carries over; mtp is unmeasured
-    # on it (see the note); nvfp4_w is measured on 3.8's own checkpoint.
-    "27B": Model(
-        name="Qwen3.8-27B (dense)",
-        kv_bpt=32 * KIB,                 # 16 attn layers x 4 KV heads x 256 x 2(K,V) x 1B
-        deltanet_state=75 * MIB,         # baseline's 75 MiB; bf16 arithmetic (48 DN layers x
-                                         # 48 vheads x 128x128 + conv) gives 75.7 MiB
+# The constants themselves live in data/catalog.toml, shared with the
+# explorer (scripts/catalog.py writes interactive/src/catalog.js from it).
+_CATALOG_TUPLES = ("nvfp4_w", "kv_hopper_fp8")
 
-        w_resident=28.8 * GIB,           # baseline's stated as-deployed FP8 footprint
-        w_decode_shared=28.8 * GIB,      # dense: every step reads all weights
-        w_route_pertok=0.0,
-        w_route_total=0.0,
-        # Accepted length at num_speculative_tokens=2 on Qwen3.6-27B, from a
-        # measurement not published in this repo (1 + a + a^2 = 2.94 gives a
-        # per-draft acceptance a ~ 0.98). Was 1.7, the baseline's fit. NOT
-        # re-measured on Qwen3.8-27B: acceptance is a property of the draft head's
-        # weights, not the architecture. PAIRED WITH MBU_DEFAULT: both were
-        # calibrated against the same passes, so moving one without the
-        # other breaks the fit (see MBU_DEFAULT).
-        spec_tokens=2,
-        mtp=2.94,
-        # RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
-        # header: 23,417,339,744 B (dense MLPs of 56/64 layers NVFP4;
-        # attention, DeltaNet, lm_head FP8; embed/MTP/vision BF16). Replaces
-        # the projection of nvidia/Qwen3.6-27B-NVFP4's 21.92e9 B onto 3.8's
-        # weights (no NVIDIA NVFP4 of 3.8 exists). Same whole-checkpoint
-        # convention as the FP8 28.8 GiB, which the measured
-        # Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B = 28.75 GiB) matches
-        # within 0.2%. Dense: decode reads everything. research/nvfp4_2026-09.md.
-        nvfp4_w=(23417339744, 23417339744, 0.0, 0.0),
-        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
-        # prefill (research/prefill.md #2): 27B dense, less ~2.5e9 of
-        # embed + untied lm_head (vocab 248,320 — the family figure the
-        # 35B-A3B ledger reads from config.json — x hidden 5,120, x2).
-        # 64 layers, interval 4 -> 16 full-attention; 24 Q heads x 256.
-        params_prefill=24.5e9, attn_layers=16, attn_d=24 * 256,
-        kv_heads=4,                      # GQA 24/4 on the 16 full-attention layers
-    ),
-    # MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
-    "35BA3B": Model(
-        name="Qwen3.6-35B-A3B (MoE, ~3B active)",
-        kv_bpt=10_240,                   # 10 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
-        deltanet_state=33_423_360,       # 30 DN layers x 32 vheads x 128x128 bf16 (+conv) = 31.9 MiB
-        w_resident=35_500_000_000,       # ~35.5B params x 1B FP8: full model (embeddings,
-                                         # lm_head, attn/DN, all experts, MTP module)
 
-        w_decode_shared=1_940_000_000,   # attn + deltanet + shared expert + router + lm_head / step
-        w_route_pertok=1_006_632_960,    # 8 routed experts x 3.146M x 40 layers, FP8
-        w_route_total=32_212_254_720,    # 256 routed experts (saturates at exactly n=32 linear)
-        spec_tokens=2,
-        mtp=1.7,                         # MTP module, speedup kept equal to baseline's fit
-        # RedHatAI/Qwen3.6-35B-A3B-NVFP4 recipe: experts + full-attn NVFP4
-        # (0.5625 B/param), but embed/lm_head/DeltaNet/router — AND the MTP
-        # module (`re:^mtp.*` is in the measured ignore list) — stay BF16,
-        # so the SHARED per-step read is 1.7x HEAVIER than FP8 while the
-        # routed-expert read is 1.78x lighter. research/nvfp4.md 6.1.
-        nvfp4_w=(24.13e9,                # MEASURED LM bytes (2.94x vs BF16 base)
-                 3.308e9,                # measured 3.3065e9: attn+shared NVFP4; DN+lm_head BF16
-                 566_231_040,            # measured 566,238,720 (+1.4e-5)
-                 18_119_393_280),        # measured 18,119,639,040 (kink stays n=32)
-        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision)
-        # prefill: MoE — a token routes to 8 of 256 experts no matter how
-        # long the chunk is, so the ACTIVE parameters prefill, not the 35B.
-        # From this model's own component ledger (model_35ba3b.md): per-step
-        # shared read 1.940e9 MINUS lm_head 0.509e9 (fires once per prefill,
-        # not per token) PLUS the 8 routed experts 1.007e9 = 2.44e9. (The
-        # published "~3B active" includes embed + lm_head.)
-        # 40 layers, 10 full-attention; 16 Q heads x 256.
-        params_prefill=2.44e9, attn_layers=10, attn_d=16 * 256,
-        kv_heads=2,                      # GQA 16/2 on the 10 full-attention layers
-    ),
-    # Dense 128B, open weights (2026-04), 88 uniform full-attention GQA layers
-    # (8 KV heads x 128) — the study's KV-hungriest model: 176 KiB/token FP8,
-    # no recurrent state, no MoE. No MTP module -> speculative default 1.0x
-    # (an external EAGLE-v1 draft exists; its speedup is unmeasured here).
-    # Constants: research/model_mistral_medium35.md.
-    "MM35": Model(
-        name="Mistral-Medium-3.5-128B (dense)",
-        kv_bpt=180_224,                  # 88 layers x 8 KV heads x 128 x 2(K,V) x 1B
-        deltanet_state=0.0,              # pure attention, no recurrent state
-        w_resident=133.6e9,              # 124.43 GiB as-shipped FP8 checkpoint
-        w_decode_shared=125.0e9,         # 88 FP8 layers + BF16 lm_head; vision tower not read
-        w_route_pertok=0.0,
-        w_route_total=0.0,
-        mtp=1.0,                         # no MTP module (EAGLE draft is external)
-        # nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
-        # edge MLP + all attention FP8, lm_head BF16 (research note #3).
-        # Resident = the MEASURED safetensors total (95,224,812,960 B,
-        # 2026-07-27 re-verification); decode read measured 86.643e9.
-        nvfp4_w=(95.2e9, 86.6e9, 0.0, 0.0),
-        max_ctx=262_144,                 # hard model max (YaRN x64 over a 4k base)
-        # prefill: the TEXT DECODER only — model_mistral_medium35.md's shard
-        # ledger gives 121.8e9 decoder-layer params exactly; embeddings and
-        # lm_head (2 x 131,072 x 12,288 = 3.22e9) are outside it, and the
-        # ~2.7e9-param vision tower is an ENCODER, never executed when
-        # re-prefilling these text contexts (subtracting embed+lm_head from
-        # the 128B multimodal total, as this constant first did, left the
-        # tower inside the GEMM). ALL 88 layers are full GQA -> the study's
-        # heaviest quadratic term by far; 96 Q heads x 128.
-        params_prefill=121.8e9, attn_layers=88, attn_d=96 * 128,
-        kv_heads=8,                      # GQA 96/8 — shards on every TP the study prices
-    ),
-    # MoE 744B-A40B (753B incl. MTP), MLA + DeepSeek Sparse Attention, open
-    # weights (2026-06). Cached: 576-B MLA latent/layer + 132-B indexer keys
-    # on 21+1 layers = 47.3 KiB/token fp8; vLLM REQUIRES fp8 KV on this path
-    # (kv_fp16_ok=False). Decode is sparse: indexer scans the context at
-    # 2,772 B/token while attention reads only top-2048 tokens/layer.
-    # Constants: research/model_glm52.md. Named GLM-5.3 since 2026-09-06:
-    # its config (55/56 keys) and its FP8 checkpoint (118,629 tensors, dtypes,
-    # shapes, bytes) are identical to GLM-5.2's; research/model_glm53.md.
-    "GLM52": Model(
-        name="GLM-5.3 (MoE 744B-A40B, MLA+DSA)",
-        kv_bpt=48_408,                   # B300: 79 x 576 (fp8_e4m3 latent) + 22 x 132 (indexer)
-        deltanet_state=0.0,              # MLA is cached attention, no recurrent state
-        w_resident=755.5e9,              # official FP8 ckpt: 753.3e9 params + BF16 excess
-        w_decode_shared=18.92e9,         # MLA + indexers + dense MLP + shared exp + lm_head
-        w_route_pertok=22_649_241_600,   # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
-        w_route_total=724_775_731_200,   # 256 experts (saturates at n=32, like 35BA3B)
-        spec_tokens=5,
-        mtp=1.7,                         # MTP module (5 drafts); transplanted fit, unmeasured
-        # nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header:
-        # routed experts of the 75 main MoE layers NVFP4 (21,233,688 B/expert);
-        # attention, indexers, shared experts and the MTP layer BF16, dense
-        # MLPs FP8. The always-active read is the FP8 constant plus the
-        # measured delta on the same tensors (+15,891,309,576 B, the BF16
-        # upcast). research/nvfp4_2026-10.md.
-        nvfp4_w=(464_115_789_896, 34_811_309_576,
-                 12_740_212_800,          # 8 x 21,233,688 x 75
-                 407_686_809_600),        # 256 x 21,233,688 x 75 (kink n=32)
-        kv_decode_bpt=2_772,             # 21 indexer layers x 132 B per context token
-        kv_decode_const=92.0e6,          # B300: 78 layers x top-2048 x 576 B per active seq
-        kv_decode_topk=2_048,            # ...scaled down for sequences < 2,048 tokens
-        # H200: FlashMLA's fp8_ds_mla rows, 656 B per latent (vLLM's GLM-5.3
-        # recipe: --kv-cache-dtype fp8 on Hopper, fp8_e4m3 on Blackwell)
-        kv_hopper_fp8=(54_728,           # 79 x 656 + 22 x 132
-                       104_792_064),     # 78 x 2048 x 656
-        kv_fp16_ok=True,                 # BF16 is vLLM's default on Hopper and accepted on
-                                         # Blackwell (FlashMLA and FlashInfer sparse both list it)
-        max_ctx=1_048_576,               # native 1M context (theta 8e6)
-        # prefill: MoE — model_glm52.md's derivation gives 39.3e9 active
-        # EXCLUDING embeddings (vLLM "39B"); less lm_head 1.903e9 (fires
-        # once per prefill) = 37.4e9. (The round "~40B active less embed +
-        # lm_head" this constant first used double-trusted the marketing
-        # figure over the ledger's own sum.)
-        # attn_layers/attn_d price MLA as DENSE attention over all 78 layers:
-        # an UPPER BOUND. DSA's top-2048 sparsity is established for decode
-        # (kv_decode_*) but its prefill behaviour is not characterised in
-        # research/model_glm52.md, so the quadratic term here is pessimistic
-        # and flagged. 64 heads x 256 (qk_nope 192 + rope 64 = v_head_dim).
-        params_prefill=37.4e9, attn_layers=78, attn_d=64 * 256,
-        kv_heads=1,                      # MLA: one latent per token, replicated under plain TP
-    ),
-    # MoE 284B-A13B (304B on disk incl. 3 DSpark stages), MQA over a 512-dim
-    # latent + per-layer-class compression (2 SWA / 21 CSA ratio-4 / 20 HCA
-    # ratio-128), open weights (2026-07-31). Only COMPRESSED caches grow:
-    # 3,450 B/token — ~10x below V3-class MLA — plus a fixed ~14.9 MiB/session
-    # (128-entry windows on 46 layers + fp32 compressor state), carried in
-    # deltanet_state. Decode reads the FP4 indexer scan + dense-HCA compressed
-    # axis (426 B/ctx-token) and top-512 latents + windows (9.36 MB/seq).
-    # Native checkpoint is already mixed FP8/FP4 (experts FP4 + E8M0 scales,
-    # servable on H200 per the vLLM recipe). NVIDIA's 0731 NVFP4 repack
-    # (E4M3 block-16 scales) is HEAVIER than native — see nvfp4_w below and
-    # research/nvfp4_2026-09.md; research/model_dsv4flash.md for the rest.
-    # Kept alongside DSV41F since 2026-09-16: V4.1 is a different
-    # architecture (CED + CSA2 + Engram), not a refresh of this one.
-    "DSV4F": Model(
-        name="DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)",
-        kv_bpt=3_450,                    # 21 x 576/4 + 20 x 576/128 + 21 x 64/4 (fp8 latent+fp4 idx)
-        deltanet_state=15_597_568,       # 46 x 128 x 576 windows + 12,206,080 fp32 compressor state
-        state_step_bytes=1_048_768,      # per step: 43 x 576 ring-slot writes + each compressor's
-                                         # slot write, its pooling read and (ratio 4) overlap-half
-                                         # copy, amortized over the ratio (1,024,000) — the window
-                                         # READS are in kv_decode_const (research/model_dsv4flash.md #3)
-        state_fp32_ok=False,             # already fp32/fp8-mixed; doubling models nothing
-        w_resident=166.88e9,             # measured safetensors total 166,878,536,440 B
-        w_decode_shared=7.66e9,          # attn 4.60 + shared exp 1.08 + compressors/indexers/
-                                         # gates/mHC 0.92 + lm_head 1.06 (research note 4)
-        w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
-        w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
-        spec_tokens=7,
-        mtp=1.7,                         # DSpark drafts 7 tokens; transplanted fit, unmeasured
-        # nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
-        # shard header. Routed experts repacked NVFP4 (E4M3 block-16 scales):
-        # 14,155,800 B/expert vs 13,369,344 native (E8M0 block-32) — this arm
-        # is 5.2% HEAVIER than FP8; MTP experts and everything else identical.
-        # research/nvfp4_2026-09.md.
-        nvfp4_w=(175_535_844_088, 7.66e9,
-                 3_652_196_400,           # 6 experts x 14,155,800 B x 43
-                 155_827_046_400),        # 256 experts x 14,155,800 B x 43
-        kv_decode_bpt=426,               # 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA
-        kv_decode_const=9_363_456,       # 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
-        kv_decode_topk=2_048,            # 512 compressed entries x ratio 4, in token space
-        kv_fp16_ok=False,                # vLLM's V4 path asserts fp8 main KV; SGLang's bf16
-                                         # KV-decode is unfinished (research note 6)
-        max_ctx=1_048_576,               # native 1M (YaRN x16 over 65,536 baked into the config)
-        # prefill: MoE active GEMM params excl embed/lm_head (12.703e9 from the
-        # param ledger). Quadratic term: the indexer scores the full compressed
-        # axis (64 x 128 / 4 = 2,048 MACs per original token, QK only, so
-        # 1,024-equiv under the 2 T^2 d convention, x 21 CSA layers) and HCA
-        # attends it densely (64 x 512 / 128 = 256-equiv x 20); the CSA
-        # top-512 and window reads are LINEAR per token and deliberately left
-        # out — prefill priced cheaper, biased AGAINST the thrash hypothesis
-        # (research/model_dsv4flash.md #6).
-        params_prefill=12.70e9, attn_layers=41, attn_d=26_624 / 41,
-        kv_heads=1, state_heads=1,       # MQA latent caches AND the latent windows replicate under plain TP
-    ),
-    # DeepSeek-V4-Flash-0731's text backbone + a 0.47B BF16 vision tower
-    # (32-layer ViT + aligner), continued-trained (2026-08-31, MIT). The text
-    # config, compress_ratios and inference/model.py cache code are those of
-    # DSV4F unchanged (diffed 2026-10-02): image tokens only add a per-expert
-    # gate bias and widen the window mask inside an image span. Every cache,
-    # decode and prefill constant is therefore DSV4F's; only the resident
-    # bytes move, by the vision tower (932,786,176 B) plus 50,176 B of fp32
-    # gate biases — the safetensors total, header-verified on all 48 shards.
-    # The tower runs on image prefill only, so it is resident but never in a
-    # decode read, and the text workload never prices it. No NVIDIA or
-    # RedHatAI NVFP4 checkpoint (community repacks only, 2026-10-02).
-    # research/model_dsv4flash_vision.md.
-    "DSV4FV": Model(
-        name="DeepSeek-V4-Flash-Vision-Exp (MoE 284B-A13B, CSA, vision)",
-        kv_bpt=3_450,                    # = DSV4F: identical caches (text config byte-identical)
-        deltanet_state=15_597_568,       # = DSV4F: 46 x 128 x 576 windows + fp32 compressor state
-        state_step_bytes=1_048_768,      # = DSV4F (research/model_dsv4flash.md #3)
-        state_fp32_ok=False,             # already fp32/fp8-mixed; doubling models nothing
-        w_resident=167_811_372_792,      # measured safetensors total: DSV4F + 932,836,352 B
-                                         # (ViT 823.7e6 + aligner 109.1e6 + gate biases)
-        w_decode_shared=7.66e9,          # = DSV4F: the tower is never read by a text decode step
-        w_route_pertok=3_449_290_752,    # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
-        w_route_total=147_169_738_752,   # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
-        spec_tokens=3,
-        mtp=1.7,                         # DSpark (the README serves 3 drafts); transplanted fit
-        nvfp4_w=None,                    # no official NVFP4 checkpoint; the experts are already 4-bit
-        kv_decode_bpt=426,               # = DSV4F: fp4 indexer scan + dense HCA
-        kv_decode_const=9_363_456,       # = DSV4F: top-k reads + windows
-        kv_decode_topk=2_048,            # 512 compressed entries x ratio 4, in token space
-        kv_fp16_ok=False,                # same V4 path: vLLM asserts fp8 main KV (the README
-                                         # and the vision image both pass --kv-cache-dtype fp8)
-        max_ctx=1_048_576,               # native 1M (YaRN x16 over 65,536 baked into the config)
-        params_prefill=12.70e9, attn_layers=41, attn_d=26_624 / 41,   # = DSV4F, text prefill
-        kv_heads=1, state_heads=1,       # MQA latent caches AND the latent windows replicate under plain TP
-    ),
-    # MoE 552B backbone + 196B Engram tables (510.3 GB on disk incl. 3 DSpark
-    # stages and a 0.5B ViT), open weights (2026-09-10, MIT). Causal Encoder-
-    # Decoder: 20 encoder + 20 decoder layers, the decoder's global KV
-    # PROJECTED from the encoder output, so prefill runs the encoder only
-    # (8B active) while decode runs all 40 (16B). CSA2 shares FOUR compressed
-    # caches across layers (sources 2/8/14 at ratio 2, 20 at ratio 1), main KV
-    # in FP4 (E2M1 + E4M3/16 = 288 B/entry) and indexer keys in FP4 (68 B) ->
-    # 890 B/token, the paper's own figure; plus 2.8 MiB/session of fp8
-    # 128-entry windows on 43 layers and fp32 compressor state, carried in
-    # deltanet_state. Decode reads four full-axis indexer scans (170 B/ctx
-    # token) + top-512 latents on 38 layers, four candidate-pool (16,384
-    # entry) indexer reads and the windows (12.8 MB/seq). The 384 routed
-    # experts are native MXFP4 (kink at n = 384/6 = 64); vLLM keeps the
-    # Engram tables in HBM ("plan capacity for them" — recipe), so the fit
-    # starts at 5xH200 / 2xB300. NVIDIA's NVFP4 repack is 3.3% heavier.
-    # research/model_dsv41flash.md.
-    "DSV41F": Model(
-        name="DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
-        kv_bpt=890,                      # 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1 cache
-        deltanet_state=2_930_688,        # 43 x 128 x 528 fp8 windows + 24,576 fp32 compressor state
-        state_step_bytes=45_696,         # per step: 40 x 528 ring-slot writes + 24,576 compressor
-                                         # state r/w — the window READS are in kv_decode_const
-        state_fp32_ok=False,             # already fp8/fp32-mixed; doubling models nothing
-        w_resident=510_286_023_000,      # measured safetensors total (header-verified), Engram in HBM
-        w_decode_shared=8_522_921_408,   # exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/
-                                         # compressors/indexers/engram-proj 0.71 + lm_head 1.32
-        w_route_pertok=4_512_153_600,    # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
-        w_route_total=288_777_830_400,   # 384 experts (kink at n = 384/6 = 64)
-        spec_tokens=5,
-        mtp=1.7,                         # DSpark drafts 5 tokens; transplanted fit, unmeasured
-        # nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
-        # shard header. Only the 40 main layers' routed experts change: native
-        # MXFP4 with E8M0 block-32 scales (18,800,640 B/expert) repacked with
-        # E4M3 block-16 scales (19,906,584 B/expert, +5.9%), as NVIDIA's 0731
-        # repack was. Everything else byte-identical, so the arm is 3.3%
-        # HEAVIER than native. research/nvfp4_2026-10.md.
-        nvfp4_w=(527_273_322_840, 8_522_921_408,
-                 4_777_580_160,           # 6 x 19,906,584 x 40
-                 305_765_130_240),        # 384 x 19,906,584 x 40
-        kv_decode_bpt=170,               # 3 x 68/2 + 68: full-axis fp4 indexer scans (layers 2/8/14/20)
-        kv_decode_const=12_763_136,      # 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool
-                                         # + 40 x 128 x 528 windows
-        kv_decode_topk=1_024,            # 512 compressed entries x ratio 2, in token space
-        kv_fp16_ok=False,                # FP4 main KV is the TRAINED cache format (QAT, tech
-                                         # report 2.4.4); no stack serves a BF16 main KV
-        max_ctx=1_048_576,               # native 1M (YaRN x16 over 65,536 baked into the config)
-        # prefill: CED runs the 20 encoder layers only — active GEMM params
-        # excl embed/lm_head 7.90e9 (encoder ledger + the layer-20 CED
-        # projection). Quadratic term: the three encoder indexers (layers
-        # 2/8/14) score the full ratio-2 compressed axis at 32 x 128 — QK
-        # only, no AV, so half the 2 T^2 d convention -> 1,024-equiv per
-        # token each; the top-512 and window reads are LINEAR per token and
-        # left out; the 128-token decoder replay is a fixed cost per prefill
-        # and left out — both price prefill cheaper, biased AGAINST the
-        # thrash hypothesis (research/model_dsv41flash.md #6).
-        params_prefill=7.90e9, attn_layers=3, attn_d=1_024,
-        kv_heads=1, state_heads=1,       # MQA latent caches AND the latent windows replicate under plain TP
-    ),
-    # MoE 125B-A6B (180B on disk incl. the 51B FP8 n-gram table, 2.7B MTP and
-    # a never-executed vision tower), open weights (2026-08). Qwen3.6-style
-    # hybrid: 36 DeltaNet + 12 QSA sparse-attention layers (GQA 24/2 x 256
-    # with a ratio-4 compressed fp8 indexer, budget 2048). Only the routed
-    # experts and the n-gram table are FP8 in the serving checkpoint — the
-    # always-active blocks stay BF16, so the shared per-step read is heavy
-    # (8.6 GB) while the cache is light (12.4 KiB/token). Deepest expert-union
-    # kink in the study: n = 512/10 = 51.2. research/model_qwen38flashnext.md.
-    "Q38FN": Model(
-        name="Qwen3.8-Flash-Next (MoE 125B-A6B, QSA+n-gram)",
-        kv_bpt=12_672,                   # 12 attn x 2 KV x 256 x 2(K,V) x 1B + 12 x 128/4 indexer
-        deltanet_state=59_572_224,       # 36 DN layers x 48 vheads x 128x128 bf16 + conv (10,240 x 4)
-        w_resident=185_502_232_570,      # FP8 ckpt metadata.total_size, shard-header-verified
-        w_decode_shared=8_623_999_000,   # exact per-tensor ledger sum — BF16 always-active:
-                                         # attn 1.23 + DN 4.17 + shared exp 0.47 + routers 0.13
-                                         # + hyper-conns 1.28 + PLE 0.07 + lm_head 1.27
-                                         # (n-gram/embed lookups excluded)
-        w_route_pertok=2_359_584_000,    # 10 experts x 4,915,800 B (FP8 + block scales) x 48
-        w_route_total=120_810_700_800,   # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
-        spec_tokens=3,
-        mtp=1.7,                         # MTP module (1 hybrid layer, 3 drafts per the vLLM
-                                         # recipe); transplanted fit, unmeasured
-        # nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
-        # shard header: routed experts of the 48 main layers NVFP4
-        # (2,764,824 B/expert, x0.5625 of FP8); n-gram table, MTP experts,
-        # attention, DeltaNet, heads byte-identical. research/nvfp4_2026-09.md.
-        nvfp4_w=(132_639_846_394, 8_623_999_000,
-                 1_327_115_520,           # 10 experts x 2,764,824 B x 48
-                 67_948_314_624),         # 512 experts x 2,764,824 B x 48
-        kv_decode_bpt=384,               # QSA indexer scan: 12 layers x 128 B / ratio 4 per ctx tok
-        kv_decode_const=25_165_824,      # 12 layers x top-2048 x 1,024 B full-KV reads per seq
-        kv_decode_topk=2_048,            # indexer_budget, read in token space (research note #6)
-        max_ctx=1_048_576,               # 262,144 native; 1M via YaRN (owner decision, as the Qwens)
-        # prefill: MoE active GEMM params excl embed/lm_head/n-gram lookups
-        # (6.04e9 from the shard-header ledger — the published "6B activated").
-        # Quadratic term priced as DENSE attention on the 12 QSA layers: an
-        # upper bound, QSA prefill sparsity uncharacterised (note #6).
-        params_prefill=6.04e9, attn_layers=12, attn_d=24 * 256,
-        kv_heads=2,                      # GQA 24/2 on the 12 QSA layers; the DeltaNet state shards (48 v-heads)
-    ),
-    # MoE 320B-A18B (321B on disk incl. a 7.4B MTP draft layer and a vision
-    # tower), open weights (2026-08-25, MIT). GLM-5.2's DSA married to a
-    # Qwen-style linear backbone: 34 KDA linear-attention + 11 NoPE
-    # sparse-MLA layers (512-B latents, NO rope bytes) with a kpool-4
-    # COMPRESSED indexer cache — 6.39 KiB/token, 7.4x below GLM-5.2 —
-    # plus the study's second-heaviest recurrent state (74.4 MiB bf16).
-    # 288 experts / 8 routed (kink n = 36). KV dtype is GPU-COUPLED: the
-    # fp8-KV base arm is Blackwell-only — "Hopper ... must run BF16 KV"
-    # (vLLM recipe), i.e. on H200 the FP16-KV toggle is the only servable
-    # arm. research/model_glm53flash.md.
-    "GLM53F": Model(
-        name="GLM-5.3-Flash (MoE 320B-A18B, KDA+NoPE-MLA)",
-        kv_bpt=6_540,                    # 12 x 512 nope-only MLA latent + 12 x 132/4 indexer keys
-                                         # (12 = 11 main + the MTP draft layer's DSA stack — the
-                                         # GLM-5.2 convention: storage incl. MTP, decode excl.)
-        deltanet_state=77_987_840,       # 34 KDA layers x 64 heads x 128x128 bf16 + q/k/v conv
-        w_resident=328_326_771_576,      # FP8 ckpt metadata.total_size, shard-header-verified
-        w_decode_shared=13_957_216_504,  # exact ledger sum — KDA 9.37 (BF16!) + DSA attn 1.64
-                                         # + shared exp 1.06 + dense MLPs 0.45 + routers 0.10
-                                         # + hyper-conns 0.07 + lm_head 1.27 + norms
-        w_route_pertok=8_457_781_248,    # 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
-        w_route_total=304_480_124_928,   # 288 experts (kink at n = 288/8 = 36)
-        spec_tokens=5,
-        mtp=1.7,                         # MTP draft layer (recipe runs 5 drafts); transplanted fit
-        # RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
-        # NVFP4 checkpoint), MEASURED from every shard header: routed experts
-        # of the 42 decode layers NVFP4 (14,155,800 B/expert, x0.5625), MTP
-        # layer keeps FP8 experts, the rest UPCAST to BF16 (+2.75e9 on the
-        # always-active read). research/nvfp4_2026-09.md.
-        nvfp4_w=(197_822_818_044,
-                 16_705_715_836,          # 13,957,216,504 + 2,748,499,332 upcast delta
-                 4_756_348_800,           # 8 experts x 14,155,800 B x 42
-                 171_228_556_800),        # 288 experts x 14,155,800 B x 42
-        kv_decode_bpt=363,               # compressed indexer scan: 11 x 132 B / kpool 4 per ctx tok
-        kv_decode_const=11_534_336,      # 11 layers x top-2048 x 512-B latent reads per seq
-        kv_decode_topk=2_048,            # index_topk, read in token space (research note #6)
-        kv_fp8_blackwell_only=True,      # "Hopper ... must run BF16 KV" (vLLM recipe): the fp8-KV
-                                         # arm raises on H200 — price with_kv_dtype("fp16") there
-        max_ctx=1_048_576,               # native 1M context
-        # prefill: MoE active GEMM params excl embed/lm_head (16.11e9 ledger;
-        # card "18B active" incl. embed+lm_head = 17.38e9 ✓). Quadratic term
-        # priced as DENSE attention on the 11 DSA layers: an upper bound,
-        # DSA prefill sparsity uncharacterised (note #6).
-        params_prefill=16.11e9, attn_layers=11, attn_d=64 * 256,
-        kv_heads=1,                      # NoPE sparse-MLA: one latent per token; the KDA state shards (64 heads)
-    ),
-    # MoE 1.05T-A49B (52B with embeddings and lm_head), open weights
-    # 2026-10-29 under the Mistral Ecosystem Open-Weight License (MIT plus a
-    # separate commercial licence for Model-as-a-Service operators). 72
-    # layers of MLA + DSA, as GLM-5.3, with two cache savings of its own:
-    # cross-layer KV sharing (9 late NoPE layers attend to layer 35's
-    # latents and store none) and index sharing (28 layers reuse the top-k
-    # of the indexer before them). 63 x 656 B fp8_ds_mla latents + 44 x 132 B
-    # indexer keys = 46.0 KiB/token, 3% below GLM-5.3 on B300 and 14% below
-    # it on H200. 128 experts / 4 routed
-    # (kink n = 32). The largest model in the study: 1,060.5 GB in FP8, so
-    # it fits no 8-GPU H200 node (min TP 9; the vLLM recipe runs it on
-    # 2 x 8 H200) and needs TP8 on B300, TP4 with the official NVFP4
-    # checkpoint. research/model_mistral_large4.md.
-    "ML4": Model(
-        name="Mistral-Large-4 (MoE 1.05T-A49B, MLA+DSA, KV sharing)",
-        kv_bpt=47_136,                   # 63 x 656 (fp8_ds_mla latent) + 44 x 132 (indexer keys)
-        deltanet_state=4_030_464,        # DSpark drafter: 3 MLA layers x 2,048-token window x 656 B
-                                         # (storage incl. the drafter, as DSV4F's DSpark windows)
-        state_step_bytes=0.0,            # the drafter's window reads are folded into mtp, as every
-                                         # draft model's are; the target layers carry no state
-        state_fp32_ok=False,             # an fp8 latent window, not a bf16 recurrent state
-        w_resident=1_060_548_427_328,    # FP8 ckpt metadata.total_size, shard-header-verified
-                                         # (incl. the 4.20 GB BF16 DSpark drafter and 3.41 GB vision)
-        w_decode_shared=20_990_666_304,  # exact ledger: MLA 8.67 + shared exp 8.04 + lm_head 2.52
-                                         # + indexers 1.20 + dense MLP 0.45 + routers 0.11 + norms
-        w_route_pertok=32_169_775_104,   # 4 experts x 113,273,856 B (FP8 + F32 block scales) x 71
-        w_route_total=1_029_432_803_328, # 128 experts (kink at n = 128/4 = 32)
-        spec_tokens=3,
-        mtp=1.7,                         # DSpark drafter (3 drafts, the recipe's depth); transplanted
-                                         # fit, unmeasured — the recipe reports AL 2.79-2.98 on GB300
-        # mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from
-        # every shard header: only the 71 MoE layers' routed experts change,
-        # to ModelOpt NVFP4 (63,701,016 B/expert, x0.5624); attention,
-        # indexers, shared experts and dense MLP stay FP8, the drafter, vision
-        # and heads BF16, byte-identical. research/model_mistral_large4.md #4.
-        nvfp4_w=(610_030_457_408, 20_990_666_304,
-                 18_091_088_544,          # 4 x 63,701,016 x 71
-                 578_914_833_408),        # 128 x 63,701,016 x 71 (kink n=32)
-        kv_decode_bpt=5_808,             # 44 indexer layers x 132 B per CONTEXT token
-        kv_decode_const=96_731_136,      # 72 layers x top-2048 x 656 B per active seq (the 9
-                                         # KV-sharing layers read layer 35's latents)
-        kv_decode_topk=2_048,            # index_topk, read in token space
-        kv_fp16_ok=False,                # every NVIDIA config Mistral and vLLM document runs the fp8
-                                         # (fp8_ds_mla) latent cache, "needed" per the NVFP4 card;
-                                         # the bfloat16 opt-out is the ROCm recipe's only
-        max_ctx=1_048_576,               # native 1M (YaRN x2048 over 512); the recipe validates 262,144
-        # prefill: MoE active GEMM params excl embed/lm_head (49.82e9 ledger;
-        # card "49B active", 52B with embeddings + lm_head = 52.34e9 ✓).
-        # attn_layers/attn_d price MLA as DENSE attention over all 72 layers,
-        # as GLM-5.3: an upper bound (DSA prefill sparsity not characterised).
-        # 64 heads x 128 (qk_nope 64 + rope 64 = v_head_dim 128).
-        params_prefill=49.82e9, attn_layers=72, attn_d=64 * 128,
-        kv_heads=1, state_heads=1,       # MLA latents AND the drafter's latent windows replicate
-                                         # under plain TP
-    ),
-}
+def _model_from_catalog(key: str, row: dict) -> Model:
+    known = {f.name for f in fields(Model)}
+    unknown = set(row) - known - CATALOG_EXTRA_KEYS
+    if unknown:
+        raise ValueError(f"catalog model {key!r}: unknown fields {sorted(unknown)}")
+    return Model(**{k: (tuple(v) if k in _CATALOG_TUPLES else v)
+                    for k, v in row.items() if k in known})
 
-# ---- MTP speedup <-> per-draft acceptance ------------------------------------
-# MTP-2 decodes with k=2 draft tokens, accepted i.i.d. until the first
-# rejection: expected tokens/forward = 1 + a + a^2. The study's 1.7x default
-# is the baseline's measured fit and corresponds to a per-draft acceptance
-# a ~ 47%; a measured 87% acceptance would give ~2.6x. The acceptance is the
-# base quantity — the speedup is derived from it.
-def mtp_speedup(acceptance: float, k: int = 2) -> float:
-    """Expected decode speedup from MTP with k draft tokens at per-draft
-    acceptance `acceptance` (accept-until-first-rejection)."""
-    if not 0.0 <= acceptance <= 1.0:
-        raise ValueError(f"acceptance must be in [0, 1], got {acceptance!r}")
-    return float(sum(acceptance ** i for i in range(k + 1)))
+
+MODELS = {k: _model_from_catalog(k, row) for k, row in CATALOG["models"].items()}
+
+# ---- Draft speedup: tokens per step ------------------------------------------
+# With per-position acceptance a_1..a_k (a_j = P(draft j accepted | drafts
+# 1..j-1 were)) a sequence advances m = 1 + sum_j prod_{i<=j} a_i tokens per
+# step; one scalar a gives the geometric (1 - a^(k+1)) / (1 - a). This is the
+# only draft speedup in the model: per-user tok/s = m / t_step.
+def tokens_per_step(acceptance, k: int) -> float:
+    """Expected tokens one sequence advances per decode step at draft depth k."""
+    if k < 0:
+        raise ValueError(f"draft depth must be >= 0, got {k!r}")
+    per_pos = (list(acceptance) if isinstance(acceptance, (list, tuple))
+               else [acceptance] * k)
+    if k > len(per_pos):
+        per_pos += [per_pos[-1] if per_pos else 0.0] * (k - len(per_pos))
+    m, run = 1.0, 1.0
+    for a in per_pos[:k]:
+        if not 0.0 <= a <= 1.0:
+            raise ValueError(f"acceptance must be in [0, 1], got {a!r}")
+        run *= a
+        m += run
+    return m
 
 
 # ---- KV-cache dtype switch --------------------------------------------------
@@ -1114,6 +651,11 @@ class Topology:
     #               and every rank re-reads the whole cache each step.
     # research/kv_tp_sharding.md (codex finding F5 on the V4.1-Flash swap).
     kv_shard: str = "dcp"
+    # Per-GPU bytes held back from the KV pool (activations, workspace,
+    # fragmentation). None = ACT_RESERVE + gpu.reserve_extra, the H200-solved
+    # reserve; a deployment whose vLLM start-up line reported its pool sets
+    # the reserve that pool implies (`ws calibrate`, [calibration] reserve_gib).
+    reserve: float | None = None
 
     @property
     def n_gpu(self) -> int:
@@ -1344,7 +886,8 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     that do not share it (see GPU.reserve_extra and docs/scenarios.md).
     """
     check_dtype_supported(model, topo)
-    reserve = ACT_RESERVE + topo.gpu.reserve_extra
+    reserve = (ACT_RESERVE + topo.gpu.reserve_extra if topo.reserve is None
+               else topo.reserve)
     # NOT factored as tp*(vram - reserve) - w: keeping the three terms in the
     # original order makes every pre-existing configuration bit-identical to the
     # pre-grid code (tp=1 reproduces the old single/DP branch, tp=n the old TP
@@ -1759,7 +1302,7 @@ def itl_spike(model: Model, topo: Topology, wl, n_decode: int, chunk: float,
     # one decode STEP: a forward pass that hands each user `mtp` tokens
     # (p50 is per-user tokens/s, speculation included), and the gap a
     # stream sees between its server-sent events
-    decode_s = model.mtp / p50[0]
+    decode_s = model.tokens_per_step / p50[0]
     # the chunk is priced mid-re-prefill (prior = E[L]/2, the average cache
     # it attends over during a full cold re-prefill); the LAST chunk of a
     # mean-length context runs ~prior = E[L], about twice this cross term
@@ -2261,7 +1804,7 @@ def spike_token_debt(model: Model, topo: Topology, wl, burst: float,
                                   n_iter=n_iter, seed=seed)
     if not np.isfinite(drain):
         return drain, ratio, float("inf"), float("inf")
-    per_user = drain * model.mtp * (1e3 / d_ms - 1e3 / x_ms)
+    per_user = drain * model.tokens_per_step * (1e3 / d_ms - 1e3 / x_ms)
     return drain, ratio, per_user, per_user * n_decode
 
 
@@ -2429,29 +1972,108 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
 # CONCURRENCY  (per-user / aggregate decode tok/s vs max_num_seqs)
 # ============================================================================
 def decode_token_seconds(model: Model, topo: Topology, mfu: float = None) -> float:
-    """GEMM compute time of ONE token position, at prefill's achieved rate.
-    No attention term: a decode position's attention is the KV READ, which the
-    byte ledger already carries."""
+    """c_tok: GEMM time of ONE token position on one replica group, at
+    prefill's kernel MFU and the group's RAW peak (no TP haircut: decode's
+    all-reduces are tau_ar). No attention term: a decode position's attention
+    is the KV READ, which the byte ledger carries."""
     if model.params_prefill <= 0:
         raise ValueError(f"{model.name}: no prefill constants "
                          "(params_prefill unset — see research/prefill.md)")
     mfu = MFU_DEFAULT if mfu is None else mfu
     if not 0 < mfu <= 1:
         raise ValueError(f"mfu must be in (0, 1], got {mfu!r}")
-    return 2.0 * model.params_prefill / (peak_flops(topo) * mfu)
+    if topo.gpu.peak_flops_fp8 <= 0:
+        raise ValueError(f"{topo.gpu.name}: peak_flops_fp8 unset")
+    return 2.0 * model.params_prefill / (topo.tp * topo.gpu.peak_flops_fp8 * mfu)
+
+
+@dataclass(frozen=True)
+class DecodeConstants:
+    """The four constants of the decode step equation (see DECODE_ETA), plus
+    the union arm. `ws calibrate` fits them; [calibration] overrides them.
+    `compute=False` drops the verify-GEMM leg: with eta = 1 and every tau 0
+    that is the pure byte roofline the baseline study priced."""
+    eta: float = DECODE_ETA
+    tau_0: float = None              # None = the solved prior (decode_priors)
+    tau_ar: float = None
+    tau_rec: float = None
+    mfu: float = None                # None = MFU_DEFAULT
+    union: str = "coverage"          # or "linear", the no-overlap upper bound
+    compute: bool = True
+
+    def __post_init__(self):
+        if not 0 < self.eta <= 1:
+            raise ValueError(f"eta must be in (0, 1], got {self.eta!r}")
+        for f in ("tau_0", "tau_ar", "tau_rec"):
+            v = getattr(self, f)
+            if v is not None and v < 0:
+                raise ValueError(f"{f} must be >= 0, got {v!r}")
+        if self.union not in ("coverage", "linear"):
+            raise ValueError(f"union must be 'coverage' or 'linear', got {self.union!r}")
+
+    def taus(self) -> tuple:
+        p0, par, prec = decode_priors()
+        return (p0 if self.tau_0 is None else self.tau_0,
+                par if self.tau_ar is None else self.tau_ar,
+                prec if self.tau_rec is None else self.tau_rec)
+
+    @classmethod
+    def roofline(cls) -> "DecodeConstants":
+        return cls(eta=1.0, tau_0=0.0, tau_ar=0.0, tau_rec=0.0, compute=False)
+
+
+def _fixed_seconds(model: Model, tp: int, k: int, taus: tuple) -> float:
+    """Per-layer fixed cost plus serial recurrent updates of one step."""
+    tau_0, tau_ar, tau_rec = taus
+    tau_l = tau_0 + (tau_ar if tp > 1 else 0.0)
+    return (tau_l * (model.layers + model.passes(k) * model.draft_layers)
+            + tau_rec * model.rec_layers * (1 + k))
+
+
+_PRIORS = None
+
+
+def decode_priors() -> tuple:
+    """(tau_0, tau_ar, tau_rec) in seconds: the two priors and tau_rec solved
+    from the anchor's measured intercept (see DECODE_ETA)."""
+    global _PRIORS
+    if _PRIORS is None:
+        m = MODELS["27B"]
+        k = _ANCHOR_SPEC_TOKENS
+        draft_s = m.passes(k) * m.draft_pass_bytes(0) / (4 * GPUS["H200"].hbm_bw * DECODE_ETA)
+        left = _ANCHOR_FIXED_S - draft_s - _fixed_seconds(m, 4, k, (TAU_0, TAU_AR, 0.0))
+        if left <= 0:
+            raise ValueError("anchor: draft bytes and the tau priors exceed the "
+                             "measured 2.7 ms intercept")
+        _PRIORS = (TAU_0, TAU_AR, left / (m.rec_layers * (1 + k)))
+    return _PRIORS
+
+
+def decode_step_seconds(model: Model, topo: Topology, n: int, kv_bytes,
+                        decode: DecodeConstants = None, k: int = None):
+    """Seconds of one decode step for n sequences whose KV and state reads
+    total `kv_bytes` (scalar or array: already replicated, see decode_curves).
+    k defaults to the model's spec_tokens."""
+    dc = decode or DecodeConstants()
+    k = model.spec_tokens if k is None else k
+    positions = n * (1 + k)
+    step_bytes = (model.w_decode(positions, dc.union)
+                  + model.passes(k) * model.draft_pass_bytes(n, dc.union) + kv_bytes)
+    t = step_bytes / (dc.eta * topo.tp * topo.gpu.hbm_bw)
+    if dc.compute:
+        t = t + positions * decode_token_seconds(model, topo, dc.mfu)
+    return t + _fixed_seconds(model, topo.tp, k, dc.taus())
 
 
 def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
-                  n_iter=3000, seed=0, union="linear", mbu: float = None,
-                  latency: "DecodeLatency | None" = None):
-    """Per-user tok/s percentiles (p5,p50,p95) and aggregate p50 vs max_num_seqs.
+                  n_iter=3000, seed=0, decode: DecodeConstants = None):
+    """Per-user tok/s percentiles (p5, p50, p95) and aggregate p50 vs the
+    number of sequences decoding at once (max_num_seqs).
 
-    step_bytes(n) = weights (MoE: shared + expert union, see Model.w_decode)
-                  + KV read of all active contexts
-                  + DeltaNet recurrent-state read+write for every active
-                    sequence (2 x state x n; each decode step updates S).
-    The state term was omitted by the baseline decode model; at its mns=6 it is
-    <2% of step bytes, but at mns 64+ it is no longer negligible.
+    per-user tok/s = tokens_per_step(acceptance, k) / t_step, with t_step from
+    decode_step_seconds. The KV and state reads are sampled per sequence from
+    the workload's context distribution; the weights, draft passes, verify
+    compute and fixed terms do not depend on the contexts.
     """
     check_dtype_supported(model, topo)
     check_cap_allowed(model, wl)
@@ -2462,37 +2084,23 @@ def decode_curves(model: Model, topo: Topology, wl: Workload, mns_range,
     # per-step KV and state bytes scale by the same factor as the storage
     model = _replicated(model, topo)
     rng = np.random.default_rng(seed)
-    # Calibrated decode efficiency (MBU_DEFAULT). This line once read
-    # `bw = effective_bw(topo)`, a pure roofline; pass mbu=1.0 to recover
-    # that reading.
-    bw = effective_bw(topo) * (MBU_DEFAULT if mbu is None else mbu)
+    m_tok = tokens_per_step(model.acceptance, model.spec_tokens)
     # dense-attention models read every cached token per step (kv_bpt); a
-    # sparse-attention model (GLM-5.3/DSA) reads kv_decode_bpt per context
-    # token (indexer scan) plus a top-k read per active sequence, capped at
-    # the sequence's own length when it is shorter than the top-k window
+    # sparse-attention model (DSA) reads kv_decode_bpt per context token
+    # (indexer scan) plus a top-k read per active sequence, capped at the
+    # sequence's own length when it is shorter than the top-k window
     kv_read_bpt = model.kv_bpt if model.kv_decode_bpt is None else model.kv_decode_bpt
     topk = model.kv_decode_topk
     p5, p50, p95, agg = [], [], [], []
     for n in mns_range:
         full, _, _, _ = wl.sample(rng, (n_iter, n))
         if model.kv_decode_const and topk:
-            # DSA reads min(len, top-k) tokens per layer, not a flat top-k
             topk_bytes = (model.kv_decode_const / topk) * \
                 np.minimum(full, topk).sum(axis=1)
         else:
             topk_bytes = n * model.kv_decode_const
-        kv_bytes = full.sum(axis=1) * kv_read_bpt + topk_bytes
-        state_bytes = n * model.state_traffic
-        step_bytes = model.w_decode(n, union) + kv_bytes + state_bytes
-        if latency is None:
-            pu = model.mtp * bw / step_bytes
-        else:
-            # opt-in: bytes at one efficiency + verify compute + fixed latency
-            t_step = (step_bytes / (effective_bw(topo) * latency.bw_eff)
-                      + n * (1 + latency.spec_tokens)
-                      * decode_token_seconds(model, topo, latency.mfu)
-                      + latency.fixed_s)
-            pu = model.mtp / t_step
+        kv_bytes = full.sum(axis=1) * kv_read_bpt + topk_bytes + n * model.state_traffic
+        pu = m_tok / decode_step_seconds(model, topo, n, kv_bytes, decode)
         a, b, c = np.percentile(pu, [5, 50, 95])
         p5.append(a); p50.append(b); p95.append(c)
         # aggregate tok/s of one engine; for DP the *system* is replicas x this
@@ -2781,10 +2389,9 @@ def _capacity_limit(at_share, warm_users: float | None,
 
 
 def max_users_decode(model: Model, topo: Topology, wl: Workload,
-                     floor: float = DECODE_FLOOR_TOKS, union: str = "linear",
+                     floor: float = DECODE_FLOOR_TOKS,
                      n_iter: int = 400, seed: int = 0, hi: int = 4096,
-                     mbu: float = None,
-                     latency: "DecodeLatency | None" = None) -> float:
+                     decode: "DecodeConstants" = None) -> float:
     """Concurrent decoders at which per-user p50 tok/s falls to `floor`.
 
     Bisection, not the linear scan tables.py uses: per-user speed is monotone
@@ -2795,7 +2402,7 @@ def max_users_decode(model: Model, topo: Topology, wl: Workload,
     """
     def p50(n):
         return decode_curves(model, topo, wl, [n], n_iter=n_iter, seed=seed,
-                             union=union, mbu=mbu, latency=latency)[1][0]
+                             decode=decode)[1][0]
     if p50(1) < floor:
         return 0.0
     if p50(hi) >= floor:
@@ -2840,11 +2447,10 @@ def max_users_decode_bounded(model: Model, topo: Topology, wl: Workload,
 def steady_decode_point(model: Model, topo: Topology, wl: Workload,
                         rate_group: float,
                         out_tokens: float = OUT_TOKENS_DEFAULT,
-                        union: str = "linear", n_iter: int = 400,
+                        n_iter: int = 400,
                         seed: int = 0, hi: int = 4096,
-                        mbu: float = None,
                         resident: float = None,
-                        latency: "DecodeLatency | None" = None) -> dict:
+                        decode: "DecodeConstants" = None) -> dict:
     """The decode batch a given LOAD actually produces, and its per-user speed.
 
     Every other decode figure in this model is a stress test: max_users_decode
@@ -2892,9 +2498,9 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     n is a floor, not an estimate. Callers that already hold the warm figure
     pass `resident`; None computes it at the same seed.
 
-    `mbu` is passed straight to decode_curves (None = the measured default),
-    so a caller honouring a calibration block prices this point and
-    max_users_decode at the SAME decode efficiency. Without it the two
+    `decode` is passed straight to decode_curves (None = the priors), so a
+    caller honouring a calibration block prices this point and
+    max_users_decode with the SAME constants. Without it the two
     disagreed silently: at mbu 0.1 vs 0.8 the decode ceiling moved 3 -> 171
     users while this point stayed at 59 tok/s either way.
 
@@ -2928,8 +2534,7 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
 
     def v(n: int) -> float:
         return float(decode_curves(model, topo, wl, [n], n_iter=n_iter,
-                                   seed=seed, union=union, mbu=mbu,
-                                   latency=latency)[1][0])
+                                   seed=seed, decode=decode)[1][0])
 
     out = {"demand_tok_s": demand, "saturated": False}
     if demand == 0:                        # no load: nothing is decoding
@@ -3027,9 +2632,9 @@ def max_users_decode_slots(model: Model, topo: Topology, wl: Workload,
                            max_num_seqs: int,
                            think_time_s: float = THINK_TIME_S,
                            out_tokens: float = OUT_TOKENS_DEFAULT,
-                           union: str = "linear", n_iter: int = 400,
-                           seed: int = 0, mbu: float = None,
-                           latency: "DecodeLatency | None" = None,
+                           n_iter: int = 400,
+                           seed: int = 0,
+                           decode: "DecodeConstants" = None,
                            per_user_tok_s: float = None,
                            quantile: float = DECODE_SLOT_QUANTILE) -> float:
     """Users per replica group at which the steady decode batch's `quantile`
@@ -3058,8 +2663,7 @@ def max_users_decode_slots(model: Model, topo: Topology, wl: Workload,
     v = per_user_tok_s
     if v is None:
         v = float(decode_curves(model, topo, wl, [max(1, math.ceil(m))],
-                                n_iter=n_iter, seed=seed, union=union,
-                                mbu=mbu, latency=latency)[1][0])
+                                n_iter=n_iter, seed=seed, decode=decode)[1][0])
     rate = m * v / out_tokens
     return rate * think_time_s / (1.0 + wl.sub_ratio)
 
@@ -3332,7 +2936,7 @@ def slowed_steps(model: Model, topo: Topology, wl, chunk: float,
                  mfu: float = MFU_DEFAULT) -> dict:
     """The step lengths slowed generation is built from, in seconds.
 
-    decode_s   one decode step: model.mtp accepted tokens per step at
+    decode_s   one decode step: model.tokens_per_step accepted tokens per step at
                `decode_toks` per stream, so mtp / decode_toks. Priced at the
                decode floor rather than at the load's own batch: the floor is
                the slowest step the decode SLO admits, and a fixed step keeps
@@ -3343,17 +2947,17 @@ def slowed_steps(model: Model, topo: Topology, wl, chunk: float,
                prior = E[L] / 2, the mean cache a chunk of a cold re-prefill
                attends over.
     mixed_s    decode_s + chunk_s, a step that carries the chunk.
-    speed      model.mtp / mixed_s, tokens per second a stream gets while a
+    speed      model.tokens_per_step / mixed_s, tokens per second a stream gets while a
                cold prefill runs.
     """
     if decode_toks <= 0:
         raise ValueError(f"decode_toks must be > 0, got {decode_toks!r}")
-    decode_s = model.mtp / decode_toks
+    decode_s = model.tokens_per_step / decode_toks
     chunk_s = prefill_seconds(model, topo, chunk, mfu,
                               prior=mean_context(wl) / 2)
     mixed_s = decode_s + chunk_s
     return {"decode_s": decode_s, "chunk_s": chunk_s, "mixed_s": mixed_s,
-            "speed": model.mtp / mixed_s}
+            "speed": model.tokens_per_step / mixed_s}
 
 
 def slowed_share(model: Model, topo: Topology, wl, req_rate: float,
@@ -3559,7 +3163,7 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
                     think_time_s: float = THINK_TIME_S,
                     decode_floor: float = DECODE_FLOOR_TOKS,
                     mfu: float = MFU_DEFAULT, discipline: str = "fcfs",
-                    ram_gib=0, union: str = "linear",
+                    ram_gib=0, decode: "DecodeConstants" = None,
                     per_pass_overhead: bool = False,
                     closed: bool = False,
                     z_think_s: float = MEASURED_THINK_Z_S,
@@ -3611,7 +3215,7 @@ def operating_point(model: Model, topo: Topology, wl: Workload, users: float,
     warm = max_users_cache(model, topo, wl, ram_gib=ram_gib, n_iter=n_iter,
                            seed=seed)
     decode_n, decode_censored = max_users_decode_bounded(
-        model, topo, wl, floor=decode_floor, union=union, n_iter=n_iter,
+        model, topo, wl, floor=decode_floor, decode=decode, n_iter=n_iter,
         seed=seed)
     ceilings = {
         "decode": decode_n,
@@ -3709,6 +3313,15 @@ EUR_PER_KWH_DEFAULT = 0.19   # Eurostat non-household EU average €0.1902/kWh
                              # H1-2025; country spread €0.08 (FI) - €0.26 (CY).
                              # STATISTICAL (HIGH), user-chosen multiplier.
 HOURS_PER_MONTH = 720.0      # the explorer's flat billing month (30 x 24 h)
+# The hours a month the team works, and so the hours the GPUs carry load:
+# 10 h a day, 21 working days. Rented GPUs are up (and billed) only then;
+# owned GPUs idle the rest of the month. A monthly reservation is rent at 720.
+WORK_HOURS_DEFAULT = 210.0
+# Months an owned server is written off over. Hyperscalers book 5 to 6 years
+# (Amazon 5, Meta 5.5, CoreWeave 6, press reports); a GPU generation lasts
+# about 2, so the planner takes 3 years, the cautious end.
+AMORT_MONTHS_DEFAULT = 36.0
+PAY_MODES = ("rent", "own")
 
 # Output tokens ONE REQUEST decodes (applied to every request, subagents
 # included) — ~400 mean, from a trace not published in this repo; was
@@ -3798,24 +3411,30 @@ def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
                 mfu: float = MFU_DEFAULT, out_tokens: float = AVG_OUT_TOK,
                 per_pass_overhead: bool = False,
                 eur_gpu_h: float = None,
-                decode_floor: float = DECODE_FLOOR_TOKS) -> dict:
-    """€ figures on top of power_draw() — the explorer's energyCost().
+                decode_floor: float = DECODE_FLOOR_TOKS,
+                pay: str = "rent", work_hours: float = WORK_HOURS_DEFAULT,
+                eur_capex_gpu: float = None,
+                amort_months: float = AMORT_MONTHS_DEFAULT) -> dict:
+    """The monthly bill of a deployment, power counted once — the
+    explorer's energyCost().
 
-    720 h/month flat. Two lines: eur_month is the ELECTRICITY (the power
-    model's own output); hw_month is GPU-hours at the rental rate
-    (eur_gpu_h, default the part's list price; the explorer's slider);
-    total_month their sum, and eur_user / eur_mtok divide the TOTAL — a
-    €/Mtok that priced the watts but not the silicon read an order of
-    magnitude too cheap. The €/1M-output-tokens figure divides the whole
-    system's cost rate by the output-token rate the load implies
-    (rate_group x replicas x out_tokens — every group assumed equally
-    loaded, the same symmetry the rest of the study uses), and is Infinity
-    at zero output rather than a silent zero. eur_user divides the monthly
-    total across `users` (floored at 1, matching the explorer). pue and
-    eur_kwh are exact user-chosen multipliers on the ELECTRICITY line —
-    linear in each, asserted in _selfcheck — so tariff/facility scenarios
-    are one multiply, never a re-model. The €-per-token figure inherits
-    out_tokens' ASSUMED status linearly.
+    Two ways to pay for the GPUs (`pay`):
+
+      rent   eur_gpu_h x n_gpu x work_hours: the GPUs are up, and billed,
+             only the hours the team works. The rent includes power,
+             cooling and the host, so there is no electricity line
+             (eur_month 0). A monthly reservation is work_hours = 720 at
+             its own lower eur_gpu_h.
+      own    eur_capex_gpu x n_gpu / amort_months, plus the electricity at
+             the meter: the load's draw (power_draw) for work_hours and the
+             idle draw for the rest of the 720-hour month. pue and eur_kwh
+             are exact multipliers on that line.
+
+    hw_month is the rent or the write-off, eur_month the electricity,
+    total_month their sum; eur_user divides the total across `users`
+    (floored at 1, matching the explorer). eur_mtok divides it by the output
+    tokens the load produces in work_hours (rate_group x replicas x
+    out_tokens, every group equally loaded), Infinity at zero output.
     """
     if users < 0:
         raise ValueError(f"users must be >= 0, got {users!r}")
@@ -3825,19 +3444,34 @@ def energy_cost(model: Model, topo: Topology, wl: Workload, rate_group: float,
         eur_gpu_h = topo.gpu.eur_gpu_h
     if eur_gpu_h < 0:
         raise ValueError(f"eur_gpu_h must be >= 0, got {eur_gpu_h!r}")
+    if pay not in PAY_MODES:
+        raise ValueError(f"pay must be one of {PAY_MODES}, got {pay!r}")
+    if not 0 < work_hours <= HOURS_PER_MONTH:
+        raise ValueError(f"work_hours must be in (0, {HOURS_PER_MONTH:g}], got {work_hours!r}")
+    if eur_capex_gpu is None:
+        eur_capex_gpu = topo.gpu.eur_capex_gpu
+    if eur_capex_gpu < 0 or amort_months <= 0:
+        raise ValueError("eur_capex_gpu must be >= 0 and amort_months > 0")
     # keywords past `chunk`: power_draw grew an out_tokens parameter, and a
     # positional tail would silently feed per_pass_overhead into it
     p = power_draw(model, topo, wl, rate_group, decode_users_group, chunk,
                    turn_tokens=turn_tokens, pue=pue, mfu=mfu,
                    out_tokens=out_tokens, per_pass_overhead=per_pass_overhead,
                    decode_floor=decode_floor)
-    eur_month = p["kw"] * HOURS_PER_MONTH * eur_kwh
-    hw_month = topo.n_gpu * eur_gpu_h * HOURS_PER_MONTH
+    if pay == "rent":
+        eur_month = 0.0
+        hw_month = topo.n_gpu * eur_gpu_h * work_hours
+    else:
+        g = topo.gpu
+        kw_idle = topo.n_gpu * (g.idle_w + g.host_w) * pue / 1000.0
+        eur_month = (p["kw"] * work_hours
+                     + kw_idle * (HOURS_PER_MONTH - work_hours)) * eur_kwh
+        hw_month = topo.n_gpu * eur_capex_gpu / amort_months
     total_month = eur_month + hw_month
     out_tok_s = rate_group * topo.replicas * out_tokens
-    eur_mtok = ((total_month / HOURS_PER_MONTH / 3600.0) / out_tok_s * 1e6
+    eur_mtok = ((total_month / work_hours / 3600.0) / out_tok_s * 1e6
                 if out_tok_s > 0 else float("inf"))
-    return {**p, "eur_month": eur_month, "hw_month": hw_month,
+    return {**p, "pay": pay, "eur_month": eur_month, "hw_month": hw_month,
             "total_month": total_month,
             "eur_user": total_month / max(1.0, users),
             "eur_mtok": eur_mtok}
@@ -3887,9 +3521,11 @@ def _selfcheck():
     pool_tp2_16 = kv_pool_tokens(m27_16, tp2)
     assert abs(pool_tp2_16 / MEASURED_POOL_TOKENS_27B_TP2_FP16 - 1) < 0.01, \
         f"TP2 FP16 pool {pool_tp2_16:.0f} should match the measured 3,233,564"
-    # MTP acceptance <-> speedup: the 1.7x default corresponds to a ~ 47%
-    assert abs(mtp_speedup(0.4747) - 1.7) < 1e-3
-    assert mtp_speedup(0.0) == 1.0 and abs(mtp_speedup(0.87) - 2.627) < 1e-3
+    # tokens per step: geometric closed form, per-position list, k = 0
+    assert abs(tokens_per_step(0.4747, 2) - 1.7) < 1e-3
+    assert tokens_per_step(0.0, 3) == 1.0 and tokens_per_step(0.9, 0) == 1.0
+    assert abs(tokens_per_step(0.971, 3) - (1 - 0.971 ** 4) / (1 - 0.971)) < 1e-12
+    assert abs(tokens_per_step((0.9, 0.8), 2) - (1 + 0.9 + 0.72)) < 1e-12
     assert with_kv_dtype(m27, "fp8") is m27          # fp8 = identity
     _, p16, _, _ = decode_curves(with_kv_dtype(m35, "fp16"), t1, wl, [64], n_iter=300)
     _, p8, _, _ = decode_curves(m35, t1, wl, [64], n_iter=300)
@@ -3955,7 +3591,7 @@ def _selfcheck():
         return with_gpu(m_, gk)
     for mdl in (MODELS["MM35"], _arm("GLM52", "H200"), MODELS["DSV4F"], MODELS["DSV4FV"],
                 MODELS["DSV41F"], MODELS["Q38FN"], _arm("GLM53F", "H200"),
-                MODELS["ML4"]):
+                MODELS["ML4"], _arm("K31P", "H200")):
         for n in (1, 2, 4, 8):
             assert kv_pool_tokens(mdl, topology("dp", n)) == 0
     # ...but replicating GROUPS does hold a real pool on one 8-GPU node.
@@ -3982,6 +3618,10 @@ def _selfcheck():
     assert min_tp_for(MODELS["ML4"], "H200") == 9
     assert min_tp_for(MODELS["ML4"], "B300") == 5
     assert min_tp_for(with_weight_dtype(MODELS["ML4"], "nvfp4"), "B300") == 3
+    # Kimi-K3.1-Pro: 1,566.6 GB with its drafter needs 13 usable H200 and
+    # 7 B300, so TP8 on one 8xB300 node is its only single-node fit
+    assert min_tp_for(_arm("K31P", "H200"), "H200") == 13
+    assert min_tp_for(MODELS["K31P"], "B300") == 7
     assert kv_pool_tokens(MODELS["MM35"], topology_grid(4, 2)) > 0    # DP4xTP2
     assert kv_pool_tokens(MODELS["GLM52"], topology_grid(2, 4, "B300")) > 0
     # min_tp is exactly the boundary: one GPU less holds nothing
@@ -3992,7 +3632,8 @@ def _selfcheck():
                    ("DSV41F", "H200"), ("DSV41F", "B300"),
                    ("Q38FN", "H200"), ("Q38FN", "B300"),
                    ("GLM53F", "H200"), ("GLM53F", "B300"),
-                   ("ML4", "H200"), ("ML4", "B300")):
+                   ("ML4", "H200"), ("ML4", "B300"),
+                   ("K31P", "H200"), ("K31P", "B300")):
         need = min_tp_for(_arm(mk, gk), gk)
         assert kv_pool_tokens(_arm(mk, gk), topology_grid(1, need, gk)) > 0
         if need > 1:
@@ -4013,7 +3654,9 @@ def _selfcheck():
                          ("GLM53F", "H200", [(2, 4), (1, 8)]),
                          ("GLM53F", "B300", [(4, 2), (2, 4), (1, 8)]),
                          ("ML4", "H200", []),
-                         ("ML4", "B300", [(1, 8)])):
+                         ("ML4", "B300", [(1, 8)]),
+                         ("K31P", "H200", []),
+                         ("K31P", "B300", [(1, 8)])):
         got = [(t.dp, t.tp) for t in node_splits(_arm(mk, gk), gk, node=8)]
         assert got == want, f"node_splits({mk}, {gk}) = {got}, want {want}"
         for t in node_splits(_arm(mk, gk), gk, node=8):
@@ -4113,10 +3756,12 @@ def _selfcheck():
     assert glm_4.w_route_total == 256 * 21_233_688 * 75
     assert abs(glm_4.w_route_total / glm_4.w_route_pertok - 32) < 1e-9
     assert glm_4.w_decode_shared == glm.w_decode_shared + 15_891_309_576
-    # every model but DSv4-Flash-Vision has an official NVFP4 checkpoint
-    # (research/nvfp4_2026-10.md); it has community repacks only (2026-10-02)
+    # every model but DSv4-Flash-Vision and Kimi-K3.1-Pro has an official
+    # NVFP4 checkpoint (research/nvfp4_2026-10.md): DSv4-Flash-Vision has
+    # community repacks only (2026-10-02), Kimi-K3.1-Pro none (2026-11-05;
+    # its experts already ship MXFP4)
     for mk in MODELS:
-        assert (MODELS[mk].nvfp4_w is None) == (mk == "DSV4FV"), mk
+        assert (MODELS[mk].nvfp4_w is None) == (mk in ("DSV4FV", "K31P")), mk
 
     # published-config KV identities for the new models
     assert mm.kv_bpt == 88 * 8 * 128 * 2 * 1                    # 176 KiB/token FP8
@@ -4134,8 +3779,8 @@ def _selfcheck():
             bad_call(); raise AssertionError("expected ValueError")
         except ValueError:
             pass
-    assert all(MODELS[k].kv_hopper_fp8 is None for k in MODELS if k != "GLM52")
-    assert mm.mtp == 1.0, "no MTP module on Mistral Medium 3.5"
+    assert all(MODELS[k].kv_hopper_fp8 is None for k in MODELS if k not in ("GLM52", "K31P"))
+    assert mm.spec_tokens == 0 and mm.tokens_per_step == 1.0, "no MTP module on Mistral Medium 3.5"
     assert mm.deltanet_state == 0.0 and glm.deltanet_state == 0.0
 
     # DSv4-Flash-0731 identities (research/model_dsv4flash.md): compressed caches
@@ -4195,8 +3840,8 @@ def _selfcheck():
 
     # DSv4-Flash-Vision-Exp (research/model_dsv4flash_vision.md): the 0731
     # text backbone + a vision tower. Every field but the name, the resident
-    # bytes, the (absent) NVFP4 arm and the draft count (its model card
-    # serves 3 DSpark drafts, 0731's 7) IS DSV4F's — the text config and the
+    # bytes, the (absent) NVFP4 arm and the draft count (each model card
+    # serves its own depth: 7 vs 3) IS DSV4F's — the text config and the
     # cache code are unchanged, so a drift here is a copy error
     ds4v = MODELS["DSV4FV"]
     _same = ("name", "w_resident", "nvfp4_w", "spec_tokens")
@@ -4273,13 +3918,35 @@ def _selfcheck():
     # active GEMM params: card "49B" (52B with embeddings and lm_head)
     assert 49e9 < ml4.params_prefill < 50e9
 
+    # Kimi-K3.1-Pro identities (research/model_kimi_k31pro.md): 69 KDA + 24
+    # DSA layers; the 5-layer dense DSpark drafter's latents share the row
+    k31 = MODELS["K31P"]
+    assert k31.kv_bpt == 24 * 576 + 24 * 132 + 5 * 576          # B300: fp8_e4m3 rows
+    assert k31.kv_hopper_fp8 == (24 * 656 + 24 * 132 + 5 * 656, 24 * 2048 * 656)
+    assert k31.kv_decode_bpt == 24 * 132 + 5 * 576              # scans + the drafter's dense read
+    assert k31.kv_decode_const == 24 * 2048 * 576
+    assert k31.deltanet_state == 69 * 96 * 128 * 128 * 2 + 69 * 3 * 12_288 * 4 * 2
+    assert k31.rec_layers == 69 and k31.layers == 93 and k31.kv_heads == 1
+    # an expert is 3 x (3072 x 3584) MXFP4: values packed two per byte plus one
+    # UE8M0 scale per 32 (shard headers, 2026-11-05)
+    _ek = 3 * 3072 * 3584 // 2 + 3 * 3072 * 3584 // 32
+    assert k31.w_route_pertok == 16 * _ek * 92 and k31.w_route_total == 896 * _ek * 92
+    assert k31.w_route_total / k31.w_route_pertok == 56         # kink at n = 56
+    # closing identity: shared read + experts + embeddings + vision tower
+    # = the index's total_size, and the drafter's checkpoint on top
+    assert (k31.w_decode_shared + k31.w_route_total + 2_348_810_240 + 894_717_952
+            == 1_561_217_377_280 == k31.w_resident - 5_373_504_514)
+    # a block drafter: one pass per step whatever the depth
+    assert k31.passes(5) == 1 and k31.passes(0) == 0 and ml4.passes(3) == 3
+    assert 103e9 < k31.params_prefill < 104e9                    # card "104B activated"
+
     # KV sharding under TP (research/kv_tp_sharding.md): every default
     # ("dcp") topology at a TP the KV heads divide stores ONE copy, so every
     # published number is untouched; the "replicate" arm pays tp/kv_heads
     # copies past the heads, and the single-latent models pay it at every tp > 1
     for mk, heads in (("27B", 4), ("35BA3B", 2), ("MM35", 8), ("GLM52", 1),
                       ("DSV4F", 1), ("DSV4FV", 1), ("DSV41F", 1), ("Q38FN", 2),
-                      ("GLM53F", 1), ("ML4", 1)):
+                      ("GLM53F", 1), ("ML4", 1), ("K31P", 1)):
         assert MODELS[mk].kv_heads == heads, mk
         for tp_ in (1, 2, 4, 8):
             assert kv_replication(MODELS[mk], topology_grid(1, tp_, "B300")) == (1.0, 1.0)
@@ -4847,55 +4514,32 @@ def _selfcheck():
         "cache ceiling must reproduce the published warm-users p5 of 69"
     assert abs(max_users_cache(m27, tp2, wl, n_iter=800) - 177) <= 6, \
         "cache ceiling must reproduce the published warm-users p5 of 177"
-    # PUBLISHED-TABLE CONVENTION. These two pin figures that appear in
-    # docs/scenarios.md, and those tables were generated before decode had any
-    # efficiency term at all (MBU_DEFAULT). They are pinned at
-    # mbu=1.0 so the published numbers stay reproducible from this file; the
-    # DEFAULT model is now the calibrated one and disagrees with them by ~2.6x.
-    # Regenerating the tables is an owner decision, not a mechanical one --
-    # until it happens, every decode figure in the docs is roofline-convention.
-    # ...and at the pre-calibration mtp too: the 27B's speedup moved 1.7 -> 2.94
-    # with the same calibration, so BOTH knobs must be rewound to reproduce a
-    # published figure. That they travel together is the point, not an
-    # inconvenience -- see MBU_DEFAULT.
-    m27_pub = dataclasses.replace(m27, mtp=1.7)
-    assert abs(max_users_decode(m27_pub, t1, wl, n_iter=800, mbu=1.0) - 118) <= 4, \
-        "decode ceiling must reproduce the published mns@40 of 118"
-    assert abs(max_users_decode(m27_pub, tp2, wl, n_iter=800, mbu=1.0) - 228) <= 8, \
-        "decode ceiling must reproduce the published mns@40 of 228"
-    # ---- H7, and what the decode measurement did and did not settle --------
-    # H7 is the study's thesis: the CACHE binds before decode bandwidth at the
-    # reference workload. It held for every configuration under the roofline
-    # convention, and the first assertion still guards that published claim.
-    #
-    # What the calibration DID identify is per-user decode speed at the batch
-    # sizes it was fitted on: the 27B / 4xH200 TP4 across n = 1-4. That is
-    # the pin: the model must land inside the 250-330 tok/s band there (it
-    # reads 314 / 302 / 276 at n = 1 / 2 / 4). What it did NOT identify is the
-    # decode CEILING, and so not the binding order either: the constant is
-    # fitted where weights dominate the step (n = 1-25) and applied where KV
-    # does (n ~ 100-250), and the two candidate mechanisms (see MBU_DEFAULT)
-    # put the 4xH200 ceiling at 238 (A, H7 stands) or 154 (B, H7 inverts)
-    # against a cache ceiling of 249, with the single-constant fold used here at ~150.
-    # On the 1xH200 row these assertions run on, the fold reads decode ~32
-    # against cache ~70 (published: 118 against 69) -- but that ordering is a
-    # projection of the fold, not a measurement, so it is deliberately NOT
-    # asserted in either direction. A spec-off / k-sweep A/B decides it. Do
-    # not add that assertion back without the measurement behind it.
-    cache = max_users_cache(m27, t1, wl, n_iter=200)
-    dec_pub = max_users_decode(m27_pub, t1, wl, n_iter=200, mbu=1.0)
-    assert dec_pub > cache, \
-        "H7 as published: under the roofline convention the cache binds first"
+    # The published decode tables (docs/scenarios.md, mns@40 = 118 / 228)
+    # were priced on the retired byte roofline at mtp 1.7; they are not
+    # reproduced any more. What is pinned instead is the construction of the
+    # step equation's priors: at the anchor (27B, 4xH200 TP4, k = 3) the
+    # draft passes plus the fixed terms make exactly the held-batch sweep's
+    # measured 2.7 ms intercept.
     tp4 = topology("tp", 4, "H200")
+    k_a = _ANCHOR_SPEC_TOKENS
+    intercept = (m27.passes(k_a) * m27.draft_pass_bytes(0)
+                 / (DECODE_ETA * tp4.tp * tp4.gpu.hbm_bw)
+                 + _fixed_seconds(m27, 4, k_a, decode_priors()))
+    assert abs(intercept - _ANCHOR_FIXED_S) < 1e-12, "the tau priors must close on the anchor"
+    assert decode_priors()[2] > 0, "the anchor must leave a positive recurrent cost"
+    # KNOWN DISAGREEMENT, recorded in research/decode-model.md: the k = 2
+    # measurement the retired MBU fold was fitted on put the 27B/TP4 n = 1
+    # step at ~9.3 ms (314 tok/s); this form, which follows the k = 3 sweep,
+    # reads 8.0 ms (366 tok/s) there. A k-sweep on one server settles it, so
+    # no per-user band is asserted until then.
     _, p50_tp4, _, _ = decode_curves(m27, tp4, wl, [1, 2, 4], n_iter=400)
-    assert all(250 <= v <= 330 for v in p50_tp4), \
-        f"27B/TP4 per-user decode at n=1,2,4 must sit in the measured 250-330 " \
-        f"tok/s band, got {[round(float(v)) for v in p50_tp4]}"
-    # wiring guard only (same mtp on both sides): the efficiency term must
-    # actually reach the ceiling search
+    assert p50_tp4[0] > p50_tp4[1] > p50_tp4[2], "per-user speed falls with the batch"
+    # wiring guard: the constants reach the ceiling search (the pure byte
+    # roofline is faster than the full equation)
     dec = max_users_decode(m27, t1, wl, n_iter=200)
-    assert dec < max_users_decode(m27, t1, wl, n_iter=200, mbu=1.0), \
-        "MBU_DEFAULT must lower the decode ceiling against the same-mtp roofline"
+    assert dec < max_users_decode(m27, t1, wl, n_iter=200,
+                                  decode=DecodeConstants.roofline()), \
+        "the step equation must lower the decode ceiling against the byte roofline"
     assert max_users_decode(m27, t1, wl, floor=20.0, n_iter=200) > dec, \
         "a lower floor must admit more concurrent decoders"
     # an unreachable floor is a censored result, not a silent cap
@@ -4950,10 +4594,13 @@ def _selfcheck():
     #    so an earlier +/-1.0 / +/-25 pin -- justified by hand-waving about a
     #    steeper curve -- would have let real drift through. Measured, not
     #    reasoned.)
-    assert abs(sdp["n"] - 6.8) <= 0.4, \
-        f"27B/TP2 reference load: ~6.8 decoders expected, got {sdp['n']:.2f}"
-    assert abs(sdp["per_user_tok_s"] - 138) <= 10, \
-        f"27B/TP2 reference load: ~138 tok/s expected, " \
+    #    Re-pinned for the decode step equation (k = 3 at acceptance 0.971,
+    #    3.83 tokens per step, against the fold's 2.94): 6.8 at 138 -> 4.2 at
+    #    221; cross-seed spread 0.03 in n and 2 tok/s.
+    assert abs(sdp["n"] - 4.2) <= 0.3, \
+        f"27B/TP2 reference load: ~4.2 decoders expected, got {sdp['n']:.2f}"
+    assert abs(sdp["per_user_tok_s"] - 221) <= 10, \
+        f"27B/TP2 reference load: ~221 tok/s expected, " \
         f"got {sdp['per_user_tok_s']:.0f}"
     #    The stress-vs-steady gap SURVIVES calibration but narrows sharply:
     #    the ceiling fell 228 -> 74 while the steady batch rose 2.2 -> 6.8, so
@@ -5064,35 +4711,40 @@ def _selfcheck():
         "decode_floor must default to DECODE_FLOOR_TOKS"
     assert abs(p_f20["d_d"] - 2 * p_f40["d_d"]) < 1e-12, \
         "d_d must scale as 1/decode_floor below the 1 - d_p clip"
-    # the bill is LINEAR in the tariff and in PUE — both are user-chosen
-    # multipliers, not model error, and must behave like it
+    # rent: the rent alone, power inside it, for the hours the team works
     cost_ref = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
                            turn_tokens=TURN)
-    cost_2e = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
-                          turn_tokens=TURN, eur_kwh=2 * EUR_PER_KWH_DEFAULT)
-    cost_2p = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS,
-                          turn_tokens=TURN, pue=2 * PUE_DEFAULT)
-    assert abs(cost_2e["eur_month"] / cost_ref["eur_month"] - 2) < 1e-12, \
-        "eur_month must be linear in eur_kwh"
-    assert abs(cost_2p["eur_month"] / cost_ref["eur_month"] - 2) < 1e-12 \
-        and abs(cost_2p["kw"] / cost_ref["kw"] - 2) < 1e-12, \
-        "eur_month (via kw) must be linear in pue"
-    # the hardware line is the part's list price x GPUs x hours, untouched by
-    # the tariff and PUE; the per-user figure divides the TOTAL
+    assert cost_ref["eur_month"] == 0.0 and cost_ref["total_month"] == cost_ref["hw_month"]
     assert abs(cost_ref["hw_month"]
-               - tp2.n_gpu * GPUS["H200"].eur_gpu_h * HOURS_PER_MONTH) < 1e-6
-    assert cost_2e["hw_month"] == cost_ref["hw_month"] \
-        and cost_2p["hw_month"] == cost_ref["hw_month"]
-    assert cost_ref["total_month"] == cost_ref["eur_month"] + cost_ref["hw_month"]
-    # every part must carry a price: the dataclass default is 0.0 so that an
-    # unpriced GPU cannot pass as free by accident
+               - tp2.n_gpu * GPUS["H200"].eur_gpu_h * WORK_HOURS_DEFAULT) < 1e-6
+    assert energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, turn_tokens=TURN,
+                       eur_kwh=2 * EUR_PER_KWH_DEFAULT)["total_month"] == cost_ref["total_month"], \
+        "a rented GPU's bill must not move with the tariff"
+    # own: the write-off plus electricity, the electricity LINEAR in the
+    # tariff and in PUE (user-chosen multipliers, not model error)
+    own = dict(turn_tokens=TURN, pay="own")
+    own_ref = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **own)
+    own_2e = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **own,
+                         eur_kwh=2 * EUR_PER_KWH_DEFAULT)
+    own_2p = energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **own, pue=2 * PUE_DEFAULT)
+    assert abs(own_2e["eur_month"] / own_ref["eur_month"] - 2) < 1e-12, \
+        "eur_month must be linear in eur_kwh"
+    assert abs(own_2p["eur_month"] / own_ref["eur_month"] - 2) < 1e-12, \
+        "eur_month must be linear in pue"
+    assert abs(own_ref["hw_month"]
+               - tp2.n_gpu * GPUS["H200"].eur_capex_gpu / AMORT_MONTHS_DEFAULT) < 1e-6
+    assert own_2e["hw_month"] == own_ref["hw_month"] == own_2p["hw_month"]
+    assert own_ref["total_month"] == own_ref["eur_month"] + own_ref["hw_month"]
+    # a month of work at full load draws more than a month of mostly idle
+    assert energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, **{**own, "work_hours": 720.0}
+                       )["eur_month"] > own_ref["eur_month"]
+    # every part must carry both prices: the dataclass defaults are 0.0 so
+    # that an unpriced GPU cannot pass as free by accident
     for _gk, _g in GPUS.items():
         assert _g.eur_gpu_h > 0, f"GPUS[{_gk!r}] has no eur_gpu_h"
+        assert _g.eur_capex_gpu > 0, f"GPUS[{_gk!r}] has no eur_capex_gpu"
 
     assert cost_ref["eur_user"] == cost_ref["total_month"] / REF_USERS
-    assert energy_cost(m27, tp2, wl, rate_ref, du, REF_USERS, turn_tokens=TURN,
-                       eur_gpu_h=0.0)["total_month"] == cost_ref["eur_month"], \
-        "eur_gpu_h = 0 must recover the electricity-only bill"
     assert 0 < cost_ref["eur_mtok"] < float("inf")
     # zero output rate: €/1M tokens is undefined (inf), never a silent zero
     assert energy_cost(m27, tp2, wl, 0.0, du, REF_USERS,

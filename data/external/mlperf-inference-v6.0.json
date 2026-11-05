@@ -1,0 +1,4790 @@
+{
+ "source": {
+  "id": "mlperf-inference-v6.0",
+  "name": "MLPerf Inference v6.0 (closed division, datacenter)",
+  "publisher": "MLCommons",
+  "url": "https://github.com/mlcommons/inference_results_v6.0",
+  "license": "Results repo is Apache-2.0 (LICENSE.md). Use of the MLPerf name and numbers is governed by the Results Messaging Guidelines (https://github.com/mlcommons/policies/blob/45b8b625425295cdde53c4b969149ea6c4c4d084/MLPerf_Results_Messaging_Guidelines.adoc): 'You may not use the MLPerf name or logo, except in a factual and non-trademark manner solely to accurately represent your benchmark score'; cite submitter, benchmark name and version, system, result ID, retrieval date and source, trademark legend; compare only same benchmark and scenario; 'MLPerf results may not be compared against non-MLPerf results'; derived metrics 'must not be presented as official or verified MLPerf metrics'.",
+  "method": "MLCommons-run peer-reviewed benchmark. Submitters tune a fixed model and dataset. Server and Interactive scenarios report the highest Poisson query rate whose 99th-percentile TTFT and TPOT meet the benchmark bound; Offline reports unconstrained throughput. Single-turn prompts, no agent traces, no prefix reuse stated.",
+  "kind": "measured",
+  "refresh_days": 180,
+  "redistribute": "cite",
+  "terms": "MLPerf Results Messaging Guidelines (mlcommons/policies 45b8b625): cite submitter, benchmark, version, system and result ID with the trademark legend; 'MLPerf results may not be compared against non-MLPerf results'; per-GPU figures are ours, not MLPerf metrics."
+ },
+ "records": [
+  {
+   "id": "mlperf-inference-v6.0/6.0-0006-gpt-oss-120b-interactive",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "ASUSTeK",
+     "system": "XA NB3I-E12",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0006",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Interactive",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 26005.8,
+     "unit": "tok/s",
+     "at": "Interactive scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 3250.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 20,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0006\", \"Submitter\": \"ASUSTeK\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Interactive\", \"System\": \"XA NB3I-E12\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 26005.8, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0006-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "ASUSTeK",
+     "system": "XA NB3I-E12",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0006",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 110077.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13759.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0006\", \"Submitter\": \"ASUSTeK\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"XA NB3I-E12\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 110077.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0006-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "ASUSTeK",
+     "system": "XA NB3I-E12",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0006",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 100656.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12582.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0006\", \"Submitter\": \"ASUSTeK\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"XA NB3I-E12\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 100656.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0010-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.13",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Cisco",
+     "system": "Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0010",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 69251.4,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8656.4,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0010\", \"Submitter\": \"Cisco\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.13, CUDA 13.0\", \"Performance_Result\": 69251.4, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0010-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.13",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Cisco",
+     "system": "Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0010",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 58553.3,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 7319.2,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0010\", \"Submitter\": \"Cisco\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.13, CUDA 13.0\", \"Performance_Result\": 58553.3, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0010-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.13",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Cisco",
+     "system": "Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0010",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 111496.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13937.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0010\", \"Submitter\": \"Cisco\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.13, CUDA 13.0\", \"Performance_Result\": 111496.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0010-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.13",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Cisco",
+     "system": "Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0010",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 110655.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13831.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0010\", \"Submitter\": \"Cisco\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"Cisco UCS C880A M8 (8x NVIDIA B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.13, CUDA 13.0\", \"Performance_Result\": 110655.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0015-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 64,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 16,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0015",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 468665.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (64 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 7322.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0015\", \"Submitter\": \"CoreWeave\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 64, \"Nodes\": 16, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 468665.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0015-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 64,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 16,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0015",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 311531.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (64 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 4867.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0015\", \"Submitter\": \"CoreWeave\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 64, \"Nodes\": 16, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 311531.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0015-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 64,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 16,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0015",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 774539.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (64 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12102.2,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0015\", \"Submitter\": \"CoreWeave\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 64, \"Nodes\": 16, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 774539.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0015-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 64,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 16,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0015",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 743550.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (64 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 11618.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0015\", \"Submitter\": \"CoreWeave\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"CoreWeave GB200 NVL72 (64x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 64, \"Nodes\": 16, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 743550.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0016-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 64,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB300 NVL72 (64x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 16,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0016",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 910468.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (64 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 14226.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0016\", \"Submitter\": \"CoreWeave\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"CoreWeave GB300 NVL72 (64x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 64, \"Nodes\": 16, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 910468.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0016-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 64,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB300 NVL72 (64x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 16,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0016",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 956523.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (64 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 14945.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0016\", \"Submitter\": \"CoreWeave\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"CoreWeave GB300 NVL72 (64x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 64, \"Nodes\": 16, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 956523.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0017-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB300 NVL72 (8x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 2,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0017",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 78564.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 9820.5,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0017\", \"Submitter\": \"CoreWeave\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"CoreWeave GB300 NVL72 (8x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 8, \"Nodes\": 2, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 78564.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0017-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "CoreWeave",
+     "system": "CoreWeave GB300 NVL72 (8x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 2,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0017",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 44589.7,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5573.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0017\", \"Submitter\": \"CoreWeave\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"CoreWeave GB300 NVL72 (8x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 8, \"Nodes\": 2, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 44589.7, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0024-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Dell",
+     "system": "PowerEdge XE9780L (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0024",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 66287.9,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8286.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0024\", \"Submitter\": \"Dell\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"PowerEdge XE9780L (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 66287.9, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0024-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Dell",
+     "system": "PowerEdge XE9780L (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0024",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 46510.6,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5813.8,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0024\", \"Submitter\": \"Dell\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"PowerEdge XE9780L (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 46510.6, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0026-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Dell",
+     "system": "PowerEdge XE9780 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0026",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 58235.4,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 7279.4,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0026\", \"Submitter\": \"Dell\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"PowerEdge XE9780 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 58235.4, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0026-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Dell",
+     "system": "PowerEdge XE9780 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0026",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 40949.5,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5118.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0026\", \"Submitter\": \"Dell\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"PowerEdge XE9780 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 40949.5, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0027-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Dell",
+     "system": "PowerEdge XE9780 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0027",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 69021.2,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8627.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0027\", \"Submitter\": \"Dell\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"PowerEdge XE9780 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.0\", \"Performance_Result\": 69021.2, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0027-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Dell",
+     "system": "PowerEdge XE9780 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0027",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 46513.1,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5814.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0027\", \"Submitter\": \"Dell\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"PowerEdge XE9780 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.0\", \"Performance_Result\": 46513.1, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0039-deepseek-r1-interactive",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "GigaComputing",
+     "system": "G894-SD3-AAX7",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0039",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Interactive",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 4934.65,
+     "unit": "tok/s",
+     "at": "Interactive scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 616.8,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 1500,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 15,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0039\", \"Submitter\": \"GigaComputing\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Interactive\", \"System\": \"G894-SD3-AAX7\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 4934.65, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0039-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "GigaComputing",
+     "system": "G894-SD3-AAX7",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0039",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 69617.4,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8702.2,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0039\", \"Submitter\": \"GigaComputing\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"G894-SD3-AAX7\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 69617.4, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0039-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "GigaComputing",
+     "system": "G894-SD3-AAX7",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0039",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 35552.6,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 4444.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0039\", \"Submitter\": \"GigaComputing\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"G894-SD3-AAX7\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 35552.6, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0039-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "GigaComputing",
+     "system": "G894-SD3-AAX7",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0039",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 107696.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13462.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0039\", \"Submitter\": \"GigaComputing\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"G894-SD3-AAX7\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 107696.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0039-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "GigaComputing",
+     "system": "G894-SD3-AAX7",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0039",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 106397.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13299.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0039\", \"Submitter\": \"GigaComputing\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"G894-SD3-AAX7\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 106397.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0040-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Google",
+     "system": "NVIDIA DGX B200 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0040",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 57116.9,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 7139.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0040\", \"Submitter\": \"Google\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA DGX B200 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 57116.9, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0040-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Google",
+     "system": "NVIDIA DGX B200 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0040",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 41027.9,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5128.5,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0040\", \"Submitter\": \"Google\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"NVIDIA DGX B200 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 41027.9, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0042-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Google",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0042",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 307874.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 4276.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0042\", \"Submitter\": \"Google\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 307874.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0042-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Google",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0042",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 156781.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 2177.5,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0042\", \"Submitter\": \"Google\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 156781.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0063-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 4,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Lambda_SIT",
+     "system": "NVIDIA GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0063",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 60220.4,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (4 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 15055.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0063\", \"Submitter\": \"Lambda_SIT\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 4, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 60220.4, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0063-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 4,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Lambda_SIT",
+     "system": "NVIDIA GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0063",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 53462.7,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (4 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13365.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0063\", \"Submitter\": \"Lambda_SIT\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"NVIDIA GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 4, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 53462.7, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0066-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Lenovo",
+     "system": "ThinkSystem SR680a V4 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0066",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 109141.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13642.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0066\", \"Submitter\": \"Lenovo\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"ThinkSystem SR680a V4 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 109141.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0066-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Lenovo",
+     "system": "ThinkSystem SR680a V4 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0066",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 100687.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12585.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0066\", \"Submitter\": \"Lenovo\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"ThinkSystem SR680a V4 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 100687.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0073-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0073",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 70325.7,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8790.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0073\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 70325.7, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0073-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0073",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 42721.4,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5340.2,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0073\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 42721.4, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0073-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0073",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 103961.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12995.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0073\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 103961.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0073-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0073",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 100328.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12541.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0073\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"NVIDIA DGX B300 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 100328.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0075-deepseek-r1-interactive",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0075",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Interactive",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 240318.0,
+     "unit": "tok/s",
+     "at": "Interactive scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 3337.8,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 1500,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 15,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0075\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Interactive\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 240318.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0075-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0075",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 486141.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 6752.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0075\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 486141.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0075-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0075",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 336106.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 4668.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0075\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 336106.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0075-gpt-oss-120b-interactive",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0075",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Interactive",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 624929.0,
+     "unit": "tok/s",
+     "at": "Interactive scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8679.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 20,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0075\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Interactive\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 624929.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0075-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0075",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 879542.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12215.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0075\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 879542.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0075-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB200",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB200",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0075",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 899218.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12489.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0075\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"NVIDIA GB200 NVL72 (72x GB200-186GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB200\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 899218.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0076-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 288,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 72,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0076",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 2494310.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (288 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8660.8,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0076\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 288, \"Nodes\": 72, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 2494310.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0076-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 288,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 72,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0076",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 1555110.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (288 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5399.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0076\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 288, \"Nodes\": 72, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 1555110.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0078-deepseek-r1-interactive",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0078",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Interactive",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 250634.0,
+     "unit": "tok/s",
+     "at": "Interactive scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 3481.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 1500,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 15,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0078\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Interactive\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 250634.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0078-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0078",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 647076.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8987.2,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0078\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 647076.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0078-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0078",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 400437.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 5561.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0078\", \"Submitter\": \"NVIDIA\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 400437.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0078-gpt-oss-120b-interactive",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0078",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Interactive",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 677199.0,
+     "unit": "tok/s",
+     "at": "Interactive scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 9405.5,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 20,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0078\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Interactive\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 677199.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0078-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0078",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 1042980.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 14485.8,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0078\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 1042980.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0078-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "NVIDIA",
+     "system": "NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0078",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 1072250.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 14892.4,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0078\", \"Submitter\": \"NVIDIA\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"NVIDIA GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 1072250.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0079-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 1,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0079",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 15371.7,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (1 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 15371.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0079\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 1, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 15371.7, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0079-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 1,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0079",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 14973.1,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (1 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 14973.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0079\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 1, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 14973.1, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0081-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0081",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 673936.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 9360.2,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0081\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 673936.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0081-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0081",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 575580.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 7994.2,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0081\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 575580.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0081-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0081",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 1046150.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 14529.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0081\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 1046150.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0081-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 72,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 18,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0081",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 1096770.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (72 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 15232.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0081\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"Nebius GB300 NVL72 (72x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 72, \"Nodes\": 18, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 1096770.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0082-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 2,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0082",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 76346.6,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 9543.3,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0082\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 8, \"Nodes\": 2, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 76346.6, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0082-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "GB300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)",
+     "nodes": 2,
+     "accelerator_string": "NVIDIA GB300",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0082",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 64510.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8063.8,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0082\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"Nebius GB300 NVL72 (4x GB300-288GB_aarch64, TensorRT)\", \"Accelerator\": \"NVIDIA GB300\", \"Total Accelerators\": 8, \"Nodes\": 2, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, Driver 580.105.08, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 64510.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0083-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0083",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 58581.6,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 7322.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0083\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 58581.6, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0083-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0083",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 51692.9,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 6461.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0083\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 51692.9, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0083-gpt-oss-120b-interactive",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0083",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Interactive",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 13155.3,
+     "unit": "tok/s",
+     "at": "Interactive scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 1644.4,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 20,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0083\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Interactive\", \"System\": \"Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 13155.3, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0083-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0083",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 85921.2,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 10740.1,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0083\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 85921.2, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0083-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0083",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 87444.2,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 10930.5,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0083\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"Nebius B200 n1 (8x B200-SXM-180GB, TensorRT)\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 87444.2, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0084-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0084",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 69318.9,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8664.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0084\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 69318.9, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0084-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0084",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 60413.4,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 7551.7,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0084\", \"Submitter\": \"Nebius\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 60413.4, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0084-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0084",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 106885.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 13360.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0084\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 106885.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0084-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Nebius",
+     "system": "Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0084",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 100437.0,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 12554.6,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0084\", \"Submitter\": \"Nebius\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"Nebius B300 n1 (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1, cuDNN 9.17, TensorRT-LLM feat/1.2-mlpinf, NVIDIA Dynamo mlperf-v6.0-dynamo-v0.8.0, vLLM CentML:mlperf-inf-mm-q3vl-v6.0\", \"Performance_Result\": 100437.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0089-deepseek-r1-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Quanta_Cloud_Technology",
+     "system": "QuantaGrid D75H-10U (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0089",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 69263.2,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8657.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0089\", \"Submitter\": \"Quanta_Cloud_Technology\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Offline\", \"System\": \"QuantaGrid D75H-10U (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 69263.2, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0089-deepseek-r1-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "DeepSeek-R1",
+    "ws_model": null,
+    "gpu": "B300",
+    "n_gpus": 8,
+    "weights": "fp4",
+    "kv": null,
+    "engine": "TensorRT 10.14",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "Quanta_Cloud_Technology",
+     "system": "QuantaGrid D75H-10U (8x B300-SXM-270GB, TensorRT)",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B300-SXM-270GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0089",
+     "benchmark_key": "deepseek-r1"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed DeepSeek-R1 Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 35435.7,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 4429.5,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 2000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0089\", \"Submitter\": \"Quanta_Cloud_Technology\", \"Model\": \"deepseek-r1\", \"Scenario\": \"Server\", \"System\": \"QuantaGrid D75H-10U (8x B300-SXM-270GB, TensorRT)\", \"Accelerator\": \"NVIDIA B300-SXM-270GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"fp4\", \"Software\": \"TensorRT 10.14, CUDA 13.1\", \"Performance_Result\": 35435.7, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0091-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "mxfp4",
+    "kv": null,
+    "engine": "LLM-D v0.5.0",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "RedHat",
+     "system": "LLM-D v0.5.0,Openshift 4.20.12,NVIDIA 8xB200-SXM-180GB",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0091",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 93070.7,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 11633.8,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0091\", \"Submitter\": \"RedHat\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"LLM-D v0.5.0,Openshift 4.20.12,NVIDIA 8xB200-SXM-180GB\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"mxfp4\", \"Software\": \"LLM-D v0.5.0 ,vLLM 0.14.1, RHEL 9.6\", \"Performance_Result\": 93070.7, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0091-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "B200",
+    "n_gpus": 8,
+    "weights": "mxfp4",
+    "kv": null,
+    "engine": "LLM-D v0.5.0",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "RedHat",
+     "system": "LLM-D v0.5.0,Openshift 4.20.12,NVIDIA 8xB200-SXM-180GB",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA B200-SXM-180GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0091",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 71588.1,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 8948.5,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0091\", \"Submitter\": \"RedHat\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"LLM-D v0.5.0,Openshift 4.20.12,NVIDIA 8xB200-SXM-180GB\", \"Accelerator\": \"NVIDIA B200-SXM-180GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"mxfp4\", \"Software\": \"LLM-D v0.5.0 ,vLLM 0.14.1, RHEL 9.6\", \"Performance_Result\": 71588.1, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0092-gpt-oss-120b-offline",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "H200",
+    "n_gpus": 8,
+    "weights": "mxfp4",
+    "kv": null,
+    "engine": "LLM-D v0.5.0",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "RedHat",
+     "system": "LLM-D v0.5.0,OpenShift 4.21,IBM cloud gx3d-160x1792x8h200,NVIDIA 8xH200-SXM-141GB",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA H200-SXM-141GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0092",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Offline",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 28680.0,
+     "unit": "tok/s",
+     "at": "Offline scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 3585.0,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0092\", \"Submitter\": \"RedHat\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Offline\", \"System\": \"LLM-D v0.5.0,OpenShift 4.21,IBM cloud gx3d-160x1792x8h200,NVIDIA 8xH200-SXM-141GB\", \"Accelerator\": \"NVIDIA H200-SXM-141GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"mxfp4\", \"Software\": \"LLM-D v0.5.0 ,OpenShift 4.21, RHEL 9.6\", \"Performance_Result\": 28680.0, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Offline has no latency constraint (throughput only). Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  },
+  {
+   "id": "mlperf-inference-v6.0/6.0-0092-gpt-oss-120b-server",
+   "url": "https://github.com/mlcommons/inference_results_v6.0/blob/4d3916ac9cf474b679cdfcf492d43a0559418ad1/summary_results.json",
+   "read": "2026-11-04",
+   "published": "2026-04",
+   "kind": "measured",
+   "config": {
+    "model": "gpt-oss-120b",
+    "ws_model": null,
+    "gpu": "H200",
+    "n_gpus": 8,
+    "weights": "mxfp4",
+    "kv": null,
+    "engine": "LLM-D v0.5.0",
+    "parallel": null,
+    "spec_decode": null,
+    "max_ctx": null,
+    "extra": {
+     "submitter": "RedHat",
+     "system": "LLM-D v0.5.0,OpenShift 4.21,IBM cloud gx3d-160x1792x8h200,NVIDIA 8xH200-SXM-141GB",
+     "nodes": 1,
+     "accelerator_string": "NVIDIA H200-SXM-141GB",
+     "division": "closed",
+     "availability": "available",
+     "mlperf_id": "6.0-0092",
+     "benchmark_key": "gpt-oss-120b"
+    }
+   },
+   "workload": {
+    "name": "MLPerf Inference v6.0 closed gpt-oss-120b Server",
+    "isl": null,
+    "osl": null,
+    "prefix_cache": null,
+    "extra": {
+     "latency_constraints_source": "https://github.com/mlcommons/inference_policies/blob/d3eba2f21026d868ad65cdcad2bb81e4a17ce3d3/inference_rules.adoc"
+    }
+   },
+   "metrics": [
+    {
+     "name": "tok_s_total",
+     "value": 24103.2,
+     "unit": "tok/s",
+     "at": "Server scenario, whole system (8 accelerators)"
+    },
+    {
+     "name": "tok_s_per_gpu",
+     "value": 3012.9,
+     "unit": "tok/s",
+     "kind": "derived",
+     "at": "tok_s_total / total accelerators (not an official MLPerf metric)"
+    },
+    {
+     "name": "ttft_p99_ms",
+     "value": 3000,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    },
+    {
+     "name": "tpot_p99_ms",
+     "value": 80,
+     "op": "<=",
+     "unit": "ms",
+     "at": "benchmark latency constraint, 99th percentile, see rules table"
+    }
+   ],
+   "quote": "{\"ID\": \"6.0-0092\", \"Submitter\": \"RedHat\", \"Model\": \"gpt-oss-120b\", \"Scenario\": \"Server\", \"System\": \"LLM-D v0.5.0,OpenShift 4.21,IBM cloud gx3d-160x1792x8h200,NVIDIA 8xH200-SXM-141GB\", \"Accelerator\": \"NVIDIA H200-SXM-141GB\", \"Total Accelerators\": 8, \"Nodes\": 1, \"weight_data_types\": \"mxfp4\", \"Software\": \"LLM-D v0.5.0 ,OpenShift 4.21, RHEL 9.6\", \"Performance_Result\": 24103.2, \"Performance_Units\": \"Tokens/s\"}",
+   "note": "Throughput is the max Poisson rate meeting the 99th-percentile TTFT and TPOT bounds. Latency bounds are from the rules table on inference_policies master at read date, not from the results file. Per-GPU figure is ours.",
+   "use": "context"
+  }
+ ]
+}

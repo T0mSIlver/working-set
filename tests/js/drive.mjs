@@ -9,7 +9,7 @@
    section.
 
    Every quantity comes out of a function the page itself calls. */
-import { CONFIG, effective_bw, kv_pool_tokens, tpEff, w_decode }
+import { CONFIG, decodeStepSeconds, effective_bw, kv_pool_tokens, tpEff, w_decode }
   from '../../interactive/src/config.js';
 import { state, currentTopo, currentWL, ramPerCache }
   from '../../interactive/src/state.js';
@@ -54,8 +54,9 @@ export function driveState(v){
   o.effective_bw = effective_bw(topo);
   o.peak_flops = peakFlops(topo);
   o.tp_efficiency = tpEff(topo.tp, topo.gpu.nvlink_domain);
-  o.w_decode_n4 = w_decode(m, 4);
   o.w_decode_n64 = w_decode(m, 64);
+  o.decode_step_n8_ms = 1e3 * decodeStepSeconds(m, topo, 8,
+    8 * 20000 * (m.kv_decode_bpt ?? m.kv_bpt), m.decode);
   o.prefill_overhead_seconds = prefillOverheadSeconds(m, topo);
   o.mfu_ceiling = mfuCeil(m, topo);
   o.mfu_effective_at_chunk = mfuEff(m, topo, chunk);

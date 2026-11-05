@@ -170,11 +170,12 @@ def test_explorer_toml_round_trips():
     assert w.sub_shares_prefix is False
     assert (slo.ttft_budget_s, slo.itl_floor_tok_s, slo.percentile) == (10, 40, 95)
     assert ep.base_url == "http://localhost:8000/v1" and ep.api_key_env == "VLLM_API_KEY"
-    assert (cal.mfu, cal.mbu) == (M.MFU_DEFAULT, M.MBU_DEFAULT)
-    # the three knobs that used to be dropped: written even at their defaults,
-    # and mtp written as the number on screen rather than left implicit
+    assert (cal.mfu, cal.eta) == (M.MFU_DEFAULT, M.DECODE_ETA)
+    # knobs written even at their defaults; acceptance and draft depth as the
+    # numbers on screen rather than left implicit
     assert (d.recurrent_state_dtype, d.weight_overhead) == ("bf16", 0)
-    assert cal.mtp == M.MODELS["35BA3B"].mtp
+    assert cal.acceptance == M.MODELS["35BA3B"].acceptance
+    assert cal.spec_tokens == M.MODELS["35BA3B"].spec_tokens
     cfg.validate()
     # no predictions travel in the file, and re-dumping it changes nothing
     assert load_config(p) == RunConfig.from_dict(tomllib.loads(cfg.dumps("toml")))
@@ -191,9 +192,11 @@ def test_explorer_toml_names_every_field():
         want = {f.name for f in dataclass_fields(typ)}
         want -= {"metrics_url"}          # optional: no /metrics on the page
         want -= {"max_num_seqs"}         # optional: written only when set; unset = no cap
-        # opt-in decode pricing: written only when selected, as dumps() does
-        # (explorer_decode_latency_mns.toml carries all four)
-        want -= {"decode_pricing", "decode_bw_eff", "decode_fixed_ms", "spec_tokens"}
+        # the taus and the union arm: written only off their priors, as
+        # dumps() does (explorer_every_knob.toml carries tau_0_us)
+        want -= {"tau_0_us", "tau_ar_us", "tau_rec_us", "union"}
+        # `ws calibrate` only: the page has no reserve control and no fit record
+        want -= {"reserve_gib", "fit"}
         # like the image keys, written only off their defaults (the page has
         # controls; explorer_every_knob.toml carries both)
         want -= {"slowed_share_max", "cold_wait_budget_s"}
@@ -206,16 +209,15 @@ def test_explorer_toml_names_every_field():
 
 
 def test_explorer_decode_toml_reaches_the_model():
-    """The explorer's max_num_seqs and latency-pricing controls, downloaded:
-    35B-A3B on TP2, latency pricing at 2 draft tokens and 2.2 ms, cap 48."""
-    p = Path(__file__).resolve().parent / "fixtures" / "explorer_decode_latency_mns.toml"
+    """The explorer's max_num_seqs and a calibrated launch cost, downloaded:
+    35B-A3B on TP2, tau_0 4 us, cap 48."""
+    p = Path(__file__).resolve().parent / "fixtures" / "explorer_decode_mns.toml"
     cfg = load_config(p)
     assert cfg.deployment.max_num_seqs == 48
-    lat = cfg.decode_latency()
-    assert lat is not None
-    assert (lat.bw_eff, lat.spec_tokens) == (M.DECODE_BW_EFF, 2)
-    assert lat.fixed_s == pytest.approx(2.2e-3)
-    assert lat.mfu == cfg.calibration.mfu
+    dc = cfg.decode_constants()
+    assert dc.taus()[0] == pytest.approx(4e-6)
+    assert dc.taus()[1:] == M.decode_priors()[1:]
+    assert (dc.eta, dc.mfu) == (M.DECODE_ETA, cfg.calibration.mfu)
     cfg.validate()
     assert load_config(p) == RunConfig.from_dict(tomllib.loads(cfg.dumps("toml")))
 
@@ -249,7 +251,7 @@ def _knob(name: str):
 def test_explorer_knobs_reach_the_model():
     """35B-A3B on 1xH200, one knob at a time, against what the page reports."""
     base, fp32 = _knob("base").to_model(), _knob("fp32").to_model()
-    p15, mtp10 = _knob("p15").to_model(), _knob("mtp10").to_model()
+    p15, off = _knob("p15").to_model(), _knob("spec_off").to_model()
     ref = M.MODELS["35BA3B"]
     # fp32 doubles the per-session recurrent state (render.js modelFor)
     assert base.deltanet_state == ref.deltanet_state
@@ -259,8 +261,9 @@ def test_explorer_knobs_reach_the_model():
     assert p15.w_resident == pytest.approx(ref.w_resident * 1.15)
     assert p15.deltanet_state == ref.deltanet_state
     assert "[+15% weights]" in p15.name
-    # the MTP slider overrides the model's own value
-    assert base.mtp == ref.mtp and mtp10.mtp == 1.0
+    # the draft-tokens control overrides the model's own depth
+    assert base.spec_tokens == ref.spec_tokens and off.spec_tokens == 0
+    assert off.tokens_per_step == 1.0
 
 
 def test_fp32_state_costs_warm_capacity_as_the_page_reports():
@@ -288,17 +291,21 @@ def test_weight_overhead_shrinks_the_kv_pool_as_the_page_reports():
     assert pool["p15"] == pytest.approx(7_897_082.474, abs=0.01)
 
 
-def test_mtp_override_moves_the_decode_ceiling():
-    """Per-user decode is mtp x bandwidth / step bytes. On this MoE the
-    slider moves both: speculation off drops the 1.7x speedup AND the two
-    draft positions each sequence routes through the experts (issue #91).
-    At this state the expert reads outweigh the speedup, so turning
-    speculation off raises the ceiling a little (40 -> 42 users)."""
+def test_speculation_off_moves_the_decode_ceiling():
+    """Per-user decode is tokens per step over the step time. Speculation off
+    loses 1.94 of 2.94 tokens per step but also the verify positions, the
+    draft passes and the expert union over them, so the ceiling falls by
+    less than the token count alone says."""
     base = predict(_knob("base"), n_iter=400)
-    off = predict(_knob("mtp10"), n_iter=400)
-    assert _knob("mtp10").to_model().verify_positions == 1
-    assert _knob("base").to_model().verify_positions == 3
-    assert 1.0 < off.decode_ceiling_users / base.decode_ceiling_users < 1.15
+    off = predict(_knob("spec_off"), n_iter=400)
+    assert off.decode_ceiling_users < base.decode_ceiling_users
+    # per user at one sequence: fewer tokens per step, partly bought back by
+    # a shorter step
+    m_on, m_off = _knob("base").to_model(), _knob("spec_off").to_model()
+    t, wl = _knob("base").to_topology(), _knob("base").to_workload()
+    on1 = M.decode_curves(m_on, t, wl, [1], n_iter=200)[1][0]
+    off1 = M.decode_curves(m_off, t, wl, [1], n_iter=200)[1][0]
+    assert 1 / m_on.tokens_per_step < off1 / on1 < 1
     # nothing else about the deployment moved
     assert off.warm_capacity_p5 == pytest.approx(base.warm_capacity_p5, rel=0.05)
 
@@ -307,19 +314,19 @@ def test_knob_round_trip_with_non_default_values():
     cfg = RunConfig.from_dict({
         "deployment": {"model": "35BA3B", "gpu": "H200",
                        "recurrent_state_dtype": "fp32", "weight_overhead": 0.15},
-        "calibration": {"mtp": 1.0}})
+        "calibration": {"spec_tokens": 0, "acceptance": 0.8}})
     cfg.validate()
     back = RunConfig.from_dict(tomllib.loads(cfg.dumps("toml")))
     assert back == cfg
     assert back.deployment.recurrent_state_dtype == "fp32"
     assert back.deployment.weight_overhead == 0.15
-    assert back.calibration.mtp == 1.0
-    # a config that does not name mtp gets the model's own value, and says so
-    # by omitting the key rather than by writing a wrong number
+    assert (back.calibration.spec_tokens, back.calibration.acceptance) == (0, 0.8)
+    # a config that does not name them gets the model's own values, and says
+    # so by omitting the keys rather than by writing a wrong number
     plain = RunConfig.from_dict({"deployment": {"model": "35BA3B"}})
-    assert plain.calibration.mtp is None
-    assert "mtp" not in plain.dumps("toml")
-    assert plain.to_model().mtp == M.MODELS["35BA3B"].mtp
+    assert plain.calibration.acceptance is None and plain.calibration.spec_tokens is None
+    assert "acceptance" not in plain.dumps("toml")
+    assert plain.to_model().spec_tokens == M.MODELS["35BA3B"].spec_tokens
 
 
 def test_knob_gates_are_refusals_not_no_ops():
@@ -339,9 +346,12 @@ def test_knob_gates_are_refusals_not_no_ops():
     with pytest.raises(ValueError, match="weight_overhead must be >= 0"):
         RunConfig.from_dict({"deployment": {"model": "35BA3B",
                                             "weight_overhead": -0.1}}).validate()
-    with pytest.raises(ValueError, match="calibration.mtp must be"):
+    with pytest.raises(ValueError, match="calibration.acceptance must be"):
         RunConfig.from_dict({"deployment": {"model": "27B"},
-                             "calibration": {"mtp": 0}}).validate()
+                             "calibration": {"acceptance": 1.5}}).validate()
+    # the retired decode keys are named, with what replaces them
+    with pytest.raises(ValueError, match="retired in workingset 0.4"):
+        RunConfig.from_dict({"calibration": {"mbu": 0.22}})
     # the DeepSeek Flash models' state is a fixed mixed-precision buffer, and
     # Mistral-Large-4's the drafter's fp8 latent windows: neither is a bf16 one
     for mk, gpu, tp in (("DSV4F", "H200", 2), ("DSV4FV", "H200", 2),
@@ -410,17 +420,17 @@ def test_type_checked_at_the_boundary():
 
 
 def test_optional_float_is_type_checked_too():
-    """`float | None` had no _SCALAR entry, so calibration.mtp was unchecked:
-    a bool sailed through and a string reached the model as a TypeError three
-    calls deep instead of a message at the file boundary."""
-    with pytest.raises(ValueError, match="calibration.mtp"):
-        RunConfig.from_dict({"calibration": {"mtp": True}})
-    with pytest.raises(ValueError, match="calibration.mtp"):
-        RunConfig.from_dict({"calibration": {"mtp": "1.7"}})
+    """`float | None` had no _SCALAR entry, so an optional float was
+    unchecked: a bool sailed through and a string reached the model as a
+    TypeError three calls deep instead of a message at the file boundary."""
+    with pytest.raises(ValueError, match="calibration.acceptance"):
+        RunConfig.from_dict({"calibration": {"acceptance": True}})
+    with pytest.raises(ValueError, match="calibration.acceptance"):
+        RunConfig.from_dict({"calibration": {"acceptance": "0.9"}})
     # what it must still accept
-    assert RunConfig.from_dict({"calibration": {"mtp": 1.7}}).calibration.mtp == 1.7
-    assert RunConfig.from_dict({"calibration": {"mtp": 2}}).calibration.mtp == 2
-    assert RunConfig.from_dict({"calibration": {"mtp": None}}).calibration.mtp is None
+    assert RunConfig.from_dict({"calibration": {"acceptance": 0.9}}).calibration.acceptance == 0.9
+    assert RunConfig.from_dict({"calibration": {"acceptance": 1}}).calibration.acceptance == 1
+    assert RunConfig.from_dict({"calibration": {"acceptance": None}}).calibration.acceptance is None
 
 
 def test_predict_reference_row():
@@ -434,7 +444,10 @@ def test_predict_reference_row():
     Issue #117 moved three of them. At the configured 1% they sat past the
     knee W / (1 - f) = 407 users (TTFT 500, cold wait 456, saturation 509);
     past it the users the cache cannot keep warm miss, so each now binds
-    just past the knee. Slowed generation sits inside it and did not move."""
+    just past the knee. Slowed generation sits inside it and did not move.
+
+    The decode step equation moved slowed generation 242 -> 212: a shorter
+    decode step makes a cold chunk mixed into it a larger stretch."""
     cfg = RunConfig.from_dict({"deployment": {"model": "27B", "gpu": "H200",
                                               "tensor_parallel": 4,
                                               "max_num_batched_tokens": 4096}})
@@ -445,7 +458,7 @@ def test_predict_reference_row():
     assert 395 <= p.warm_capacity_p5 <= 411        # 403, Monte Carlo
     assert p.latency_ceiling_users == 412
     assert p.cold_wait_ceiling_users == 409
-    assert p.slowed_ceiling_users == 242
+    assert p.slowed_ceiling_users == 212
     assert p.saturation_ceiling_users == 413
     assert p.cache_hit_rate == 0.99                 # 64 users, all inside W
     assert abs(p.ttft_miss_s - 0.916) < 0.005
@@ -574,12 +587,12 @@ def test_max_num_seqs_bounds_the_steady_batch_and_rewords_h_decode():
     from workingset.hypotheses.ceilings import HDecode
     dep = {"model": "27B", "gpu": "H200", "tensor_parallel": 4}
     free = RunConfig.from_dict({"deployment": dep, "workload": {"users": 400}})
-    capped = RunConfig.from_dict({"deployment": {**dep, "max_num_seqs": 64},
+    capped = RunConfig.from_dict({"deployment": {**dep, "max_num_seqs": 16},
                                   "workload": {"users": 400}})
     pf, pc = predict(free, n_iter=200), predict(capped, n_iter=200)
-    assert pf.steady_decode_seqs is not None and pf.steady_decode_seqs > 64
+    assert pf.steady_decode_seqs is not None and pf.steady_decode_seqs > 16
     assert pc.steady_decode_seqs is None and pc.itl_normal_ms is None
-    assert "max_num_seqs (64 sequences)" in HDecode().statement(capped, pc)
+    assert "max_num_seqs (16 sequences)" in HDecode().statement(capped, pc)
     # unset prices the recommended cap, and says so
     assert "recommended" in HDecode().statement(free, pf)
 
@@ -596,57 +609,43 @@ def test_max_num_seqs_round_trips_and_validates(tmp_path):
         RunConfig.from_dict({"deployment": {"model": "27B", "max_num_seqs": 0}}).validate()
 
 
-def test_latency_decode_pricing_is_opt_in_and_reproduces_its_calibration():
-    """The three-leg decode pricing: off by default (nothing published moves),
-    and when selected it must reproduce the step times it was calibrated on
-    — 27B / 4xH200 TP4, fp32 state, MTP depth 3, prefill MFU 0.32 — from its
-    physical terms, not from a fit to them."""
+def test_decode_step_reproduces_the_measured_sweep():
+    """The decode step equation against the held-batch sweep its priors were
+    read on — 27B / 4xH200 TP4, fp32 state, MTP depth 3, prefill MFU 0.32 —
+    from its physical terms, not from a fit to each rung."""
     dep = {"model": "27B", "gpu": "H200", "tensor_parallel": 4,
            "recurrent_state_dtype": "fp32"}
-    base = RunConfig.from_dict({"deployment": dep})
-    assert base.decode_latency() is None
-    cfg = RunConfig.from_dict({"deployment": dep,
-                               "calibration": {"decode_pricing": "latency",
-                                               "mfu": 0.32}})
-    lat = cfg.decode_latency()
-    m, t = cfg.to_model(), cfg.to_topology()
-    # (sequences, context per sequence) -> calibration ms per step, rounded
+    cfg = RunConfig.from_dict({"deployment": dep, "calibration": {"mfu": 0.32}})
+    m, t, dc = cfg.to_model(), cfg.to_topology(), cfg.decode_constants()
+    assert m.spec_tokens == 3
+    # (sequences, context per sequence) -> measured ms per step, rounded
     for (n, ctx), ms in {(1, 46e3): 8.6, (8, 47e3): 11.1, (32, 40e3): 19.7,
                          (64, 37e3): 31.3, (8, 111e3): 14.4, (32, 105e3): 31.7,
                          (64, 103e3): 56.0}.items():
-        step_bytes = m.w_decode(n, "linear") + n * ctx * m.kv_bpt + n * m.state_traffic
-        t_step = (step_bytes / (M.effective_bw(t) * lat.bw_eff)
-                  + n * (1 + lat.spec_tokens) * M.decode_token_seconds(m, t, lat.mfu)
-                  + lat.fixed_s)
-        assert abs(1e3 * t_step / ms - 1) < 0.06, (n, ctx, 1e3 * t_step, ms)
+        kv = n * ctx * m.kv_bpt + n * m.state_traffic
+        step = M.decode_step_seconds(m, t, n, kv, dc)
+        assert abs(1e3 * step / ms - 1) < 0.05, (n, ctx, 1e3 * step, ms)
     # the documented exception: one long sequence alone reads its cache less
     # efficiently than a batch does, and the form has no term for it
-    lone = (m.w_decode(1, "linear") + 114e3 * m.kv_bpt + m.state_traffic) \
-        / (M.effective_bw(t) * lat.bw_eff) \
-        + (1 + lat.spec_tokens) * M.decode_token_seconds(m, t, lat.mfu) + lat.fixed_s
+    lone = M.decode_step_seconds(m, t, 1, 114e3 * m.kv_bpt + m.state_traffic, dc)
     assert 0.85 < 1e3 * lone / 10.2 < 0.92
-    # `ws test` reads its ladder curve through the same pricing `ws predict` shows
+    # `ws test` reads its ladder curve through the constants `ws predict` shows
     from workingset.shared import ladder_model_curve
+    slow = RunConfig.from_dict({"deployment": dep, "calibration": {"eta": 0.15}})
     assert (ladder_model_curve(cfg, 32, n_iter=48)["decode_tok_s"]
-            > ladder_model_curve(base, 32, n_iter=48)["decode_tok_s"])
-    # a default config still writes the file it always wrote
-    assert "decode_pricing" not in base.dumps("toml")
-    assert "spec_tokens" not in base.dumps("json")
-    assert 'decode_pricing = "latency"' in cfg.dumps("toml")
-    # it moves the decode ceiling and the steady point, and nothing else
-    p0, p1 = predict(base, n_iter=200), predict(cfg, n_iter=200)
-    assert p1.decode_ceiling_users > p0.decode_ceiling_users
+            > ladder_model_curve(slow, 32, n_iter=48)["decode_tok_s"])
+    # a default config writes no decode constant it does not set
+    base = RunConfig.from_dict({"deployment": dep})
+    assert "tau_0_us" not in base.dumps("toml") and "acceptance" not in base.dumps("json")
+    # eta moves the decode ceiling and the steady point, and nothing else
+    p0, p1 = predict(base, n_iter=200), predict(slow, n_iter=200)
+    assert p1.decode_ceiling_users < p0.decode_ceiling_users
     assert p1.warm_capacity_p5 == p0.warm_capacity_p5
     assert p1.itl_normal_ms != p0.itl_normal_ms
-    # spec off: no verify width, one token of compute per sequence per step
-    off = RunConfig.from_dict({"deployment": dep, "calibration": {
-        "decode_pricing": "latency", "spec_tokens": 0}})
-    assert off.decode_latency().spec_tokens == 0
-    with pytest.raises(ValueError, match="decode_pricing"):
-        RunConfig.from_dict({"calibration": {"decode_pricing": "fast"}}).validate()
-    with pytest.raises(ValueError, match="bw_eff"):
-        RunConfig.from_dict({"calibration": {"decode_pricing": "latency",
-                                             "decode_bw_eff": 0.0}}).validate()
+    with pytest.raises(ValueError, match="union"):
+        RunConfig.from_dict({"calibration": {"union": "fast"}}).validate()
+    with pytest.raises(ValueError, match="eta"):
+        RunConfig.from_dict({"calibration": {"eta": 0.0}}).validate()
 
 
 def test_predict_dp_system_multiplies():

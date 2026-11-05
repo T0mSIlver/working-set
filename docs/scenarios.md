@@ -38,8 +38,8 @@ math with live sliders.
 | Models *(2026-09-10)* | DeepSeek-V4-Flash-0731 | → **DeepSeek-V4.1-Flash** (552B + 196B Engram, 8B/16B active, CED + CSA2, FP4 main KV: 890 B/token but 510 GB resident — 8×H200 / 2×B300 minimum) replaces it ([`research/model_dsv41flash.md`](../research/model_dsv41flash.md)) |
 | Models *(2026-09-16)* | DeepSeek-V4.1-Flash | + **DeepSeek-V4-Flash-0731** back alongside it — a different architecture, not an older revision of the same one; its per-step state charge now follows the V4.1 correction (window reads counted once) ([`research/model_dsv4flash.md`](../research/model_dsv4flash.md)) |
 | Models *(2026-11-04)* | — | + **Mistral-Large-4** (1.05T-A49B, MLA + DSA with cross-layer KV and index sharing: 46.0 KiB/token, but 1,060.5 GB in FP8, so it fits no 8×H200 node — 8×B300, or 4×B300 in NVFP4) — in the explorer and `tables.py`; the § tables below predate it ([`research/model_mistral_large4.md`](../research/model_mistral_large4.md)) |
+| Models *(2026-11-05)* | — | + **Kimi-K3.1-Pro** (2.8T-A104B, 69 KDA + 24 gated DSA layers: 19.4 KiB/token and a 226 MiB state per session; MXFP4 experts with BF16 elsewhere, 1,566.6 GB with its drafter, so it fits no 8×H200 node — 8×B300 at TP8 only) — in the explorer and `tables.py`; the § tables below predate it ([`research/model_kimi_k31pro.md`](../research/model_kimi_k31pro.md)) |
 | KV row *(2026-11-04)* | 576 B per MLA latent | vLLM's real FP8 rows: GLM-5.3 keeps 576 B on B300 but stores 656-B `fp8_ds_mla` rows on H200 (54,728 B/token, so 8×H200 TP8 holds 3.98M tokens, not 4.50M), and BF16 KV becomes servable; the GLM-5.2 H200 rows in the § tables below predate it ([`research/model_glm52.md`](../research/model_glm52.md) § 2, issue #122) |
-| Expert union *(2026-11-04)* | one routed position per decoding sequence | **1 + drafts** positions per sequence while speculative decoding is on, since the verify routes every draft ([#91](https://github.com/T0mSIlver/working-set/issues/91)): the linear union saturates at E / (k × (1 + drafts)) sequences, so 35B-A3B at 11 instead of 32, and its 1×H200 decode ceiling drops from 76 to 40 users at the explorer's other defaults. The § MoE decode tables below predate it |
 
 Model refinements over the first draft of this study (each moves numbers by 10–20%):
 
@@ -139,6 +139,13 @@ user-class sessions only (`which="user"`), and HBM-resident sessions only
 cannot decode until it is restored).
 
 ### Decode speed (bandwidth-bound, MoE-aware)
+
+> **2026-11-04:** the code no longer prices decode this way. One step
+> equation (bytes at η of raw bandwidth, verify compute, per-layer and
+> recurrent fixed costs, draft passes as bytes) replaced this roofline, the
+> MBU fold and the per-model `mtp`; tokens per step come from acceptance and
+> draft depth. The decode figures in this document predate it.
+> `research/decode-model.md` has the equation and what moved.
 
 ```
 step_bytes(n) = w_decode(n) + (Σ active-context tokens)·KV_bpt + 2·n·state
@@ -1190,10 +1197,8 @@ Two separate causes; distinguishing them matters when reading sweeps.
 **Inherent to the metric** (real effects, reproducible):
 
 - **Piecewise-linear kinks.** The conservative expert-union model is
-  `min(n·(1+s)·w_pertok, w_total)`, with s the draft count while speculative
-  decoding is on — decode cost has a hard kink where all experts are active
-  (35B-A3B: n = 32 without drafts, ≈ 11 with its 2); beyond it, extra
-  concurrency adds only KV/state bytes.
+  `min(n·w_pertok, w_total)` — decode cost has a hard kink at n = 32 where all 256
+  experts are active; beyond it, extra concurrency adds only KV/state bytes.
 - **Tail truncation (the cap).** Warm capacity responds to `max_seq_len` through
   the log-normal *tail mass* above the cap, which shrinks super-exponentially as
   the cap rises: big gains from 120k → 60k, almost nothing from 262k → 180k.

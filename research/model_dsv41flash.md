@@ -216,6 +216,7 @@ out until `nvidia/DeepSeek-V4.1-Flash-NVFP4` (2026-09-16) was measured on
 repack, only the routed experts change: E8M0 block-32 scales become E4M3
 block-16 scales, 18,800,640 → 19,906,584 B/expert (+5.9%). The checkpoint
 weighs 527.27 GB against 510.29 GB native.
+Whether it speeds up prefill is open and unmeasured: `research/nvfp4_prefill_dsv41f.md`.
 
 ## 5. Serving notes
 

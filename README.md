@@ -10,7 +10,7 @@ for agentic coding workloads.
 live sliders for the workload, model (Qwen3.8-27B / 35B-A3B /
 Mistral-Medium-3.5 / GLM-5.3 / DeepSeek-V4-Flash /
 DeepSeek-V4-Flash-Vision-Exp / DeepSeek-V4.1-Flash / Qwen3.8-Flash-Next /
-GLM-5.3-Flash / Mistral-Large-4), GPU (H200 / B300), weight & KV dtypes, and DP × TP
+GLM-5.3-Flash / Mistral-Large-4 / Kimi-K3.1-Pro), GPU (H200 / B300), weight & KV dtypes, and DP × TP
 topology. It answers as a decision tool: a binding-constraint verdict, a
 deploy recipe (vLLM flags), the **bill** (€/GPU-hour and €/kWh sliders:
 hardware plus a duty-cycle power model), a **sensitivity panel** showing which assumption
@@ -46,8 +46,10 @@ uv run ws link workingset.toml           # the explorer URL showing this config
 uv run ws hypotheses                     # the H-* and what each one needs
 uv run ws test workingset.toml --dry-run # the plan, the sampler self-check, no requests
 uv run ws test workingset.toml --exclusive --out run.json   # measure it
+uv run ws calibrate sweep.json --config workingset.toml --write   # fit the decode constants to a ws decode-sweep run
 uv run ws report run.json                # re-print the verdicts
 uv run ws models                         # model / GPU keys
+uv run ws api workingset.toml --hours 84 # one seat on each API; what each coding plan holds
 uv run pytest                            # self-checks + config round-trips
 ```
 
@@ -210,7 +212,9 @@ bytes, priced from one vLLM anchor, give 24M. Method, sources and the misses:
   uv run scripts/tables.py           # regenerates every number in docs/scenarios.md
   ```
 
-- [research/](research/) — sourced constants for each model and GPU.
+- [research/](research/) — sourced constants for each model and GPU;
+  [research/api_prices.md](research/api_prices.md) for the API and coding-plan
+  prices `ws api` reads.
 - [interactive/](interactive/) — the explorer, a dependency-free page
   mirroring the Python model: `index.html` holds the markup and styles,
   `src/*.js` the model and the charts as ES modules (`src/main.js` is the

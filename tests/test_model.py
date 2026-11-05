@@ -263,10 +263,10 @@ def test_slowed_ceiling_solves_its_limit():
 def test_token_debt_counts_tokens_not_steps():
     """A drain costs each warm user the tokens it would have decoded: its
     per-user speed normally minus its speed while every step carries a chunk,
-    over the drain. Each step hands out `mtp` tokens, so counting steps
+    over the drain. Each step hands out `tokens_per_step` tokens, so counting steps
     undercounts by the accepted length (the 27B's 2.94)."""
     m, t, wl = M.MODELS["27B"], M.topology_grid(1, 2, "H200"), M.Workload()
-    assert m.mtp > 1                    # the case the step count got wrong
+    assert m.tokens_per_step > 1                    # the case the step count got wrong
     drain, _, per_user, total = M.spike_token_debt(
         m, t, wl, 32, 64, 2.0, 32_768, 2_000, n_iter=200)
     _, p50, _, _ = M.decode_curves(m, t, wl, [64], n_iter=200, seed=0)
@@ -278,20 +278,16 @@ def test_token_debt_counts_tokens_not_steps():
 
 
 def test_expert_union_counts_speculative_verify_positions():
-    """Issue #91: with speculative decoding each sequence verifies 1 + s
-    positions per step, and each routes through the experts. The linear
-    (upper-bound) union saturates at E/(k(1+s)) sequences, not E/k; the
-    coverage arm keeps one draw per sequence; turning speculation off
-    (mtp = 1) restores the old count."""
-    import dataclasses
+    """Issue #91: with draft depth k each sequence verifies 1 + k positions per
+    step and every one routes through the experts, so the linear (no-overlap)
+    union saturates at E/(k_e (1 + k)) sequences, not E/k_e."""
     m = M.MODELS["DSV41F"]                     # 384 experts / 6 routed, 5 drafts
-    assert m.spec_tokens == 5 and m.mtp > 1 and m.verify_positions == 6
-    assert m.w_decode(10) == pytest.approx(m.w_decode_shared + 60 * m.w_route_pertok)
-    assert m.w_decode(11) == pytest.approx(m.w_decode_shared + m.w_route_total)
-    off = dataclasses.replace(m, mtp=1.0)
-    assert off.verify_positions == 1
-    assert off.w_decode(10) == pytest.approx(m.w_decode_shared + 10 * m.w_route_pertok)
-    assert off.w_decode(64) == pytest.approx(m.w_decode_shared + m.w_route_total)
-    assert m.w_decode(10, "coverage") == off.w_decode(10, "coverage")
+    k = m.spec_tokens
+    assert k == 5
+    below, above = 10, 11                      # 10 x 6 = 60 < 64 <= 11 x 6
+    assert m.w_decode(below * (1 + k), "linear") == pytest.approx(
+        m.w_decode_shared + below * (1 + k) * m.w_route_pertok)
+    assert m.w_decode(above * (1 + k), "linear") == pytest.approx(
+        m.w_decode_shared + m.w_route_total)
     dense = M.MODELS["27B"]                    # no experts: drafts change nothing
-    assert dense.w_decode(1) == dense.w_decode(100) == dense.w_decode_shared
+    assert dense.w_decode(1) == dense.w_decode(600) == dense.w_decode_shared

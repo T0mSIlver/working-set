@@ -27,7 +27,7 @@
    nothing but state.js reads another module at evaluation time), but a module
    that state.js depends on must never depend on state.js.
    ========================================================================== */
-import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, unionKink } from './config.js';
+import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, tokensPerStep, unionKink } from './config.js';
 import { TTFT_PCTS, requestRate, steadyResident } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
@@ -135,7 +135,7 @@ function enforceConstraints(){
   if (!fp8Ok && state.kv === "fp8") state.kv = "fp16";
   const stateOk = m.deltanet_state > 0 && m.state_fp32_ok !== false;
   if (!stateOk && state.state_dt === "fp32") state.state_dt = "bf16";
-  const woverOk = state.model !== "27B";
+  const woverOk = !m.weights_as_deployed;
   if (!woverOk && state.wover === "p15") state.wover = "pub";
   // reflect state + disabled flags back into the segmented controls
   const sync = (segId, val)=>document.querySelectorAll(`#${segId} button`).forEach(
@@ -156,28 +156,16 @@ function enforceConstraints(){
   document.querySelector('#seg-wover button[data-v="p15"]').disabled = !woverOk;
   // control explanations live in the label tooltips, not under the knobs;
   // the state-dependent ones are re-stamped here on every constraint pass
-  document.getElementById('kv-tip').setAttribute('data-tip', fp16Ok
-    ? (state.model === "GLM52"
-      ? "GLM-5.3's FP8 cache row depends on the GPU: on B300 vLLM serves it through FlashInfer as plain fp8_e4m3, 576 B per latent; on H200 through FlashMLA as fp8_ds_mla, 656 B (512 fp8 values, 16 B of scales, 64 rope values kept BF16), so an H200 holds 11.5% fewer tokens. FP16 is BF16 KV on either part (vLLM's default on Hopper): double the 576-B row and doubled top-k reads; the indexer scan stays fp8."
-      : state.model === "GLM53F"
-      ? "GLM-5.3-Flash inverts the usual constraint: fp8 KV is BLACKWELL-ONLY — vLLM's recipe says Hopper must run BF16 KV, so on H200 the toggle LOCKS to FP16 (double bytes/token AND doubled top-k reads; the compressed indexer scan stays fp8). On B300 both arms are selectable."
-      : "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected.")
-    : (state.model === "DSV4F" || state.model === "DSV4FV"
-      ? `${m.name.split(" (")[0]}: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled.`
-      : state.model === "DSV41F"
-      ? "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels, quantization-aware trained) and the sliding windows FP8 — that native layout is what the FP8 arm prices; no serving stack offers a BF16 main KV, so the toggle is disabled."
-      : `${m.name.split(" (")[0]}: FP16 KV is not servable, so the toggle is disabled.`));
-  if (state.model === "ML4")
-    document.getElementById('kv-tip').setAttribute('data-tip', "Mistral-Large-4: every NVIDIA configuration Mistral and vLLM document runs the FP8 latent cache (fp8_ds_mla, which the NVFP4 card calls needed); the bfloat16 opt-out exists on ROCm only, so the FP16 toggle is disabled. Its rows are 656 B per latent on both parts: 512 fp8 values, 16 B of scales and 64 rope values kept BF16.");
-  document.getElementById('state-tip').setAttribute('data-tip', stateOk
-    ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence: method page, "The three un-measured structural knobs".`
-    : (state.model === "DSV4F" || state.model === "DSV4FV"
-      ? `${m.name.split(" (")[0]} pays a fixed ${fmt(m.deltanet_state/MIB,1)} MiB/session (fp8/bf16 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.`
-      : state.model === "DSV41F"
-      ? `DeepSeek-V4.1-Flash pays a fixed ${fmt(m.deltanet_state/MIB,1)} MiB/session (fp8 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.`
-      : state.model === "ML4"
-      ? `Mistral-Large-4 keeps no recurrent state (MLA attention); the ${fmt(m.deltanet_state/MIB,1)} MiB/session it pays is its DSpark drafter's three 2,048-token latent windows, fp8 like the cache — no bf16/fp32 knob to turn, so the control is disabled.`
-      : `${m.name.split(" (")[0]} keeps no recurrent state — pure ${state.model==="GLM52" ? "MLA" : "GQA"} attention — so this control is disabled.`));
+  // a model's own wording, where the catalogue has one, replaces the generic
+  // tip; {state_mib} is its per-session state in MiB
+  const short = m.name.split(" (")[0], ex = m.explorer;
+  document.getElementById('kv-tip').setAttribute('data-tip', ex.kv_tip ?? (fp16Ok
+    ? "All constants assume the FP8 KV cache (--kv-cache-dtype fp8_e4m3), as tested in the baseline. FP16 doubles KV bytes/token: half the pool, slower decode. Weights & DeltaNet state unaffected."
+    : `${short}: FP16 KV is not servable, so the toggle is disabled.`));
+  document.getElementById('state-tip').setAttribute('data-tip',
+    ex.state_tip?.replaceAll('{state_mib}', fmt(m.deltanet_state/MIB,1)) ?? (stateOk
+      ? `Dtype of the Gated-DeltaNet recurrent state — a flat ${fmt(m.deltanet_state/MIB,1)} MiB per-session charge at bf16, double at fp32. bf16 is ASSUMED, not measured: the largest un-measured structural knob on the Qwens (~−10% warm capacity at fp32) — evidence: method page, "The three un-measured structural knobs".`
+    : `${short} keeps no recurrent state — pure GQA attention — so this control is disabled.`));
   document.getElementById('kvshard-tip').setAttribute('data-tip', (() => {
     const heads = m.kv_heads || 1, tp = state.tp;
     const copies = tp > heads ? tp / heads : 1;
@@ -192,19 +180,7 @@ function enforceConstraints(){
   document.getElementById('wover-tip').setAttribute('data-tip', woverOk
     ? "Slack between a checkpoint's stated bytes and the server's real resident footprint. This model's figure is raw/on-disk — an under-estimate by an unknown margin; +15% is the one calibrated data point (the 27B's as-deployed 28.8 GiB vs its raw params), transferred here as an extrapolation."
     : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Its NVFP4 figure is a measured checkpoint total under the same convention, so the knob stays disabled on this model.");
-  const modelTips = {
-    "27B": "Qwen3.8-27B — dense hybrid, the calibrated baseline (measured on Qwen3.6-27B, whose checkpoint is tensor-for-tensor the same shape): 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN.",
-    "35BA3B": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32, or 11 counting its 2 draft positions per sequence). 262k native context, 1M via YaRN.",
-    "MM35": "Mistral-Medium-3.5-128B — dense, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B), the study's KV-hungriest model. No MTP module: speculative default 1.0× (external EAGLE draft unmeasured). Hard 262k context max.",
-    "GLM52": "GLM-5.3 — 744B-A40B MLA+DSA (constants derived on GLM-5.2, whose checkpoint is tensor-for-tensor the same shape): 47.3 KiB/token stored on B300 and 53.4 KiB on H200 (vLLM's FP8 row differs by GPU), but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context.",
-    "DSV4F": "DeepSeek-V4-Flash-0731 — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's lightest big-MoE fit: from 2×H200 / 1×B300 (native FP4 experts; NVFP4 exists but is 5% heavier: the experts are already 4-bit natively and NVIDIA's repack only adds denser scales). A different architecture from V4.1-Flash (no encoder-decoder split, no Engram tables), kept alongside it. 1M native context.",
-    "DSV4FV": "DeepSeek-V4-Flash-Vision-Exp — DeepSeek-V4-Flash-0731's text backbone plus a 0.47B vision tower (32-layer ViT + aligner), continued-trained for multimodal agents. The text config and cache code are 0731's unchanged, so every cache, decode and prefill constant is too (3.4 KiB/token + 14.9 MiB/session); only the resident weights grow, by 0.93 GB. Fits from 2×H200 / 1×B300. No official NVFP4 checkpoint. Priced on the text workload only: image encoding and image tokens are not modelled. Terminal-Bench 74.2% on 2.1 and 12.1% on 4.0 (AA, max effort) — below 0731 on 2.1 although DeepSeek's card has it above (83.9 vs 82.7). 1M native context.",
-    "DSV41F": "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four FP4 compressed caches across the 40 layers: 890 B/token stored — 4× below V4-Flash-0731, ~40× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far, but its heaviest fit after GLM-5.3: vLLM keeps the 203 GB Engram tables in HBM, so 510 GB resident — 8×H200 (5 by arithmetic) / 2×B300. Native MXFP4 experts (384, 6 routed: kink n = 64, or 11 counting its 5 draft positions per sequence); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1.",
-    "Q38FN": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 12.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2, or 12.8 counting its 3 draft positions per sequence) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN.",
-    "GLM53F": "GLM-5.3-Flash — MoE 320B-A18B hybrid (34 KDA linear + 11 NoPE sparse-MLA layers, +1 MTP DSA layer whose cache is charged): 6.4 KiB/token stored — 7.4× below GLM-5.2 — plus a 74.4 MiB bf16 KDA state per session; decode reads top-2048 latents + a kpool-4 compressed indexer scan. 288 experts / 8 routed (kink n = 36, or 6 counting its 5 draft positions per sequence). Fits from 3×H200 / 2×B300 (pool arithmetic; no recipe floor published). fp8 KV is Blackwell-only, so on H200 the KV toggle locks to BF16. NVFP4: RedHatAI checkpoint (2026-08-27, the vLLM recipe\'s) — 42 decode layers\' experts ×0.5625, the rest upcast to BF16, so the fixed per-step read grows 14.0 → 16.7 GB while the resident drops to 197.8 GB. 1M native context.",
-    "ML4": "Mistral-Large-4 — 1.05T-A49B MoE (52B active with embeddings and lm_head), 72 layers of MLA + DSA as GLM-5.3, plus two cache savings: 9 late NoPE layers attend to layer 35's latents and store none, and 28 layers reuse the top-k of the indexer before them. 46.0 KiB/token stored in vLLM's 656-B fp8_ds_mla rows, 3% below GLM-5.3 on B300, plus 3.8 MiB/session for the DSpark drafter's windows; decode reads top-2048 latents on all 72 layers and 44 indexer scans. 128 experts / 4 routed (kink n = 32, or 8 counting its 3 draft positions per sequence), 32.2 GB of routed experts per token, the study's heaviest. The largest model here: 1,060.5 GB in FP8, so no 8×H200 node holds it (the vLLM recipe runs it on 2×8 H200, which this page does not price); 8×B300 in FP8, from 4×B300 with the official NVFP4 checkpoint (610.0 GB). Terminal-Bench 24.7% on 4.0 (AA, high effort); AA has no 2.1 run. 1M native context, 262k validated by the recipe. License: Mistral Ecosystem Open-Weight (MIT, plus a separate commercial licence for Model-as-a-Service operators).",
-  };
-  document.getElementById('model-tip').setAttribute('data-tip', modelTips[state.model]);
+  document.getElementById('model-tip').setAttribute('data-tip', m.explorer.tip);
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
   // per-model ranges: max_seq_len cap (mirrors check_cap_allowed) and the
   // prompt-median sliders both scale with the model's context window — the
@@ -224,6 +200,12 @@ function enforceConstraints(){
 }
 
 // segmented controls
+// the model and GPU buttons, one per catalogue row, before the wiring below
+for (const [segId, rows, label] of [['seg-model', CONFIG.MODELS, m => m.explorer.short],
+                                    ['seg-gpu', CONFIG.GPUS, g => g.name]]){
+  document.getElementById(segId).innerHTML = Object.entries(rows).map(([k, r]) =>
+    `<button data-v="${k}" aria-pressed="${k === state[segId.slice(4)]}">${esc(label(r))}</button>`).join('\n');
+}
 document.querySelectorAll('.seg').forEach(seg=>{
   const key=seg.dataset.key;
   // #seg-split has no data-key: its buttons are rebuilt per GPU count and carry
@@ -235,13 +217,13 @@ document.querySelectorAll('.seg').forEach(seg=>{
       if (btn.disabled) return;
       seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===btn?'true':'false'));
       state[key]=btn.dataset.v;
-      // switching model adopts ITS speculative-decode default (1.7x = the
-      // Qwen fit / GLM transplant; 1.0x = Mistral, which has no MTP module) —
-      // the label's value readout changes visibly, and the MTP tooltip
-      // documents the reset behaviour
+      // switching model adopts ITS draft acceptance and depth (the recipe's
+      // num_speculative_tokens; 0 on Mistral-Medium-3.5, which ships no
+      // draft model) — the readouts change visibly, the tooltip says so
       if (key==='model'){
-        state.mtp = CONFIG.MODELS[state.model].mtp;
-        document.getElementById('s-mtp').value = state.mtp;
+        state.acc = CONFIG.MODELS[state.model].acceptance;
+        state.dspec = CONFIG.MODELS[state.model].spec_tokens;
+        document.getElementById('s-acc').value = state.acc;
       }
       // switching GPU adopts ITS on-demand price the same way — the slider
       // names the selected part's price, so leaving it at the old part's
@@ -260,8 +242,8 @@ document.querySelectorAll('.seg').forEach(seg=>{
 // sliders
 const sliderMap=[
   ['s-ngpu','ngpu',v=>parseInt(v,10)],
-  ['s-mtp','mtp',v=>parseFloat(v)],
-  ['s-mbu','mbu',v=>parseFloat(v)],
+  ['s-acc','acc',v=>parseFloat(v)],
+  ['s-eta','eta',v=>parseFloat(v)],
   ['s-mfu','mfu',v=>parseFloat(v)],
   ['s-ram','ram',v=>parseInt(v,10)],
   ['s-cap','cap',v=>parseInt(v,10)],
@@ -284,6 +266,7 @@ const sliderMap=[
   ['s-burst','burst',v=>parseInt(v,10)],
   ['s-ekwh','ekwh',v=>parseFloat(v)],
   ['s-gpuh','gpuh',v=>parseFloat(v)],
+  ['s-work','work',v=>parseInt(v,10)],
 ];
 sliderMap.forEach(([id,key,cast])=>{
   const el=document.getElementById(id);
@@ -316,11 +299,9 @@ document.getElementById('i-mns').addEventListener('input', e=>{
   state.mns = raw === '' ? null : n;
   onInput();
 });
-// the latency pricing's constants; an out-of-range entry is ignored (the
-// state keeps its last legal value), as workingset refuses to price it
-for (const [id, key, lo, hi, int] of [['i-dbw','dbw',0.01,1,false],
-                                      ['i-dfixed','dfixed',0,50,false],
-                                      ['i-dspec','dspec',0,16,true]]){
+// draft tokens; an out-of-range entry is ignored (the state keeps its last
+// legal value), as workingset refuses to price it
+for (const [id, key, lo, hi, int] of [['i-dspec','dspec',0,16,true]]){
   document.getElementById(id).addEventListener('input', e=>{
     const n = Number(e.target.value);
     if (e.target.value.trim() === '' || !Number.isFinite(n) || n < lo || n > hi) return;
@@ -434,16 +415,11 @@ function syncLabels(){
     requestRate(state.users, state.think).toFixed(2);
   document.getElementById('v-ngpu').textContent=fmt(state.ngpu,0);
   document.getElementById('v-gpuname').textContent=CONFIG.GPUS[state.gpu].name;
-  document.getElementById('v-mtp').textContent=state.mtp.toFixed(2);
-  document.getElementById('v-mbu').textContent=state.mbu.toFixed(2);
-  // the latency pricing does not read the MBU; its own constants show instead
-  const lat = state.dprice === 'latency';
-  document.getElementById('s-mbu').disabled = lat;
-  document.getElementById('dprice-lat').hidden = !lat;
-  for (const [id, key] of [['i-dbw','dbw'],['i-dfixed','dfixed'],['i-dspec','dspec']]){
-    const el = document.getElementById(id);
-    if (document.activeElement !== el && Number(el.value) !== state[key]) el.value = state[key];
-  }
+  document.getElementById('v-acc').textContent=state.acc.toFixed(3);
+  document.getElementById('v-tps').textContent=tokensPerStep(state.acc, state.dspec).toFixed(2);
+  document.getElementById('v-eta').textContent=state.eta.toFixed(2);
+  { const el = document.getElementById('i-dspec');
+    if (document.activeElement !== el && Number(el.value) !== state.dspec) el.value = state.dspec; }
   document.getElementById('v-mns').textContent = state.mns === null ? 'unset' : 'cap ' + fmt(state.mns, 0);
   const mnsEl = document.getElementById('i-mns');
   const mnsText = state.mns === null ? '' : String(state.mns);
@@ -451,33 +427,14 @@ function syncLabels(){
     mnsEl.value = mnsText; mnsEl.setAttribute('aria-invalid', 'false');
   }
   document.getElementById('v-mfu').textContent=state.mfu.toFixed(2);
-  // invert speedup = 1 + a + a^2 (MTP-2, accept-until-reject) for the implied
-  // per-draft acceptance — the base quantity the speedup is computed from
-  const acc = state.mtp<=1 ? 0 : (Math.sqrt(4*state.mtp-3)-1)/2;
-  // α inverts the 2-draft MTP model — exact for the two 2-draft Qwen models only.
-  // GLM-5.3 drafts 5 tokens, DSv4-Flash 7, DSv4-Flash-Vision 3, DSv4.1-Flash 5 and Mistral-Large-4 3 (DSpark),
-  // Q3.8-Flash-Next 3, and Mistral-Medium-3.5 has no MTP module (its slider models EAGLE) — indicative on all of those.
-  const aNote = state.model==="GLM52" ? ' GLM-5.3 drafts 5 tokens — α is indicative only.'
-              : state.model==="DSV4F" ? ' DSv4-Flash drafts 7 tokens (DSpark) — α is indicative only.'
-              : state.model==="DSV4FV" ? ' DSv4-Flash-Vision drafts 3 tokens (DSpark, its model card) — α is indicative only.'
-              : state.model==="DSV41F" ? ' DSv4.1-Flash drafts 5 tokens (DSpark) — α is indicative only.'
-              : state.model==="Q38FN" ? ' Q3.8-Flash-Next drafts 3 tokens (vLLM recipe) — α is indicative only.'
-              : state.model==="GLM53F" ? ' GLM-5.3-Flash drafts 5 tokens (vLLM recipe) — α is indicative only.'
-              : state.model==="ML4" ? ' Mistral-Large-4 drafts 3 tokens (DSpark, fixed by the checkpoint) — α is indicative only.'
-              : state.model==="MM35" ? ' Mistral has no MTP module — the slider models an EAGLE-style speedup; α does not apply.' : '';
-  const aLine = (state.mtp<=1 ? 'Currently OFF — implied per-draft acceptance α = 0%.'
-    : `Current implied per-draft acceptance α ≈ ${(acc*100).toFixed(0)}%.`) + aNote;
-  document.getElementById('mtp-tip').setAttribute('data-tip',
-    'Speculative-decode speedup (1.0× = off). With 2 draft tokens speedup = 1 + α + α², so 2.94× ⇔ α ≈ 98% — an accepted length calibrated on Qwen3.6-27B from a measurement not published here, carried over unmeasured on 3.8 (1.7× ⇔ α ≈ 47% was the earlier fit); switching model resets the slider to that model\'s default. Applies to the selected configuration only. ' + aLine);
-  // MBU provenance, stated on the control: one measurement, applied to every
-  // row, the frontier included -- the slider is how a reader argues with it.
-  const mbuProv = state.model === "27B"
-    ? 'Calibrated on Qwen3.6-27B from a measurement not published here, and carried over with its paired MTP fit, unmeasured on 3.8.'
-    : (is_moe(CONFIG.MODELS[state.model]) || CONFIG.MODELS[state.model].deltanet_state > 0
-        ? 'Measured on the 27B and applied here unchanged; unmeasured on this model.'
-        : 'Measured on a recurrent hybrid and applied here unchanged; this model has no recurrence to serialise and may well sit higher, but nothing in this study measures a dense one.');
-  document.getElementById('mbu-tip').setAttribute('data-tip',
-    'Memory Bandwidth Utilisation — the fraction of the group\'s advertised HBM bandwidth a decode pass achieves. Decode\'s counterpart to the prefill MFU below, and the study\'s newest constant: decode was first priced at 1.00, a pure roofline. MODEL CONVENTION (already divided by tp_efficiency). ONE value for every row, the frontier included: a global sensitivity knob, not a per-model property — drag it and watch which configurations survive. It absorbs both streaming inefficiency and whatever speculative verification costs on a sequential recurrence, so on the 27B it TRAVELS WITH the MTP slider. ' + mbuProv);
+  const m0 = CONFIG.MODELS[state.model];
+  const ownAcc = m0.acceptance_measured
+    ? `${m0.acceptance} is measured on this model's draft head.`
+    : `${m0.acceptance} is Qwen3.6-27B's measured value, carried here unmeasured: no public figure exists for this draft head.`;
+  document.getElementById('acc-tip').setAttribute('data-tip',
+    `Share of draft tokens the target model accepts, each one given the previous were (accept until the first rejection). With k draft tokens a sequence advances 1 + α + α² + … + α^k tokens per step: ${tokensPerStep(state.acc, state.dspec).toFixed(2)} at α ${state.acc.toFixed(3)}, k ${state.dspec}. ${ownAcc} Switching model resets both to its own. Mirrors [calibration] acceptance; \`ws calibrate\` reads it from vLLM's /metrics.`);
+  document.getElementById('eta-tip').setAttribute('data-tip',
+    'Share of the group\'s raw HBM bandwidth a decode step streams its bytes at (weights, draft passes, KV, recurrent state). One of four constants of the decode step, with the verify compute at the prefill MFU and per-layer launch, all-reduce and recurrent-update times. 0.29 is read off one held-batch sweep (Qwen3.6-27B, 4×H200 TP4); the same value prices every row, the frontier included. Mirrors [calibration] eta; `ws calibrate` fits it from a decode sweep.');
   document.getElementById('v-ram').textContent=fmt(state.ram,0);
   document.getElementById('v-cap').textContent=fmt(state.cap,0);
   // the 0.1k step is only reachable at the chat end of the range, so show the
@@ -496,6 +453,12 @@ function syncLabels(){
   document.getElementById('v-inval').textContent=state.inval.toFixed(1);
   document.getElementById('v-ekwh').textContent=state.ekwh.toFixed(2);
   document.getElementById('v-gpuh').textContent=state.gpuh.toFixed(2);
+  document.getElementById('v-work').textContent=fmt(state.work,0);
+  // a rented GPU's power is in its rent; an owned one has no hourly price
+  const own = state.pay === 'own';
+  document.getElementById('s-ekwh').disabled = !own;
+  document.querySelectorAll('#seg-pue button').forEach(b => { b.disabled = !own; });
+  document.getElementById('s-gpuh').disabled = own;
 }
 
 // the statistic the cold request wait limit is checked at, as its label prints it
@@ -516,15 +479,16 @@ const URL_ENUMS = {
   state_dt: () => ["bf16","fp32"], wover: () => ["pub","p15"],
   kvshard: () => ["dcp","replicate"],
   pue: () => ["1.2","1.5","2.0"],
+  pay: () => ["rent","own"],
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
   bench: () => Object.keys(CONFIG.BENCHES),
   ttft_pct: () => TTFT_PCTS,
-  dprice: () => ["roofline","latency"],
+  union: () => ["coverage","linear"],
 };
 const URL_BOOLS = ["sub_shares_prefix", "showCeil"];
 // numeric keys ride the slider map where a slider exists; tp has none
 const URL_EXTRA_NUM = { tp: [1, 8], headcount: [0, 1000000000], mns: [1, 4096],
-                        dbw: [0.01, 1], dfixed: [0, 50], dspec: [0, 16] };
+                        dspec: [0, 16], t0: [0, 1000], tar: [0, 1000], trec: [0, 1000] };
 const URL_INT = new Set(['tp', 'headcount', 'mns', 'dspec']);
 export function encodeStateURL(){
   const p = new URLSearchParams();
@@ -532,11 +496,13 @@ export function encodeStateURL(){
   for (const k of Object.keys(URL_ENUMS)) put(k, state[k]);
   // a headcount link re-derives users on load, so the derived value is noise
   for (const [, k] of sliderMap) if (!(k === 'users' && hasHeadcount())) put(k, state[k]);
-  // mtp diffs against the SELECTED model's own default, not the global one:
-  // the decoder resets an absent mtp to CONFIG.MODELS[model].mtp, so diffing
-  // globally silently flipped a 1.7x Mistral link back to that model's 1.0x
-  if (String(state.mtp) !== String(CONFIG.MODELS[state.model].mtp)) p.set('mtp', String(state.mtp));
-  else p.delete('mtp');
+  // acc and dspec diff against the SELECTED model's own values, not the
+  // global ones: the decoder resets an absent one to the model's
+  for (const [k, own] of [['acc', CONFIG.MODELS[state.model].acceptance],
+                          ['dspec', CONFIG.MODELS[state.model].spec_tokens]]){
+    if (String(state[k]) !== String(own)) p.set(k, String(state[k]));
+    else p.delete(k);
+  }
   // gpuh likewise diffs against the SELECTED part's list price: the decoder
   // re-seeds an absent gpuh from CONFIG.GPUS[gpu], so a B300 link at the
   // B300 median must stay a bare link
@@ -566,10 +532,12 @@ function applyURLState(){
   // a link without ttft_pct predates the control: those pages checked a
   // miss's mean TTFT, so that is what it reproduces
   state.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);
-  // a shared model carries its own MTP default unless the link pins one —
-  // the same reset the model buttons apply on click
-  if (p.get('model') !== null && p.get('mtp') === null)
-    state.mtp = CONFIG.MODELS[state.model].mtp;
+  // a shared model carries its own acceptance and draft depth unless the
+  // link pins them — the same reset the model buttons apply on click
+  if (p.get('model') !== null && p.get('acc') === null)
+    state.acc = CONFIG.MODELS[state.model].acceptance;
+  if (p.get('model') !== null && p.get('dspec') === null)
+    state.dspec = CONFIG.MODELS[state.model].spec_tokens;
   // and a shared GPU carries its own price unless the link pins one
   if (p.get('gpu') !== null && p.get('gpuh') === null)
     state.gpuh = CONFIG.GPUS[state.gpu].eur_gpu_h;
@@ -600,8 +568,8 @@ function applyURLState(){
 // reflect enum state into the two segmented controls enforceConstraints does
 // not manage (it owns wdt/kv/state/wover; model and gpu are click-only)
 function syncEnumSegs(){
-  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-bench','bench'],
-                                  ['seg-dprice','dprice'], ['seg-ttft_pct','ttft_pct']])
+  for (const [segId, key] of [['seg-model','model'], ['seg-gpu','gpu'], ['seg-pue','pue'], ['seg-pay','pay'], ['seg-bench','bench'],
+                                  ['seg-ttft_pct','ttft_pct']])
     document.querySelectorAll(`#${segId} button`).forEach(
       b => b.setAttribute('aria-pressed', b.dataset.v === state[key] ? 'true' : 'false'));
   document.getElementById('t-sub_shares_prefix').checked = state.sub_shares_prefix;

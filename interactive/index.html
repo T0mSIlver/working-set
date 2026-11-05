@@ -500,25 +500,11 @@ details.more .more-body{padding:0 0 16px}
       <div class="ctl-grid hyp-grid">
         <div class="field">
           <label class="flabel"><span class="tip" id="model-tip" data-tip="">Model</span></label>
-          <div class="seg" id="seg-model" data-key="model">
-            <button data-v="27B" aria-pressed="true">Qwen3.8-27B</button>
-            <button data-v="35BA3B" aria-pressed="false">35B-A3B</button>
-            <button data-v="MM35" aria-pressed="false">Mistral-Med-3.5</button>
-            <button data-v="GLM52" aria-pressed="false">GLM-5.3</button>
-            <button data-v="DSV4F" aria-pressed="false">DSv4-Flash</button>
-            <button data-v="DSV4FV" aria-pressed="false">DSv4-Flash-Vision</button>
-            <button data-v="DSV41F" aria-pressed="false">DSv4.1-Flash</button>
-            <button data-v="Q38FN" aria-pressed="false">Q3.8-Flash</button>
-            <button data-v="GLM53F" aria-pressed="false">G5.3-Flash</button>
-            <button data-v="ML4" aria-pressed="false">Mistral-Large-4</button>
-          </div>
+          <div class="seg" id="seg-model" data-key="model"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="H200 (141 GB, 4.8 TB/s) is the calibrated baseline. B300 (288.4 GB measured, 8 TB/s) is the only part that runs NVFP4 weights; its memory reserve is the H200 calibration plus a measured correction.">GPU</span></label>
-          <div class="seg" id="seg-gpu" data-key="gpu">
-            <button data-v="H200" aria-pressed="true">H200</button>
-            <button data-v="B300" aria-pressed="false">B300</button>
-          </div>
+          <div class="seg" id="seg-gpu" data-key="gpu"></div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Total GPUs, up to one 8-GPU NVLink node. Split decides how they form replica groups. Large models need several GPUs before any cache fits; dimmed splits show where.">GPUs</span> <span class="val"><span id="v-ngpu">1</span>× <span id="v-gpuname">H200</span></span></label>
@@ -603,8 +589,12 @@ details.more .more-body{padding:0 0 16px}
           </div>
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mtp-tip" data-tip="">MTP decode speedup</span> <span class="val"><span id="v-mtp">2.94</span>×</span></label>
-          <input type="range" id="s-mtp" min="1.0" max="3.0" step="0.01" value="2.94">
+          <label class="flabel"><span class="tip" id="acc-tip" data-tip="">Draft acceptance</span> <span class="val"><span id="v-acc">0.971</span> · <span id="v-tps">3.83</span> tok/step</span></label>
+          <input type="range" id="s-acc" min="0" max="1" step="0.001" value="0.971">
+          <div class="latrow">
+            <label><span class="tip" data-tip="Draft tokens verified per sequence per step (vLLM num_speculative_tokens; 0 is off). Each one adds a draft pass (a block drafter such as Kimi-K3.1-Pro's runs one pass for all of them), a verify position per sequence and, on a MoE, more experts read. Defaults to the model's recipe. Mirrors [calibration] spec_tokens.">Draft tokens</span>
+              <input type="number" id="i-dspec" min="0" max="16" step="1" value="3"></label>
+          </div>
         </div>
         <div class="field">
           <label class="flabel"><span class="tip" data-tip="Host RAM for evicted sessions&#x27; KV and state. It raises warm capacity but not decode speed: an offloaded session is restored over PCIe first, and that time is not priced. Split across replicas under DP.">CPU offload</span> <span class="val"><span id="v-ram">0</span> GiB</span></label>
@@ -728,23 +718,8 @@ details.more .more-body{padding:0 0 16px}
           <input type="range" id="s-mfu" min="0.10" max="1.00" step="0.01" value="0.45">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="mbu-tip" data-tip="">Decode efficiency (MBU)</span> <span class="val"><span id="v-mbu">0.22</span></span></label>
-          <input type="range" id="s-mbu" min="0.10" max="1.00" step="0.01" value="0.22">
-        </div>
-        <div class="field">
-          <label class="flabel"><span class="tip" data-tip="How a decode step is priced. Roofline, the default and every published figure: step bytes over the group's bandwidth times the MBU. Latency, opt-in: every byte at one bandwidth efficiency, plus the speculative verify as (1 + draft tokens) tokens of compute per sequence at the prefill MFU, plus a fixed time per step. Its three constants come from one deployment (TP4, MTP depth 3); set draft tokens to your server's num_speculative_tokens first. Under Latency the MBU slider is unused and the MFU slider moves decode too. Above about 64 sequences the step jumps for an unknown reason, which this form does not price. Mirrors [calibration] decode_pricing.">Decode pricing</span></label>
-          <div class="seg" id="seg-dprice" data-key="dprice">
-            <button data-v="roofline" aria-pressed="true">Roofline (MBU)</button>
-            <button data-v="latency" aria-pressed="false">Latency</button>
-          </div>
-          <div class="latrow" id="dprice-lat" hidden>
-            <label><span class="tip" data-tip="Share of the group's advertised bandwidth every decode byte streams at under the latency pricing. 0.36 on one TP4 deployment. Mirrors decode_bw_eff.">BW eff</span>
-              <input type="number" id="i-dbw" min="0.05" max="1" step="0.01" value="0.36"></label>
-            <label><span class="tip" data-tip="Per-step time that bytes and compute leave over: TP all-reduces, draft-head passes, kernel launches. 2.7 ms at TP4, 64 layers, MTP depth 3. Mirrors decode_fixed_ms.">Fixed ms</span>
-              <input type="number" id="i-dfixed" min="0" max="50" step="0.1" value="2.7"></label>
-            <label><span class="tip" data-tip="Speculative tokens verified per sequence per step (vLLM num_speculative_tokens; 0 is off). Each costs one token of compute per sequence. Mirrors spec_tokens.">Draft tokens</span>
-              <input type="number" id="i-dspec" min="0" max="16" step="1" value="3"></label>
-          </div>
+          <label class="flabel"><span class="tip" id="eta-tip" data-tip="">Decode bandwidth efficiency (η)</span> <span class="val"><span id="v-eta">0.29</span></span></label>
+          <input type="range" id="s-eta" min="0.10" max="1.00" step="0.01" value="0.29">
         </div>
         <div class="field">
           <label class="flabel" for="i-mns"><span class="tip" data-tip="vLLM --max-num-seqs, per replica group. The scheduler never runs more sequences at once, so past it a request queues instead of slowing the batch. Empty means the recommended value: the largest batch whose per-user decode meets the floor, within the GPU-resident sessions. It binds where the 99th-percentile batch decoding at your load reaches it, which takes far more users than sequences. Mirrors deployment.max_num_seqs.">max_num_seqs</span> <span class="val" id="v-mns">unset</span></label>
@@ -775,7 +750,7 @@ details.more .more-body{padding:0 0 16px}
     <div class="panel card">
       <p class="ct">Price per seat against capability</p>
       <div class="field" style="margin:6px 0 8px">
-        <label class="flabel"><span class="tip" id="bench-axis-label" data-tip="Which Terminal-Bench version is on the x-axis. Both are Artificial Analysis pass@1: 2.1 is 89 tasks × 3 in Terminus 2, with a run for every model but Mistral-Large-4; 4.0 is 66 tasks × 3 in mini-SWE-agent v2.4.6, with a run for every model. DeepSeek-V4.1-Flash has no AA run on 2.1 and uses its vendor card&#x27;s 90.6 there. Only this chart changes.">chart axis</span></label>
+        <label class="flabel"><span class="tip" id="bench-axis-label" data-tip="Which Terminal-Bench version is on the x-axis. Both are Artificial Analysis pass@1: 2.1 is 89 tasks × 3 in Terminus 2, with a run for every model but Mistral-Large-4 and Kimi-K3.1-Pro; 4.0 is 66 tasks × 3 in mini-SWE-agent v2.4.6, with a run for every model. DeepSeek-V4.1-Flash has no AA run on 2.1 and uses its vendor card&#x27;s 90.6 there. Only this chart changes.">chart axis</span></label>
         <div class="seg" id="seg-bench" role="group" aria-labelledby="bench-axis-label">
           <button data-v="tb21" aria-pressed="false">TB 2.1</button>
           <button data-v="tb40" aria-pressed="true">TB 4.0</button>
@@ -944,19 +919,30 @@ details.more .more-body{padding:0 0 16px}
 <details class="hood" id="recipe"><summary><span class="lbl">The bill</span></summary>
 <div class="hood-body">
   <div class="panel card" id="costCard" style="margin-bottom:14px">
-    <p class="ct">Hardware and electricity per month</p>
+    <p class="ct">The bill per month</p>
     <div class="ctl-grid" style="margin-bottom:4px">
       <div class="ctl-group">
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Price of one kWh. Default €0.19, the EU-27 non-household average (Eurostat, H1 2025); countries range from €0.077 (FI) to €0.258 (CY). Moves the electricity line only.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
+          <label class="flabel"><span class="tip" data-tip="Rent: the GPU-hour price for the hours the GPUs are up, power, cooling and the host included, so there is no electricity line. A monthly reservation is rent at 720 hours. Own: the server's purchase price written off over 36 months (Supermicro store, Nov 2026: 8-GPU H200 server $328k, B300 about $663k), plus electricity at the meter, around the clock. Staff, networking and storage are in neither.">GPUs</span></label>
+          <div class="seg" id="seg-pay" data-key="pay">
+            <button data-v="rent" aria-pressed="true">rent by the hour</button>
+            <button data-v="own" aria-pressed="false">own</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Hours a month the team works, and so the hours the GPUs carry load. Rented GPUs are up and billed only then; owned GPUs idle the rest of the month. Default 210: 10 h a day, 21 working days. 720 is a monthly reservation or a team that never stops.">Hours the GPUs work</span> <span class="val"><span id="v-work">210</span> h / month</span></label>
+          <input type="range" id="s-work" min="40" max="720" step="10" value="210">
+        </div>
+        <div class="field">
+          <label class="flabel"><span class="tip" data-tip="Price of one kWh. Default €0.19, the EU-27 non-household average (Eurostat, H1 2025); countries range from €0.077 (FI) to €0.258 (CY). Owned GPUs only: a rent includes power.">Electricity price</span> <span class="val">€<span id="v-ekwh">0.19</span> / kWh</span></label>
           <input type="range" id="s-ekwh" min="0.05" max="0.60" step="0.01" value="0.19">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="One GPU-hour of the selected part, on demand. Default is the cross-provider median (getdeploying.com, Sept 2026: H200 $4.40, B300 $7.89, at 1.16 USD per EUR). Hyperscalers charge 2 to 3× that; owned hardware amortises to under €1. A rental price includes power, so for a rented GPU the electricity line double-counts (about 7% at the defaults). For owned hardware enter your amortised cost and both lines apply. Staff, networking and storage are not included.">GPU price</span> <span class="val">€<span id="v-gpuh">3.80</span> / GPU·h</span></label>
+          <label class="flabel"><span class="tip" data-tip="One GPU-hour of the selected part, on demand, power included. Default is the cross-provider median (getdeploying.com, Sept 2026: H200 $4.40, B300 $7.89, at 1.16 USD per EUR). Hyperscalers charge 2 to 3× that; reserved terms run lower (H200 1-year about $7.3-7.6 at the hyperscalers, $3.99 for 91-180 days at Together). Rented GPUs only.">GPU rent</span> <span class="val">€<span id="v-gpuh">3.80</span> / GPU·h</span></label>
           <input type="range" id="s-gpuh" min="0.5" max="20" step="0.1" value="3.8">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" data-tip="Facility watts per IT watt (cooling, power distribution). 1.2 is hyperscale, 1.5 the average colocation site (Uptime survey), 2.0 a small server room. Multiplies the electricity line only.">Facility PUE</span></label>
+          <label class="flabel"><span class="tip" data-tip="Facility watts per IT watt (cooling, power distribution). 1.2 is hyperscale, 1.5 the average colocation site (Uptime survey), 2.0 a small server room. Multiplies the electricity of owned GPUs.">Facility PUE</span></label>
           <div class="seg" id="seg-pue" data-key="pue">
             <button data-v="1.2" aria-pressed="false">1.2 hyperscale</button>
             <button data-v="1.5" aria-pressed="true">1.5 colo</button>

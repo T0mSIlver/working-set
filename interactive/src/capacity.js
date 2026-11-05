@@ -1,5 +1,5 @@
-import { CONFIG, DECODE_MBU, GIB, PREFILL_MFU, effective_bw, is_moe, kv_pool_tokens,
-         replicated, state_traffic, tpEff, unionKink, w_decode } from './config.js';
+import { CONFIG, DECODE_ETA, GIB, PREFILL_MFU, decodeConstants, decodeStepSeconds, is_moe,
+         kv_pool_tokens, replicated, state_traffic, tokensPerStep } from './config.js';
 import { percentiles } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
@@ -115,8 +115,8 @@ export function decodePlan(gpuP95, draft){
   return { nMax, step, iter };
 }
 
-// The two efficiency knobs, read through helpers so nothing reaches past the
-// slider to the constant. Each falls back to the single global constant when
+// The decode constants and the prefill MFU, read through helpers so nothing
+// reaches past the slider to the constant. Each falls back to the single global constant when
 // state has not been seeded yet (the load-time unit checks run that early).
 // The load-time unit checks and steadyChecks call decodeCurves/prefillSeconds
 // BEFORE `state` is declared (steadyChecks says as much in its own comment), so
@@ -128,43 +128,28 @@ export function decodePlan(gpuP95, draft){
 // so it is in the temporal dead zone and typeof throws a ReferenceError just
 // like a plain read would. That guard looked right, parsed fine, and silently
 // killed every load-time check before it ran.
-export function decodeMbu(){
-  try { return state.mbu > 0 ? state.mbu : DECODE_MBU; }
-  catch (e) { return DECODE_MBU; }
+export function decodeState(){
+  // the step equation's constants from the page state (taus in us on the
+  // page, null = the prior); mirrors RunConfig.decode_constants
+  const us = v => (v === null || v === undefined) ? null : v * 1e-6;
+  try {
+    return decodeConstants({ eta: state.eta > 0 ? state.eta : DECODE_ETA,
+      t0: us(state.t0), tar: us(state.tar), trec: us(state.trec),
+      mfu: prefillMfu(), union: state.union || "coverage" });
+  } catch (e) { return decodeConstants({ mfu: PREFILL_MFU }); }
 }
 export function prefillMfu(){
   try { return state.mfu > 0 ? state.mfu : PREFILL_MFU; }
   catch (e) { return PREFILL_MFU; }
 }
 
-// The opt-in latency pricing's constants (mirrors RunConfig.decode_latency):
-// null under the default roofline pricing. The compute leg runs at the
-// PREFILL MFU, as workingset prices it (DecodeLatency.mfu = calibration.mfu).
-export function decodeLatency(){
-  try {
-    if (state.dprice !== "latency") return null;
-    return { bw_eff: state.dbw, fixed_s: state.dfixed / 1e3,
-             spec_tokens: state.dspec, mfu: prefillMfu() };
-  } catch (e) { return null; }
-}
-// GEMM compute time of ONE token position at prefill's achieved rate — no
-// attention term, the KV read is already in the byte ledger. Mirrors
-// decode_token_seconds (peak inlined: prefill.js's peakFlops imports this
-// module).
-export function decodeTokenSeconds(model, topo, mfu){
-  if (!(model.params_prefill > 0))
-    throw new Error(`${model.name}: no prefill constants (params_prefill unset)`);
-  const gpu = topo.gpu || CONFIG.GPUS["H200"];
-  const peak = topo.tp * gpu.peak_flops_fp8 * tpEff(topo.tp, gpu.nvlink_domain);
-  return 2 * model.params_prefill / (peak * mfu);
-}
-
 export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // a replicated cache is re-read by every rank that holds a copy: per-step
   // KV and state bytes scale by the storage factor (mirrors decode_curves)
   model = replicated(model, topo);
-  // MEASURED efficiency, not a roofline: see DECODE_MBU.
-  const bw = effective_bw(topo) * (model.decode_mbu || DECODE_MBU), scale = topo.replicas;
+  // the step equation's constants modelFor baked onto the model
+  const dc = model.decode || decodeConstants(), scale = topo.replicas;
+  const mTok = tokensPerStep(model.acceptance, model.spec_tokens);
   const ns=[]; for (let n=1; n<=nMax; n+=step) ns.push(n);
   // LOW-n anchors. Per-user speed is a hyperbola in n, so the first regular
   // interval (1 -> 1+step) contains most of the curve's entire drop: at the
@@ -178,13 +163,13 @@ export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   for (const a of [2,3,4,6,8,11,16,22,32,45,64,90])
     if (a < Math.min(firstGap, nMax+1)) ns.push(a);
   if (ns.length > 1) ns.sort((a,b)=>a-b);
-  // The conservative expert union kinks HARD at n_sat = unionKink (the
-  // batch activates every expert). A wide-
+  // The conservative expert union kinks HARD at n_sat = total/pertok (the
+  // batch activates every expert; n_sat = 32 for both MoE models). A wide-
   // step sweep that straddles n_sat interpolates straight through the kink
   // and draws a spurious notch around it — sample the kink point exactly so
   // charts C and D show the true piecewise shape.
   if (is_moe(model)){
-    const nSat = unionKink(model);
+    const nSat = Math.round(model.w_route_total / model.w_route_pertok);
     if (nSat > 1 && nSat < nMax && !ns.includes(nSat))
       ns.push(nSat), ns.sort((a,b)=>a-b);
   }
@@ -220,25 +205,14 @@ export function decodeCurves(model, topo, wl, nMax, step, n_iter){
   // token (indexer scan) plus the length-capped top-k read per sequence
   const kvReadBpt = model.kv_decode_bpt ?? model.kv_bpt;
   const perTok = topk ? model.kv_decode_const/topk : 0;
-  // opt-in latency pricing (model.decode_lat, baked on by modelFor): every
-  // byte at one bandwidth efficiency, the speculative verify as compute, plus
-  // a fixed per-step latency. Mirrors the `latency` branch of decode_curves.
-  const lat = model.decode_lat || null;
-  const bwLat = lat ? effective_bw(topo) * lat.bw_eff : 0;
-  const tTok = lat ? decodeTokenSeconds(model, topo, lat.mfu) : 0;
   for (let k=0;k<K;k++){
     const n=ns[k];
-    // weights + recurrent-state traffic for every active sequence
-    const wd = w_decode(model, n) + n*state_traffic(model)
-             + (topk ? 0 : n*(model.kv_decode_const ?? 0));
+    // recurrent-state traffic (and a flat top-k read) for every active sequence
+    const perSeq = n*state_traffic(model) + (topk ? 0 : n*(model.kv_decode_const ?? 0));
     const col=kvsum[k], tcol=topk?tksum[k]:null;
-    if (lat){
-      const tFix = n*(1 + lat.spec_tokens)*tTok + lat.fixed_s;
-      for (let it=0; it<n_iter; it++)
-        buf[it] = model.mtp / ((wd + col[it]*kvReadBpt + (topk ? tcol[it]*perTok : 0)) / bwLat + tFix);
-    } else
     for (let it=0; it<n_iter; it++)
-      buf[it] = model.mtp * bw / (wd + col[it]*kvReadBpt + (topk ? tcol[it]*perTok : 0));
+      buf[it] = mTok / decodeStepSeconds(model, topo, n,
+        perSeq + col[it]*kvReadBpt + (topk ? tcol[it]*perTok : 0), dc);
     const [a,b,c] = percentiles(buf, [5,50,95]);
     p5.push(a); p50.push(b); p95.push(c);
     agg.push(n*b*scale);

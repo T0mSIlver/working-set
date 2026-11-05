@@ -1,5 +1,4 @@
-import { AVG_OUT_TOK, CONFIG, DECODE_BW_EFF, DECODE_FIXED_MS, DECODE_FLOOR_TOKS, DECODE_MBU, DECODE_SPEC_TOKENS,
-         PREFILL_MFU, makeGrid } from './config.js';
+import { AVG_OUT_TOK, CONFIG, DECODE_ETA, DECODE_FLOOR_TOKS, PREFILL_MFU, makeGrid } from './config.js';
 
 /* ============================================================================
    STATE
@@ -13,9 +12,11 @@ export const state = {
   // state_dt: recurrent-state dtype (bf16 = the study default, inferred from
   // the baseline's 75 MiB); wover: deployed-weight overhead over the raw or
   // on-disk checkpoint bytes ("pub" = as published, "p15" = +15%).
-  // mtp follows the SELECTED model's own value (the model segment resets it);
-  // the seed here is the 27B's calibrated 2.94, was 1.7.
-  state_dt: "bf16", wover: "pub", mtp: 2.94,
+  // acc (per-draft acceptance) and dspec (draft tokens per step, 0 = off)
+  // follow the SELECTED model's own values (the model segment resets them);
+  // the seeds here are the 27B's.
+  state_dt: "bf16", wover: "pub",
+  acc: CONFIG.MODELS["27B"].acceptance, dspec: CONFIG.MODELS["27B"].spec_tokens,
   // kvshard: how a group's KV cache is laid out across its TP ranks. "dcp"
   // (decode context parallelism, the layout every published number assumes;
   // the recipe emits --decode-context-parallel-size) stores one copy;
@@ -23,18 +24,13 @@ export const state = {
   // model's KV heads keeps a full copy — the MLA / MQA models pay tp copies.
   // research/kv_tp_sharding.md.
   kvshard: "dcp",
-  // Efficiency knobs. mbu (decode) and mfu (prefill) are the study's two
-  // measured-efficiency constants, exposed because both are single-deployment
-  // anchors rather than brackets and the reader should be able to argue with
-  // them. Both are GLOBAL: one value for every row, never reseeded per model.
-  mbu: DECODE_MBU, mfu: PREFILL_MFU,
-  // Decode pricing: "roofline" = bytes over the MBU fold (every published
-  // figure); "latency" = workingset's opt-in DecodeLatency, priced with
-  // dbw (bandwidth efficiency), dfixed (ms per step) and dspec (speculative
-  // tokens verified per sequence) and the prefill MFU. mbu is unused there.
-  // Mirrors [calibration] decode_pricing / decode_bw_eff / decode_fixed_ms /
-  // spec_tokens.
-  dprice: "roofline", dbw: DECODE_BW_EFF, dfixed: DECODE_FIXED_MS, dspec: DECODE_SPEC_TOKENS,
+  // Efficiency knobs, GLOBAL (one value for every row, never reseeded per
+  // model): eta (decode: achieved fraction of raw HBM bandwidth) and mfu
+  // (prefill, and the decode verify compute). t0 / tar / trec are the step
+  // equation's per-layer, all-reduce and recurrent-update costs in us, null
+  // = the prior; they have no control and arrive from `ws link` after
+  // `ws calibrate`. union: the expert-union arm. Mirrors [calibration].
+  eta: DECODE_ETA, mfu: PREFILL_MFU, t0: null, tar: null, trec: null, union: "coverage",
   // vLLM --max-num-seqs per replica group; null = not stated (the decode
   // ceiling is the bandwidth's alone). Mirrors deployment.max_num_seqs: it
   // caps the decode ceiling and the steady decode batch.
@@ -99,6 +95,12 @@ export const state = {
   // CONFIG.GPUS[gpu].eur_gpu_h and re-seeded on every GPU switch, the way mtp
   // follows the model; a pricing constant, so NOT in samplingSig either.
   gpuh: CONFIG.GPUS["H200"].eur_gpu_h,
+  // how the GPUs are paid for (model.energy_cost): 'rent' bills the GPU-hour
+  // price for the hours they are up, power included; 'own' writes the
+  // purchase off over 36 months and adds electricity. `work` is the hours a
+  // month the team works, the hours the GPUs carry load
+  // (model.WORK_HOURS_DEFAULT: 10 h a day, 21 days). Pricing, not sampling.
+  pay: "rent", work: 210,
 };
 
 // Snapshot of the published reference configuration, taken BEFORE any URL

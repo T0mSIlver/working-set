@@ -842,12 +842,12 @@ def test_freeze_ms_matches_the_explorer_formula():
     m, t = cfg.to_model(), cfg.to_topology()
     cap, chunk, pu = cfg.deployment.max_model_len, 4_096, 800.0
     step = min(chunk, cap)
-    want = 1e3 * (m.mtp / pu
+    want = 1e3 * (m.tokens_per_step / pu
                   + M.prefill_seconds(m, t, step, M.MFU_DEFAULT, prior=cap - step))
     assert freeze_ms(m, t, cap, chunk, pu) == pytest.approx(want)
     # a chunk bigger than the context is one cap-sized pass, no negative prior
     assert freeze_ms(m, t, 1_000, 32_768, pu) == pytest.approx(
-        1e3 * (m.mtp / pu + M.prefill_seconds(m, t, 1_000, M.MFU_DEFAULT,
+        1e3 * (m.tokens_per_step / pu + M.prefill_seconds(m, t, 1_000, M.MFU_DEFAULT,
                                               prior=0)))
 
 
@@ -856,8 +856,8 @@ def test_freeze_reproduces_the_reference_harness_block():
     itl_normal_ms 2.2 and itl_worst_freeze_ms 171 — a prefill term of 168.8 ms
     behind one chunk of a 180k cold re-prefill.
 
-    Only the PREFILL term is pinned. The mtp/pu term rides on the decode
-    calibration, which moved (MBU 0.22, the 27B's measured mtp) after that
+    Only the PREFILL term is pinned. The tokens_per_step/pu term rides on
+    the decode constants, which moved (the MBU fold, then the step equation) after that
     block was generated: steady_decode_tok_s is 285 here where the reference
     said 817, exactly as decode_ceiling_users is 150 where it said 428. The
     prefill half is the part this port could get wrong, so that is what fails
@@ -871,14 +871,14 @@ def test_freeze_reproduces_the_reference_harness_block():
     assert p.itl_freeze_lo_ms < p.itl_worst_freeze_ms < p.itl_freeze_hi_ms
 
 
-def test_steady_point_honours_the_calibration_mbu():
-    """max_users_decode reads cfg.calibration.mbu; steady_decode_point stayed
-    at the study default, so the decode ceiling and the steady point were
-    priced at different decode efficiencies in the same run."""
+def test_steady_point_honours_the_calibration_eta():
+    """max_users_decode once read the calibration while steady_decode_point
+    stayed at the study default, so the decode ceiling and the steady point
+    were priced at different decode constants in the same run."""
     base = {"deployment": {"model": "27B", "gpu": "H200", "tensor_parallel": 4}}
-    lo = predict(RunConfig.from_dict({**base, "calibration": {"mbu": 0.1}}),
+    lo = predict(RunConfig.from_dict({**base, "calibration": {"eta": 0.1}}),
                  n_iter=60)
-    hi = predict(RunConfig.from_dict({**base, "calibration": {"mbu": 0.8}}),
+    hi = predict(RunConfig.from_dict({**base, "calibration": {"eta": 0.8}}),
                  n_iter=60)
     assert hi.decode_ceiling_users > lo.decode_ceiling_users
     # the steady point must move WITH it, not stay put
@@ -891,7 +891,7 @@ def test_itl_normal_is_one_decode_step():
     p = predict(RunConfig(), n_iter=40)
     m = RunConfig().to_model()
     assert p.itl_normal_ms == pytest.approx(
-        round(1e3 * m.mtp / p.steady_decode_tok_s, 1), abs=0.6)
+        round(1e3 * m.tokens_per_step / p.steady_decode_tok_s, 1), abs=0.6)
 
 
 # ============================================================================

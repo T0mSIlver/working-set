@@ -1,0 +1,902 @@
+# The model and GPU catalogue: every per-model and per-GPU constant the
+# capacity model reads, in one file. workingset.model loads it (MODELS, GPUS)
+# and scripts/catalog.py writes the explorer's copy (interactive/src/
+# catalog.js), so Python and JS price the same numbers by construction.
+#
+# Only fields that differ from the dataclass defaults in workingset.model
+# (GPU, Model) appear here; both sides apply the same defaults. Field
+# meanings live on those dataclasses. A number that was an expression in
+# code keeps the expression in its comment ("= 32 * KIB").
+#
+# Adding a model: one [models.KEY] table here, then `uv run scripts/catalog.py`
+# and `uv run scripts/golden.py`.
+
+# ============================================================================
+# GPUs
+# ============================================================================
+# peak_flops_fp8: 1,979 TFLOPS DENSE. NVIDIA's H200 datasheet leads with
+# "3,958 TFLOPS FP8" — that figure is WITH 2:4 structured sparsity, which
+# no dense LLM GEMM reaches. Halve it. research/prefill.md #1.
+[gpus.H200]
+name = "H200"
+vram = 141e9
+hbm_bw = 4.8e12
+supports_nvfp4 = false
+peak_flops_fp8 = 1.979e15
+# power (research/power.md #1): spec plate 700 W SXM; idle a
+# measured H100 proxy +10%; decode/prefill the measured Hopper
+# fractions 0.55 / 0.90 of TDP; host the DGX H200 spec adder
+tdp_w = 700.0
+idle_w = 80.0
+p_decode_w = 385.0
+p_prefill_w = 630.0
+host_w = 575.0
+eur_gpu_h = 3.80
+# purchase: Supermicro's store, 8-GPU HGX H200 server, "starting price"
+# $328,260.64 (read 2026-11-04), / 8 GPUs / 1.1267 USD per EUR (ECB that day)
+eur_capex_gpu = 36418.0
+
+# Blackwell Ultra: 288 GB HBM3e, 8 TB/s, native FP4 tensor cores.
+# vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
+# quickstart, driver 590.48.01) shows 275,040 MiB = 288.4e9 B per GPU:
+# the B300 delivers nominal decimal bytes with NO Hopper-style ~7%
+# over-provision. reserve_extra: the measured H200 hidden margin that the
+# transferred reserve must therefore add back (research/gpu_b300.md #3 —
+# formerly a flagged sensitivity, now the measured central case).
+# peak_flops_fp8: 4.5 PFLOPS dense. The DGX B300 datasheet quotes
+# "72 PFLOPS FP8" for 8 GPUs WITH 2:4 sparsity -> 9 PFLOPS sparse/GPU ->
+# 4.5 dense (corroborated by third-party spec tables listing HGX B300
+# FP8 dense at 4,500 TFLOPS). NOTE the trap this replaces: Blackwell
+# Ultra's 1.5x FP4 uplift (13.5 PFLOPS dense, research/gpu_b300.md) did
+# NOT carry to FP8 — "FP8 = half of FP4", true on Hopper, over-credits
+# the B300 by 1.5x. Never measured here. research/prefill.md #1.
+[gpus.B300]
+name = "B300"
+vram = 288.4e9
+hbm_bw = 8.0e12
+supports_nvfp4 = true
+reserve_extra = 9.75e9
+peak_flops_fp8 = 4.5e15
+# power: ENTIRELY EXTRAPOLATED — no Blackwell Ultra power-state
+# measurement exists. Rule (power.md #3): transfer Hopper's
+# fractions of TDP (idle ~10.5%, decode 0.55, prefill 0.90)
+# onto the 1,400 W plate; host_w is the mid of the DGX B300
+# spec bracket (410-710 W/GPU). If the target is the 1,100 W
+# air-cooled SXM6 AC part, scale the three GPU wattages ~0.79.
+tdp_w = 1400.0
+idle_w = 150.0
+p_decode_w = 770.0
+p_prefill_w = 1260.0
+host_w = 500.0
+eur_gpu_h = 6.80
+# purchase: Supermicro's 8-GPU HGX B300 server at $662,846 (store listing as
+# reported 2026-09-21; the store showed it out of stock on 2026-11-04;
+# resellers list $551k to $795k), / 8 GPUs / 1.1267 USD per EUR
+eur_capex_gpu = 73538.0
+
+# ============================================================================
+# MODELS
+# ============================================================================
+# Baseline dense sibling — numbers straight from the original study. The
+# published Qwen3.6-27B config (64 layers, interval 4 -> 16 full-attn x
+# 4 KV heads x 256) reproduces the baseline's 32 KiB/token exactly.
+# Named Qwen3.8-27B since 2026-09-05: its config and its FP8 checkpoint
+# (1,606 tensors, dtypes and shapes) are identical to Qwen3.6-27B's, so
+# every architecture-determined constant carries over; mtp is unmeasured
+# on it (see the note); nvfp4_w is measured on 3.8's own checkpoint.
+[models.27B]
+name = "Qwen3.8-27B (dense)"
+kv_bpt = 32768                   # = 32 * KIB: 16 attn layers x 4 KV heads x 256 x 2(K,V) x 1B
+deltanet_state = 78643200        # = 75 * MIB: baseline's 75 MiB; bf16 arithmetic (48 DN layers x
+                                 # 48 vheads x 128x128 + conv) gives 75.7 MiB
+w_resident = 30923764531.2       # = 28.8 * GIB: baseline's stated as-deployed FP8 footprint
+w_decode_shared = 30923764531.2  # = 28.8 * GIB: dense: every step reads all weights
+w_route_pertok = 0.0
+w_route_total = 0.0
+layers = 64
+rec_layers = 48
+draft_layers = 1
+# draft pass: the MTP layer (~0.5e9 B) + the untied lm_head it re-reads for
+# the draft logits (248,320 x 5,120 = 1.27e9 B), both taken as FP8:
+# ESTIMATED, no ledger itemises them. A BF16 lm_head (2.54e9) would leave the
+# anchor's measured 2.7 ms intercept no room for the all-reduce floor, so the
+# FP8 reading is the one the measurement allows. It sets tau_rec through that
+# anchor (model.decode_priors): re-measure before trusting either.
+w_draft = 1.77e9
+w_draft_route_pertok = 0.0
+# per-draft acceptance MEASURED on Qwen3.6-27B at k = 2 (1 + a + a^2 = 2.94;
+# geometric to three decimals, #74); carried to 3.8, same draft head shape
+acceptance = 0.971
+acceptance_measured = true
+spec_tokens = 3                  # num_speculative_tokens: the reference server's depth
+weights_as_deployed = true        # w_resident is the measured as-deployed footprint (no +15%)
+# RedHatAI/Qwen3.8-27B-NVFP4 (2026-08-17), MEASURED from every shard
+# header: 23,417,339,744 B (dense MLPs of 56/64 layers NVFP4;
+# attention, DeltaNet, lm_head FP8; embed/MTP/vision BF16). Replaces
+# the projection of nvidia/Qwen3.6-27B-NVFP4's 21.92e9 B onto 3.8's
+# weights (no NVIDIA NVFP4 of 3.8 exists). Same whole-checkpoint
+# convention as the FP8 28.8 GiB, which the measured
+# Qwen/Qwen3.6-27B-FP8 checkpoint (30.87e9 B = 28.75 GiB) matches
+# within 0.2%. Dense: decode reads everything. research/nvfp4_2026-09.md.
+nvfp4_w = [
+    23417339744,
+    23417339744,
+    0.0,
+    0.0,
+]
+max_ctx = 1_048_576              # 262,144 native; 1M via YaRN (owner decision)
+# prefill (research/prefill.md #2): 27B dense, less ~2.5e9 of
+# embed + untied lm_head (vocab 248,320 — the family figure the
+# 35B-A3B ledger reads from config.json — x hidden 5,120, x2).
+# 64 layers, interval 4 -> 16 full-attention; 24 Q heads x 256.
+params_prefill = 24.5e9
+attn_layers = 16
+attn_d = 6144                    # = 24 * 256
+kv_heads = 4                     # GQA 24/4 on the 16 full-attention layers
+
+[models.27B.quality]  # xhigh effort (the index run); 3.6 was 162/267, no 4.0 run
+tb21 = [213, 267]
+tb40 = [11, 198]
+aa = "qwen3-8-27b"
+
+[models.27B.explorer]
+short = "Qwen3.8-27B"
+tip = "Qwen3.8-27B — dense hybrid, the calibrated baseline (measured on Qwen3.6-27B, whose checkpoint is tensor-for-tensor the same shape): 64 layers (48 DeltaNet + 16 full-attn) → 32 KiB/token FP8 KV plus a 75 MiB recurrent state per session. 262k native context, 1M via YaRN."
+
+# MoE model — published Qwen3.6-35B-A3B config (see research/model_35ba3b.md).
+[models.35BA3B]
+name = "Qwen3.6-35B-A3B (MoE, ~3B active)"
+kv_bpt = 10_240                  # 10 full-attn layers x 2 KV heads x 256 x 2(K,V) x 1B
+deltanet_state = 33_423_360      # 30 DN layers x 32 vheads x 128x128 bf16 (+conv) = 31.9 MiB
+w_resident = 35_500_000_000      # ~35.5B params x 1B FP8: full model (embeddings,
+                                 # lm_head, attn/DN, all experts, MTP module)
+w_decode_shared = 1_940_000_000  # attn + deltanet + shared expert + router + lm_head / step
+w_route_pertok = 1_006_632_960   # 8 routed experts x 3.146M x 40 layers, FP8
+w_route_total = 32_212_254_720   # 256 routed experts (saturates at exactly n=32 linear)
+layers = 40
+rec_layers = 30
+draft_layers = 1
+# draft pass: MTP layer always-active ~3.5e7 (0.84e9 module less 256
+# experts x 3.146e6) + lm_head 0.509e9 FP8; 8 routed experts x 3.146e6
+# per position (research/model_35ba3b.md:108,122)
+w_draft = 5.44e8
+w_draft_route_pertok = 25_165_824
+# acceptance: the 27B's measured 0.971, carried to its Qwen MTP-head sibling; unmeasured
+acceptance = 0.971
+spec_tokens = 2                  # num_speculative_tokens: MTP module
+# RedHatAI/Qwen3.6-35B-A3B-NVFP4 recipe: experts + full-attn NVFP4
+# (0.5625 B/param), but embed/lm_head/DeltaNet/router — AND the MTP
+# module (`re:^mtp.*` is in the measured ignore list) — stay BF16,
+# so the SHARED per-step read is 1.7x HEAVIER than FP8 while the
+# routed-expert read is 1.78x lighter. research/nvfp4.md 6.1.
+nvfp4_w = [
+    24.13e9,  # MEASURED LM bytes (2.94x vs BF16 base)
+    3.308e9,  # measured 3.3065e9: attn+shared NVFP4; DN+lm_head BF16
+    566_231_040,  # measured 566,238,720 (+1.4e-5)
+    18_119_393_280,  # measured 18,119,639,040 (kink stays n=32)
+]
+max_ctx = 1_048_576              # 262,144 native; 1M via YaRN (owner decision)
+# prefill: MoE — a token routes to 8 of 256 experts no matter how
+# long the chunk is, so the ACTIVE parameters prefill, not the 35B.
+# From this model's own component ledger (model_35ba3b.md): per-step
+# shared read 1.940e9 MINUS lm_head 0.509e9 (fires once per prefill,
+# not per token) PLUS the 8 routed experts 1.007e9 = 2.44e9. (The
+# published "~3B active" includes embed + lm_head.)
+# 40 layers, 10 full-attention; 16 Q heads x 256.
+params_prefill = 2.44e9
+attn_layers = 10
+attn_d = 4096                    # = 16 * 256
+kv_heads = 2                     # GQA 16/2 on the 10 full-attention layers
+
+[models.35BA3B.quality]  # 0/198 is a MEASURED zero, not a missing run
+tb21 = [120, 267]
+tb40 = [0, 198]
+aa = "qwen3-6-35b-a3b"
+
+[models.35BA3B.explorer]
+short = "35B-A3B"
+tip = "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN."
+
+# Dense 128B, open weights (2026-04), 88 uniform full-attention GQA layers
+# (8 KV heads x 128) — the study's KV-hungriest model: 176 KiB/token FP8,
+# no recurrent state, no MoE. No MTP module -> speculative default 1.0x
+# (an external EAGLE-v1 draft exists; its speedup is unmeasured here).
+# Constants: research/model_mistral_medium35.md.
+[models.MM35]
+name = "Mistral-Medium-3.5-128B (dense)"
+kv_bpt = 180_224                 # 88 layers x 8 KV heads x 128 x 2(K,V) x 1B
+deltanet_state = 0.0             # pure attention, no recurrent state
+w_resident = 133.6e9             # 124.43 GiB as-shipped FP8 checkpoint
+w_decode_shared = 125.0e9        # 88 FP8 layers + BF16 lm_head; vision tower not read
+w_route_pertok = 0.0
+w_route_total = 0.0
+layers = 88
+rec_layers = 0
+draft_layers = 0
+# no draft model ships with it (the external EAGLE-v1 draft is unsized)
+w_draft = 0.0
+w_draft_route_pertok = 0.0
+spec_tokens = 0                  # num_speculative_tokens: no MTP module; the explorer's slider models an external EAGLE-style draft
+draft_method = "eagle"
+# nvidia/Mistral-Medium-3.5-128B-NVFP4 mixed recipe: MLP 4-86 NVFP4,
+# edge MLP + all attention FP8, lm_head BF16 (research note #3).
+# Resident = the MEASURED safetensors total (95,224,812,960 B,
+# 2026-07-27 re-verification); decode read measured 86.643e9.
+nvfp4_w = [
+    95.2e9,
+    86.6e9,
+    0.0,
+    0.0,
+]
+max_ctx = 262_144                # hard model max (YaRN x64 over a 4k base)
+# prefill: the TEXT DECODER only — model_mistral_medium35.md's shard
+# ledger gives 121.8e9 decoder-layer params exactly; embeddings and
+# lm_head (2 x 131,072 x 12,288 = 3.22e9) are outside it, and the
+# ~2.7e9-param vision tower is an ENCODER, never executed when
+# re-prefilling these text contexts (subtracting embed+lm_head from
+# the 128B multimodal total, as this constant first did, left the
+# tower inside the GEMM). ALL 88 layers are full GQA -> the study's
+# heaviest quadratic term by far; 96 Q heads x 128.
+params_prefill = 121.8e9
+attn_layers = 88
+attn_d = 12288                   # = 96 * 128
+kv_heads = 8                     # GQA 96/8 — shards on every TP the study prices
+
+[models.MM35.quality]  # 0/198 is a MEASURED zero, not a missing run
+tb21 = [135, 267]
+tb40 = [0, 198]
+aa = "mistral-medium-3-5"
+
+[models.MM35.explorer]
+short = "Mistral-Med-3.5"
+tip = "Mistral-Medium-3.5-128B — dense, 88 uniform full-attention layers → 176 KiB/token KV (17.6× the 35B-A3B), the study's KV-hungriest model. No MTP module: speculative default 1.0× (external EAGLE draft unmeasured). Hard 262k context max."
+
+# MoE 744B-A40B (753B incl. MTP), MLA + DeepSeek Sparse Attention, open
+# weights (2026-06). Cached: 576-B MLA latent/layer + 132-B indexer keys
+# on 21+1 layers = 47.3 KiB/token fp8; vLLM REQUIRES fp8 KV on this path
+# (kv_fp16_ok=False). Decode is sparse: indexer scans the context at
+# 2,772 B/token while attention reads only top-2048 tokens/layer.
+# Constants: research/model_glm52.md. Named GLM-5.3 since 2026-09-06:
+# its config (55/56 keys) and its FP8 checkpoint (118,629 tensors, dtypes,
+# shapes, bytes) are identical to GLM-5.2's; research/model_glm53.md.
+[models.GLM52]
+name = "GLM-5.3 (MoE 744B-A40B, MLA+DSA)"
+kv_bpt = 48_408                  # B300: 79 x 576 (fp8_e4m3 latent) + 22 x 132 (indexer)
+deltanet_state = 0.0             # MLA is cached attention, no recurrent state
+w_resident = 755.5e9             # official FP8 ckpt: 753.3e9 params + BF16 excess
+w_decode_shared = 18.92e9        # MLA + indexers + dense MLP + shared exp + lm_head
+w_route_pertok = 22_649_241_600  # 8 experts x (3x6144x2048) x 75 MoE layers, FP8
+w_route_total = 724_775_731_200  # 256 experts (saturates at n=32, like 35BA3B)
+layers = 78
+rec_layers = 0
+draft_layers = 1
+# draft pass: MTP layer always-active 3.69e8 (10,032,632,960 B less 256
+# experts x 37,748,736) + lm_head 1.903e9 BF16; 8 routed experts x
+# 37,748,736 per position (research/nvfp4_2026-10.md:40, model_glm52.md:126)
+w_draft = 2.272e9
+w_draft_route_pertok = 301_989_888
+# acceptance MEASURED (outside): InferenceX pins GLM-5.3 NVFP4's accepted
+# length at 2.94 tokens per step with 3 drafts (inferencex/golden-al-glm-5.3-nvfp4,
+# research/sources/inferencex.md) -> geometric a = 0.797
+acceptance = 0.797
+acceptance_measured = true
+spec_tokens = 5                  # num_speculative_tokens: MTP module
+# nvidia/GLM-5.3-NVFP4 (2026-09-14), MEASURED from every shard header:
+# routed experts of the 75 main MoE layers NVFP4 (21,233,688 B/expert);
+# attention, indexers, shared experts and the MTP layer BF16, dense
+# MLPs FP8. The always-active read is the FP8 constant plus the
+# measured delta on the same tensors (+15,891,309,576 B, the BF16
+# upcast). research/nvfp4_2026-10.md.
+nvfp4_w = [
+    464_115_789_896,
+    34_811_309_576,
+    12_740_212_800,  # 8 x 21,233,688 x 75
+    407_686_809_600,  # 256 x 21,233,688 x 75 (kink n=32)
+]
+kv_decode_bpt = 2_772            # 21 indexer layers x 132 B per context token
+kv_decode_const = 92.0e6         # B300: 78 layers x top-2048 x 576 B per active seq
+kv_decode_topk = 2_048           # ...scaled down for sequences < 2,048 tokens
+# H200: FlashMLA's fp8_ds_mla rows, 656 B per latent (vLLM's GLM-5.3
+# recipe: --kv-cache-dtype fp8 on Hopper, fp8_e4m3 on Blackwell)
+kv_hopper_fp8 = [
+    54_728,  # 79 x 656 + 22 x 132
+    104_792_064,  # 78 x 2048 x 656
+]
+kv_fp16_ok = true                # BF16 is vLLM's default on Hopper and accepted on
+                                 # Blackwell (FlashMLA and FlashInfer sparse both list it)
+max_ctx = 1_048_576              # native 1M context (theta 8e6)
+# prefill: MoE — model_glm52.md's derivation gives 39.3e9 active
+# EXCLUDING embeddings (vLLM "39B"); less lm_head 1.903e9 (fires
+# once per prefill) = 37.4e9. (The round "~40B active less embed +
+# lm_head" this constant first used double-trusted the marketing
+# figure over the ledger's own sum.)
+# attn_layers/attn_d price MLA as DENSE attention over all 78 layers:
+# an UPPER BOUND. DSA's top-2048 sparsity is established for decode
+# (kv_decode_*) but its prefill behaviour is not characterised in
+# research/model_glm52.md, so the quadratic term here is pessimistic
+# and flagged. 64 heads x 256 (qk_nope 192 + rope 64 = v_head_dim).
+params_prefill = 37.4e9
+attn_layers = 78
+attn_d = 16384                   # = 64 * 256
+kv_heads = 1                     # MLA: one latent per token, replicated under plain TP
+
+[models.GLM52.quality]  # max effort (the index run); 5.2 was 208/267, no 4.0 run
+tb21 = [224, 267]
+tb40 = [83, 198]
+aa = "glm-5-3"
+
+[models.GLM52.explorer]
+short = "GLM-5.3"
+tip = "GLM-5.3 — 744B-A40B MLA+DSA (constants derived on GLM-5.2, whose checkpoint is tensor-for-tensor the same shape): 47.3 KiB/token stored on B300 and 53.4 KiB on H200 (vLLM's FP8 row differs by GPU), but decode reads only top-2048 tokens/layer + an indexer scan. FP8 weights fit from 7×H200 / 4×B300 (recipe floor; 3×B300 by pool arithmetic alone); NVFP4 from 2×B300. 1M native context."
+kv_tip = "GLM-5.3's FP8 cache row depends on the GPU: on B300 vLLM serves it through FlashInfer as plain fp8_e4m3, 576 B per latent; on H200 through FlashMLA as fp8_ds_mla, 656 B (512 fp8 values, 16 B of scales, 64 rope values kept BF16), so an H200 holds 11.5% fewer tokens. FP16 is BF16 KV on either part (vLLM's default on Hopper): double the 576-B row and doubled top-k reads; the indexer scan stays fp8."
+state_tip = "GLM-5.3 keeps no recurrent state — pure MLA attention — so this control is disabled."
+# FlashMLA's fp8_ds_mla on Hopper, fp8_e4m3 on Blackwell, where vLLM also
+# turns auto into fp8, so the BF16 arm must say bfloat16
+kv_cache_dtype = { fp8_hopper = "fp8", fp16 = "bfloat16" }
+
+# MoE 284B-A13B (304B on disk incl. 3 DSpark stages), MQA over a 512-dim
+# latent + per-layer-class compression (2 SWA / 21 CSA ratio-4 / 20 HCA
+# ratio-128), open weights (2026-07-31). Only COMPRESSED caches grow:
+# 3,450 B/token — ~10x below V3-class MLA — plus a fixed ~14.9 MiB/session
+# (128-entry windows on 46 layers + fp32 compressor state), carried in
+# deltanet_state. Decode reads the FP4 indexer scan + dense-HCA compressed
+# axis (426 B/ctx-token) and top-512 latents + windows (9.36 MB/seq).
+# Native checkpoint is already mixed FP8/FP4 (experts FP4 + E8M0 scales,
+# servable on H200 per the vLLM recipe). NVIDIA's 0731 NVFP4 repack
+# (E4M3 block-16 scales) is HEAVIER than native — see nvfp4_w below and
+# research/nvfp4_2026-09.md; research/model_dsv4flash.md for the rest.
+# Kept alongside DSV41F since 2026-09-16: V4.1 is a different
+# architecture (CED + CSA2 + Engram), not a refresh of this one.
+[models.DSV4F]
+name = "DeepSeek-V4-Flash-0731 (MoE 284B-A13B, CSA)"
+kv_bpt = 3_450                   # 21 x 576/4 + 20 x 576/128 + 21 x 64/4 (fp8 latent+fp4 idx)
+deltanet_state = 15_597_568      # 46 x 128 x 576 windows + 12,206,080 fp32 compressor state
+state_step_bytes = 1_048_768     # per step: 43 x 576 ring-slot writes + each compressor's
+                                 # slot write, its pooling read and (ratio 4) overlap-half
+                                 # copy, amortized over the ratio (1,024,000) — the window
+                                 # READS are in kv_decode_const (research/model_dsv4flash.md #3)
+state_fp32_ok = false            # already fp32/fp8-mixed; doubling models nothing
+w_resident = 166.88e9            # measured safetensors total 166,878,536,440 B
+w_decode_shared = 7.66e9         # attn 4.60 + shared exp 1.08 + compressors/indexers/
+                                 # gates/mHC 0.92 + lm_head 1.06 (research note 4)
+w_route_pertok = 3_449_290_752   # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
+w_route_total = 147_169_738_752  # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+layers = 43
+rec_layers = 0
+draft_layers = 3
+# draft pass: 3 DSpark stages, always-active ~6e8 ESTIMATED (10.86e9 B of
+# stages less an assumed 256 x 13,369,344 B of experts each) + lm_head
+# 1.059e9 BF16; routed 3 stages x 6 x 13,369,344 per position, ESTIMATED
+w_draft = 1.659e9
+w_draft_route_pertok = 240_648_192
+# acceptance: Mistral-Large-4's outside-measured DSpark 0.777, carried to the
+# other DSpark drafter; unmeasured
+acceptance = 0.777
+spec_tokens = 7                  # num_speculative_tokens: DSpark, 0731's model card (greedy drafts)
+draft_method = "dspark"
+# nvidia/DeepSeek-V4-Flash-0731-NVFP4 (2026-08-19), MEASURED from every
+# shard header. Routed experts repacked NVFP4 (E4M3 block-16 scales):
+# 14,155,800 B/expert vs 13,369,344 native (E8M0 block-32) — this arm
+# is 5.2% HEAVIER than FP8; MTP experts and everything else identical.
+# research/nvfp4_2026-09.md.
+nvfp4_w = [
+    175_535_844_088,
+    7.66e9,
+    3_652_196_400,  # 6 experts x 14,155,800 B x 43
+    155_827_046_400,  # 256 experts x 14,155,800 B x 43
+]
+kv_decode_bpt = 426              # 21 x 64/4 fp4 indexer scan + 20 x 576/128 dense HCA
+kv_decode_const = 9_363_456      # 21 x 512 x 576 top-k reads + 43 x 128 x 576 windows
+kv_decode_topk = 2_048           # 512 compressed entries x ratio 4, in token space
+kv_fp16_ok = false               # vLLM's V4 path asserts fp8 main KV; SGLang's bf16
+                                 # KV-decode is unfinished (research note 6)
+max_ctx = 1_048_576              # native 1M (YaRN x16 over 65,536 baked into the config)
+# prefill: MoE active GEMM params excl embed/lm_head (12.703e9 from the
+# param ledger). Quadratic term: the indexer scores the full compressed
+# axis (64 x 128 / 4 = 2,048 MACs per original token, QK only, so
+# 1,024-equiv under the 2 T^2 d convention, x 21 CSA layers) and HCA
+# attends it densely (64 x 512 / 128 = 256-equiv x 20); the CSA
+# top-512 and window reads are LINEAR per token and deliberately left
+# out — prefill priced cheaper, biased AGAINST the thrash hypothesis
+# (research/model_dsv4flash.md #6).
+params_prefill = 12.70e9
+attn_layers = 41
+attn_d = 649.3658536585366       # = 26_624 / 41
+kv_heads = 1
+state_heads = 1                  # MQA latent caches AND the latent windows replicate under plain TP
+
+[models.DSV4F.quality]  # 0731, max effort
+tb21 = [210, 267]
+tb40 = [24, 198]
+aa = "deepseek-v4-flash"
+
+[models.DSV4F.explorer]
+short = "DSv4-Flash"
+tip = "DeepSeek-V4-Flash-0731 — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's lightest big-MoE fit: from 2×H200 / 1×B300 (native FP4 experts; NVFP4 exists but is 5% heavier: the experts are already 4-bit natively and NVIDIA's repack only adds denser scales). A different architecture from V4.1-Flash (no encoder-decoder split, no Engram tables), kept alongside it. 1M native context."
+kv_tip = "DeepSeek-V4-Flash-0731: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled."
+state_tip = "DeepSeek-V4-Flash-0731 pays a fixed {state_mib} MiB/session (fp8/bf16 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled."
+speculative_config = '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"greedy"}'
+
+# DeepSeek-V4-Flash-0731's text backbone + a 0.47B BF16 vision tower
+# (32-layer ViT + aligner), continued-trained (2026-08-31, MIT). The text
+# config, compress_ratios and inference/model.py cache code are those of
+# DSV4F unchanged (diffed 2026-10-02): image tokens only add a per-expert
+# gate bias and widen the window mask inside an image span. Every cache,
+# decode and prefill constant is therefore DSV4F's; only the resident
+# bytes move, by the vision tower (932,786,176 B) plus 50,176 B of fp32
+# gate biases — the safetensors total, header-verified on all 48 shards.
+# The tower runs on image prefill only, so it is resident but never in a
+# decode read, and the text workload never prices it. No NVIDIA or
+# RedHatAI NVFP4 checkpoint (community repacks only, 2026-10-02).
+# research/model_dsv4flash_vision.md.
+[models.DSV4FV]
+name = "DeepSeek-V4-Flash-Vision-Exp (MoE 284B-A13B, CSA, vision)"
+kv_bpt = 3_450                   # = DSV4F: identical caches (text config byte-identical)
+deltanet_state = 15_597_568      # = DSV4F: 46 x 128 x 576 windows + fp32 compressor state
+state_step_bytes = 1_048_768     # = DSV4F (research/model_dsv4flash.md #3)
+state_fp32_ok = false            # already fp32/fp8-mixed; doubling models nothing
+w_resident = 167_811_372_792     # measured safetensors total: DSV4F + 932,836,352 B
+                                 # (ViT 823.7e6 + aligner 109.1e6 + gate biases)
+w_decode_shared = 7.66e9         # = DSV4F: the tower is never read by a text decode step
+w_route_pertok = 3_449_290_752   # 6 experts x 13,369,344 B (FP4 packed + scales) x 43
+w_route_total = 147_169_738_752  # 256 experts (kink at n = 256/6 ~ 42.7 — non-integer)
+layers = 43
+rec_layers = 0
+draft_layers = 3
+# draft pass: = DSV4F (same DSpark stages; ESTIMATED split)
+w_draft = 1.659e9
+w_draft_route_pertok = 240_648_192
+# acceptance: as DSV4F (DSpark); unmeasured
+acceptance = 0.777
+spec_tokens = 3                  # num_speculative_tokens: DSpark, its model card
+draft_method = "dspark"
+# nvfp4_w: none  # no official NVFP4 checkpoint; the experts are already 4-bit
+kv_decode_bpt = 426              # = DSV4F: fp4 indexer scan + dense HCA
+kv_decode_const = 9_363_456      # = DSV4F: top-k reads + windows
+kv_decode_topk = 2_048           # 512 compressed entries x ratio 4, in token space
+kv_fp16_ok = false               # same V4 path: vLLM asserts fp8 main KV (the README
+                                 # and the vision image both pass --kv-cache-dtype fp8)
+max_ctx = 1_048_576              # native 1M (YaRN x16 over 65,536 baked into the config)
+params_prefill = 12.70e9
+attn_layers = 41
+attn_d = 649.3658536585366       # = 26_624 / 41: = DSV4F, text prefill
+kv_heads = 1
+state_heads = 1                  # MQA latent caches AND the latent windows replicate under plain TP
+
+[models.DSV4FV.quality]  # max effort, read 2026-10-02
+tb21 = [198, 267]
+tb40 = [24, 198]
+aa = "deepseek-v4-flash-vision"
+
+[models.DSV4FV.explorer]
+short = "DSv4-Flash-Vision"
+tip = "DeepSeek-V4-Flash-Vision-Exp — DeepSeek-V4-Flash-0731's text backbone plus a 0.47B vision tower (32-layer ViT + aligner), continued-trained for multimodal agents. The text config and cache code are 0731's unchanged, so every cache, decode and prefill constant is too (3.4 KiB/token + 14.9 MiB/session); only the resident weights grow, by 0.93 GB. Fits from 2×H200 / 1×B300. No official NVFP4 checkpoint. Priced on the text workload only: image encoding and image tokens are not modelled. Terminal-Bench 74.2% on 2.1 and 12.1% on 4.0 (AA, max effort) — below 0731 on 2.1 although DeepSeek's card has it above (83.9 vs 82.7). 1M native context."
+kv_tip = "DeepSeek-V4-Flash-Vision-Exp: vLLM's V4 path asserts a quantized (FP8) main KV cache and SGLang's BF16 KV-decode is unfinished — FP16 KV is not servable, so the toggle is disabled."
+state_tip = "DeepSeek-V4-Flash-Vision-Exp pays a fixed {state_mib} MiB/session (fp8/bf16 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled."
+speculative_config = '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic","enable_adaptive_verification":true}'
+
+[[models.DSV4FV.explorer.recipe]]
+after_spec = true
+note = "priced as a text workload: image encoding (ViT prefill) and image tokens are not modelled"
+
+# MoE 552B backbone + 196B Engram tables (510.3 GB on disk incl. 3 DSpark
+# stages and a 0.5B ViT), open weights (2026-09-10, MIT). Causal Encoder-
+# Decoder: 20 encoder + 20 decoder layers, the decoder's global KV
+# PROJECTED from the encoder output, so prefill runs the encoder only
+# (8B active) while decode runs all 40 (16B). CSA2 shares FOUR compressed
+# caches across layers (sources 2/8/14 at ratio 2, 20 at ratio 1), main KV
+# in FP4 (E2M1 + E4M3/16 = 288 B/entry) and indexer keys in FP4 (68 B) ->
+# 890 B/token, the paper's own figure; plus 2.8 MiB/session of fp8
+# 128-entry windows on 43 layers and fp32 compressor state, carried in
+# deltanet_state. Decode reads four full-axis indexer scans (170 B/ctx
+# token) + top-512 latents on 38 layers, four candidate-pool (16,384
+# entry) indexer reads and the windows (12.8 MB/seq). The 384 routed
+# experts are native MXFP4 (kink at n = 384/6 = 64); vLLM keeps the
+# Engram tables in HBM ("plan capacity for them" — recipe), so the fit
+# starts at 5xH200 / 2xB300. NVIDIA's NVFP4 repack is 3.3% heavier.
+# research/model_dsv41flash.md.
+[models.DSV41F]
+name = "DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)"
+kv_bpt = 890                     # 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1 cache
+deltanet_state = 2_930_688       # 43 x 128 x 528 fp8 windows + 24,576 fp32 compressor state
+state_step_bytes = 45_696        # per step: 40 x 528 ring-slot writes + 24,576 compressor
+                                 # state r/w — the window READS are in kv_decode_const
+state_fp32_ok = false            # already fp8/fp32-mixed; doubling models nothing
+w_resident = 510_286_023_000     # measured safetensors total (header-verified), Engram in HBM
+w_decode_shared = 8_522_921_408  # exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/
+                                 # compressors/indexers/engram-proj 0.71 + lm_head 1.32
+w_route_pertok = 4_512_153_600   # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
+w_route_total = 288_777_830_400  # 384 experts (kink at n = 384/6 = 64)
+layers = 40
+rec_layers = 0
+draft_layers = 3
+# draft pass: 3 DSpark stages always-active 7.13e8 (7,932,874,632 B less
+# 3 x 128 x 18,800,640 of experts) + lm_head 1.324e9 BF16; routed
+# 3 stages x 3 x 18,800,640 per position (research/model_dsv41flash.md:176)
+w_draft = 2.037e9
+w_draft_route_pertok = 169_205_760
+# acceptance: as DSV4F (DSpark); unmeasured
+acceptance = 0.777
+spec_tokens = 5                  # num_speculative_tokens: DSpark, the vLLM recipe on NVIDIA
+draft_method = "dspark"
+# nvidia/DeepSeek-V4.1-Flash-NVFP4 (2026-09-16), MEASURED from every
+# shard header. Only the 40 main layers' routed experts change: native
+# MXFP4 with E8M0 block-32 scales (18,800,640 B/expert) repacked with
+# E4M3 block-16 scales (19,906,584 B/expert, +5.9%), as NVIDIA's 0731
+# repack was. Everything else byte-identical, so the arm is 3.3%
+# HEAVIER than native. research/nvfp4_2026-10.md.
+nvfp4_w = [
+    527_273_322_840,
+    8_522_921_408,
+    4_777_580_160,  # 6 x 19,906,584 x 40
+    305_765_130_240,  # 384 x 19,906,584 x 40
+]
+kv_decode_bpt = 170              # 3 x 68/2 + 68: full-axis fp4 indexer scans (layers 2/8/14/20)
+kv_decode_const = 12_763_136     # 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool
+                                 # + 40 x 128 x 528 windows
+kv_decode_topk = 1_024           # 512 compressed entries x ratio 2, in token space
+kv_fp16_ok = false               # FP4 main KV is the TRAINED cache format (QAT, tech
+                                 # report 2.4.4); no stack serves a BF16 main KV
+max_ctx = 1_048_576              # native 1M (YaRN x16 over 65,536 baked into the config)
+# prefill: CED runs the 20 encoder layers only — active GEMM params
+# excl embed/lm_head 7.90e9 (encoder ledger + the layer-20 CED
+# projection). Quadratic term: the three encoder indexers (layers
+# 2/8/14) score the full ratio-2 compressed axis at 32 x 128 — QK
+# only, no AV, so half the 2 T^2 d convention -> 1,024-equiv per
+# token each; the top-512 and window reads are LINEAR per token and
+# left out; the 128-token decoder replay is a fixed cost per prefill
+# and left out — both price prefill cheaper, biased AGAINST the
+# thrash hypothesis (research/model_dsv41flash.md #6).
+params_prefill = 7.90e9
+attn_layers = 3
+attn_d = 1_024
+kv_heads = 1
+state_heads = 1                  # MQA latent caches AND the latent windows replicate under plain TP
+
+[models.DSV41F.quality]  # max effort; 4.0 read 2026-11-04
+tb21 = 0.906
+tb40 = [53, 198]
+aa = "deepseek-v4-1-flash"
+source = { tb21 = "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — Artificial Analysis has no 2.1 run (read 2026-11-04)" }
+
+[models.DSV41F.explorer]
+short = "DSv4.1-Flash"
+tip = "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four FP4 compressed caches across the 40 layers: 890 B/token stored — 4× below V4-Flash-0731, ~40× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far, but its heaviest fit after GLM-5.3: vLLM keeps the 203 GB Engram tables in HBM, so 510 GB resident — 8×H200 (5 by arithmetic) / 2×B300. Native MXFP4 experts (384, 6 routed: kink n = 64); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1."
+kv_tip = "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels, quantization-aware trained) and the sliding windows FP8 — that native layout is what the FP8 arm prices; no serving stack offers a BF16 main KV, so the toggle is disabled."
+state_tip = "DeepSeek-V4.1-Flash pays a fixed {state_mib} MiB/session (fp8 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled."
+speculative_config = '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block","enable_adaptive_verification":true}'
+
+# MoE 125B-A6B (180B on disk incl. the 51B FP8 n-gram table, 2.7B MTP and
+# a never-executed vision tower), open weights (2026-08). Qwen3.6-style
+# hybrid: 36 DeltaNet + 12 QSA sparse-attention layers (GQA 24/2 x 256
+# with a ratio-4 compressed fp8 indexer, budget 2048). Only the routed
+# experts and the n-gram table are FP8 in the serving checkpoint — the
+# always-active blocks stay BF16, so the shared per-step read is heavy
+# (8.6 GB) while the cache is light (12.4 KiB/token). Deepest expert-union
+# kink in the study: n = 512/10 = 51.2. research/model_qwen38flashnext.md.
+[models.Q38FN]
+name = "Qwen3.8-Flash-Next (MoE 125B-A6B, QSA+n-gram)"
+kv_bpt = 12_672                  # 12 attn x 2 KV x 256 x 2(K,V) x 1B + 12 x 128/4 indexer
+deltanet_state = 59_572_224      # 36 DN layers x 48 vheads x 128x128 bf16 + conv (10,240 x 4)
+w_resident = 185_502_232_570     # FP8 ckpt metadata.total_size, shard-header-verified
+w_decode_shared = 8_623_999_000  # exact per-tensor ledger sum — BF16 always-active:
+                                 # attn 1.23 + DN 4.17 + shared exp 0.47 + routers 0.13
+                                 # + hyper-conns 1.28 + PLE 0.07 + lm_head 1.27
+                                 # (n-gram/embed lookups excluded)
+w_route_pertok = 2_359_584_000   # 10 experts x 4,915,800 B (FP8 + block scales) x 48
+w_route_total = 120_810_700_800  # 512 experts (kink at n = 512/10 = 51.2 — the deepest)
+layers = 48
+rec_layers = 36
+draft_layers = 1
+# draft pass: MTP layer always-active 1.81e8 (2,698,026,496 B less 512
+# experts x 4,915,800) + lm_head 1.271e9 BF16; 10 routed experts x
+# 4,915,800 per position (research/model_qwen38flashnext.md:119)
+w_draft = 1.452e9
+w_draft_route_pertok = 49_158_000
+# acceptance: the 27B's measured 0.971, carried to its Qwen MTP-head sibling; unmeasured
+acceptance = 0.971
+spec_tokens = 3                  # num_speculative_tokens: vLLM recipe
+# nvidia/Qwen3.8-Flash-Next-NVFP4 (2026-09-02), MEASURED from every
+# shard header: routed experts of the 48 main layers NVFP4
+# (2,764,824 B/expert, x0.5625 of FP8); n-gram table, MTP experts,
+# attention, DeltaNet, heads byte-identical. research/nvfp4_2026-09.md.
+nvfp4_w = [
+    132_639_846_394,
+    8_623_999_000,
+    1_327_115_520,  # 10 experts x 2,764,824 B x 48
+    67_948_314_624,  # 512 experts x 2,764,824 B x 48
+]
+kv_decode_bpt = 384              # QSA indexer scan: 12 layers x 128 B / ratio 4 per ctx tok
+kv_decode_const = 25_165_824     # 12 layers x top-2048 x 1,024 B full-KV reads per seq
+kv_decode_topk = 2_048           # indexer_budget, read in token space (research note #6)
+max_ctx = 1_048_576              # 262,144 native; 1M via YaRN (owner decision, as the Qwens)
+# prefill: MoE active GEMM params excl embed/lm_head/n-gram lookups
+# (6.04e9 from the shard-header ledger — the published "6B activated").
+# Quadratic term priced as DENSE attention on the 12 QSA layers: an
+# upper bound, QSA prefill sparsity uncharacterised (note #6).
+params_prefill = 6.04e9
+attn_layers = 12
+attn_d = 6144                    # = 24 * 256
+kv_heads = 2                     # GQA 24/2 on the 12 QSA layers; the DeltaNet state shards (48 v-heads)
+
+[models.Q38FN.quality]
+tb21 = [230, 267]
+tb40 = [50, 198]
+aa = "qwen3-8-flash-next"
+
+[models.Q38FN.explorer]
+short = "Q3.8-Flash"
+tip = "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 12.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN."
+
+# vLLM recipe: plain TP8 is incompatible with the FP8 checkpoint (128-wide quantization blocks), so TP8 must run as TEP8
+[[models.Q38FN.explorer.recipe]]
+when = { tp_min = 8 }
+flags = ["--enable-expert-parallel"]
+note = "TEP8: plain TP8 is incompatible with this FP8 checkpoint (vLLM recipe)"
+
+# the triton MoE backend is the recipe's HOPPER guidance only; Blackwell rows never mention it
+[[models.Q38FN.explorer.recipe]]
+when = { tp_min = 8, gpu = "H200" }
+flags = ["--moe-backend triton"]
+
+[[models.Q38FN.explorer.recipe]]
+when = { tp_max = 1, gpu = "B300" }
+note = "1×B300 passes the pool arithmetic; the recipe's validated floor is TP2 (TP1 hit compilation OOM on GB300)"
+
+# MoE 320B-A18B (321B on disk incl. a 7.4B MTP draft layer and a vision
+# tower), open weights (2026-08-25, MIT). GLM-5.2's DSA married to a
+# Qwen-style linear backbone: 34 KDA linear-attention + 11 NoPE
+# sparse-MLA layers (512-B latents, NO rope bytes) with a kpool-4
+# COMPRESSED indexer cache — 6.39 KiB/token, 7.4x below GLM-5.2 —
+# plus the study's second-heaviest recurrent state (74.4 MiB bf16).
+# 288 experts / 8 routed (kink n = 36). KV dtype is GPU-COUPLED: the
+# fp8-KV base arm is Blackwell-only — "Hopper ... must run BF16 KV"
+# (vLLM recipe), i.e. on H200 the FP16-KV toggle is the only servable
+# arm. research/model_glm53flash.md.
+[models.GLM53F]
+name = "GLM-5.3-Flash (MoE 320B-A18B, KDA+NoPE-MLA)"
+kv_bpt = 6_540                   # 12 x 512 nope-only MLA latent + 12 x 132/4 indexer keys
+                                 # (12 = 11 main + the MTP draft layer's DSA stack — the
+                                 # GLM-5.2 convention: storage incl. MTP, decode excl.)
+deltanet_state = 77_987_840      # 34 KDA layers x 64 heads x 128x128 bf16 + q/k/v conv
+w_resident = 328_326_771_576     # FP8 ckpt metadata.total_size, shard-header-verified
+w_decode_shared = 13_957_216_504 # exact ledger sum — KDA 9.37 (BF16!) + DSA attn 1.64
+                                 # + shared exp 1.06 + dense MLPs 0.45 + routers 0.10
+                                 # + hyper-conns 0.07 + lm_head 1.27 + norms
+w_route_pertok = 8_457_781_248   # 8 experts x 25,171,968 B (FP8 + F32 scales) x 42
+w_route_total = 304_480_124_928  # 288 experts (kink at n = 288/8 = 36)
+layers = 45
+rec_layers = 34
+draft_layers = 1
+# draft pass: MTP layer always-active 2.44e8 (7,493,399,168 B less 288
+# experts x 25,171,968) + lm_head 1.269e9 BF16; 8 routed experts x
+# 25,171,968 per position (research/model_glm53flash.md:118)
+w_draft = 1.513e9
+w_draft_route_pertok = 201_375_744
+# acceptance: GLM-5.3's outside-measured 0.797, carried to its GLM sibling; unmeasured
+acceptance = 0.797
+spec_tokens = 5                  # num_speculative_tokens: vLLM recipe
+# RedHatAI/GLM-5.3-Flash-NVFP4 (2026-08-27; the vLLM recipe's named
+# NVFP4 checkpoint), MEASURED from every shard header: routed experts
+# of the 42 decode layers NVFP4 (14,155,800 B/expert, x0.5625), MTP
+# layer keeps FP8 experts, the rest UPCAST to BF16 (+2.75e9 on the
+# always-active read). research/nvfp4_2026-09.md.
+nvfp4_w = [
+    197_822_818_044,
+    16_705_715_836,  # 13,957,216,504 + 2,748,499,332 upcast delta
+    4_756_348_800,  # 8 experts x 14,155,800 B x 42
+    171_228_556_800,  # 288 experts x 14,155,800 B x 42
+]
+kv_decode_bpt = 363              # compressed indexer scan: 11 x 132 B / kpool 4 per ctx tok
+kv_decode_const = 11_534_336     # 11 layers x top-2048 x 512-B latent reads per seq
+kv_decode_topk = 2_048           # index_topk, read in token space (research note #6)
+kv_fp8_blackwell_only = true     # "Hopper ... must run BF16 KV" (vLLM recipe): the fp8-KV
+                                 # arm raises on H200 — price with_kv_dtype("fp16") there
+max_ctx = 1_048_576              # native 1M context
+# prefill: MoE active GEMM params excl embed/lm_head (16.11e9 ledger;
+# card "18B active" incl. embed+lm_head = 17.38e9 ✓). Quadratic term
+# priced as DENSE attention on the 11 DSA layers: an upper bound,
+# DSA prefill sparsity uncharacterised (note #6).
+params_prefill = 16.11e9
+attn_layers = 11
+attn_d = 16384                   # = 64 * 256
+kv_heads = 1                     # NoPE sparse-MLA: one latent per token; the KDA state shards (64 heads)
+
+[models.GLM53F.quality]
+tb21 = [225, 267]
+tb40 = [65, 198]
+aa = "glm-5-3-flash"
+
+[models.GLM53F.explorer]
+short = "G5.3-Flash"
+tip = "GLM-5.3-Flash — MoE 320B-A18B hybrid (34 KDA linear + 11 NoPE sparse-MLA layers, +1 MTP DSA layer whose cache is charged): 6.4 KiB/token stored — 7.4× below GLM-5.2 — plus a 74.4 MiB bf16 KDA state per session; decode reads top-2048 latents + a kpool-4 compressed indexer scan. 288 experts / 8 routed (kink n = 36). Fits from 3×H200 / 2×B300 (pool arithmetic; no recipe floor published). fp8 KV is Blackwell-only, so on H200 the KV toggle locks to BF16. NVFP4: RedHatAI checkpoint (2026-08-27, the vLLM recipe's) — 42 decode layers' experts ×0.5625, the rest upcast to BF16, so the fixed per-step read grows 14.0 → 16.7 GB while the resident drops to 197.8 GB. 1M native context."
+kv_tip = "GLM-5.3-Flash inverts the usual constraint: fp8 KV is BLACKWELL-ONLY — vLLM's recipe says Hopper must run BF16 KV, so on H200 the toggle LOCKS to FP16 (double bytes/token AND doubled top-k reads; the compressed indexer scan stays fp8). On B300 both arms are selectable."
+
+[[models.GLM53F.explorer.recipe]]
+when = { gpu = "H200" }
+note = "BF16 KV is REQUIRED on Hopper for this model — fp8 KV is Blackwell-only (vLLM recipe); the KV toggle locks accordingly"
+
+[[models.GLM53F.explorer.recipe]]
+when = { tp_max = 3 }
+note = "TP<4 is this study's pool arithmetic; the vLLM recipe only demonstrates TP4 (one GB200 tray)"
+
+# MoE 1.05T-A49B (52B with embeddings and lm_head), open weights
+# 2026-10-29 under the Mistral Ecosystem Open-Weight License (MIT plus a
+# separate commercial licence for Model-as-a-Service operators). 72
+# layers of MLA + DSA, as GLM-5.3, with two cache savings of its own:
+# cross-layer KV sharing (9 late NoPE layers attend to layer 35's
+# latents and store none) and index sharing (28 layers reuse the top-k
+# of the indexer before them). 63 x 656 B fp8_ds_mla latents + 44 x 132 B
+# indexer keys = 46.0 KiB/token, 3% below GLM-5.3 on B300 and 14% below
+# it on H200. 128 experts / 4 routed
+# (kink n = 32). The largest model in the study: 1,060.5 GB in FP8, so
+# it fits no 8-GPU H200 node (min TP 9; the vLLM recipe runs it on
+# 2 x 8 H200) and needs TP8 on B300, TP4 with the official NVFP4
+# checkpoint. research/model_mistral_large4.md.
+[models.ML4]
+name = "Mistral-Large-4 (MoE 1.05T-A49B, MLA+DSA, KV sharing)"
+kv_bpt = 47_136                  # 63 x 656 (fp8_ds_mla latent) + 44 x 132 (indexer keys)
+deltanet_state = 4_030_464       # DSpark drafter: 3 MLA layers x 2,048-token window x 656 B
+                                 # (storage incl. the drafter, as DSV4F's DSpark windows)
+state_step_bytes = 0.0           # the drafter's window reads are folded into mtp, as every
+                                 # draft model's are; the target layers carry no state
+state_fp32_ok = false            # an fp8 latent window, not a bf16 recurrent state
+w_resident = 1_060_548_427_328   # FP8 ckpt metadata.total_size, shard-header-verified
+                                 # (incl. the 4.20 GB BF16 DSpark drafter and 3.41 GB vision)
+w_decode_shared = 20_990_666_304 # exact ledger: MLA 8.67 + shared exp 8.04 + lm_head 2.52
+                                 # + indexers 1.20 + dense MLP 0.45 + routers 0.11 + norms
+w_route_pertok = 32_169_775_104  # 4 experts x 113,273,856 B (FP8 + F32 block scales) x 71
+w_route_total = 1_029_432_803_328 # 128 experts (kink at n = 128/4 = 32)
+layers = 72
+rec_layers = 0
+draft_layers = 3
+# draft pass: the 3-layer dense DSpark drafter 4,199,938,048 B BF16
+# (MEASURED) + lm_head 2.517e9 BF16 (research/model_mistral_large4.md:113)
+w_draft = 6.717e9
+w_draft_route_pertok = 0.0
+# acceptance MEASURED (outside): the vLLM recipe's DSpark accepted lengths
+# 2.98 / 2.85 / 2.79 at 8k / 32k / 60k input, 3 drafts, on GB300 -> geometric
+# a = 0.777 at 32k (research/model_mistral_large4.md #5)
+acceptance = 0.777
+acceptance_measured = true
+spec_tokens = 3                  # num_speculative_tokens: DSpark, fixed by the checkpoint (vLLM recipe)
+draft_method = "dspark"
+# mistralai/Mistral-Large-4-1T-A52B-NVFP4 (2026-10-29), MEASURED from
+# every shard header: only the 71 MoE layers' routed experts change,
+# to ModelOpt NVFP4 (63,701,016 B/expert, x0.5624); attention,
+# indexers, shared experts and dense MLP stay FP8, the drafter, vision
+# and heads BF16, byte-identical. research/model_mistral_large4.md #4.
+nvfp4_w = [
+    610_030_457_408,
+    20_990_666_304,
+    18_091_088_544,  # 4 x 63,701,016 x 71
+    578_914_833_408,  # 128 x 63,701,016 x 71 (kink n=32)
+]
+kv_decode_bpt = 5_808            # 44 indexer layers x 132 B per CONTEXT token
+kv_decode_const = 96_731_136     # 72 layers x top-2048 x 656 B per active seq (the 9
+                                 # KV-sharing layers read layer 35's latents)
+kv_decode_topk = 2_048           # index_topk, read in token space
+kv_fp16_ok = false               # every NVIDIA config Mistral and vLLM document runs the fp8
+                                 # (fp8_ds_mla) latent cache, "needed" per the NVFP4 card;
+                                 # the bfloat16 opt-out is the ROCm recipe's only
+max_ctx = 1_048_576              # native 1M (YaRN x2048 over 512); the recipe validates 262,144
+# prefill: MoE active GEMM params excl embed/lm_head (49.82e9 ledger;
+# card "49B active", 52B with embeddings + lm_head = 52.34e9 ✓).
+# attn_layers/attn_d price MLA as DENSE attention over all 72 layers,
+# as GLM-5.3: an upper bound (DSA prefill sparsity not characterised).
+# 64 heads x 128 (qk_nope 64 + rope 64 = v_head_dim 128).
+params_prefill = 49.82e9
+attn_layers = 72
+attn_d = 8192                    # = 64 * 128
+kv_heads = 1
+state_heads = 1                  # MLA latents AND the drafter's latent windows replicate
+                                 # under plain TP
+
+[models.ML4.quality]  # high effort, read 2026-11-04; no 2.1 run
+tb40 = [49, 198]
+aa = "mistral-large-4"
+
+[models.ML4.explorer]
+short = "Mistral-Large-4"
+tip = "Mistral-Large-4 — 1.05T-A49B MoE (52B active with embeddings and lm_head), 72 layers of MLA + DSA as GLM-5.3, plus two cache savings: 9 late NoPE layers attend to layer 35's latents and store none, and 28 layers reuse the top-k of the indexer before them. 46.0 KiB/token stored in vLLM's 656-B fp8_ds_mla rows, 3% below GLM-5.3 on B300, plus 3.8 MiB/session for the DSpark drafter's windows; decode reads top-2048 latents on all 72 layers and 44 indexer scans. 128 experts / 4 routed (kink n = 32), 32.2 GB of routed experts per token, the study's heaviest. The largest model here: 1,060.5 GB in FP8, so no 8×H200 node holds it (the vLLM recipe runs it on 2×8 H200, which this page does not price); 8×B300 in FP8, from 4×B300 with the official NVFP4 checkpoint (610.0 GB). Terminal-Bench 24.7% on 4.0 (AA, high effort); AA has no 2.1 run. 1M native context, 262k validated by the recipe. License: Mistral Ecosystem Open-Weight (MIT, plus a separate commercial licence for Model-as-a-Service operators)."
+kv_tip = "Mistral-Large-4: every NVIDIA configuration Mistral and vLLM document runs the FP8 latent cache (fp8_ds_mla, which the NVFP4 card calls needed); the bfloat16 opt-out exists on ROCm only, so the FP16 toggle is disabled. Its rows are 656 B per latent on both parts: 512 fp8 values, 16 B of scales and 64 rope values kept BF16."
+state_tip = "Mistral-Large-4 keeps no recurrent state (MLA attention); the {state_mib} MiB/session it pays is its DSpark drafter's three 2,048-token latent windows, fp8 like the cache — no bf16/fp32 knob to turn, so the control is disabled."
+speculative_config = '{"method":"dspark","num_speculative_tokens":3}'
+spec_with_dcp = true                # the recipe validates TP8 DCP8 with DSpark (vllm#63796)
+kv_cache_dtype = { fp8 = "fp8_ds_mla" }
+
+# Mistral-Large-4's vLLM recipe: the checkpoint loads in Mistral's format
+[[models.ML4.explorer.recipe]]
+at = 1
+flags = ["--tokenizer-mode mistral --config-format mistral --load-format mistral"]
+
+[[models.ML4.explorer.recipe]]
+note = "Mistral-Large-4 ships in the vllm/vllm-openai:mistral-large-4 image only (no vLLM release includes it yet, 2026-11-04); the recipe validates --max-model-len 262144"
+
+
+# MoE 2.8T-A104B (103.2B active excluding embeddings and lm_head), open
+# weights 2026-11-04 under the Kimi K3.1 Pro License (MIT terms plus a
+# separate agreement for Model-as-a-Service operators above $20M a year and
+# a display rule above 100M users; internal use is exempt). Kimi K3's
+# layout (69 KDA linear-attention layers, latent MoE, 896 experts / 16
+# routed: kink n = 56) with its 24 gated MLA layers replaced by gated DSA
+# (MLA latents plus a top-2048 indexer on every one, at 1-indexed layers
+# 4, 8, ..., 92 and 93), and block Attention Residuals (12 layers a block).
+# The checkpoint ships MXFP4 routed experts (quantization-aware trained)
+# and keeps everything else BF16, so the always-active read is the study's
+# heaviest: 111.5 GB per step, 61.3 GB of it the KDA projections.
+# 1,566.6 GB resident with the DSpark drafter: no 8xH200 node, 8xB300 only.
+# research/model_kimi_k31pro.md.
+[models.K31P]
+name = "Kimi-K3.1-Pro (MoE 2.8T-A104B, KDA+DSA)"
+kv_bpt = 19_872                  # 24 x 576 (fp8_e4m3 latent) + 24 x 132 (indexer keys)
+                                 # + 5 x 576 (the dense DSpark drafter's latents, which share
+                                 # vLLM's block row: dense_mla_draft_bytes_per_token)
+deltanet_state = 237_404_160     # 69 KDA layers x 96 heads x 128x128 bf16 + q/k/v conv
+                                 # (3 x 12,288 x 4 bf16), the GLM53F convention
+w_resident = 1_566_590_881_794   # metadata.total_size 1,561,217,377,280 (shard-header-verified)
+                                 # + the BF16 DSpark drafter 5,373,504,514 (its own checkpoint)
+w_decode_shared = 111_517_783_040 # exact ledger, all BF16: KDA 61.26 + shared exp 24.31
+                                 # + MLA 11.15 + latent MoE projections 9.45 + lm_head 2.35
+                                 # + dense MLP 1.45 + routers 1.18 + indexers 0.36 + norms
+w_route_pertok = 25_829_572_608  # 16 experts x 17,547,264 B (MXFP4 + UE8M0 group-32) x 92
+w_route_total = 1_446_456_066_048 # 896 experts (kink at n = 896/16 = 56)
+layers = 93
+rec_layers = 69
+draft_layers = 5
+# draft pass: the 5-layer dense DSpark drafter 5,373,504,514 B BF16 (MEASURED,
+# incl. its Markov head) + the target's lm_head 2,348,810,240 B BF16, which it
+# shares (research/model_kimi_k31pro.md #5)
+w_draft = 7.722e9
+w_draft_route_pertok = 0.0
+# one draft pass per step: a block drafter, "7 tokens per forward pass"
+# (Inferact/Kimi-K3.1-Pro-DSpark-preview README)
+draft_passes = 1
+# acceptance MEASURED (outside): InferenceX's golden accepted length for this
+# drafter on B300, SPEED-Bench coding, thinking on, probabilistic drafting with
+# block verification: 3.08 at 5 drafts -> geometric a = 0.721
+acceptance = 0.721
+acceptance_measured = true
+spec_tokens = 5                  # num_speculative_tokens: the vLLM recipe's DSpark config
+draft_method = "dspark"
+kv_decode_bpt = 6_048            # per CONTEXT token per step: 24 indexer scans x 132 B
+                                 # + the drafter's dense read, 5 x 576 B (one pass)
+kv_decode_const = 28_311_552     # B300: 24 layers x top-2048 x 576 B per active seq
+kv_decode_topk = 2_048           # index_topk, read in token space
+# H200: vLLM's K3.1 verifier picks fp8_ds_mla off SM10x, 656 B per latent
+# (the drafter's rows too). No Hopper recipe exists and no 8xH200 node
+# holds the weights; the row keeps Python's multi-node arithmetic honest.
+kv_hopper_fp8 = [
+    22_192,  # 24 x 656 + 24 x 132 + 5 x 656
+    32_243_712,  # 24 x 2048 x 656
+]
+max_ctx = 1_048_576              # native 1M; the recipe runs --max-model-len 1048576
+# prefill: active GEMM params excl embed/lm_head (103.19e9 ledger; card
+# "104B activated"). Quadratic term priced as DENSE attention on the 24 DSA
+# layers, as GLM-5.3: an upper bound. 96 heads, QK^T at 192 (nope 128 +
+# rope 64) and AV at 128: attn_d is their mean width x heads.
+params_prefill = 103.19e9
+attn_layers = 24
+attn_d = 15360                   # = 96 * (192 + 128) / 2
+kv_heads = 1                     # MLA: one latent per token; the KDA state shards (96 heads)
+
+[models.K31P.quality]  # AA's default variant (unlabelled), read 2026-11-05; no 2.1 run
+tb40 = [133, 198]
+aa = "kimi-k3-1-pro"
+
+[models.K31P.explorer]
+short = "Kimi-K3.1-Pro"
+weights = "MXFP4"
+tip = "Kimi-K3.1-Pro — 2.8T-A104B MoE: 69 KDA linear-attention layers and 24 gated DSA layers (MLA latents plus a top-2048 indexer), the routed experts in a 3,584-wide latent space (896 experts / 16 routed, kink n = 56). 19.4 KiB/token stored on B300 (24 latents of 576 B, 24 indexer keys, and the DSpark drafter's 5 dense latents) plus a 226 MiB bf16 KDA state per session, the study's heaviest. The checkpoint ships MXFP4 experts and BF16 everything else, so every step reads 111.5 GB of always-active weights (61 GB of it KDA projections) on top of 25.8 GB of experts per token. 1,566.6 GB resident with the drafter: no 8×H200 node holds it; 8×B300 at TP8, the vLLM recipe's single-node layout. No NVFP4 checkpoint. Terminal-Bench 67.2% on 4.0 (AA); AA has no 2.1 run. 1M native context. License: Kimi K3.1 Pro (MIT terms plus a separate agreement for Model-as-a-Service operators above $20M a year)."
+kv_tip = "Kimi-K3.1-Pro's FP8 cache row depends on the GPU, as GLM-5.3's: on B300 vLLM serves its DSA layers through FlashInfer as plain fp8_e4m3, 576 B per latent; off Blackwell it picks fp8_ds_mla, 656 B. The indexer keys stay fp8 (132 B) in every arm. FP16 is BF16 KV, which vLLM accepts when asked for (auto becomes fp8 on Blackwell) but the recipe does not document: double the latent rows and doubled top-k reads."
+speculative_config = '{"model":"Inferact/Kimi-K3.1-Pro-DSpark-preview","num_speculative_tokens":5,"method":"dspark","draft_sample_method":"probabilistic"}'
+spec_with_dcp = true                # the recipe's AgentX preset runs DCP8 with this draft
+# vLLM turns auto into fp8_e4m3 on Blackwell, so the BF16 arm must say bfloat16
+kv_cache_dtype = { fp8_hopper = "fp8_ds_mla", fp16 = "bfloat16" }
+
+[[models.K31P.explorer.recipe]]
+at = 1
+flags = ["--trust-remote-code"]
+
+[[models.K31P.explorer.recipe]]
+note = "Kimi-K3.1-Pro ships in the vllm/vllm-openai:kimi-k31 image only (no vLLM wheel includes it yet, vllm#65685, 2026-11-05); the recipe adds --load-format fastsafetensors on Blackwell to load the 1.56 TB faster"

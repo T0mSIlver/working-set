@@ -23,7 +23,8 @@ export function decodeStateURL(url){
           : v;
   }
   const p = new URLSearchParams(q);
-  if (!p.has('mtp')) st.mtp = CONFIG.MODELS[st.model].mtp;
+  if (!p.has('acc')) st.acc = CONFIG.MODELS[st.model].acceptance;
+  if (!p.has('dspec')) st.dspec = CONFIG.MODELS[st.model].spec_tokens;
   if (!p.has('gpuh')) st.gpuh = CONFIG.GPUS[st.gpu].eur_gpu_h;
   // a non-bare link without ttft_pct predates the control: a miss's mean
   st.ttft_pct = ttftPctFromFragment(p, TTFT_PCTS);

@@ -81,7 +81,8 @@ Read from the per-model pages' embedded dataset (`terminalbenchV21` and
 `terminalbenchV40` fields), 2026-09-10; re-read 2026-11-04, when
 Mistral-Large-4 joined, from the same dataset, whose fields are now named
 `terminalBench21` and `terminalBench40`. Every AA figure read on 2026-09-10 was
-unchanged. Percent = runs passed / 267 (2.1) or
+unchanged. Kimi-K3.1-Pro's row was read 2026-11-05, when it joined; the
+other rows were not re-read that day. Percent = runs passed / 267 (2.1) or
 / 198 (4.0).
 
 | Explorer key | AA slug | AA name | TB 2.1 | runs | TB 4.0 | runs | AA release date |
@@ -97,7 +98,8 @@ unchanged. Percent = runs passed / 267 (2.1) or
 | `DSV41F` | `deepseek-v4-1-flash` | DeepSeek V4.1 Flash (Max). **2.1 is the vendor card's figure** (§ 1 exception): pass@1 on the **DeepSeek Harness, Minimal mode, max reasoning effort, 1M context**, from `https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash` (README, read 2026-09-10); AA has no 2.1 run. **4.0 is AA's run, read 2026-11-04**, replacing the card's 31.2 | **90.6%** (vendor) | — | **26.8%** | 53 | 2026-09-10 |
 | `Q38FN` | `qwen3-8-flash-next` | Qwen3.8-Flash-Next | **86.1%** | 230 | **25.3%** | 50 | 2026-08-26 |
 | `GLM53F` | `glm-5-3-flash` | GLM-5.3-Flash (max) | **84.3%** | 225 | **32.8%** | 65 | 2026-08-26 |
-| `ML4` | `mistral-large-4` | Mistral Large 4 (High) — **read 2026-11-04**, when the model joined the study. AA has no 2.1 run. Mistral's technical report claims 41.0% on 4.0, labelled "AA Coding Agent Index", a different AA index run inside coding agents; this column is AA's mini-swe-agent run (`model_mistral_large4.md` § 9) | — | — | **24.7%** | 49 | 2026-10-29 |
+| `ML4` | `mistral-large-4` | Mistral Large 4 (High) — **read 2026-11-04**, when the model joined the study. AA has no 2.1 run. Mistral's technical report claims 41.0% on 4.0, labelled "AA Coding Agent Index", a different AA index run inside coding agents: it is Large 4 in Mistral Vibe at high effort, 41.4% (82/198), the largest agent-over-mini-swe-agent gain AA shows for any model (+16.7; most models sit within ±4). This column is AA's mini-swe-agent run (`model_mistral_large4.md` § 9) | — | — | **24.7%** | 49 | 2026-10-29 |
+| `K31P` | `kimi-k3-1-pro` | Kimi K3.1 Pro (AA labels no effort; the card's default is max) — **read 2026-11-05**, when the model joined the study. AA has no 2.1 run. Moonshot's card reports 65.7% on 4.0, run in Claude Code; AA's mini-swe-agent run lands 1.5 points above it, so the score holds across two harnesses, unlike Mistral-Large-4's (`model_kimi_k31pro.md` § 9) | — | — | **67.2%** | 133 | 2026-10-23 |
 
 A `—` in a 4.0 column is **no run**; a **0.0%** is a *measured* zero (0 of
 198 runs passed) and is plotted. The two are different facts and the
@@ -131,7 +133,7 @@ free key; the pages were used because no key was on hand.
   span 45 to 86 points on 2.1 and 0 to 42 on 4.0; the two newest lead 2.1 but
   on 4.0 they trail GLM-5.3, released eight days earlier. Re-read the ledger when a model is added, and record the date.
   The default for a model without a run on a version is `null` (left off that
-  axis, `—` in that column): Mistral-Large-4 on 2.1. The one departure is
+  axis, `—` in that column): Mistral-Large-4 and Kimi-K3.1-Pro on 2.1. The one departure is
   DeepSeek V4.1 Flash's vendor 2.1 figure (§ 1): read its 2.1 lead over
   Qwen3.8-Flash-Next (86.1, AA) as *unknown*, not as 4.5 points.
 
@@ -142,15 +144,16 @@ is not noise:
 
 | | 2.1 | 4.0 |
 |---|---|---|
-| spread over the study models with a run (nine on 2.1, ten on 4.0) | 45.7 pts (44.9–90.6) | 41.9 pts (0.0–41.9) |
-| spread over the **top four** | 6.7 pts (83.9–90.6) | 16.7 pts (25.3–41.9) |
-| best AA-measured model | Qwen3.8-Flash-Next 86.1 | GLM-5.3 41.9 |
+| spread over the study models with a run (nine on 2.1, eleven on 4.0) | 45.7 pts (44.9–90.6) | 67.2 pts (0.0–67.2) |
+| spread over the **top four** | 6.7 pts (83.9–90.6) | 40.4 pts (26.8–67.2) |
+| best AA-measured model | Qwen3.8-Flash-Next 86.1 | Kimi-K3.1-Pro 67.2 |
 | GLM-5.3 vs Qwen3.8-Flash-Next | −2.2 | **+16.7** |
 | models scoring 0 | none | two |
 
 On 2.1 the four strongest models are inside 7 points, which is roughly the
 spread one scaffold change produces on the same model (§ 1) — the version
-has saturated for this field. On 4.0 the same four are inside 17. How many
+has saturated for this field. On 4.0 the same four are inside 17, and
+Kimi-K3.1-Pro, which AA ran on 4.0 only, leads them by 25 points. How many
 steps chart H's staircase then has depends on the explorer state, not on the
 benchmark alone: the efficient set is recomputed per GPU, load and price, so
 at the 64-user H200 default the 2.1 staircase has two steps

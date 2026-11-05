@@ -44,6 +44,7 @@ the per-layer split; without per-layer benchmarks the direction is unknown.
 For NVFP4 configurations the prefill figures are therefore a modeling
 *choice*, not a bound — the one family where the section's "every bias
 points against the hypothesis" bookkeeping cannot be claimed.
+The DeepSeek-V4.1-Flash case, with sources: `research/nvfp4_prefill_dsv41f.md`.
 
 `gpu_b300.md` limitation 3 ("B300 FLOPS are not modelled") is now partially
 retired: they are modelled, at HIGH confidence after the 2026-08-01

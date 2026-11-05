@@ -238,14 +238,90 @@ The study takes Terminal-Bench from Artificial Analysis only
 | 4.0 | **24.7%** | 49 / 198 | "Mistral Large 4 (High)", mini-swe-agent, 66 tasks × 3 |
 
 Mistral's technical report claims **41.0%** on 4.0, labelled "AA Coding Agent
-Index", and 90.2% on 2.1. AA's Coding Agent Index is a separate index that
-runs models inside coding agents (Claude Code, Codex, Opencode and others).
-The 4.0 field the study reads is AA's Intelligence Index run with
-mini-swe-agent. The same report's figures for GLM-5.3 (40.0) and
-DeepSeek-V4.1-Flash-1017 (31.0) sit within three points of AA's
-mini-swe-agent runs (41.9 and 33.8). Large 4's sits 16 points above, so the
-harness matters far more for Large 4 than for those two. The preview claimed
-28.3% at launch.
+Index", and 90.2% on 2.1. The preview claimed 28.3% at launch.
+
+**Where the 41.0 comes from** (AA `/agents/coding-agents` and
+`/methodology/coding-agents-benchmarking`, raw page data, read 2026-11-04).
+AA's Coding Agent Index v2.0 averages FrontierCode v1.1, Terminal-Bench 4.0
+and SWE-Atlas-QnA-AA, each model run inside one agent. Its 4.0 component uses
+the same 66 tasks × 3 (task image `sha256:39d9f44b…`) as the Intelligence
+Index run the study reads; only the agent differs. Large 4 has one agent
+there, Mistral's own:
+
+| Run | Harness | Effort | 4.0 | Output tok / attempt |
+|---|---|---|---:|---:|
+| Intelligence Index (the study's axis) | mini-swe-agent, 500 steps, bash only, no compaction | high | **24.7%** (49) | 171k |
+| Coding Agent Index | Mistral Vibe 3.0.0-v14 (AA lists no release date) | high | **41.4%** (82) | 294k |
+| Coding Agent Index | Mistral Vibe 3.0.0-v14 | medium | 26.3% (52) | 194k |
+
+Vibe at high passed 85 attempts; AA's reward-hacking judge flagged 3 and
+zeroed them, leaving 82. Mistral's 41.0 is this row (an earlier snapshot or
+81/198 rounded). The report's other 4.0 figures are the same index's rows,
+each in a different agent: GLM-5.3 40.0 (Opencode 39.9), V4.1-Flash-1017
+31.0 (DeepSeek Harness 30.8).
+
+**The gap is an outlier.** For the models AA runs both ways, the agent row
+minus the mini-swe-agent row: GLM-5.3 −2.0, V4.1-Flash −3.0 (1017, DeepSeek
+Harness) and +1.5 (09-10, Codex), GPT-6 Astra −3.5 and GPT-6.1 Sol −3.1
+(Codex), Gemini 4 Carbon −1.6 (Antigravity), Claude Sonnet 5.5 +2.6 and Haiku
+5.5 −2.0 (Claude Code), Grok 4.7 +7.5 (Grok Build). Most sit within ±4
+points; the next largest vendor-harness gain is Grok's +7.5. Large 4 gains
++16.7 in Vibe, and Vibe at medium (26.3) only matches mini-swe-agent at high.
+(Effort levels are matched by name; AA's variant lists were not checked row
+by row except for Large 4.) The opposite case exists too: Qwen3.8 Max loses
+22 points in Claude Code (16.7 vs 38.9), a harness it was not tuned for.
+
+Reading: Large 4 depends on Vibe far more than other models depend on their
+vendor's agent, plausibly from training on Vibe's tool schema, which
+mini-swe-agent's plain bash loop does not offer. That is an inference: AA
+publishes no per-task trajectories to check it.
+
+Outside views (read 2026-11-04). Vals AI's own mini-swe-agent run of 4.0
+lands in the same place as AA's (low to mid 20s), so the 24.7 is not an AA
+artefact. The release post says the model gained 13 points over the
+preview's 28 on "Artificial Analysis Coding Agent Index - Terminal-Bench 4.0",
+credits "continuing to scale reinforcement learning", and names neither the
+harness nor the training tasks; a technical report is announced. AI Realist
+(`airealist.ai/p/mistral-large-4-weights-score-comes-with-harness`) notes
+Vibe moved from v2.26.0 (2026-10-06) to v3.0.0 (2026-10-19) between the
+preview and the release, so the 13-point gain may sit in the weights (RL on
+Vibe-shaped tasks), in Vibe 3.0 (prompting, thinking budget, sampling), or
+both. A run of the release weights in another agent would split it: ≥ 38
+puts the gain in the weights, 25–30 puts it in Vibe. No such run is public.
+
+**The model repo** (`mistralai/Mistral-Large-4-1T-A52B`, discussions and
+`assets/technical_report.pdf`, read 2026-11-04). No discussion raises the
+gap. Two bear on it:
+- #5: Claude Code through LiteLLM fails on every skill load, because the
+  chat template refuses a `tool` message after a `user` message. Mistral's
+  engineer keeps the check: "We have a chat completion protocol that enforces
+  this order on which we train, so … behavior is undefined if we remove it",
+  and recommends "our Vibe Harness". The model is trained on one message
+  protocol and Mistral does not vouch for it outside that protocol.
+- #7 (open, from HF staff): adds Terminal-Bench 4.0 = 41.0 to the Hub
+  leaderboard, sourced to the announcement, with no harness named; the same
+  PR labels its Terminal-Bench-Science row "mini-swe-agent harness".
+
+The technical report's Table 3 labels the row "Terminal-Bench 4.0 (AA Coding
+Agent Index)" and names no agent. § 4.1.2 builds terminal-agent RL tasks
+partly from "internal terminal-agent traces"; § 4.3.2 says RL and evaluation
+run "the same environment code" and that an agentic episode ends when "the
+agent … produces a final message without tool calls". Neither says whether
+that loop is Vibe's.
+
+Asked in discussion #17 (opened 2026-11-04,
+`https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B/discussions/17`):
+whether the RL ran in Vibe, what Vibe 3.0 sets that mini-swe-agent does not,
+and which score other harnesses should expect. Update this section when Mistral
+answers.
+
+**For the study:** the axis keeps 24.7. The one-harness rule
+(`terminal_bench.md` § 1) holds, and the Coding Agent Index cannot replace it:
+every model there runs in a different agent, and six of the study's ten
+models (GLM-5.3-Flash, Qwen3.8-Flash-Next, Qwen3.8 27B, Qwen3.6 35B-A3B,
+Mistral Medium 3.5, V4-Flash-Vision) have no row. The 41.4 is the right figure only for a
+deployment whose users run Mistral Vibe; the EI users the study sizes for
+run pi and opencode, which AA has not paired with Large 4.
 
 On the study's axis Large 4 lands below GLM-5.3 (41.9), GLM-5.3-Flash (32.8)
 and DeepSeek-V4.1-Flash (26.8), and level with Qwen3.8-Flash-Next (25.3).
