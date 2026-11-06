@@ -123,12 +123,14 @@ def main():
         if not j:
             continue
         share = s["cached_tokens"] / max(s["prompt_tokens"], 1)
+        if s["cached_tokens"] == 0:
+            print(f"  {m}: {s['requests']} requests, the server reported no "
+                  "cached tokens, so the cache can't be judged (vLLM's "
+                  "--enable-prompt-tokens-details is off)")
+            continue
         line = (f"  {m}: {s['requests']} requests, {share:.1%} of prompt "
                 f"tokens cached; hit {s['hit'] / j:.1%}, tail "
                 f"{s['tail'] / j:.1%}, lost {s['lost'] / j:.1%}")
-        if s["cached_tokens"] == 0:
-            line += ("  <- no cached tokens reported: is vLLM's "
-                     "--enable-prompt-tokens-details on?")
         print(line)
         for _, n in GAPS:
             if s["judged " + n]:
