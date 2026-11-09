@@ -24,6 +24,7 @@ FLAT = B.Speed(a=1.0)
 def _r(seat=0, turn=0, kind="hit", u=100, prompt=1000, out=100, sent=1.0,
        ttft=0.5, service=2.0, span=1.5, **kw):
     kw.setdefault("warm", kind == "hit")
+    kw.setdefault("cached", 0)      # the server reports cached tokens
     return B.Row(seat, turn, kind, u, prompt, out, sent, ttft=ttft,
                  service=service, span=span, done=True, **kw)
 
@@ -53,20 +54,41 @@ def test_one_block_short_is_not_an_eviction_two_are():
     assert _judge(_warm(5, cached=975)).evictions == 5
 
 
-def test_a_server_caching_in_big_blocks_is_not_read_as_evicting():
+def _big_blocks():
     # a hybrid model caches in 1,600-token blocks: every warm request comes
-    # back up to 1,599 tokens short of the shared prefix, which is no eviction
-    rows = [_r(turn=k, cached=1600 * (10 + k), expected=1600 * (10 + k) + 900)
+    # back up to 1,599 tokens short of the shared prefix
+    return [_r(turn=k, cached=1600 * (10 + k), expected=1600 * (10 + k) + 900)
             for k in range(10)]
-    s = _judge(rows)
-    assert s.kv_block_tokens == 1600 and s.evictions == 0
-    # ...while a lost prefix still is
+
+
+def test_a_block_smaller_than_the_replies_show_stops_the_run():
+    plan = B.Plan("t.json", kv_block_tokens=16, kv_block_source="/metrics")
+    with pytest.raises(ValueError, match="--kv-block-tokens 1600"):
+        B.check_cache_reporting(_big_blocks(), plan)
+    plan.kv_block_tokens = 1600
+    B.check_cache_reporting(_big_blocks(), plan)
+    # a block given on the command line is the override
+    B.check_cache_reporting(_big_blocks(), B.Plan(
+        "t.json", kv_block_tokens=16, kv_block_source="given"))
+
+
+def test_at_the_right_block_a_lost_prefix_is_still_an_eviction():
+    rows = _big_blocks()
+    lim = B.Limits(min_samples=1, kv_block_tokens=1600)
+    assert _judge(rows, lim).evictions == 0
     rows[0].cached = 1600
-    assert _judge(rows).evictions == 1
+    assert _judge(rows, lim).evictions == 1
 
 
-def test_too_few_distinct_cached_values_leave_the_block_alone():
-    assert _judge(_warm(20, cached=1000)).kv_block_tokens == B.KV_BLOCK_TOKENS
+def test_a_server_reporting_no_cached_tokens_stops_the_run():
+    rows = _warm(5, cached=None)
+    with pytest.raises(ValueError, match="--skip-eviction-check"):
+        B.check_cache_reporting(rows, B.Plan("t.json"))
+    B.check_cache_reporting(rows, B.Plan("t.json", eviction_check=False))
+
+
+def test_too_few_distinct_cached_values_say_nothing_about_the_block():
+    assert B.block_from_replies(_warm(20, cached=1000)) == 0
 
 
 def test_the_block_size_is_read_from_cache_config_info():
@@ -87,10 +109,10 @@ def test_evictions_over_one_percent_fail_and_are_named():
     assert _judge(_warm(99, cached=1000) + _warm(1, cached=0)).passed
 
 
-def test_a_server_that_reports_no_cached_tokens_leaves_it_unknown():
+def test_a_step_where_the_server_stopped_reporting_cached_tokens_fails():
     s = _judge(_warm(20, cached=None))
-    assert s.checks["evictions"]["status"] == "unknown" and s.passed
-    assert "WARNING" in B.step_line(s) and "cached_tokens" in B.step_line(s)
+    assert s.checks["evictions"]["status"] == "unknown" and not s.passed
+    assert "no cached_tokens" in B.step_line(s)
 
 
 def test_a_cold_or_big_request_is_not_warm():
@@ -353,27 +375,34 @@ def _endpoint_fake(per_token=0.005, evict=False, report=True, on_request=None,
     return handler
 
 
+FAKE_METRICS = ('vllm:cache_config_info{block_size="16",'
+                'enable_prefix_caching="True",num_gpu_blocks="1000"} 1.0\n')
+
+
 def _run(tmp_path, monkeypatch, handler, *extra, urls=("http://fake/v1",),
-         block=None):
+         metrics=FAKE_METRICS, rc=0):
     path = tmp_path / "trace.json"
     path.write_text(json.dumps(_trace().to_dict()))
     load_trace.cache_clear()
     monkeypatch.setattr(B, "make_client", lambda: httpx.AsyncClient(
         transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(B, "_endpoint_info", lambda *a: {"model": "m"})
+    monkeypatch.setattr(B, "_endpoint_info",
+                        lambda *a: {"model": "m", "max_model_len": 1_000_000})
     monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 10)
     monkeypatch.setattr("workingset.test_cmd.open_metrics",
                         lambda *a, **k: None)      # no /metrics behind a fake
-    asked = []
-    monkeypatch.setattr(B, "read_block_size",
-                        lambda url, h: asked.append(url) or block)
+    def read_metrics(url, h):
+        if metrics is None:
+            raise ValueError(f"GET {url} failed (fake)")
+        return metrics
+    monkeypatch.setattr(B, "read_metrics", read_metrics)
     out = tmp_path / "run.json"
     flags = [f for u in urls for f in ("--base-url", u)]
-    rc = main(["replay", str(path), *flags, "--ramp-s", "0.05", "--min-samples", "1",
+    got = main(["replay", str(path), *flags, "--ramp-s", "0.05", "--min-samples", "1",
                "--measure-s", "0.6", "--min-turns", "0", "--out", str(out),
                *extra])
-    assert rc == 0
-    return json.loads(out.read_text())
+    assert got == rc
+    return json.loads(out.read_text()) if out.exists() else None
 
 
 def test_a_server_that_keeps_its_cache_passes_every_check(
@@ -391,17 +420,32 @@ def test_a_server_that_keeps_its_cache_passes_every_check(
 
 def test_the_block_size_comes_from_metrics_unless_given(
         tmp_path, monkeypatch, capsys):
-    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1",
-               block=1600)
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1")
     assert (rec["plan"]["kv_block_tokens"], rec["plan"]["kv_block_source"]) \
-        == (1600, "/metrics")
-    assert "KV block 1,600 tokens (from /metrics)" in capsys.readouterr().out
+        == (16, "/metrics")
+    assert "KV block 16 tokens (from /metrics)" in capsys.readouterr().out
     rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1",
-               "--kv-block-tokens", "32", block=1600)
+               "--kv-block-tokens", "32")
     assert (rec["plan"]["kv_block_tokens"], rec["plan"]["kv_block_source"]) \
         == (32, "given")
-    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1")
-    assert rec["plan"]["kv_block_source"] == "default"
+    assert "/metrics says 16" in capsys.readouterr().out
+
+
+def test_what_the_replay_cannot_read_stops_it_before_any_load(
+        tmp_path, monkeypatch, capsys):
+    sent = []
+    fake = _endpoint_fake(on_request=sent.append)
+    assert _run(tmp_path, monkeypatch, fake, metrics=None, rc=2) is None
+    assert "GET http://fake/metrics failed" in capsys.readouterr().err
+    _run(tmp_path, monkeypatch, fake, "--no-metrics", metrics=None, rc=2)
+    assert "pass --kv-block-tokens" in capsys.readouterr().err
+    _run(tmp_path, monkeypatch, fake, metrics="vllm:num_requests_running 0\n",
+         rc=2)
+    assert "pass --kv-block-tokens" in capsys.readouterr().err
+    _run(tmp_path, monkeypatch, fake, metrics=FAKE_METRICS.replace(
+        'caching="True"', 'caching="False"'), rc=2)
+    assert "--skip-eviction-check" in capsys.readouterr().err
+    assert sent == []
 
 
 def test_a_server_that_forgets_the_prefix_fails_on_evictions(
@@ -415,14 +459,15 @@ def test_a_server_that_forgets_the_prefix_fails_on_evictions(
     assert "failed: evictions" in capsys.readouterr().out
 
 
-def test_a_server_without_cached_tokens_warns_loudly_and_does_not_gate(
+def test_a_server_without_cached_tokens_stops_the_run_unless_skipped(
         tmp_path, monkeypatch, capsys):
+    _run(tmp_path, monkeypatch, _endpoint_fake(report=False),
+         "--max-sessions", "1", rc=3)
+    assert "reports no cached tokens" in capsys.readouterr().err
     rec = _run(tmp_path, monkeypatch, _endpoint_fake(report=False),
-               "--max-sessions", "1")
-    assert rec["steps"][0]["checks"]["evictions"]["status"] == "unknown"
+               "--max-sessions", "1", "--skip-eviction-check")
+    assert rec["steps"][0]["checks"]["evictions"]["status"] == "skipped"
     assert rec["steps"][0]["passed"]
-    assert "WARNING: the server reports no cached_tokens" in \
-        capsys.readouterr().out
 
 
 def test_decode_speed_gates_a_run(tmp_path, monkeypatch):
@@ -552,10 +597,43 @@ def test_an_idle_run_moves_on_and_starts_where_asked(tmp_path, monkeypatch,
         capsys.readouterr().out
 
 
-def test_several_urls_default_their_metrics_to_each_origin(tmp_path, capsys):
+def test_an_unreachable_metrics_names_the_flags_that_get_past_it():
+    with pytest.raises(ValueError, match="--metrics-url.*--no-metrics"):
+        B.read_metrics("http://127.0.0.1:9/metrics", {})
+
+
+def test_several_urls_default_their_metrics_to_each_origin(
+        tmp_path, capsys, monkeypatch):
     path = tmp_path / "t.json"
     path.write_text(json.dumps(_trace().to_dict()))
+    monkeypatch.setattr(B, "_endpoint_info",
+                        lambda *a: {"model": "m", "max_model_len": 1_000_000})
+    monkeypatch.setattr(B, "read_metrics", lambda u, h: FAKE_METRICS)
     assert main(["replay", str(path), "--base-url", "http://a:8000/v1",
                  "--base-url", "https://b.example/api/v1", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "reading http://a:8000/metrics, https://b.example/metrics" in out
+
+
+def test_one_router_url_reads_every_replica_metrics(tmp_path, capsys,
+                                                   monkeypatch):
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps(_trace().to_dict()))
+    monkeypatch.setattr(B, "_endpoint_info",
+                        lambda *a: {"model": "m", "max_model_len": 1_000_000})
+    read = []
+    monkeypatch.setattr(B, "read_metrics",
+                        lambda u, h: read.append(u) or FAKE_METRICS)
+    assert main(["replay", str(path), "--base-url", "http://router/v1",
+                 "--metrics-url", "http://pod-a:8000/metrics",
+                 "--metrics-url", "http://pod-b:8000/metrics",
+                 "--dry-run"]) == 0
+    assert read == ["http://pod-a:8000/metrics", "http://pod-b:8000/metrics"]
+    other = FAKE_METRICS.replace('"16"', '"1600"')
+    monkeypatch.setattr(B, "read_metrics", lambda u, h: (
+        other if "pod-b" in u else FAKE_METRICS))
+    assert main(["replay", str(path), "--base-url", "http://router/v1",
+                 "--metrics-url", "http://pod-a:8000/metrics",
+                 "--metrics-url", "http://pod-b:8000/metrics",
+                 "--dry-run"]) == 2
+    assert "disagree on the KV block" in capsys.readouterr().err

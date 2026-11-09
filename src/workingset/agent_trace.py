@@ -731,9 +731,16 @@ def replay_gap(r: TraceRequest, policy: str, max_gap_s: float, rng,
     if r.kind in INACTIVE:
         if policy == "drop":
             return 0.0
-        if policy == "sample" and pool:
+        if policy == "sample":
+            if not pool:
+                raise ValueError(NO_THINK_POOL)
             return min(pool[rng.randrange(len(pool))], max_gap_s)
     return min(r.gap_s, max_gap_s)
+
+
+NO_THINK_POOL = ("the gap policy 'sample' draws inactive gaps from the "
+                 "trace's think gaps, and this trace has none: use "
+                 "--replay-gap-policy keep or drop")
 
 
 def mean_gap(trace: AgentTrace, policy: str = DEFAULT_GAP_POLICY,
@@ -749,7 +756,9 @@ def mean_gap(trace: AgentTrace, policy: str = DEFAULT_GAP_POLICY,
                 continue
             if r.kind in INACTIVE and policy == "drop":
                 gaps.append(0.0)
-            elif r.kind in INACTIVE and policy == "sample" and sampled is not None:
+            elif r.kind in INACTIVE and policy == "sample":
+                if sampled is None:
+                    raise ValueError(NO_THINK_POOL)
                 gaps.append(sampled)
             else:
                 gaps.append(min(r.gap_s, max_gap_s))
@@ -949,7 +958,12 @@ def cmd_trace(args) -> int:
                else ""))
     say("the same averages as a smooth [workload] (what `ws test --replay` "
         "predicts against):")
-    for k, v in equivalent_workload(trace).items():
+    try:
+        eq = equivalent_workload(trace)
+    except ValueError as e:      # the trace is written; its averages need a policy
+        say(f"  none under the default gap policy: {e}")
+        return 0
+    for k, v in eq.items():
         say(f"  {k} = {v}")
     return 0
 

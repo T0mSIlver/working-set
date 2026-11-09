@@ -83,8 +83,8 @@ MAX_EVICTION_SHARE = 0.01
 MAX_WARM_TTFT_S = 3.0
 MIN_DECODE_TOK_S = 50.0
 WARM_NEW_TOKENS = 8192
-KV_BLOCK_TOKENS = 16        # when neither the flag, /metrics nor the replies say
 BLOCK_FROM_REPLIES_MIN = 8  # distinct cached_tokens values before their gcd counts
+KV_BLOCK_TOKENS = 16        # a Limits default for tests and old records only
 MIN_SAMPLES = 10            # a check with fewer requests than this is not judged
 MIN_DECODE_TOKENS = 32      # requests with fewer output tokens have no speed
 ROUTINGS = ("sticky", "round-robin")
@@ -460,15 +460,35 @@ def block_from_metrics(text: str) -> int | None:
     return None
 
 
-def read_block_size(url: str, headers: dict[str, str]) -> int | None:
-    """The server's KV block size from its /metrics, None when unreadable."""
+def prefix_caching_from_metrics(text: str) -> bool | None:
+    """enable_prefix_caching from vllm:cache_config_info, None when absent."""
+    import re
+    for line in text.splitlines():
+        if line.startswith("vllm:cache_config_info"):
+            m = re.search(r'enable_prefix_caching="(\w+)"', line)
+            return (m.group(1) == "True") if m else None
+    return None
+
+
+def read_metrics(url: str, headers: dict[str, str]) -> str:
+    """The text of a vLLM /metrics. Raises ValueError, with what to pass
+    instead, when it does not answer or is not vLLM's."""
     import httpx
     try:
         r = httpx.get(url, headers=headers, timeout=10.0)
         r.raise_for_status()
-        return block_from_metrics(r.text)
-    except Exception:                               # noqa: BLE001
-        return None
+    except Exception as e:                          # noqa: BLE001
+        raise ValueError(
+            f"GET {url} failed ({e}). Pass --metrics-url (and "
+            "--metrics-header for its auth), or --no-metrics to run without "
+            "it: the report then cannot say what ran out, and "
+            "--kv-block-tokens is required") from None
+    if "vllm:" not in r.text:
+        raise ValueError(f"{url} answers but holds no vllm: metric (a router "
+                         "or gateway?). Pass each engine's own /metrics with "
+                         "--metrics-url, once per replica behind a router, "
+                         "or --no-metrics")
+    return r.text
 
 
 @dataclass
@@ -482,6 +502,7 @@ class Limits:
     kv_block_tokens: int = KV_BLOCK_TOKENS
     max_slowdown: float | None = None   # gates only when given
     min_samples: int = MIN_SAMPLES
+    eviction_check: bool = True         # False: --skip-eviction-check
 
 
 # the checks, in the order they are reported
@@ -723,15 +744,24 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     warm = [r for r in rows if r.warm and r.uncached <= lim.warm_new_tokens]
     step.warm_requests = len(warm)
     known = [r for r in warm if r.ok and r.cached is not None]
-    block = max(lim.kv_block_tokens, block_from_replies(known), 1)
+    block = max(lim.kv_block_tokens, 1)
     step.kv_block_tokens = block
     evicted = [r for r in known
                if r.cached < r.expected // block * block - block]
     step.evictions = len(evicted)
     ms = lim.min_samples
-    if warm and not known:
+    if not lim.eviction_check:
+        checks["evictions"] = _check("skipped", limit=lim.max_eviction_share,
+                                     n=len(warm))
+    elif warm and not known:
+        # the run checked the server reports cached tokens before the load:
+        # a step where it stopped is a fail, not a pass
         checks["evictions"] = _check("unknown", limit=lim.max_eviction_share,
                                      n=len(warm))
+        if any(r.ok for r in warm):
+            step.reasons.append(
+                f"evictions: the server reported no cached tokens on "
+                f"{sum(r.ok for r in warm)} warm requests")
     elif not known and ms <= 0:
         checks["evictions"] = _check("n/a", limit=lim.max_eviction_share)
     elif len(known) < ms or not known:
@@ -970,6 +1000,7 @@ class Plan:
     # "/metrics" (vllm:cache_config_info) or "default"; the eviction check
     # also raises it to the block the replies show (block_from_replies)
     kv_block_source: str = "given"
+    eviction_check: bool = True         # False: --skip-eviction-check
     routing: str = "sticky"             # with several URLs
     output_scale: float = 1.0
     chat_rate: float = 0.0              # background chat requests per second
@@ -998,7 +1029,8 @@ class Plan:
         return Limits(self.max_eviction_share, self.max_warm_ttft_s,
                       self.min_decode_tok_s, self.max_failed_share,
                       self.warm_new_tokens, self.kv_block_tokens,
-                      self.max_slowdown, self.min_samples)
+                      self.max_slowdown, self.min_samples,
+                      eviction_check=self.eviction_check)
 
     @property
     def measure_cap_s(self) -> float:
@@ -1395,6 +1427,27 @@ def _say(msg: str = "") -> None:
     print(msg, flush=True)      # a run piped to a file or `tee` shows progress
 
 
+def check_cache_reporting(rows, plan: Plan) -> None:
+    """Before any load: the server must report cached tokens, in blocks no
+    larger than the one the eviction check rounds to. Raises ValueError with
+    the flag that overrides it."""
+    if not plan.eviction_check:
+        return
+    ok = [r for r in rows if r.ok]
+    if ok and all(r.cached is None for r in ok):
+        raise ValueError(
+            "the server reports no cached tokens (vLLM needs "
+            "--enable-prompt-tokens-details), so evictions cannot be counted. "
+            "Pass --skip-eviction-check to run without that check")
+    g = block_from_replies(ok)
+    if g > plan.kv_block_tokens and plan.kv_block_source != "given":
+        raise ValueError(
+            f"the server's cached tokens come in whole blocks of {g:,}, but "
+            f"the block from {plan.kv_block_source} is "
+            f"{plan.kv_block_tokens:,}: every warm request would read as an "
+            f"eviction. Pass --kv-block-tokens {g} if that is the block")
+
+
 async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
     """`ep`: an EndpointSpec, or a list of them (a data-parallel deployment,
     routed by `plan.routing`); `metrics`: a sampler, or a list paired with
@@ -1415,13 +1468,16 @@ async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
                         f"server's prompt token counts ({plan.cpt_probes} "
                         "probes)")
             else:
-                on_step("the server reported no prompt token counts: "
-                        f"keeping {plan.chars_per_token:g} chars per token")
+                raise ValueError(
+                    "the server reported no prompt token counts, so chars "
+                    "per token cannot be measured: pass --chars-per-token or "
+                    "--tokenizer")
         prefix = _prefix_text(plan)
         on_step(f"alone: up to {plan.calibrate_requests} requests back to "
                 "back, one in flight")
         speed, cal_rows = await calibrate(client, ep0, plan, trace, prefix,
                                           nonce)
+        check_cache_reporting(cal_rows, plan)
         on_step(describe_speed(speed, trace, plan))
         results: dict[int, bool | None] = {}
         steps: list[Step] = []
@@ -1482,9 +1538,9 @@ def describe_speed(speed: Speed, trace: AgentTrace, plan: Plan) -> str:
             "of model time")
 
 
-UNKNOWN_CACHED = ("WARNING: the server reports no cached_tokens (start vLLM "
-                  "with --enable-prompt-tokens-details): evictions cannot be "
-                  "counted, that check is UNKNOWN and does not gate")
+UNKNOWN_CACHED = ("the server reported no cached_tokens in this step (vLLM "
+                  "needs --enable-prompt-tokens-details): evictions cannot be "
+                  "counted, so the step fails")
 
 
 def _word(s: Step) -> str:
@@ -1501,12 +1557,13 @@ def check_cells(s: Step) -> dict[str, str]:
         if c is None:
             continue
         st, v, lim = c["status"], c["value"], c["limit"]
-        if v is None and st != "n/a" and st != "unknown":
+        if v is None and st not in ("n/a", "unknown", "skipped"):
             out[name] = (f"too few samples ({c['n']} < {c.get('min')}), "
                          "not judged" if st == "few" else "-")
             continue
         if name == "evictions":
-            cell = {"unknown": "unknown", "n/a": "no warm request"}.get(st) or (
+            cell = {"unknown": "unknown", "n/a": "no warm request",
+                    "skipped": "skipped (--skip-eviction-check)"}.get(st) or (
                 f"{c.get('count', 0)}/{c['n']} = {v:.1%} (<= {lim:.1%})")
         elif name == "warm time to first token":
             cell = ("no warm request" if st == "n/a" else
@@ -1757,11 +1814,12 @@ def _endpoint_info(base_url: str, api_key: str) -> dict:
     try:
         r = httpx.get(f"{base_url}/models", timeout=10.0, headers=(
             {"Authorization": f"Bearer {api_key}"} if api_key else {}))
+        r.raise_for_status()
         data = (r.json().get("data") or [{}])[0]
         return {"model": data.get("id", ""),
                 "max_model_len": data.get("max_model_len")}
-    except Exception:                               # noqa: BLE001
-        return {}
+    except Exception as e:                          # noqa: BLE001
+        return {"error": str(e)}
 
 
 def default_shared_prefix(trace: AgentTrace) -> int:
@@ -1831,15 +1889,20 @@ def cmd_replay(args) -> int:
     bases = [b.rstrip("/") for b in (args.base_url or [DEFAULT_BASE_URL])]
     base = bases[0]
     murls = list(args.metrics_url or [])
-    if not murls and len(bases) > 1:
+    if args.no_metrics and murls:
+        print("ws replay: --no-metrics and --metrics-url contradict each "
+              "other", file=sys.stderr)
+        return 2
+    if not murls and not args.no_metrics:
         from urllib.parse import urlsplit
         murls = ["{0.scheme}://{0.netloc}/metrics".format(urlsplit(b))
                  for b in bases]
         print("  --metrics-url not given: reading " + ", ".join(murls))
-    if murls and len(murls) != len(bases):
+    if murls and len(bases) > 1 and len(murls) != len(bases):
         print(f"ws replay: {len(murls)} --metrics-url for {len(bases)} "
-              "--base-url: give one per base URL, in the same order",
-              file=sys.stderr)
+              "--base-url: give one per base URL, in the same order (one "
+              "--base-url with several --metrics-url is a router in front of "
+              "replicas)", file=sys.stderr)
         return 2
     for flag, v, lo in (("--output-scale", args.output_scale, 0.0),
                         ("--chat-rate", args.chat_rate, -1e-9)):
@@ -1847,24 +1910,49 @@ def cmd_replay(args) -> int:
             print(f"ws replay: {flag} must be positive" if lo == 0.0 else
                   f"ws replay: {flag} cannot be negative", file=sys.stderr)
             return 2
+    def fail(msg: str) -> int:
+        print(f"ws replay: {msg}", file=sys.stderr)
+        return 2
+
     info = _endpoint_info(base, key)       # a dry run reads it too
-    cap = args.max_model_len or info.get("max_model_len") or max(
-        r.prompt_tokens + r.output_tokens for s in trace.sessions for r in s)
+    if "error" in info:
+        return fail(f"GET {base}/models failed ({info['error']}): check "
+                    "--base-url and --api-key-env")
+    cap = args.max_model_len or info.get("max_model_len")
+    if not cap:
+        return fail(f"{base}/models gives no max_model_len: pass "
+                    "--max-model-len")
+    texts = []
+    for i, u in enumerate(murls):
+        b = bases[i] if len(bases) > 1 else base
+        try:
+            texts.append(read_metrics(u, metrics_headers(
+                args.metrics_header, key, b, u)))
+        except ValueError as e:
+            return fail(str(e))
+    blocks = {u: block_from_metrics(t) for u, t in zip(murls, texts)}
+    if len(set(blocks.values())) > 1:
+        return fail("the replicas disagree on the KV block: " + ", ".join(
+            f"{u} {v}" for u, v in blocks.items()))
+    block, block_source = args.kv_block_tokens, "given"
+    seen = block_from_metrics(texts[0]) if texts else None
+    if block is None:
+        if seen is None:
+            return fail("the KV block size is unknown (" + (
+                "--no-metrics" if not texts else
+                f"{murls[0]} has no vllm:cache_config_info block_size")
+                + "): pass --kv-block-tokens")
+        block, block_source = seen, "/metrics"
+    caching = prefix_caching_from_metrics(texts[0]) if texts else None
+    if caching is False and not args.skip_eviction_check:
+        return fail("the server runs without prefix caching, so there is no "
+                    "cache to evict from: pass --skip-eviction-check")
     cpt, cpt_source = args.chars_per_token, "given"
     if args.tokenizer:
         from .test_cmd import _calibrated_cpt
         cpt = _calibrated_cpt(args.tokenizer)
     elif cpt is None:
         cpt, cpt_source = 4.0, "default"
-    block, block_source = args.kv_block_tokens, "given"
-    if block is None:
-        from urllib.parse import urlsplit
-        url = (murls[0] if murls else
-               "{0.scheme}://{0.netloc}/metrics".format(urlsplit(base)))
-        block = read_block_size(url, metrics_headers(
-            args.metrics_header, key, base, url))
-        block_source = "/metrics" if block else "default"
-        block = block or KV_BLOCK_TOKENS
     plan = Plan(trace_path=args.trace, max_slowdown=args.max_slowdown,
                 min_samples=args.min_samples,
                 start_sessions=args.start_sessions,
@@ -1874,6 +1962,7 @@ def cmd_replay(args) -> int:
                 max_failed_share=args.max_failed_share,
                 warm_new_tokens=args.warm_new_tokens,
                 kv_block_tokens=block, kv_block_source=block_source,
+                eviction_check=not args.skip_eviction_check,
                 routing=args.routing or "sticky",
                 output_scale=args.output_scale, chat_rate=args.chat_rate,
                 chat_prompt_tokens=args.chat_prompt_tokens,
@@ -1913,12 +2002,11 @@ def cmd_replay(args) -> int:
           + (" (until measured from the server's prompt token counts)"
              if cpt_source == "default" else ""))
     print(f"  KV block {plan.kv_block_tokens:,} tokens ("
-          + {"given": "--kv-block-tokens",
-             "/metrics": "from /metrics"}.get(
-              plan.kv_block_source,
-              "default: /metrics did not say; raised to the block the "
-              "replies' cached tokens come in")
-          + ")")
+          + ("from /metrics" if plan.kv_block_source == "/metrics" else
+             "--kv-block-tokens" + (f"; /metrics says {seen:,}"
+                                    if seen and seen != block else ""))
+          + ")" + ("; eviction check skipped (--skip-eviction-check)"
+                   if not plan.eviction_check else ""))
     cp = capped_requests(trace, plan.context_cap_tokens)
     if cp["requests"]:
         print(f"  {cp['requests']:,} of {cp['of']:,} recorded requests "
@@ -1964,9 +2052,10 @@ def cmd_replay(args) -> int:
     if murls:
         from .test_cmd import open_metrics
         metrics = [open_metrics(u, args.engine,
-                                metrics_headers(args.metrics_header, key, b,
-                                                u))
-                   for b, u in zip(bases, murls)]
+                                metrics_headers(
+                                    args.metrics_header, key,
+                                    bases[i] if len(bases) > 1 else base, u))
+                   for i, u in enumerate(murls)]
 
     async def go():
         from .test_cmd import _maybe
@@ -2005,12 +2094,14 @@ def cmd_replay(args) -> int:
         Path(args.out).write_text(json.dumps(rec, indent=1) + "\n",
                                   encoding="utf-8")
     print_report(rec)
-    if murls and not any(s.server for s in res["steps"]):
-        print("\nwarning: --metrics-url gave no reading (unreachable, or "
-              "refused without credentials): the verdict above stands, but it "
-              "cannot say what ran out", file=sys.stderr)
     if args.out:
         print(f"\nrun record written to {args.out}")
+    if (any(m is not None for m in metrics or ()) and res["steps"]
+            and not any(s.server for s in res["steps"])):
+        print("\nws replay: /metrics answered before the run but gave no "
+              "reading during it: the verdict above cannot say what ran out",
+              file=sys.stderr)
+        return 4
     return 0
 
 
@@ -2076,9 +2167,13 @@ def add_subparser(sub) -> None:
                         "server's usage.prompt_tokens_details.cached_tokens "
                         "is more than one block under the tokens the "
                         "request shares with its session's previous "
-                        "request. Needs vLLM --enable-prompt-tokens-details; "
-                        "a server that reports none leaves the check "
-                        "'unknown', and it does not gate")
+                        "request. Needs vLLM --enable-prompt-tokens-details: "
+                        "the run stops before any load if the server reports "
+                        "no cached tokens")
+    g.add_argument("--skip-eviction-check", action="store_true",
+                   help="run without the eviction check (a server that "
+                        "reports no cached tokens, or runs without prefix "
+                        "caching)")
     g.add_argument("--max-warm-ttft-s", type=float, default=MAX_WARM_TTFT_S,
                    help="p90 time to first token of warm requests, seconds "
                         "(default %(default)s)")
@@ -2090,9 +2185,9 @@ def add_subparser(sub) -> None:
     g.add_argument("--kv-block-tokens", type=int, default=None,
                    help="the server's KV cache block size: the shared prefix "
                         "rounds down to it and the eviction test tolerates "
-                        "one block (default: block_size from /metrics, else "
-                        f"{KV_BLOCK_TOKENS}; raised to the block the replies' "
-                        "cached tokens come in)")
+                        "one block (default: block_size from /metrics; the "
+                        "run stops when neither says, or when the replies' "
+                        "cached tokens come in larger blocks)")
     g.add_argument("--min-decode-tok-s", type=float, default=MIN_DECODE_TOK_S,
                    help="p10 decode speed per request, (output - 1) / (last "
                         "- first token time), over requests of at least "
@@ -2139,6 +2234,10 @@ def add_subparser(sub) -> None:
                    help="the server's Prometheus /metrics, to say what ran "
                         "out. Repeat it once per --base-url, in the same "
                         "order")
+    p.add_argument("--no-metrics", action="store_true",
+                   help="run without /metrics (by default each base URL's "
+                        "own /metrics is read, and the run stops if it does "
+                        "not answer); --kv-block-tokens is then required")
     p.add_argument("--engine", help="one engine of a multi-engine /metrics")
     p.add_argument("--tokenizer", help="size the synthetic text with this "
                                        "model's tokenizer (needs toklen)")

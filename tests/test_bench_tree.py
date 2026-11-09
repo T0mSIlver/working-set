@@ -194,7 +194,8 @@ def test_a_dry_run_reads_the_context_cap_from_the_endpoint(
     load_trace.cache_clear()
     monkeypatch.setattr(B, "_endpoint_info", lambda *a: {
         "model": "served", "max_model_len": 4096})
-    assert main(["replay", str(path), "--dry-run"]) == 0
+    assert main(["replay", str(path), "--dry-run", "--no-metrics",
+                 "--kv-block-tokens", "16"]) == 0
     out = capsys.readouterr().out
     assert "context cap 4,096 tokens (from /models)" in out
     assert "model=served" in out

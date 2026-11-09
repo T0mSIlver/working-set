@@ -16,11 +16,18 @@ export VLLM_API_KEY=...        # if the endpoint needs one
 uvx --from workingset ws decode-sweep \
   --base-url http://HOST:8000/v1 --model MODEL \
   --api-key-env VLLM_API_KEY \
-  --metrics-url http://HOST:8000/metrics \
+  --metrics-url http://HOST:8000/metrics --tensor-parallel 8 \
   --batch 1,8,32,64,128,256,512 --context 100000 \
   --out decode-sweep.json
 ```
 
+- Before any load the sweep stops, naming the flag to pass, when it cannot
+  read what it relies on: the served model and its `max_model_len` from
+  `/models` (`--max-model-len`), the KV pool and prefix caching from
+  `vllm:cache_config_info` (`--kv-tokens`; `--force` for a shared context
+  when the server does not say), and one engine when `/metrics` holds several
+  (`--engine`). `--tensor-parallel` is required: nothing on the server gives
+  it.
 - `--metrics-header 'Name: value'` (repeatable) adds a header to the
   `/metrics` request. The API key goes to `/metrics` only when it is on the
   same origin as `--base-url`.

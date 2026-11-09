@@ -211,3 +211,28 @@ def test_mixed_windows_are_recorded_but_not_fitted():
                                    "mixed": {"mixed_step_s": 9.0}}]
     mixed = C.calibrate(cfg, recs)
     assert {k: f.value for k, f in plain.items()} == {k: f.value for k, f in mixed.items()}
+
+
+def test_a_sweep_without_its_tensor_parallel_width_is_refused():
+    cfg = _cfg()
+    rec = _sweep(cfg, 2)
+    del rec["tensor_parallel"]
+    with pytest.raises(ValueError, match="tensor_parallel"):
+        C.calibrate(cfg, [rec])
+
+
+def test_a_pool_the_config_cannot_explain_is_refused():
+    cfg = _cfg()
+    with pytest.raises(ValueError, match="kv_sharding"):
+        C.calibrate(cfg, [_sweep(cfg, 2, pool=10 ** 12)])
+
+
+def test_rungs_left_out_and_the_prior_mfu_are_said():
+    cfg = _cfg()
+    rec = _sweep(cfg, 2)
+    rec["rungs"][0]["batch_ok"] = False
+    rec["rungs"][0]["why_not"] = ["4 requests waited"]
+    notes = []
+    C.calibrate(cfg, [rec, _sweep(cfg, 1)], notes=notes)
+    assert any("left out (4 requests waited)" in n for n in notes)
+    assert any("config's mfu" in n for n in notes)

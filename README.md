@@ -98,6 +98,13 @@ uv run ws replay trace.json --base-url http://gpu:8000/v1 --out run.json
 uv run ws report run.json                 # re-print it
 ```
 
+0. **Before any load,** the replay reads what it needs from the server and
+   stops with an error naming the flag to pass when it cannot: the model and
+   `max_model_len` from `/models` (`--max-model-len`), the KV block and prefix
+   caching from `/metrics` (`--kv-block-tokens`, `--metrics-url`,
+   `--no-metrics`), chars per token from the server's prompt token counts
+   (`--chars-per-token`, `--tokenizer`), and whether the server reports cached
+   tokens (`--skip-eviction-check`).
 1. **Alone.** One replayed session sends 40 requests back to back, one in
    flight at a time. The endpoint's own speed is fitted from them: time to
    first token from the uncached tokens and the context, then time per output
@@ -116,12 +123,11 @@ uv run ws report run.json                 # re-print it
      to the server's KV block, are what the server should have cached. It is
      an eviction when `usage.prompt_tokens_details.cached_tokens` is more than
      a block short. The block is `block_size` from `/metrics`
-     (`vllm:cache_config_info`), else 16, or `--kv-block-tokens`; the check
-     raises it to the block the replies' cached tokens come in (1,600 on a
-     hybrid model), so a wrong block cannot turn every request into an
-     eviction. vLLM reports that with
-     `--enable-prompt-tokens-details`; a server that does not leaves the check
-     "unknown", with a warning, and it does not gate.
+     (`vllm:cache_config_info`), or `--kv-block-tokens`. The run stops when
+     the replies' cached tokens come in larger blocks than that (1,600 on a
+     hybrid model), since every warm request would then read as an eviction.
+     vLLM reports cached tokens with `--enable-prompt-tokens-details`; the run
+     stops on a server that does not, unless `--skip-eviction-check`.
    - The p90 time to first token of warm requests is at most 3 s
      (`--max-warm-ttft-s`).
    - The p10 decode speed per request, (output tokens - 1) / (last token
@@ -157,7 +163,7 @@ Other flags shape the load:
 
 - `--base-url` repeated benches a data-parallel deployment (give one
   `--metrics-url` per base URL, in the same order; without any, each
-  defaults to `<origin of the base URL>/metrics`). `--routing sticky`, the
+  defaults to `<origin of the base URL>/metrics`, for a single URL too). `--routing sticky`, the
   default, pins a session tree to one URL by a stable hash of its seat id, as
   a session-affine router does; `--routing round-robin` sends each request to
   the next URL. The report counts requests and shows server metrics per URL.

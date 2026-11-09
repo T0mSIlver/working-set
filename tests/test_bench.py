@@ -24,6 +24,17 @@ def _row(u, prompt, out, ttft, service, seat=0, turn=0, sent=1.0, **kw):
                  service=service, done=True, **kw)
 
 
+
+@pytest.fixture(autouse=True)
+def _a_vllm_server(monkeypatch):
+    """What the replay reads before any load, as a vLLM server answers it;
+    a test that wants another answer patches over it."""
+    monkeypatch.setattr(B, "_endpoint_info",
+                        lambda *a: {"model": "m", "max_model_len": 1_000_000})
+    monkeypatch.setattr(B, "read_metrics", lambda u, h: (
+        'vllm:cache_config_info{block_size="16",enable_prefix_caching="True",'
+        'num_gpu_blocks="1000"} 1.0\n'))
+
 def test_fit_recovers_the_endpoints_speed():
     truth = B.Speed(a=0.05, b=1 / 8000, c=2e-11, d=0.02, e=1e-7)
     rows = [_row(u, ctx, out, truth.ttft(u, ctx), truth.service(u, ctx, out))
@@ -170,7 +181,8 @@ def test_calibration_stops_when_the_endpoint_rejects_the_requests(
     load_trace.cache_clear()
     monkeypatch.setattr(B, "make_client", lambda: httpx.AsyncClient(
         transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(B, "_endpoint_info", lambda *a: {"model": "m"})
+    monkeypatch.setattr(B, "_endpoint_info",
+                        lambda *a: {"model": "m", "max_model_len": 1_000_000})
     monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 5)
     rc = main(["replay", str(path), "--base-url", "http://fake/v1"])
     assert rc == 3
@@ -264,10 +276,14 @@ def _run(tmp_path, monkeypatch, handler, *extra):
     load_trace.cache_clear()
     monkeypatch.setattr(B, "make_client", lambda: httpx.AsyncClient(
         transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(B, "_endpoint_info", lambda *a: {"model": "m"})
+    monkeypatch.setattr(B, "_endpoint_info",
+                        lambda *a: {"model": "m", "max_model_len": 1_000_000})
     monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 10)
+    monkeypatch.setattr("workingset.test_cmd.open_metrics",
+                        lambda *a, **k: None)      # no /metrics behind a fake
     out = tmp_path / "run.json"
     rc = main(["replay", str(path), "--base-url", "http://fake/v1",
+               "--skip-eviction-check",
                "--ramp-s", "0.05", "--min-samples", "1", "--measure-s", "0.5", "--min-turns", "0",
                "--out", str(out),
                *extra])

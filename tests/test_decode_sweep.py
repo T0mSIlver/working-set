@@ -99,3 +99,72 @@ def test_cross_origin_metrics_scrape_carries_no_api_token():
     asyncio.run(run())
     assert seen and "authorization" not in seen[0].headers
     assert seen[0].headers["X-Scrape"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# what the sweep cannot read stops it before any load
+# ---------------------------------------------------------------------------
+CACHE = ('vllm:cache_config_info{block_size="16",enable_prefix_caching="True",'
+         'engine="0",num_gpu_blocks="1000"} 1.0\n'
+         'vllm:num_requests_running{engine="0"} 0\n')
+MODELS = {"data": [{"id": "m", "max_model_len": 200_000}]}
+
+
+def _sweep(monkeypatch, capsys, *flags, metrics=CACHE, models=MODELS):
+    import httpx
+
+    from workingset.cli import main
+    sent = []
+
+    def handler(req):
+        if req.url.path.endswith("/metrics"):
+            return httpx.Response(200, text=metrics)
+        if req.url.path.endswith("/models"):
+            return httpx.Response(200, json=models)
+        sent.append(req)
+        return httpx.Response(500, text="no load in these tests")
+    real = httpx._client.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(
+        transport=httpx.MockTransport(handler),
+        **{k: v for k, v in kw.items() if k != "verify"}))
+    rc = main(["decode-sweep", "--base-url", "http://h:8000/v1", "--model", "m",
+               "--batch", "1", "--context", "1000", *flags])
+    assert not sent
+    return rc, capsys.readouterr().err
+
+
+def test_the_sweep_needs_the_tensor_parallel_width(monkeypatch, capsys):
+    rc, err = _sweep(monkeypatch, capsys)
+    assert rc == 2 and "--tensor-parallel is required" in err
+
+
+def test_several_engines_need_one_named(monkeypatch, capsys):
+    two = CACHE + 'vllm:num_requests_running{engine="1"} 0\n'
+    rc, err = _sweep(monkeypatch, capsys, "--tensor-parallel", "4",
+                     metrics=two)
+    assert rc == 2 and "2 engines" in err and "--engine" in err
+
+
+def test_unknown_pool_or_prefix_caching_stops_the_sweep(monkeypatch, capsys):
+    bare = 'vllm:num_requests_running{engine="0"} 0\n'
+    rc, err = _sweep(monkeypatch, capsys, "--tensor-parallel", "4",
+                     metrics=bare)
+    assert rc == 2 and "--kv-tokens" in err
+    rc, err = _sweep(monkeypatch, capsys, "--tensor-parallel", "4",
+                     "--kv-tokens", "16000", metrics=bare)
+    assert rc == 2 and "does not say whether prefix caching" in err
+
+
+def test_a_model_the_server_does_not_list_stops_the_sweep(monkeypatch,
+                                                         capsys):
+    rc, err = _sweep(monkeypatch, capsys, "--tensor-parallel", "4",
+                     models={"data": [{"id": "other"}]})
+    assert rc == 2 and "'m' is not served" in err and "other" in err
+    rc, err = _sweep(monkeypatch, capsys, "--tensor-parallel", "4",
+                     models={"data": [{"id": "m"}]})
+    assert rc == 2 and "--max-model-len" in err
+
+
+def test_judge_fails_a_rung_whose_streams_did_not_all_start():
+    ok, why = judge(32, [32, 32], [0, 0], 0, 0, started=30)
+    assert not ok and "only 30 of 32 streams started" in why[0]

@@ -210,8 +210,13 @@ def client_window(tok0, tok1, ev0, ev1, dt: float, started: list[bool]) -> dict:
 
 
 def judge(n: int, running: list[float], waiting: list[float], errors: int,
-          drained: int) -> tuple[bool, list[str]]:
+          drained: int, started: int | None = None,
+          scrape_errors: int = 0) -> tuple[bool, list[str]]:
     why = []
+    if started is not None and started < n:
+        why.append(f"only {started} of {n} streams started before the window")
+    if scrape_errors:
+        why.append(f"{scrape_errors} /metrics scrapes failed in the window")
     if running and min(running) < MIN_RUNNING_SHARE * n:
         why.append(f"server ran only {min(running):.0f} of {n} sequences at its low point")
     if not running:
@@ -303,8 +308,8 @@ async def _gauges(ep: Endpoint, stop: asyncio.Event, out: dict) -> None:
                 v = ep.ad.gauge(s, key)
                 if v is not None:
                     out[dst].append(v)
-        except Exception:
-            pass
+        except Exception:                           # noqa: BLE001
+            out["scrape_errors"] = out.get("scrape_errors", 0) + 1
         try:
             await asyncio.wait_for(stop.wait(), 1.0)
         except asyncio.TimeoutError:
@@ -320,23 +325,37 @@ async def wait_idle(ep: Endpoint, timeout: float) -> bool | None:
             _, s, _ = await ep.scrape()
         except Exception:
             return None
-        busy = (ep.ad.gauge(s, "requests_running") or 0) + (ep.ad.gauge(s, "requests_waiting") or 0)
-        if busy == 0:
+        run, wait = (ep.ad.gauge(s, "requests_running"),
+                     ep.ad.gauge(s, "requests_waiting"))
+        if run is None or wait is None:
+            return None
+        if run + wait == 0:
             return True
         await asyncio.sleep(1.0)
     return False
 
 
+def engines_in(text: str) -> list[str]:
+    """The engine label values on vllm: lines (one engine: [] or one id)."""
+    return sorted(set(re.findall(r'^vllm:[^{\s]*\{[^}]*engine="([^"]*)"',
+                                 text, re.M)))
+
+
 def pool_tokens(text: str, ep: Endpoint) -> tuple[int | None, bool | None]:
-    """(KV pool size in tokens, prefix caching on) from vllm:cache_config_info."""
+    """(KV pool size in tokens, prefix caching on) from vllm:cache_config_info,
+    of the engine --engine names when there are several."""
+    engine = getattr(getattr(ep, "a", None), "engine", None)
     for line in text.splitlines():
         if line.startswith("vllm:cache_config_info"):
             lab = dict(re.findall(r'(\w+)="([^"]*)"', line))
+            if engine is not None and lab.get("engine", engine) != str(engine):
+                continue
             try:
                 blocks, bs = int(lab["num_gpu_blocks"]), int(lab["block_size"])
             except (KeyError, ValueError):
                 return None, None
-            return blocks * bs, lab.get("enable_prefix_caching") == "True"
+            pc = lab.get("enable_prefix_caching")
+            return blocks * bs, (None if pc is None else pc.lower() == "true")
     return None, None
 
 
@@ -534,6 +553,10 @@ async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
              + [("depth", d) for d in args.prefill_depth])
     for tag, (kind, v) in enumerate(loads):
         if st.err or drained:
+            rec["mixed_skipped"] = [f"{k} {x:,}" for k, x in loads[tag:]]
+            print(f"  n={n}: mixed windows not run ({len(st.err)} streams "
+                  f"failed, {drained} finished): "
+                  + ", ".join(rec["mixed_skipped"]), flush=True)
             break
         w = await mixed_window(ep, args, pr, n, st, kind, v, rec["pure_step_s"], tag,
                                (alone or {}).get(v) if kind == "tokens" else None)
@@ -543,15 +566,19 @@ async def run_rung(ep: Endpoint, args, pr: Prompts, n: int, out_tokens: int,
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     rec["client"] = client_window(c0[0], c1[0], c0[1], c1[1], dt, started)
-    rec["running"] = {k: (min(v), sum(v) / len(v), max(v)) for k, v in gauges.items() if v}
+    rec["running"] = {k: (min(v), sum(v) / len(v), max(v))
+                      for k, v in gauges.items() if isinstance(v, list) and v}
+    rec["scrape_errors"] = gauges.get("scrape_errors", 0)
     rec["batch_ok"], rec["why_not"] = judge(
-        n, gauges["running"], gauges["waiting"], len(st.err), drained)
+        n, gauges["running"], gauges["waiting"], len(st.err), drained,
+        started=sum(started), scrape_errors=gauges.get("scrape_errors", 0))
     rec["errors"] = st.err[:3]
     s, c = rec["server"], rec["client"]
     if s["step_time_s"] and c.get("step_time_s"):
         rec["step_ratio"] = c["step_time_s"] / s["step_time_s"]
-    run_mean = rec["running"].get("running", (0, n, 0))[1] or n
-    rec["tok_s_seq_server"] = s["tok_s_total"] / run_mean if s["tok_s_total"] else None
+    run_mean = rec["running"].get("running", (0, None, 0))[1]
+    rec["tok_s_seq_server"] = (s["tok_s_total"] / run_mean
+                               if s["tok_s_total"] and run_mean else None)
     return rec
 
 
@@ -595,21 +622,43 @@ async def sweep(args) -> dict:
             httpx.AsyncClient(limits=limits, verify=_verify(args)) as mc:
         ep = Endpoint(c, args, mh, mc)
         _, s0, text0 = await ep.scrape()
+        engines = engines_in(text0)
+        if len(engines) > 1 and args.engine is None:
+            raise ValueError(
+                f"{args.metrics_url} holds {len(engines)} engines "
+                f"({', '.join(engines)}): their forward passes would be summed "
+                "and the step read too short. Pass --engine N and run against "
+                "that engine's port, once per engine")
         pool, prefix_on = pool_tokens(text0, ep)
-        pool = args.kv_tokens or pool
-        if not args.distinct and prefix_on is False and not args.force:
-            raise ValueError("the server runs without prefix caching: a shared context "
-                             "would be prefilled once per sequence. Use --distinct "
-                             "or --force.")
-        max_len = None
+        if pool is None and not args.kv_tokens:
+            raise ValueError(f"{args.metrics_url} has no vllm:cache_config_info "
+                             "pool: pass --kv-tokens")
+        if args.kv_tokens:
+            if pool and abs(args.kv_tokens - pool) > 0.01 * pool:
+                print(f"KV pool {args.kv_tokens:,} tokens from --kv-tokens; "
+                      f"the server says {pool:,}")
+            pool = args.kv_tokens
+        if not args.distinct and not args.force and prefix_on is not True:
+            raise ValueError(
+                ("the server runs without prefix caching" if prefix_on is False
+                 else f"{args.metrics_url} does not say whether prefix caching "
+                 "is on") + ": a shared context would be prefilled once per "
+                 "sequence. Use --distinct, or --force if it is on")
         try:
             r = await c.get("/models", timeout=args.timeout)
-            for m in r.json().get("data", []):
-                if m.get("id") == args.model:
-                    max_len = m.get("max_model_len")
-        except Exception:
-            pass
-        if max_len and args.context + args.suffix_tokens + 64 > max_len:
+            r.raise_for_status()
+            served = {m.get("id"): m for m in r.json().get("data", [])}
+        except Exception as e:                      # noqa: BLE001
+            raise ValueError(f"GET {base}/models failed ({e}): check "
+                             "--base-url and the API key") from None
+        if args.model not in served:
+            raise ValueError(f"model {args.model!r} is not served; /models "
+                             f"lists {sorted(k for k in served if k)}")
+        max_len = args.max_model_len or served[args.model].get("max_model_len")
+        if not max_len:
+            raise ValueError("/models gives no max_model_len: pass "
+                             "--max-model-len")
+        if args.context + args.suffix_tokens + 64 > max_len:
             raise ValueError(f"--context {args.context:,} does not fit max_model_len {max_len:,}")
         print(f"decode sweep: {args.model} at {base}, context {args.context:,} "
               f"({'distinct' if args.distinct else 'shared'}), hold {args.hold:.0f}s, "
@@ -692,7 +741,16 @@ def cmd_decode_sweep(args) -> int:
     if not args.api_key and args.api_key_env and not os.environ.get(args.api_key_env):
         print(f"ws: --api-key-env {args.api_key_env} is not set", file=sys.stderr)
         return 2
-    res = asyncio.run(sweep(args))
+    if args.tensor_parallel is None:
+        print("ws: --tensor-parallel is required: /metrics does not give the "
+              "server's --tensor-parallel-size, and `ws calibrate` needs it",
+              file=sys.stderr)
+        return 2
+    try:
+        res = asyncio.run(sweep(args))
+    except ValueError as e:
+        print(f"ws decode-sweep: {e}", file=sys.stderr)
+        return 2
     if args.out:
         Path(args.out).write_text(json.dumps(res, indent=1))
         print(f"\nwrote {args.out}")
@@ -766,8 +824,10 @@ def add_subparser(sub) -> None:
                         "rung; later rungs use the last clean rung's measured rate (default 300)")
     p.add_argument("--kv-tokens", type=int, help="KV pool size in tokens, when /metrics lacks it")
     p.add_argument("--tensor-parallel", type=int, metavar="TP",
-                   help="the server's --tensor-parallel-size, recorded so `ws calibrate` "
-                        "can tell runs at two widths apart (default: the config's)")
+                   help="the server's --tensor-parallel-size (required), recorded so "
+                        "`ws calibrate` can tell runs at two widths apart")
+    p.add_argument("--max-model-len", type=int,
+                   help="the server's max_model_len, when /models lacks it")
     p.add_argument("--kv-fill", type=float, default=0.9,
                    help="skip a rung needing more than this share of the pool (default 0.9)")
     p.add_argument("--warm-concurrency", type=int, default=8,
