@@ -702,10 +702,11 @@ def _rtt(s: Snapshot) -> float:
     return 0.0 if math.isnan(s.rtt) else s.rtt
 
 
-def load_jsonl(path) -> list[Snapshot]:
-    """Replay a `ws metrics tail --out` log. Malformed lines are skipped:
-    a log truncated by Ctrl-C ends mid-line more often than not."""
+def load_jsonl_counted(path) -> tuple[list[Snapshot], int]:
+    """Replay a `ws metrics tail --out` log: (snapshots, malformed lines
+    skipped). A log truncated by Ctrl-C ends mid-line more often than not."""
     out: list[Snapshot] = []
+    skipped = 0
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -714,8 +715,18 @@ def load_jsonl(path) -> list[Snapshot]:
             try:
                 out.append(Snapshot.from_json(line))
             except Exception:
-                continue
+                skipped += 1
     out.sort(key=lambda s: s.t_sent)
+    return out, skipped
+
+
+def load_jsonl(path) -> list[Snapshot]:
+    """`load_jsonl_counted` that says on stderr how many lines it skipped."""
+    out, skipped = load_jsonl_counted(path)
+    if skipped:
+        import sys
+        print(f"{path}: skipped {skipped} malformed line(s) of "
+              f"{len(out) + skipped}", file=sys.stderr)
     return out
 
 

@@ -41,6 +41,7 @@ def build_options(args, cfg) -> ProbeOptions:
                         ("api", "api"),
                         ("freeze_threshold_ms", "freeze_threshold_ms"),
                         ("seed", "seed"),
+                        ("kv_block_tokens", "kv_block_tokens"),
                         ("replay", "replay"),
                         ("replay_max_gap_s", "replay_max_gap_s"),
                         ("replay_gap_policy", "replay_gap_policy"),
@@ -56,6 +57,9 @@ def build_options(args, cfg) -> ProbeOptions:
     if getattr(args, "freeze_threshold_ms", None) is not None:
         kw["slow_threshold_ms"] = args.freeze_threshold_ms
     kw["ignore_eos"] = not getattr(args, "no_ignore_eos", False)
+    kw["chars_per_token_given"] = (
+        getattr(args, "chars_per_token", None) is not None
+        or bool(getattr(args, "tokenizer", None)))
     tok = getattr(args, "tokenizer", None)
     if tok:
         # the real tokenizer sets chars_per_token; a --chars-per-token given
@@ -90,13 +94,18 @@ def apply_replay(cfg, path: str, max_gap_s: float,
     from .probe.replay import load_trace
     try:
         trace = load_trace(path)
+        eq = equivalent_workload(trace, park_s=max_gap_s,
+                                 policy=policy or DEFAULT_GAP_POLICY)
     except (OSError, ValueError, KeyError) as e:
         return cfg, f"{type(e).__name__}: {e}"
-    return replace(cfg, workload=replace(cfg.workload,
-                                         **equivalent_workload(
-                                             trace, park_s=max_gap_s,
-                                             policy=policy
-                                             or DEFAULT_GAP_POLICY))), None
+    return replace(cfg, workload=replace(cfg.workload, **eq)), None
+
+
+def replaced_workload_keys(before, after) -> list[str]:
+    """"key: old -> new" for each [workload] value the trace changed."""
+    return [f"{k}: {getattr(before, k)} -> {getattr(after, k)}"
+            for k in before.__dataclass_fields__
+            if getattr(before, k) != getattr(after, k)]
 
 
 def build_budget(args) -> ProbeBudget:
@@ -238,6 +247,9 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
       + ("  (may generate the population it measures)" if args.exclusive
          else "  (shares the endpoint; exclusive hypotheses are skipped)"))
     w(f"metrics  : {args.metrics_url or 'none'}")
+    w("server   : a real run first reads max_model_len, the KV pool and "
+      "block, and the metrics keys from the endpoint, and stops if they "
+      "disagree with the config (--allow-config-mismatch)")
     from .probe.latency import slow_threshold_ms
     thr, thr_src = slow_threshold_ms(cfg, opts)
     stat = "mean" if slo.ttft_statistic == "miss_mean" else f"p{slo.percentile}"
@@ -305,9 +317,13 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
 
     if pl.run_ladder:
         from .probe.ladder import build_ladder
+        dropped: list = []
         ladder = build_ladder(preds.predicted_limit_users, opts.rungs,
                               opts.max_users, preds.operating_point_users,
-                              opts.rungs_given)
+                              opts.rungs_given, dropped)
+        if dropped:
+            w(f"\nrungs above --max-users {opts.max_users:,} dropped: "
+              + ", ".join(f"{p:,}" for p in dropped))
         w("\nLOAD LADDER (users; each rung: "
           f"ramp {opts.ramp_s:g}s + measure {opts.measure_s:g}s)")
         tr = None
@@ -344,10 +360,10 @@ def dry_run(cfg, preds, opts, ep, pl, args, out=None) -> int:
           "(1 establishing + warm turns + 1 forced miss each)")
     if "burst" in pl.probes:
         # the standing load the RUN will use, from the run's own rule
-        pop = RunContext(cfg, preds, opts, ep, burst=opts.burst,
-                         burst_users=opts.burst_users)._burst_pop()
+        pop, why = RunContext(cfg, preds, opts, ep, burst=opts.burst,
+                              burst_users=opts.burst_users)._burst_pop_why()
         w(f"\nBURST PROBE: {opts.burst} simultaneous forced misses at a "
-          f"{pop}-user standing load, after a {opts.ramp_s:g}s ramp "
+          f"{pop}-user standing load ({why}), after a {opts.ramp_s:g}s ramp "
           f"(sessions establish over its first {ESTABLISH_FRAC:.0%}; the fire "
           f"is held, up to {ESTABLISH_WAIT_MAX_S:g}s, until none is still "
           "waiting for its first token)")
@@ -495,6 +511,10 @@ def _progress(kind, payload) -> None:
               f"{'-' if r.decode_p50 != r.decode_p50 else f'{r.decode_p50:.1f}'}"
               " tok/s "
               f"| {r.achieved_rps:.2f} req/s | {v}", flush=True)
+        if r.n_tokens_estimated:
+            print(f"  {r.n_tokens_estimated} of {r.n_turns} turns came back "
+                  "without completion_tokens: they have no decode rate and "
+                  "are left out of the decode statistics", flush=True)
     elif kind == "blown":
         print("  SLOs clearly blown — stopping the ladder early (higher rungs "
               "would only stress the endpoint)", flush=True)
@@ -503,6 +523,12 @@ def _progress(kind, payload) -> None:
     elif kind == "burst":
         print(f"\n--- burst probe: N={payload[0]} at {payload[1]} standing "
               "users ---", flush=True)
+        if len(payload) > 2 and payload[2].startswith("half"):
+            print(f"  standing load: {payload[2]}", flush=True)
+    elif kind == "dropped-rungs":
+        print("\n  rungs above --max-users "
+              f"{payload[1]:,} dropped from the ladder: "
+              + ", ".join(f"{p:,}" for p in payload[0]), flush=True)
     elif kind == "shared":
         print("\n--- shared-endpoint probe (rails on) ---", flush=True)
     elif kind == "shared-round":
@@ -568,6 +594,45 @@ def _bracket(rung_dicts) -> list:
 # ============================================================================
 # commands
 # ============================================================================
+def check_server(cfg, opts, ep, args, metrics_url):
+    """Read the endpoint's max_model_len, KV pool and block, prefix caching,
+    spec-decode counters and adapter keys before any load, and hold the
+    config to them. Returns (opts with the KV block, notes for the record,
+    error text or None)."""
+    from .server_check import (MISMATCH_HELP, blind_metrics, check_config,
+                               read_server)
+    server = read_server(ep.base_url, ep.api_key, metrics_url,
+                         _metrics_headers(args, ep) if metrics_url else {},
+                         getattr(args, "engine", None))
+    diffs, notes = check_config(cfg, server, metrics_url)
+    blind = blind_metrics(server)
+    if blind and not getattr(args, "allow_blind_metrics", False):
+        return opts, [], (f"{blind}. Point --metrics-url at a vLLM /metrics, "
+                          "or pass --allow-blind-metrics to run without them")
+    if blind:
+        notes.append(blind + " (--allow-blind-metrics)")
+    if diffs and not getattr(args, "allow_config_mismatch", False):
+        return opts, [], ("the config does not match the server it would "
+                          "measure:\n  - " + "\n  - ".join(diffs)
+                          + "\n" + MISMATCH_HELP)
+    if diffs:
+        notes = [f"ALLOWED MISMATCH (--allow-config-mismatch): {d}"
+                 for d in diffs] + notes
+    if not opts.kv_block_tokens:
+        if server["block_size"]:
+            opts = replace(opts, kv_block_tokens=server["block_size"])
+        else:
+            notes.append("the KV block is unknown (no vllm:cache_config_info "
+                         "block_size): a server that reports cached_tokens "
+                         "stops the run until --kv-block-tokens is given")
+    elif server["block_size"] and server["block_size"] != opts.kv_block_tokens:
+        notes.append(f"--kv-block-tokens {opts.kv_block_tokens} given; "
+                     f"/metrics says {server['block_size']}")
+    for n in notes:
+        print(f"  note: {n}")
+    return opts, notes, None
+
+
 def cmd_test(args) -> int:
     from .cli import _apply_overrides       # deferred: cli imports this module
     from .config import load_config
@@ -580,6 +645,16 @@ def cmd_test(args) -> int:
     if metrics_url != cfg.endpoint.metrics_url:
         cfg = replace(cfg, endpoint=replace(cfg.endpoint,
                                             metrics_url=metrics_url))
+    from .cli import defaulted_line
+    line = defaulted_line(args.config, args)
+    if line:
+        print(line)
+    if cfg.workload.image_share and (args.api or "completions") != "chat":
+        # refused here, with the arguments, not by the first image request;
+        # on the config the user wrote, before a trace replaces it
+        print("ws test: error: workload.image_share > 0 sends images, which "
+              "need --api chat (/completions takes text only)", file=sys.stderr)
+        return 2
     if getattr(args, "replay", None):
         if not args.exclusive:
             # only the ladder and the burst's standing load replay; the
@@ -588,6 +663,7 @@ def cmd_test(args) -> int:
                   "ladder and the burst replay recorded sessions)",
                   file=sys.stderr)
             return 2
+        before = cfg.workload
         cfg, err = apply_replay(cfg, args.replay,
                                 args.replay_max_gap_s or PARK_S,
                                 getattr(args, "replay_gap_policy", None))
@@ -595,11 +671,8 @@ def cmd_test(args) -> int:
             print(f"ws test: error: --replay {args.replay}: {err}",
                   file=sys.stderr)
             return 2
-    if cfg.workload.image_share and (args.api or "completions") != "chat":
-        # refused here, with the arguments, not by the first image request
-        print("ws test: error: workload.image_share > 0 sends images, which "
-              "need --api chat (/completions takes text only)", file=sys.stderr)
-        return 2
+        print(f"--replay {args.replay} replaced these [workload] keys: "
+              + "; ".join(replaced_workload_keys(before, cfg.workload)))
     preds =predict(cfg, n_iter=args.n_iter, seed=args.predict_seed)
     opts = build_options(args, cfg)
     ep = build_endpoint(args, cfg)
@@ -607,6 +680,16 @@ def cmd_test(args) -> int:
     selected = REGISTRY.select(None if (args.all or not args.keys) else args.keys)
     pl = make_plan(selected, exclusive=args.exclusive,
                    metrics=bool(args.metrics_url), burst=opts.burst)
+    if pl.run_ladder:
+        from .probe.ladder import build_ladder
+        try:
+            dropped: list = []
+            build_ladder(preds.predicted_limit_users, opts.rungs,
+                         opts.max_users, preds.operating_point_users,
+                         opts.rungs_given, dropped)
+        except ValueError as e:
+            print(f"ws test: error: {e}", file=sys.stderr)
+            return 2
 
     if args.dry_run:
         return dry_run(cfg, preds, opts, ep, pl, args)
@@ -617,6 +700,10 @@ def cmd_test(args) -> int:
             print(f"  {h.key:<14} {reason}", file=sys.stderr)
         return 2
 
+    opts, extra_notes, err = check_server(cfg, opts, ep, args, metrics_url)
+    if err:
+        print(f"ws test: error: {err}", file=sys.stderr)
+        return 2
     metrics = open_metrics(args.metrics_url, getattr(args, 'engine', None),
                            _metrics_headers(args, ep))
     budget, sopts = build_budget(args), build_shared(args)
@@ -627,6 +714,9 @@ def cmd_test(args) -> int:
     except KeyboardInterrupt:
         print("\ninterrupted before any hypothesis was scored", file=sys.stderr)
         return 130
+    except ValueError as e:       # a fact the run needs and could not get
+        print(f"ws test: error: {e}", file=sys.stderr)
+        return 2
 
     opt_dict = {**opts.to_dict(), "probe_budget": budget.to_dict(),
                 "shared": sopts.to_dict()}
@@ -638,7 +728,7 @@ def cmd_test(args) -> int:
         rungs=cached["rungs"], sample=cached["sample"], burst=cached["burst"],
         shared=cached.get("shared"), hypotheses=rows,
         skipped=[{**h.describe(), "reason": r} for h, r in pl.skipped],
-        not_established=not_established_notes(
+        not_established=extra_notes + not_established_notes(
             cfg, opts, pl, rungs=cached["rungs"], sample=cached["sample"],
             burst=cached["burst"], hypotheses=rows, exclusive=args.exclusive,
             metrics=bool(metrics_url), interrupted=interrupted,

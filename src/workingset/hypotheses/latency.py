@@ -213,6 +213,9 @@ class HColdWait(Hypothesis):
         data = {"by_pop": by_pop, "budget_s": budget,
                 "idle_source": next((r.cold_wait["idle_source"]
                                      for r in rungs), None),
+                "idle_prefill_note": (
+                    "idle prefill from the model (mfu "
+                    f"{cfg.calibration.mfu:g}), not measured"),
                 "server_queue_note": (
                     "vLLM counts queue time until the request is first "
                     "scheduled, which is not the same as until its prefill "
@@ -233,4 +236,7 @@ class HColdWait(Hypothesis):
                            text=_bracket_text(lo, hi), data=data)
 
     def verdict(self, pred: Prediction, m: Measurement) -> Verdict:
-        return ceiling_verdict(pred, m)
+        v = ceiling_verdict(pred, m)
+        if m.data.get("idle_source") == "model":
+            v = Verdict(v.status, f"{v.text}; {m.data['idle_prefill_note']}")
+        return v

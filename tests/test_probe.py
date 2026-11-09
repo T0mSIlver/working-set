@@ -46,7 +46,8 @@ def small_cfg(**wl) -> RunConfig:
 def small_opts(**kw) -> ProbeOptions:
     base = dict(ramp_s=0.02, measure_s=0.25, context_cap_tokens=2_000,
                 request_timeout_s=5.0, freeze_threshold_ms=20.0,
-                sample_requests=2, sample_warm_turns=1, seed=7)
+                sample_requests=2, sample_warm_turns=1, seed=7,
+                kv_block_tokens=16)
     base.update(kw)
     return ProbeOptions(**base)
 
@@ -969,7 +970,7 @@ def test_eval_sample_on_synthetic_traces():
         trace(1, "hit", 2.0, 0.4, tps=110, gaps_ms=[3, 3], ctok=10,
               ptok=100, intended=100, cached=99),
         trace(2, "hit", 2.0, 0.6, tps=None, err="boom"),
-    ])
+    ], kv_block_tokens=16)
     assert s.n == 3 and s.n_ok == 2 and s.n_err == 1
     assert s.ttft_miss_mean == pytest.approx(2.0)
     assert s.decode_p50 == pytest.approx(100.0)

@@ -859,11 +859,23 @@ def equivalent_workload(trace: AgentTrace, park_s: float = PARK_S,
             d = cur.prompt_tokens - prev.prompt_tokens - prev.output_tokens
             if cur.prompt_tokens >= prev.prompt_tokens:
                 growth.append(max(d, 0))
+    # no wait and no growth to average are not zero or 30 s: the predictions
+    # priced on them would be a guess dressed as the trace's
+    if think is None:
+        raise ValueError(
+            "the trace has no wait between two requests (every session is "
+            f"one request, or the {policy!r} gap policy leaves none), so "
+            "workload.think_time_s cannot be read from it")
+    if not growth:
+        raise ValueError(
+            "no session in the trace has two requests whose prompt did not "
+            "shrink, so workload.warm_turn_tokens (the prompt growth per "
+            "turn) cannot be read from it")
     return {
         "user_prompt_median_tokens": int(round(math.exp(mu))),
         "user_prompt_sigma": round(max(sigma, 0.01), 3),
-        "think_time_s": (_round_think(think) if think is not None else 30.0),
-        "warm_turn_tokens": int(round(sum(growth) / len(growth))) if growth else 0,
+        "think_time_s": _round_think(think),
+        "warm_turn_tokens": int(round(sum(growth) / len(growth))),
         "max_output_tokens": max(1, int(round(
             sum(r.output_tokens for r in reqs) / len(reqs)))),
         "subagent_ratio": 0.0,

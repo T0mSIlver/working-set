@@ -124,6 +124,9 @@ class RequestTrace:
     span_s: float | None = None       # t_last - t_first
     t_end: float | None = None        # monotonic end-of-stream (last chunk)
     n_chunks: int = 0
+    # no completion_tokens came back, so the token count would be SSE events
+    # (wrong under speculative decoding): the request carries no decode rate
+    tokens_estimated: bool = False
     gaps_ms: list = field(default_factory=list, repr=False)
     covariates: dict | None = None    # metrics snapshot at SEND time
     # images carried (history included), and how many were new this turn.
@@ -174,7 +177,7 @@ class RequestTrace:
     def finish_decode_rates(self, n_tok: int | None = None) -> None:
         """Fill `clean_decode_tps` from the span and the stall. Split out of
         the stream loop so a synthetic trace is scored by the same code."""
-        n_tok = n_tok if n_tok else (self.ctok or self.n_chunks)
+        n_tok = n_tok if n_tok else (self.ctok or 0)
         clean = (self.span_s or 0.0) - self.stall_s
         if n_tok and n_tok > 1 and clean > 0:
             self.clean_decode_tps = (n_tok - 1) / clean
@@ -534,7 +537,11 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
         details = usage.get("prompt_tokens_details") or {}
         if isinstance(details, dict) and details.get("cached_tokens") is not None:
             trace.cached_tokens = details["cached_tokens"]
-    n_tok = trace.ctok if trace.ctok else n_chunks
+    # a stream's SSE events are not its tokens under speculative decoding or
+    # multi-token steps; without the server's completion_tokens the request
+    # has no decode rate (it is counted, never guessed)
+    n_tok = trace.ctok or 0
+    trace.tokens_estimated = not n_tok
     # span_s is set whenever the stream had >= 2 content chunks — the SAME
     # condition that makes `gaps` non-empty. A server reporting
     # completion_tokens=1 on a multi-chunk stream must not carry stall_s with

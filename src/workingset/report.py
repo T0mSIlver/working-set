@@ -92,7 +92,9 @@ def _latency_table(w, rungs, p, pred, slo) -> None:
     thr = next((r.slowed["threshold_ms"] for r in rungs if r.slowed), None)
     w(f"\nLATENCY LIMITS — slowed = a gap >= {fmt(thr, ' ms', 0)} (half the "
       "predicted mixed step unless --freeze-threshold-ms overrode it); cold "
-      f"wait = client TTFT minus the idle prefill time (from the {src})")
+      "wait = client TTFT minus the idle prefill time ("
+      + ("idle prefill from the model, not measured" if src == "model"
+         else f"from the {src}") + ")")
     w(f"{'users':>6} {'slowed share':>13} {'slowed tok/s':>13} "
       f"{'longest run':>12} {f'p{p} run':>9} {f'cold wait p{p}':>15} "
       f"{'(mean)':>8} {'n cold':>7} {'server queue':>13}")

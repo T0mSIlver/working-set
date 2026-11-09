@@ -201,9 +201,18 @@ class RunContext:
         The second of the two places a fractional per-group operating point is
         rounded (see probe.ladder.build_ladder): sessions get opened here, so
         the standing load has to be a whole number of them."""
-        return self.burst_users or max(1, round(
-            self.predictions.operating_point_users
-            or 0.5 * self.predictions.predicted_limit_users))
+        return self._burst_pop_why()[0]
+
+    def _burst_pop_why(self) -> tuple[int, str]:
+        """(standing load, where it came from): the fallback to half the
+        predicted limit is named, never silent."""
+        if self.burst_users:
+            return self.burst_users, "--burst-users"
+        op = self.predictions.operating_point_users
+        if op:
+            return max(1, round(op)), "the operating point"
+        return (max(1, round(0.5 * self.predictions.predicted_limit_users)),
+                "half the predicted limit, because the operating point is 0")
 
     def _burst_key(self) -> tuple:
         return ("burst", self._identity(), self.burst_n, self._burst_pop())
@@ -225,10 +234,14 @@ class RunContext:
 
     # ---- probes, cached by parameters ----------------------------------
     def ladder_pops(self) -> list[int]:
-        return build_ladder(self.predictions.predicted_limit_users,
+        dropped: list = []
+        pops = build_ladder(self.predictions.predicted_limit_users,
                             self.opts.rungs, self.opts.max_users,
                             self.predictions.operating_point_users,
-                            self.opts.rungs_given)
+                            self.opts.rungs_given, dropped)
+        if dropped:
+            self.on_progress("dropped-rungs", (dropped, self.opts.max_users))
+        return pops
 
     async def ladder(self) -> LadderView:
         key = self._ladder_key()
@@ -306,7 +319,8 @@ class RunContext:
         if key not in self._cache:
             if self.frozen:
                 return None
-            self.on_progress("burst", (self.burst_n, pop))
+            self.on_progress("burst", (self.burst_n, pop,
+                                       self._burst_pop_why()[1]))
             self._cache[key] = await run_burst(
                 self.client, self.ep, self.cfg, self.opts, self.burst_n, pop,
                 self.prefixes, self.metrics)

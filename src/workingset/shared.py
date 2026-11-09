@@ -2351,7 +2351,8 @@ def _assemble(cfg, opts, sopts, gov, traces, windows, lengths, preds=None,
                 b["model"] = ladder_model_curve(cfg, b["running_mean"])
     sample = eval_sample(probe_traces,
                          server=(overall or {}).get("window"),
-                         cap_tokens=opts.context_cap_tokens)
+                         cap_tokens=opts.context_cap_tokens,
+                         kv_block_tokens=opts.kv_block_tokens)
     return SharedResult(
         fits=fits, op=op, max_extrapolation=sopts.max_extrapolation,
         max_extrapolation_requests=sopts.max_extrapolation_requests,

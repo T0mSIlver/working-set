@@ -380,6 +380,7 @@ def test_a_rung_without_a_sample_prints_a_dash_not_nan(capsys):
     nan = float("nan")
     _progress("rung-done", SimpleNamespace(
         passed=True, reasons=[], slowed={}, cold_wait={}, ttft_hit_p50=0.2,
-        ttft_miss_p50=nan, decode_p50=nan, achieved_rps=0.1))
+        ttft_miss_p50=nan, decode_p50=nan, achieved_rps=0.1,
+            n_tokens_estimated=0, n_turns=1))
     out = capsys.readouterr().out
     assert "nan" not in out and "miss p50 -" in out

@@ -50,6 +50,8 @@ class Rung:
     n_hit: int = 0
     n_miss: int = 0
     n_err: int = 0
+    # turns whose server gave no completion_tokens: no decode rate, counted here
+    n_tokens_estimated: int = 0
     ttft_hit_p50: float = float("nan")
     ttft_hit_pX: float = float("nan")
     ttft_miss_p50: float = float("nan")
@@ -281,6 +283,7 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     hit = [t for t in ok if t.kind == "hit"]
     miss = [t for t in ok if t.kind == "miss"]
     res.n_turns, res.n_hit, res.n_miss = len(ok), len(hit), len(miss)
+    res.n_tokens_estimated = sum(1 for t in ok if t.tokens_estimated)
 
     res.ttft_hit_p50 = pct([t.ttft for t in hit], 50)
     res.ttft_hit_pX = pct([t.ttft for t in hit], p)
@@ -333,8 +336,7 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     # the server's own answer, where it gives one
     cached = [t for t in hit if t.cached_tokens is not None and t.ptok_achieved]
     if cached:
-        res.cached_frac = sum(1 for t in cached
-                              if t.cached_tokens > 0.5 * t.ptok_achieved) / len(cached)
+        res.cached_frac = warm_share(cached, opts.kv_block_tokens)
     # eviction. Without `cached_tokens` the server's prefill histogram says
     # how many tokens each request computed; failing that, the baseline's
     # TTFT classifier (queueing alone can push a warm hit over its threshold).
@@ -404,6 +406,55 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
 # ============================================================================
 # the closed loop
 # ============================================================================
+def warm_share(cached: list, block: int) -> float:
+    """Share of hit turns the server served warm: cached_tokens no more than
+    one KV block short of the prompt's whole blocks. The server caches whole
+    blocks, so a fixed fraction of the prompt fails on a short prompt when the
+    block is large (1,600 tokens on a hybrid model). nan when no prompt is
+    over two blocks (the test cannot tell it from a miss). Raises ValueError
+    when the block is unknown."""
+    if block <= 0:
+        raise ValueError(
+            "the server reports cached_tokens but the KV block size is "
+            "unknown, and a warm request is judged against it (the server "
+            "caches whole blocks, so a prompt is up to one block short of "
+            "its cached prefix): pass --kv-block-tokens, or --metrics-url "
+            "for a vLLM /metrics that carries cache_config_info")
+    judged = [(t.ptok_achieved // block) * block - block for t in cached]
+    pairs = [(t, f) for t, f in zip(cached, judged) if f > 0]
+    if not pairs:
+        return float("nan")
+    return sum(1 for t, f in pairs if t.cached_tokens >= f) / len(pairs)
+
+
+RATIO_BAND = (0.9, 1.1)     # achieved / intended prompt tokens
+RATIO_MIN_N = 8             # text-only turns before the ratio is judged
+
+
+def check_prompt_tokens(opts, traces: list) -> None:
+    """Stop when the prompts come back at a size the 4.0 chars-per-token
+    assumption did not intend: every context length, cache fill and rate in
+    the run is priced on the intended size. Raises ValueError naming the
+    flags that supply the figure; silent once --chars-per-token or
+    --tokenizer was given (the report then prints the ratio)."""
+    if opts.chars_per_token_given:
+        return
+    ratios = [t.ptok_achieved / t.ptok_intended for t in traces
+              if t.ptok_achieved and t.ptok_intended and not t.n_images
+              and not t.error]
+    if len(ratios) < RATIO_MIN_N:
+        return
+    m = pct(ratios, 50)
+    if not RATIO_BAND[0] <= m <= RATIO_BAND[1]:
+        raise ValueError(
+            f"the server counted a median {m:.2f} x the prompt tokens the "
+            f"probe intended (over {len(ratios)} requests), which means the "
+            f"assumed {opts.chars_per_token:g} chars per token is wrong for "
+            "this model. Pass --tokenizer <the model's Hugging Face id> to "
+            f"measure it, or --chars-per-token {opts.chars_per_token / m:.2f} "
+            "to set it")
+
+
 async def user_loop(client, ep: EndpointSpec, cfg, opts, uid: int, is_sub: bool,
                     prefixes: Prefixes, traces: list, stop: asyncio.Event,
                     stagger_s: float, metrics=None, seed: int | None = None):
@@ -470,7 +521,10 @@ async def run_population(client, ep: EndpointSpec, cfg, opts, pop: int,
     if on_partial is not None:
         on_partial(pop, n_sub, traces, measure_start)
     try:
-        await asyncio.sleep(opts.ramp_s + opts.measure_s)
+        end = t0 + opts.ramp_s + opts.measure_s
+        while (left := end - time.monotonic()) > 0:
+            await asyncio.sleep(min(left, 5.0))
+            check_prompt_tokens(opts, traces)
     finally:
         stop.set()
         for t in tasks:
@@ -540,7 +594,7 @@ class Sample:
 
 
 def eval_sample(traces: list, server: dict | None = None,
-                cap_tokens: float = 0.0) -> Sample:
+                cap_tokens: float = 0.0, kv_block_tokens: int = 0) -> Sample:
     """Pure: the same derived quantities as `eval_rung`, over a handful of
     turns and with no measure window to clip to.
 
@@ -583,8 +637,7 @@ def eval_sample(traces: list, server: dict | None = None,
     s.images = image_split(hit, 95)
     cached = [t for t in hit if t.cached_tokens is not None and t.ptok_achieved]
     if cached:
-        s.cached_frac = sum(1 for t in cached
-                            if t.cached_tokens > 0.5 * t.ptok_achieved) / len(cached)
+        s.cached_frac = warm_share(cached, kv_block_tokens)
     s.spike = spike_evidence(traces, cap_tokens)
     s.traces = list(traces)
     return s
@@ -624,4 +677,5 @@ async def run_sample(client, ep: EndpointSpec, cfg, opts, prefixes: Prefixes,
 
     await asyncio.gather(*[one(i) for i in range(max(1, opts.sample_requests))])
     server = await sampler_window(metrics, w0, sampler_now(metrics))
-    return eval_sample(traces, server, cap_tokens=opts.context_cap_tokens)
+    return eval_sample(traces, server, cap_tokens=opts.context_cap_tokens,
+                       kv_block_tokens=opts.kv_block_tokens)

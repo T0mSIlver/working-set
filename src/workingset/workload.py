@@ -1784,11 +1784,19 @@ _TABLE = re.compile(r"^\s*\[")
 
 
 def existing_workload(path: str | Path) -> dict[str, Any]:
-    """The `[workload]` table a config already carries, or `{}`."""
+    """The `[workload]` table a config already carries, `{}` when the file
+    does not exist yet; ValueError when it exists and does not parse."""
     try:
-        raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return {}                       # no file yet: nothing to carry over
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(
+            f"{path} exists but is not valid TOML ({e}): fix it, or point "
+            "--into at a new file; reading it as empty would overwrite the "
+            "[workload] keys it carries") from None
     block = raw.get("workload")
     return dict(block) if isinstance(block, dict) else {}
 

@@ -379,6 +379,7 @@ def read_measured(run_dirs: list[str | Path]) -> dict:
     lane's timeline is rebuilt as its turns back to back (plus the replayed
     tool delay) from a common start: the driver starts every lane at once."""
     per_lane = []
+    skipped = 0
     for d in run_dirs:
         lr, t = [], 0.0
         for line in (Path(d) / "turns.jsonl").read_text().splitlines():
@@ -388,18 +389,32 @@ def read_measured(run_dirs: list[str | Path]) -> dict:
             tm, tk = j.get("timing") or {}, j.get("tokens") or {}
             if not j.get("success") or tm.get("e2e_latency_ms") is None:
                 continue
+            # the server's own counts and first-token time, or the turn is
+            # left out: a recorded or zero stand-in would pass for a reading
+            need = (tk.get("server_prompt_tokens"), tk.get("server_output_tokens"),
+                    tk.get("server_cached_prompt_tokens"),
+                    tm.get("time_to_first_token_ms"))
+            if any(v is None for v in need):
+                skipped += 1
+                continue
             e2e = tm["e2e_latency_ms"] / 1000
             gen = (tm.get("generation_ms") or 0) / 1000
-            out = tk.get("server_output_tokens") or tk.get("local_output_tokens") or 0
+            out = tk["server_output_tokens"]
             lr.append({"task": j.get("task_id"),
-                       "prompt": tk.get("server_prompt_tokens") or tk.get("recorded_prompt_tokens") or 0,
-                       "out": out, "cached": tk.get("server_cached_prompt_tokens") or 0,
+                       "prompt": tk["server_prompt_tokens"],
+                       "out": out, "cached": tk["server_cached_prompt_tokens"],
                        "t0": t, "t1": t + e2e,
-                       "ttft": (tm.get("time_to_first_token_ms") or 0) / 1000,
+                       "ttft": tm["time_to_first_token_ms"] / 1000,
                        "gen_tps": (out - 1) / gen if gen > 0 else 0.0})
             t += e2e + (j.get("replayed_tool_delay_ms") or 0) / 1000
         per_lane.append(lr)
-    return summarize([r for lr in per_lane for r in lr], per_lane)
+    if skipped:
+        import sys
+        print(f"aa_local: {skipped} successful turn(s) left out: no server "
+              "prompt/output/cached token count or first-token time",
+              file=sys.stderr)
+    extra = {"turns_skipped_no_server_counts": skipped} if skipped else None
+    return summarize([r for lr in per_lane for r in lr], per_lane, extra)
 
 
 def anchor_from(box: Box, run_dir: str | Path) -> Box:

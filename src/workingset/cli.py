@@ -59,6 +59,9 @@ def _fmt_count(x: float) -> str:
 def cmd_predict(args) -> int:
     cfg = load_config(args.config)
     cfg = _apply_overrides(cfg, args)
+    line = defaulted_line(args.config, args)
+    if line:
+        print(line, file=sys.stderr if args.json else sys.stdout)
     p = predict(cfg, closed=args.closed, n_iter=args.n_iter, seed=args.seed)
     if args.json:
         out = {"config": cfg.to_dict(), "predictions": p.to_dict(),
@@ -148,8 +151,8 @@ def cmd_predict(args) -> int:
     return 0
 
 
-def _apply_overrides(cfg: RunConfig, args) -> RunConfig:
-    dep = {k: v for k, v in (("model", args.model), ("gpu", args.gpu),
+def _deploy_overrides(args) -> dict:
+    return {k: v for k, v in (("model", args.model), ("gpu", args.gpu),
                              ("tensor_parallel", args.tp), ("replicas", args.dp),
                              ("weight_dtype", args.weight_dtype),
                              ("kv_dtype", args.kv_dtype),
@@ -158,6 +161,25 @@ def _apply_overrides(cfg: RunConfig, args) -> RunConfig:
                              ("max_model_len", args.max_model_len),
                              ("max_num_seqs", args.max_num_seqs),
                              ("ram_gib", args.ram_gib)) if v is not None}
+
+
+def defaulted_line(path: str, args) -> str | None:
+    """One line naming the [deployment] keys neither the file nor a flag set,
+    so the numbers that follow rest on those defaults visibly."""
+    from .config import defaulted_deployment_keys
+    keys = defaulted_deployment_keys(path)
+    if keys is None:
+        return None
+    keys = [k for k in keys if k not in _deploy_overrides(args)]
+    if not keys:
+        return None
+    d = RunConfig().deployment
+    return (f"deployment keys not set in {path}, defaulted: "
+            + ", ".join(f"{k}={getattr(d, k)}" for k in keys))
+
+
+def _apply_overrides(cfg: RunConfig, args) -> RunConfig:
+    dep = _deploy_overrides(args)
     wl = {k: v for k, v in (("users", args.users), ("miss_rate", args.miss_rate),
                             ("think_time_s", args.think)) if v is not None}
     if dep:
@@ -477,6 +499,20 @@ def build_parser() -> argparse.ArgumentParser:
                         "from the trace (sample, the default), the recorded "
                         "wait capped at --replay-max-gap-s (cap), or none "
                         "(drop)")
+    p.add_argument("--kv-block-tokens", type=int, metavar="N",
+                   help="the server's KV block in tokens (default: read from "
+                        "/metrics vllm:cache_config_info). A warm request is "
+                        "judged against it: a 1,600-token block on a hybrid "
+                        "model puts a short prompt up to a block short of "
+                        "its cached prefix")
+    p.add_argument("--allow-config-mismatch", action="store_true",
+                   help="run although the server's max_model_len or KV pool "
+                        "differs from the config's, or cannot be read; the "
+                        "differences go into the record's not-established "
+                        "notes")
+    p.add_argument("--allow-blind-metrics", action="store_true",
+                   help="run with --metrics-url although the adapter found "
+                        "neither requests_running nor kv_cache_usage in it")
     p.add_argument("--run-nonce", metavar="HEX",
                    help="mixed into every miss salt and session context so a "
                         "re-run at the same --seed cannot be answered from the "

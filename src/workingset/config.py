@@ -504,6 +504,23 @@ def load_config(path: str | Path) -> RunConfig:
     return RunConfig.from_dict(tomllib.loads(text))
 
 
+def defaulted_deployment_keys(path: str | Path) -> list[str] | None:
+    """The [deployment] keys the config file does not set (so RunConfig.from_dict
+    filled them with the dataclass default); None for a harness .py, which
+    names its deployment its own way."""
+    import dataclasses
+    p = Path(path)
+    if p.suffix == ".py":
+        return None
+    text = p.read_text(encoding="utf-8")
+    raw = json.loads(text) if p.suffix == ".json" else tomllib.loads(text)
+    if p.suffix == ".json" and "deployment" not in raw:
+        return None                       # a legacy JSON config
+    given = set(raw.get("deployment") or {})
+    return [f.name for f in dataclasses.fields(Deployment)
+            if f.name not in given]
+
+
 def _config_from_harness(src: str) -> dict:
     """The CONFIG between the harness's BEGIN/END markers: either the
     explorer's json.loads(r\"\"\"...\"\"\") form or the committed template's

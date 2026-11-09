@@ -44,7 +44,14 @@ class ProbeOptions:
     # --- request shaping --------------------------------------------------
     chars_per_token: float = 4.0        # synthetic-text calibration
     tokenizer: str | None = None        # HF slug / tokenizer.json that set it
+    # True when --chars-per-token or --tokenizer set the figure; False means
+    # the 4.0 above is an assumption, and a run whose achieved prompt tokens
+    # come back outside 0.9-1.1 of intended stops (`check_prompt_tokens`)
+    chars_per_token_given: bool = False
     context_cap_tokens: int = 180_000   # truncation cap (the model's max_seq_len)
+    # the server's KV block, which a warm request's cached_tokens is judged
+    # against; 0 = unknown (`ws test` fills it from /metrics or --kv-block-tokens)
+    kv_block_tokens: int = 0
     request_timeout_s: float = 300.0    # keep well above the TTFT budget
     ignore_eos: bool = True             # vLLM extension: fixed-length decode
     api: str = "completions"            # "completions" | "chat"
@@ -75,8 +82,8 @@ class ProbeOptions:
     def ladder_key(self) -> tuple:
         """Cache key: everything that changes what a ladder rung measures."""
         return (self.rungs, self.rungs_given, self.max_users, self.ramp_s, self.measure_s,
-                self.turns_per_user, self.chars_per_token,
-                self.context_cap_tokens, self.request_timeout_s,
+                self.turns_per_user, self.chars_per_token, self.chars_per_token_given,
+                self.context_cap_tokens, self.kv_block_tokens, self.request_timeout_s,
                 self.ignore_eos, self.api, self.freeze_threshold_ms,
                 self.slow_threshold_ms, self.seed,
                 self.run_nonce, self.replay, self.replay_max_gap_s,

@@ -87,6 +87,22 @@ that share of warm turns then attaches generated PNGs, which stay in the
 session history, and the report splits warm-turn TTFT by whether the turn
 sent a new image. The model does not price images yet.
 
+Before it sends load, `ws test` reads `max_model_len`, the KV pool and block,
+prefix caching and the metrics keys from the endpoint, and stops when the
+config's `deployment.max_model_len` differs or the KV pool differs from the
+predicted one by more than 15% (set `deployment.kv_sharding`,
+`calibration.reserve_gib` or run `ws calibrate --vllm-log`;
+`--allow-config-mismatch` runs anyway and records the differences). It also
+stops when `--metrics-url` gives neither `requests_running` nor
+`kv_cache_usage` (`--allow-blind-metrics`), when the server's token counts
+for the prompts are outside 0.9-1.1 of the intended ones and neither
+`--chars-per-token` nor `--tokenizer` was given, and when the server reports
+cached tokens but its KV block is unknown (`--kv-block-tokens`; read from
+`/metrics` otherwise). A reply without `completion_tokens` has no decode rate
+and is counted, not guessed. `ws test` and `ws predict` print the
+`[deployment]` keys the file leaves to their defaults. A rung above
+`--max-users` is dropped with a line saying so; an empty ladder is an error.
+
 ## How many agent sessions an endpoint serves
 
 `ws replay` answers that from the endpoint and recorded sessions alone, with
@@ -184,6 +200,9 @@ hypothesis by hypothesis:
 ```bash
 uv run ws test workingset.toml --replay trace.json --exclusive --out run.json
 ```
+
+`--replay` prints every `[workload]` key the trace replaced, and stops when
+the trace has no wait between requests or no prompt growth to average.
 
 `ws trace pi` keeps, for each request, the prompt and reply token counts, the
 wait before it and what it waited on, and nothing of the text, so other people
