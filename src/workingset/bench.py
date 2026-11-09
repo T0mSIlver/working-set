@@ -83,7 +83,8 @@ MAX_EVICTION_SHARE = 0.01
 MAX_WARM_TTFT_S = 3.0
 MIN_DECODE_TOK_S = 50.0
 WARM_NEW_TOKENS = 8192
-KV_BLOCK_TOKENS = 16
+KV_BLOCK_TOKENS = 16        # when neither the flag, /metrics nor the replies say
+BLOCK_FROM_REPLIES_MIN = 8  # distinct cached_tokens values before their gcd counts
 MIN_SAMPLES = 10            # a check with fewer requests than this is not judged
 MIN_DECODE_TOKENS = 32      # requests with fewer output tokens have no speed
 ROUTINGS = ("sticky", "round-robin")
@@ -436,6 +437,40 @@ def _pct(xs: list[float], q: float) -> float:
     return xs[lo] + (xs[hi] - xs[lo]) * (k - lo)
 
 
+def block_from_replies(rows) -> int:
+    """The block the server caches in, read off its replies: vLLM counts
+    cached tokens in whole KV blocks, so the gcd of enough distinct
+    cached_tokens values is the block (1,600 on a hybrid model whose
+    attention block grows to the recurrent state's page). 0 below
+    BLOCK_FROM_REPLIES_MIN distinct values: too few to tell the block from
+    chance."""
+    vals = {r.cached for r in rows if r.cached}
+    if len(vals) < BLOCK_FROM_REPLIES_MIN:
+        return 0
+    return math.gcd(*vals)
+
+
+def block_from_metrics(text: str) -> int | None:
+    """block_size from vllm:cache_config_info, None when absent."""
+    import re
+    for line in text.splitlines():
+        if line.startswith("vllm:cache_config_info"):
+            m = re.search(r'block_size="(\d+)"', line)
+            return int(m.group(1)) if m else None
+    return None
+
+
+def read_block_size(url: str, headers: dict[str, str]) -> int | None:
+    """The server's KV block size from its /metrics, None when unreadable."""
+    import httpx
+    try:
+        r = httpx.get(url, headers=headers, timeout=10.0)
+        r.raise_for_status()
+        return block_from_metrics(r.text)
+    except Exception:                               # noqa: BLE001
+        return None
+
+
 @dataclass
 class Limits:
     """What a step must hold to pass (`judge`). One flag each."""
@@ -523,6 +558,9 @@ class Step:
     checks: dict = field(default_factory=dict)
     warm_requests: int = 0
     evictions: int = 0
+    # the block the eviction check rounded to: the plan's, or larger when the
+    # server's cached_tokens all came in whole blocks of a larger size
+    kv_block_tokens: int = 0
     cold_requests: int = 0
     cold_queue_p50: float = float("nan")    # cold time to first token less
     cold_queue_p90: float = float("nan")    # the idle estimate: queueing
@@ -685,7 +723,8 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     warm = [r for r in rows if r.warm and r.uncached <= lim.warm_new_tokens]
     step.warm_requests = len(warm)
     known = [r for r in warm if r.ok and r.cached is not None]
-    block = max(lim.kv_block_tokens, 1)
+    block = max(lim.kv_block_tokens, block_from_replies(known), 1)
+    step.kv_block_tokens = block
     evicted = [r for r in known
                if r.cached < r.expected // block * block - block]
     step.evictions = len(evicted)
@@ -927,6 +966,10 @@ class Plan:
     max_failed_share: float = MAX_ERROR_SHARE
     warm_new_tokens: int = WARM_NEW_TOKENS
     kv_block_tokens: int = KV_BLOCK_TOKENS
+    # where kv_block_tokens came from: "given" (--kv-block-tokens),
+    # "/metrics" (vllm:cache_config_info) or "default"; the eviction check
+    # also raises it to the block the replies show (block_from_replies)
+    kv_block_source: str = "given"
     routing: str = "sticky"             # with several URLs
     output_scale: float = 1.0
     chat_rate: float = 0.0              # background chat requests per second
@@ -1813,6 +1856,15 @@ def cmd_replay(args) -> int:
         cpt = _calibrated_cpt(args.tokenizer)
     elif cpt is None:
         cpt, cpt_source = 4.0, "default"
+    block, block_source = args.kv_block_tokens, "given"
+    if block is None:
+        from urllib.parse import urlsplit
+        url = (murls[0] if murls else
+               "{0.scheme}://{0.netloc}/metrics".format(urlsplit(base)))
+        block = read_block_size(url, metrics_headers(
+            args.metrics_header, key, base, url))
+        block_source = "/metrics" if block else "default"
+        block = block or KV_BLOCK_TOKENS
     plan = Plan(trace_path=args.trace, max_slowdown=args.max_slowdown,
                 min_samples=args.min_samples,
                 start_sessions=args.start_sessions,
@@ -1821,7 +1873,7 @@ def cmd_replay(args) -> int:
                 min_decode_tok_s=args.min_decode_tok_s,
                 max_failed_share=args.max_failed_share,
                 warm_new_tokens=args.warm_new_tokens,
-                kv_block_tokens=args.kv_block_tokens,
+                kv_block_tokens=block, kv_block_source=block_source,
                 routing=args.routing or "sticky",
                 output_scale=args.output_scale, chat_rate=args.chat_rate,
                 chat_prompt_tokens=args.chat_prompt_tokens,
@@ -1860,6 +1912,13 @@ def cmd_replay(args) -> int:
           f"{plan.chars_per_token:.3g} chars per token"
           + (" (until measured from the server's prompt token counts)"
              if cpt_source == "default" else ""))
+    print(f"  KV block {plan.kv_block_tokens:,} tokens ("
+          + {"given": "--kv-block-tokens",
+             "/metrics": "from /metrics"}.get(
+              plan.kv_block_source,
+              "default: /metrics did not say; raised to the block the "
+              "replies' cached tokens come in")
+          + ")")
     cp = capped_requests(trace, plan.context_cap_tokens)
     if cp["requests"]:
         print(f"  {cp['requests']:,} of {cp['of']:,} recorded requests "
@@ -2028,10 +2087,12 @@ def add_subparser(sub) -> None:
                         "request exists, no compaction or reset lies "
                         "between, and it adds at most this many new tokens "
                         "(default %(default)s)")
-    g.add_argument("--kv-block-tokens", type=int, default=KV_BLOCK_TOKENS,
+    g.add_argument("--kv-block-tokens", type=int, default=None,
                    help="the server's KV cache block size: the shared prefix "
                         "rounds down to it and the eviction test tolerates "
-                        "one block (default %(default)s)")
+                        "one block (default: block_size from /metrics, else "
+                        f"{KV_BLOCK_TOKENS}; raised to the block the replies' "
+                        "cached tokens come in)")
     g.add_argument("--min-decode-tok-s", type=float, default=MIN_DECODE_TOK_S,
                    help="p10 decode speed per request, (output - 1) / (last "
                         "- first token time), over requests of at least "

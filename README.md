@@ -112,10 +112,14 @@ uv run ws report run.json                 # re-print it
      (`--max-eviction-share`). A request is warm when its session's previous
      request exists, no compaction lies between, and it adds at most 8192
      tokens (`--warm-new-tokens`). The replay knows what it sent, so the
-     tokens a request shares with its session's previous prompt (rounded down
-     to a `--kv-block-tokens` block, 16) are what the server should have
-     cached. It is an eviction when `usage.prompt_tokens_details.cached_tokens`
-     is more than a block short. vLLM reports that with
+     tokens a request shares with its session's previous prompt, rounded down
+     to the server's KV block, are what the server should have cached. It is
+     an eviction when `usage.prompt_tokens_details.cached_tokens` is more than
+     a block short. The block is `block_size` from `/metrics`
+     (`vllm:cache_config_info`), else 16, or `--kv-block-tokens`; the check
+     raises it to the block the replies' cached tokens come in (1,600 on a
+     hybrid model), so a wrong block cannot turn every request into an
+     eviction. vLLM reports that with
      `--enable-prompt-tokens-details`; a server that does not leaves the check
      "unknown", with a warning, and it does not gate.
    - The p90 time to first token of warm requests is at most 3 s

@@ -53,6 +53,30 @@ def test_one_block_short_is_not_an_eviction_two_are():
     assert _judge(_warm(5, cached=975)).evictions == 5
 
 
+def test_a_server_caching_in_big_blocks_is_not_read_as_evicting():
+    # a hybrid model caches in 1,600-token blocks: every warm request comes
+    # back up to 1,599 tokens short of the shared prefix, which is no eviction
+    rows = [_r(turn=k, cached=1600 * (10 + k), expected=1600 * (10 + k) + 900)
+            for k in range(10)]
+    s = _judge(rows)
+    assert s.kv_block_tokens == 1600 and s.evictions == 0
+    # ...while a lost prefix still is
+    rows[0].cached = 1600
+    assert _judge(rows).evictions == 1
+
+
+def test_too_few_distinct_cached_values_leave_the_block_alone():
+    assert _judge(_warm(20, cached=1000)).kv_block_tokens == B.KV_BLOCK_TOKENS
+
+
+def test_the_block_size_is_read_from_cache_config_info():
+    text = ('# HELP vllm:cache_config_info x\n'
+            'vllm:cache_config_info{block_size="1600",cache_dtype="fp8",'
+            'enable_prefix_caching="True",num_gpu_blocks="18788"} 1.0\n')
+    assert B.block_from_metrics(text) == 1600
+    assert B.block_from_metrics("vllm:num_requests_running 0\n") is None
+
+
 def test_evictions_over_one_percent_fail_and_are_named():
     rows = _warm(98, cached=1000) + _warm(2, cached=0)
     s = _judge(rows)
@@ -329,7 +353,8 @@ def _endpoint_fake(per_token=0.005, evict=False, report=True, on_request=None,
     return handler
 
 
-def _run(tmp_path, monkeypatch, handler, *extra, urls=("http://fake/v1",)):
+def _run(tmp_path, monkeypatch, handler, *extra, urls=("http://fake/v1",),
+         block=None):
     path = tmp_path / "trace.json"
     path.write_text(json.dumps(_trace().to_dict()))
     load_trace.cache_clear()
@@ -339,6 +364,9 @@ def _run(tmp_path, monkeypatch, handler, *extra, urls=("http://fake/v1",)):
     monkeypatch.setattr(B, "CALIBRATE_REQUESTS", 10)
     monkeypatch.setattr("workingset.test_cmd.open_metrics",
                         lambda *a, **k: None)      # no /metrics behind a fake
+    asked = []
+    monkeypatch.setattr(B, "read_block_size",
+                        lambda url, h: asked.append(url) or block)
     out = tmp_path / "run.json"
     flags = [f for u in urls for f in ("--base-url", u)]
     rc = main(["replay", str(path), *flags, "--ramp-s", "0.05", "--min-samples", "1",
@@ -359,6 +387,21 @@ def test_a_server_that_keeps_its_cache_passes_every_check(
     assert warm and all(r["cached"] is not None and r["expected"] > 0
                         for r in warm)
     assert "within evictions <= 1.0% of warm requests" in capsys.readouterr().out
+
+
+def test_the_block_size_comes_from_metrics_unless_given(
+        tmp_path, monkeypatch, capsys):
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1",
+               block=1600)
+    assert (rec["plan"]["kv_block_tokens"], rec["plan"]["kv_block_source"]) \
+        == (1600, "/metrics")
+    assert "KV block 1,600 tokens (from /metrics)" in capsys.readouterr().out
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1",
+               "--kv-block-tokens", "32", block=1600)
+    assert (rec["plan"]["kv_block_tokens"], rec["plan"]["kv_block_source"]) \
+        == (32, "given")
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1")
+    assert rec["plan"]["kv_block_source"] == "default"
 
 
 def test_a_server_that_forgets_the_prefix_fails_on_evictions(
