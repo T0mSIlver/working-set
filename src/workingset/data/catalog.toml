@@ -572,11 +572,14 @@ speculative_config = '{"method":"dspark","num_speculative_tokens":5,"draft_sampl
 # with a ratio-4 compressed fp8 indexer, budget 2048). Only the routed
 # experts and the n-gram table are FP8 in the serving checkpoint — the
 # always-active blocks stay BF16, so the shared per-step read is heavy
-# (8.6 GB) while the cache is light (12.4 KiB/token). Deepest expert-union
+# (8.6 GB) while the cache is light (13.4 KiB/token). Deepest expert-union
 # kink in the study: n = 512/10 = 51.2. research/model_qwen38flashnext.md.
 [models.Q38FN]
 name = "Qwen3.8-Flash-Next (MoE 125B-A6B, QSA+n-gram)"
-kv_bpt = 12_672                  # 12 attn x 2 KV x 256 x 2(K,V) x 1B + 12 x 128/4 indexer
+kv_bpt = 13_741                  # 13 attn (12 + the MTP layer) x 2 KV x 256 x 2(K,V) x 1B
+                                 # + 13 x 132/4 indexer (128 fp8 + 4 B fp32 scale per entry)
+                                 # = 13,312 + 429; decode (kv_decode_*) excludes the MTP layer
+kv_index_bpt = 429               # the single-head indexer share of kv_bpt: replicates x tp
 deltanet_state = 59_572_224      # 36 DN layers x 48 vheads x 128x128 bf16 + conv (10,240 x 4)
 w_resident = 185_502_232_570     # FP8 ckpt metadata.total_size, shard-header-verified
 w_decode_shared = 8_623_999_000  # exact per-tensor ledger sum — BF16 always-active:
@@ -626,7 +629,7 @@ aa = "qwen3-8-flash-next"
 
 [models.Q38FN.explorer]
 short = "Q3.8-Flash"
-tip = "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 12.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN."
+tip = "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 13.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN."
 
 # vLLM recipe: plain TP8 is incompatible with the FP8 checkpoint (128-wide quantization blocks), so TP8 must run as TEP8
 [[models.Q38FN.explorer.recipe]]

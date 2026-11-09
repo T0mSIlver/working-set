@@ -1,5 +1,5 @@
 import { ACT_RESERVE, AVG_OUT_TOK, CONFIG, GIB, PREFILL_MFU, clampTp, divisors,
-         dcpSize, effective_bw, kvReplication, kv_pool_tokens, makeGrid, makeTopo, minTpFor,
+         dcpSize, effective_bw, kvReplication, kv_pool_tokens, replicated, makeGrid, makeTopo, minTpFor,
          servableKv, state_traffic, tokensPerStep, tpEff, withGpu, withKvDtype, draftPasses } from './config.js';
 import { PREFILL_CHUNK, REF_REQ_RATE, SPIKE_SLA_S, WARM_TURN_TOK, capacityLimit, coldRequestSeconds,
          contextStats, liveThink, liveTurn, maxUsersColdWait, maxUsersLatency, maxUsersSaturation,
@@ -140,6 +140,15 @@ export function unitChecks(){
     && kvReplication(CONFIG.MODELS["GLM52"], makeGrid(1,3,"B300","replicate"))[0] === 3
     && dcpSize(CONFIG.MODELS["27B"], makeGrid(1,6,"B300")) === 1,
     "odd TP: one copy under dcp (extrapolated), the continuous ratio under replicate");
+  {
+    // single-head index cache: x tp under replicate, the 2-head attention KV x tp/2
+    const q = CONFIG.MODELS["Q38FN"], qr = replicated(q, makeGrid(1,4,"B300","replicate"));
+    console.assert(qr.kv_bpt === 2*(q.kv_bpt - q.kv_index_bpt) + 4*q.kv_index_bpt
+      && qr.kv_decode_bpt === 4*q.kv_decode_bpt && qr.kv_decode_const === 2*q.kv_decode_const
+      && replicated(q, makeGrid(1,4,"B300")).kv_bpt === q.kv_bpt
+      && withKvDtype(q, "fp16").kv_index_bpt === 2*q.kv_index_bpt,
+      "Q38FN replicate: index cache x tp, attention KV x tp/2; dcp one copy");
+  }
   {
     const glm = CONFIG.MODELS["GLM52"], b8 = makeGrid(1,8,"B300"), b8r = makeGrid(1,8,"B300","replicate");
     console.assert(approx(kv_pool_tokens(glm, b8r)*8, kv_pool_tokens(glm, b8), 1e-12),
@@ -343,7 +352,7 @@ export function unitChecks(){
     "DSV41F NVFP4: only the routed experts move, repacked heavier (E4M3 block-16 scales)");
   // Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md; mirror _selfcheck)
   const q38 = CONFIG.MODELS["Q38FN"];
-  console.assert(q38.kv_bpt === 12*2*256*2 + 12*128/4,
+  console.assert(q38.kv_bpt === 13*2*256*2 + 13*132/4,
     "Q38FN kv_bpt = 12 attn layers' KV + ratio-4 compressed indexer keys");
   console.assert(q38.deltanet_state === 36*48*128*128*2 + 36*10240*4*2,
     "Q38FN per-session state = bf16 DeltaNet SSM + conv state");

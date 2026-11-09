@@ -388,7 +388,7 @@ def main():
     print("\n== Qwen3.8-Flash-Next sparse decode: QSA pricing vs dense-read ==")
     print("  the indexer scans ratio-4 compressed fp8 keys (384 B/ctx token) and")
     print("  attention reads full KV for only the top-2048 selected tokens; the")
-    print("  dense-read row streams the whole 12.4 KiB/token cache instead.")
+    print("  dense-read row streams the whole 13.4 KiB/token cache instead.")
     q38_dense = dataclasses.replace(MODELS["Q38FN"], kv_decode_bpt=None,
                                     kv_decode_const=0.0)
     for n in (16, 64, 120):

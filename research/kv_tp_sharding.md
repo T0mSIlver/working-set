@@ -78,15 +78,13 @@ numbers keep the slider's multiplier — the MTP transplant is an unmeasured
 headroom assumption everywhere in the study, and the slider is where a
 reader takes it out (codex F3).
 
-**One approximation left in place (codex F6):** Qwen3.8-Flash-Next's
-cache has two components with different head counts — the GQA main K/V
-(2 heads, 12,288 B/token) and the compressed indexer keys (1 head,
-384 B/token). A single `kv_heads = 2` under-replicates the indexer: at
-TP8 the exact figures are 13,056 B/token under DCP (priced 12,672) and
-52,224 under plain TP (priced 50,688), 0.5–3% on the pool and 2.6% on the
-replicated per-user speed at n = 64. Splitting the two components would
-add a second head field to every model for one model's 3%; recorded
-instead.
+**Two head counts on one model (codex F6, now split out):**
+Qwen3.8-Flash-Next's cache has two components with different head
+counts — the GQA main K/V (2 heads) and the single-head compressed
+indexer keys. `Model.kv_index_bpt` holds the indexer share of `kv_bpt`;
+under "replicate" it is multiplied by tp, the rest by tp / kv_heads, and
+the indexer scan in `kv_decode_bpt` follows the indexer. "dcp" is
+unchanged. Only Q38FN sets it; the MLA models are single-head throughout.
 
 ## 4. What replication costs (reference workload, fp8 KV)
 

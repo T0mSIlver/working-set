@@ -356,6 +356,12 @@ class Model:
     # kv_replication() turns this into the factor the pool and the per-step
     # KV reads are multiplied by. research/kv_tp_sharding.md.
     kv_heads: int = 1
+    # The part of kv_bpt held by a SINGLE-head index cache (a QSA/DSA
+    # indexer's compressed keys). Under "replicate" every TP rank keeps a full
+    # copy of it (factor tp), while the attention KV with kv_heads heads
+    # replicates only tp / kv_heads. 0 = none split out (the MLA models'
+    # whole cache is already one head, so it replicates x tp as a whole).
+    kv_index_bpt: float = 0.0
     # Same for the per-session recurrent / fixed state: None = it shards
     # across the TP ranks at every tp the study prices (DeltaNet / KDA value
     # heads, 32-64 of them); the DeepSeek Flash models' windows are the single
@@ -508,6 +514,7 @@ def with_kv_dtype(model: Model, kv_dtype: str) -> Model:
     # (≤3% on Q38FN, ≤6% on GLM-5.3-Flash) over-doubles, a conservative
     # slack flagged in each model's note.
     return replace(model, kv_bpt=model.kv_bpt * 2,
+                   kv_index_bpt=model.kv_index_bpt * 2,
                    kv_decode_const=model.kv_decode_const * 2,
                    kv_dtype="fp16", name=model.name + " [FP16 KV]")
 
@@ -749,19 +756,26 @@ def dcp_size(model: Model, topo: Topology) -> int:
     return max(1, topo.tp // max(1, model.kv_heads))
 
 
+def _index_replication(model: Model, topo: Topology) -> float:
+    """Copies of a single-head index cache: every rank keeps one under
+    "replicate" (tp), a "dcp" group stores one."""
+    return float(topo.tp) if topo.kv_shard == "replicate" and topo.tp > 1 else 1.0
+
+
 def _replicated(model: Model, topo: Topology) -> Model:
     """The model with its cache and state bytes multiplied by the copies the
     group holds — what the pool and the decode step actually pay. Internal:
     kv_pool_tokens, warm_capacity and decode_curves apply it to the CALLER'S
     model, and nothing returns it, so it cannot be applied twice."""
     r_kv, r_st = kv_replication(model, topo)
-    if r_kv == 1.0 and r_st == 1.0:
+    if r_kv == 1.0 and r_st == 1.0 and (model.kv_index_bpt <= 0 or topo.kv_shard == "dcp"):
         return model
+    r_ix = _index_replication(model, topo) if model.kv_index_bpt > 0 else r_kv
     return replace(
         model,
-        kv_bpt=model.kv_bpt * r_kv,
+        kv_bpt=(model.kv_bpt - model.kv_index_bpt) * r_kv + model.kv_index_bpt * r_ix,
         kv_decode_bpt=(None if model.kv_decode_bpt is None
-                       else model.kv_decode_bpt * r_kv),
+                       else model.kv_decode_bpt * r_ix),
         kv_decode_const=model.kv_decode_const * r_kv,
         deltanet_state=model.deltanet_state * r_st,
         state_step_bytes=(None if model.state_step_bytes is None
@@ -3964,6 +3978,17 @@ def _selfcheck():
     assert kv_replication(m27, topology_grid(1, 6, "B300", "replicate"))[0] == 1.5
     assert kv_replication(glm, topology_grid(1, 3, "B300", "replicate"))[0] == 3.0
     assert dcp_size(m27, topology_grid(1, 6, "B300")) == 1
+    # a single-head index cache replicates x tp under "replicate", the
+    # 2-head attention KV only x tp/2; "dcp" stores one copy of both
+    q38c = MODELS["Q38FN"]
+    attn_b = q38c.kv_bpt - q38c.kv_index_bpt
+    q38r = _replicated(q38c, topology_grid(1, 4, "B300", "replicate"))
+    assert q38r.kv_bpt == 2 * attn_b + 4 * q38c.kv_index_bpt
+    assert q38r.kv_decode_bpt == 4 * q38c.kv_decode_bpt
+    assert q38r.kv_decode_const == 2 * q38c.kv_decode_const
+    assert _replicated(q38c, topology_grid(1, 4, "B300")).kv_bpt == q38c.kv_bpt
+    assert _replicated(q38c, topology_grid(1, 1, "B300", "replicate")).kv_bpt == q38c.kv_bpt
+    assert with_kv_dtype(q38c, "fp16").kv_index_bpt == 2 * q38c.kv_index_bpt
     # the pool of a replicated group divides by the factor, the host offload
     # buffer does not (one copy), and the per-step KV read grows by it
     b8r = topology_grid(1, 8, "B300", "replicate")
@@ -3989,7 +4014,8 @@ def _selfcheck():
 
     # Qwen3.8-Flash-Next identities (research/model_qwen38flashnext.md)
     q38 = MODELS["Q38FN"]
-    assert q38.kv_bpt == 12 * 2 * 256 * 2 + 12 * 128 / 4        # KV + compressed indexer
+    assert q38.kv_bpt == 13 * 2 * 256 * 2 + 13 * 132 / 4        # KV + compressed indexer, MTP layer incl.
+    assert q38.kv_index_bpt == 13 * 132 / 4                     # the single-head indexer share
     assert q38.deltanet_state == 36 * 48 * 128 * 128 * 2 + 36 * 10_240 * 4 * 2
     assert q38.w_route_pertok == 10 * 4_915_800 * 48            # FP8 experts + block scales
     assert q38.w_route_total == 512 * 4_915_800 * 48

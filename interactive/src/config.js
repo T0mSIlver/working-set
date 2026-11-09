@@ -222,7 +222,8 @@ export function withKvDtype(m, kv){
   if (m.kv_gpu)
     throw new Error(`${m.name}: withKvDtype must run before withGpu`);
   if (kv !== "fp16" || m.kv_fp16_ok === false) return m;
-  return { ...m, kv_bpt: m.kv_bpt*2, kv_decode_const: (m.kv_decode_const||0)*2,
+  return { ...m, kv_bpt: m.kv_bpt*2, kv_index_bpt: (m.kv_index_bpt||0)*2,
+           kv_decode_const: (m.kv_decode_const||0)*2,
            kv_dtype: "fp16", name: m.name + " [FP16 KV]" };
 }
 // The FP8 cache row this GPU serves (mirrors with_gpu). Identity for every
@@ -356,10 +357,13 @@ export function dcpSize(m, topo){
 // caller, so it cannot be applied twice.
 export function replicated(m, topo){
   const [rKv, rSt] = kvReplication(m, topo);
-  if (rKv === 1.0 && rSt === 1.0) return m;
+  const ix = m.kv_index_bpt || 0;
+  // a single-head index cache keeps a full copy on every rank under "replicate"
+  const rIx = ix > 0 ? (((topo.kv_shard || "dcp") === "replicate" && topo.tp > 1) ? topo.tp : 1.0) : rKv;
+  if (rKv === 1.0 && rSt === 1.0 && rIx === 1.0) return m;
   return { ...m,
-    kv_bpt: m.kv_bpt * rKv,
-    kv_decode_bpt: (m.kv_decode_bpt === undefined || m.kv_decode_bpt === null) ? m.kv_decode_bpt : m.kv_decode_bpt * rKv,
+    kv_bpt: (m.kv_bpt - ix) * rKv + ix * rIx,
+    kv_decode_bpt: (m.kv_decode_bpt === undefined || m.kv_decode_bpt === null) ? m.kv_decode_bpt : m.kv_decode_bpt * rIx,
     kv_decode_const: (m.kv_decode_const ?? 0) * rKv,
     deltanet_state: m.deltanet_state * rSt,
     state_step_bytes: (m.state_step_bytes === undefined || m.state_step_bytes === null) ? m.state_step_bytes : m.state_step_bytes * rSt };
