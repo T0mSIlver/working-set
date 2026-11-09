@@ -465,7 +465,9 @@ async def mixed_window(ep: Endpoint, args, pr: Prompts, n: int, st: Streams,
          "prompt_tokens_mean": sum(pt) / len(pt) if pt else None,
          "server": server_window(ep.ad, sa, sb, dt),
          "mixed": summarize(per),
-         "running": {k: (min(v), sum(v) / len(v), max(v)) for k, v in gauges.items() if v}}
+         "running": {k: (min(v), sum(v) / len(v), max(v))
+                     for k, v in gauges.items() if isinstance(v, list) and v},
+         "scrape_errors": gauges.get("scrape_errors", 0)}
     if kind == "tokens":
         w["prefill_tokens"] = value
     else:

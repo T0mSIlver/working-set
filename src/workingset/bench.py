@@ -61,7 +61,7 @@ from dataclasses import MISSING, asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
-from .agent_trace import PARK_S, AgentTrace
+from .agent_trace import DEFAULT_GAP_POLICY, GAP_POLICIES, PARK_S, AgentTrace
 from .probe.options import ProbeOptions
 from .probe.replay import ReplaySession, load_trace, root_sessions
 from .probe.request import (EndpointSpec, RequestTrace, make_client,
@@ -1001,6 +1001,7 @@ class Plan:
     # also raises it to the block the replies show (block_from_replies)
     kv_block_source: str = "given"
     eviction_check: bool = True         # False: --skip-eviction-check
+    gap_policy: str = DEFAULT_GAP_POLICY  # --replay-gap-policy
     routing: str = "sticky"             # with several URLs
     output_scale: float = 1.0
     chat_rate: float = 0.0              # background chat requests per second
@@ -1057,7 +1058,8 @@ def _seat(trace: AgentTrace, plan: Plan, prefix_text: str, uid: int,
                  text_rng=random.Random(f"bench-text {plan.seed} {uid} "
                                         f"{run_nonce}"),
                  roots=root_sessions(trace), start=start,
-                 output_scale=plan.output_scale)
+                 output_scale=plan.output_scale,
+                 gap_policy=plan.gap_policy)
 
 
 def _prefix_text(plan: Plan) -> str:
@@ -1376,6 +1378,10 @@ async def run_step(client, ep, plan: Plan, trace: AgentTrace, n: int,
         for t in still:
             t.cancel()
         await asyncio.gather(*still, return_exceptions=True)
+    # a seat that died stopped sending load: the step would be underloaded
+    for t in tasks + forest.tasks + chat_tasks:
+        if t.done() and not t.cancelled() and t.exception() is not None:
+            raise t.exception()
     step = Step(sessions=n, rows=rows, chat_rows=chat_rows, drain_s=drain_s,
                 window=(plan.ramp_s, plan.ramp_s + measured),
                 n_urls=len(ep) if isinstance(ep, Router) else 1)
@@ -1660,8 +1666,10 @@ def rule_words(plan: dict) -> str:
     checks held the turn slowdown and 5% failed requests."""
     if "max_warm_ttft_s" not in plan:
         return (f"p{PERCENTILE} turn <= {plan['max_slowdown']:g}x alone")
-    words = (f"evictions <= {plan['max_eviction_share']:.1%} of warm "
-             f"requests, warm time to first token p{PERCENTILE} <= "
+    ev = (f"evictions <= {plan['max_eviction_share']:.1%} of warm requests"
+          if plan.get("eviction_check", True) else
+          "evictions NOT checked (--skip-eviction-check)")
+    words = (f"{ev}, warm time to first token p{PERCENTILE} <= "
              f"{plan['max_warm_ttft_s']:g} s, decode speed p10 >= "
              f"{plan['min_decode_tok_s']:g} tok/s, failed requests <= "
              f"{plan['max_failed_share']:.1%}")
@@ -1932,6 +1940,13 @@ def cmd_replay(args) -> int:
     if "error" in info:
         return fail(f"GET {base}/models failed ({info['error']}): check "
                     "--base-url and --api-key-env")
+    from .agent_trace import INACTIVE, think_pool
+    if (args.replay_gap_policy == "sample" and not think_pool(trace)
+            and any(r.kind in INACTIVE and r.gap_s is not None
+                    for s in trace.sessions for r in s)):
+        return fail("the gap policy 'sample' draws inactive gaps from the "
+                    "trace's think gaps, and this trace has none: pass "
+                    "--replay-gap-policy cap or drop")
     cap = args.max_model_len or info.get("max_model_len")
     if not cap:
         return fail(f"{base}/models gives no max_model_len: pass "
@@ -1977,6 +1992,7 @@ def cmd_replay(args) -> int:
                 warm_new_tokens=args.warm_new_tokens,
                 kv_block_tokens=block, kv_block_source=block_source,
                 eviction_check=not args.skip_eviction_check,
+                gap_policy=args.replay_gap_policy,
                 routing=args.routing or "sticky",
                 output_scale=args.output_scale, chat_rate=args.chat_rate,
                 chat_prompt_tokens=args.chat_prompt_tokens,
@@ -2248,6 +2264,12 @@ def add_subparser(sub) -> None:
                    help="the server's Prometheus /metrics, to say what ran "
                         "out. Repeat it once per --base-url, in the same "
                         "order")
+    p.add_argument("--replay-gap-policy", choices=GAP_POLICIES,
+                   default=DEFAULT_GAP_POLICY,
+                   help="what an inactive gap (an error, a resume, an idle "
+                        "wait) becomes: sample a think gap from the trace, "
+                        "cap the recorded wait, or drop it (default "
+                        "%(default)s)")
     p.add_argument("--no-metrics", action="store_true",
                    help="run without /metrics (by default each base URL's "
                         "own /metrics is read, and the run stops if it does "

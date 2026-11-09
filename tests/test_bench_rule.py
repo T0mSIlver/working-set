@@ -468,6 +468,7 @@ def test_a_server_without_cached_tokens_stops_the_run_unless_skipped(
                "--max-sessions", "1", "--skip-eviction-check")
     assert rec["steps"][0]["checks"]["evictions"]["status"] == "skipped"
     assert rec["steps"][0]["passed"]
+    assert "evictions NOT checked" in B.headline(rec)
 
 
 def test_decode_speed_gates_a_run(tmp_path, monkeypatch):
@@ -637,3 +638,30 @@ def test_one_router_url_reads_every_replica_metrics(tmp_path, capsys,
                  "--metrics-url", "http://pod-b:8000/metrics",
                  "--dry-run"]) == 2
     assert "disagree on the KV block" in capsys.readouterr().err
+
+
+def test_a_trace_without_think_gaps_needs_another_gap_policy(
+        tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.json"
+    s = tuple([TraceRequest(1000, 10, None, "user")]
+              + [TraceRequest(1000 + 100 * k, 10, 5.0, "tool", kind="idle")
+                 for k in range(1, 4)])
+    path.write_text(json.dumps(AgentTrace("pi", (s,)).to_dict()))
+    load_trace.cache_clear()
+    monkeypatch.setattr(B, "_endpoint_info",
+                        lambda *a: {"model": "m", "max_model_len": 1_000_000})
+    monkeypatch.setattr(B, "read_metrics", lambda u, h: FAKE_METRICS)
+    assert main(["replay", str(path), "--dry-run"]) == 2
+    assert "--replay-gap-policy cap or drop" in capsys.readouterr().err
+    assert main(["replay", str(path), "--dry-run",
+                 "--replay-gap-policy", "cap"]) == 0
+
+
+def test_a_seat_that_dies_stops_the_run_instead_of_underloading_the_step(
+        tmp_path, monkeypatch, capsys):
+    def die(self, *a, **k):
+        raise ValueError("seat died")
+    monkeypatch.setattr(B._Seat, "think_s", die)
+    _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1",
+         rc=3)
+    assert "seat died" in capsys.readouterr().err

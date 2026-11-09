@@ -740,7 +740,7 @@ def replay_gap(r: TraceRequest, policy: str, max_gap_s: float, rng,
 
 NO_THINK_POOL = ("the gap policy 'sample' draws inactive gaps from the "
                  "trace's think gaps, and this trace has none: use "
-                 "--replay-gap-policy keep or drop")
+                 "--replay-gap-policy cap or drop")
 
 
 def mean_gap(trace: AgentTrace, policy: str = DEFAULT_GAP_POLICY,
