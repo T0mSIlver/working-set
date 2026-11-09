@@ -44,19 +44,26 @@ count: 180.00e9 on disk − 51.20e9 n-gram − 2.61e9 MTP − 0.45e9 vision =
 DSv4-Flash's `num_nextn_predict_layers`; no constant depends on it — MTP
 reads are never priced).
 
-## 2. KV bytes per token — 12 QSA layers + a compressed indexer axis
+## 2. KV bytes per token — 12 QSA layers + the MTP layer, and a compressed indexer axis
 
-Only the 12 full-attention layers cache K/V; the 36 DeltaNet layers hold a
+Only the 12 full-attention layers (plus the MTP draft layer, itself a
+full-attention QSA layer with its indexer) cache K/V; the 36 DeltaNet layers hold a
 fixed recurrent state (§ 3). The QSA indexer additionally caches its selection
 keys on a **ratio-4 compressed axis** (`indexer_compress_ratio: 4`, 1 kv head
 × 128 dims), the same construction as DSv4-Flash's CSA indexer:
 
 ```
 kv_bpt (fp8 KV + fp8 compressed indexer keys, per token):
-  full-attn KV   12 layers x 2 KV heads x 256 x 2 (K,V) x 1 B = 12,288
-  indexer keys   12 layers x 128 B / 4                         =    384
+  full-attn KV   13 layers x 2 KV heads x 256 x 2 (K,V) x 1 B = 13,312
+  indexer keys   13 layers x 132 B / 4                         =    429
   ------------------------------------------------------------------------
-  TOTAL                                                        = 12,672 B/token (12.4 KiB)
+  TOTAL                                                        = 13,741 B/token (13.4 KiB)
+
+Earlier versions counted 12 layers and 128 B per indexer entry (12,672). The
+MTP layer's cache is allocated by the server, and an indexer entry carries a
+4-B fp32 scale (132 B, as GLM's). `kv_index_bpt` = 429 is the single-head
+indexer share, which plain TP replicates x tp (the 2-head attention KV only
+x tp/2). Decode (`kv_decode_*`) still counts the 12 main layers.
 
 deltanet_state (fixed per session, bf16 recurrent state):
   SSM state  36 layers x 48 vheads x 128 x 128 x 2 B = 56,623,104
@@ -191,7 +198,7 @@ the option out. Revisit if NVIDIA ships an official recipe.
   the recipe's opt-in host offload needs ≥51 GB of host RAM plus headroom).
   Offloaded, `w_resident` drops by 51.2e9 B (≈ 28%) and the H200 min-TP
   story does not change (134.3e9 still exceeds one GPU's 121.7e9 budget); a
-  B300 gains ~4.0M pool tokens (51,200,245,762 / 12,672). Conservative
+  B300 gains ~4.0M pool tokens (51,200,245,762 / 13,741). Conservative
   direction: resident (biases capacity DOWN). § 6.
 - **Speculative decoding:** in-checkpoint MTP (1 hybrid layer, "trained with
   multi-steps"); the vLLM recipe runs `{"method":"mtp",

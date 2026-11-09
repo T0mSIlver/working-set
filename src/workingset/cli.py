@@ -153,6 +153,7 @@ def _apply_overrides(cfg: RunConfig, args) -> RunConfig:
                              ("tensor_parallel", args.tp), ("replicas", args.dp),
                              ("weight_dtype", args.weight_dtype),
                              ("kv_dtype", args.kv_dtype),
+                             ("kv_sharding", getattr(args, "kv_sharding", None)),
                              ("max_num_batched_tokens", args.chunk),
                              ("max_model_len", args.max_model_len),
                              ("max_num_seqs", args.max_num_seqs),
@@ -257,6 +258,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="output path ('-' for stdout); default "
                         "workingset.toml, or workingset.json with --json")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--kv-sharding", choices=M.KV_SHARDS,
+                   help="dcp (default; decode context parallelism, one copy of "
+                        "the KV) or replicate (plain --tensor-parallel-size)")
     _add_deploy_flags(p)
     p.set_defaults(fn=cmd_init)
 

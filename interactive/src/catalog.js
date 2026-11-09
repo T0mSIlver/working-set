@@ -379,7 +379,8 @@ export const CATALOG = {
   },
   "Q38FN": {
    "name": "Qwen3.8-Flash-Next (MoE 125B-A6B, QSA+n-gram)",
-   "kv_bpt": 12672,
+   "kv_bpt": 13741,
+   "kv_index_bpt": 429,
    "deltanet_state": 59572224,
    "w_resident": 185502232570,
    "w_decode_shared": 8623999000,
@@ -419,7 +420,7 @@ export const CATALOG = {
    },
    "explorer": {
     "short": "Q3.8-Flash",
-    "tip": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 12.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN.",
+    "tip": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 13.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN.",
     "recipe": [
      {
       "when": {
@@ -668,6 +669,7 @@ export const CATALOG = {
    "kv_fp8_blackwell_only": false,
    "state_fp32_ok": true,
    "kv_heads": 1,
+   "kv_index_bpt": 0.0,
    "max_ctx": 262144,
    "params_prefill": 0.0,
    "attn_layers": 0,

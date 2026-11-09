@@ -886,27 +886,6 @@
    "hypothesis": "follows moments_miss_sq or the queue's onset on the same state; JS draws reseeded (WS-10)"
   },
   {
-   "quantity": "power_d_d",
-   "where": {
-    "model": "Q38FN",
-    "gpu": "B300",
-    "wdt": "fp8",
-    "kv": "fp16",
-    "ngpu": 6,
-    "tp": 1,
-    "users": 16,
-    "inval": 35.0,
-    "chunk": "8192",
-    "_duty": {
-     "gte": 0.0279,
-     "lt": 0.0296
-    }
-   },
-   "observed_rel": 0.0658,
-   "max_rel": 0.079,
-   "hypothesis": "decode duty reads the decode p50 at the steady batch on a lightly loaded DP replica; JS draws reseeded (WS-10)"
-  },
-  {
    "quantity": "steady_saturated",
    "where": {
     "model": "MM35",
@@ -986,27 +965,6 @@
    "observed_rel": 0.1016,
    "max_rel": 0.122,
    "hypothesis": "past the knee at prefill duty > 1 on Mistral-Medium's small warm pool, the capacity-aware fixed point moves in whole sessions; JS draws reseeded (WS-10)"
-  },
-  {
-   "quantity": "power_per_gpu_w",
-   "where": {
-    "model": "Q38FN",
-    "gpu": "B300",
-    "wdt": "fp8",
-    "kv": "fp16",
-    "ngpu": 3,
-    "tp": 3,
-    "users": 400,
-    "inval": 35.0,
-    "chunk": "4096",
-    "_duty": {
-     "gte": 0.6091,
-     "lt": 0.6468
-    }
-   },
-   "observed_rel": 0.0203,
-   "max_rel": 0.025,
-   "hypothesis": "follows the decode duty on the same state, just past a 2% band; JS draws reseeded (WS-10)"
   },
   {
    "quantity": "max_users_saturation",
@@ -1105,20 +1063,280 @@
    "hypothesis": "Monte-Carlo noise at the band's edge: 5.94% on one state whose vector is unchanged, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 6.1% to 5.9% (2026-11-05)."
   },
   {
-   "quantity": "power_d_d",
+   "quantity": "cache_hit_rate",
    "where": {
-    "model": "Q38FN",
+    "model": "MM35",
     "gpu": "H200",
     "wdt": "fp8",
     "kv": "fp16",
-    "ngpu": 4,
-    "tp": 2,
-    "chunk": "4096",
-    "eta": 0.3
+    "ngpu": 6,
+    "tp": 3,
+    "users": 128,
+    "inval": 3,
+    "chunk": "8192",
+    "ram": 256,
+    "cap": 262,
+    "eta": 0.2,
+    "mfu": 0.55,
+    "user_median": 31,
+    "think": 90
    },
-   "observed_rel": 0.0508,
-   "max_rel": 0.052,
-   "hypothesis": "Monte-Carlo noise at the band's edge: 5.08% on one state whose vector is unchanged, now past the band the Kimi-K3.1-Pro probe entry narrowed from 5.1% to 4.6% (2026-11-05)."
+   "observed_rel": 0.1632,
+   "max_rel": 0.167,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "max_users_cold_wait",
+   "where": {
+    "model": "MM35",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 6,
+    "tp": 3,
+    "users": 128,
+    "inval": 3,
+    "chunk": "8192",
+    "ram": 256,
+    "cap": 262,
+    "eta": 0.2,
+    "mfu": 0.55,
+    "user_median": 31,
+    "think": 90
+   },
+   "observed_rel": 0.1568,
+   "max_rel": 0.16,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "max_users_cache",
+   "where": {
+    "model": "MM35",
+    "gpu": "H200",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 6,
+    "tp": 3,
+    "users": 128,
+    "inval": 3,
+    "chunk": "8192",
+    "ram": 256,
+    "cap": 262,
+    "eta": 0.2,
+    "mfu": 0.55,
+    "user_median": 31,
+    "think": 90
+   },
+   "observed_rel": 0.1632,
+   "max_rel": 0.167,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "ttft_hit_fcfs",
+   "where": {
+    "model": "Q38FN",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 2,
+    "tp": 1,
+    "users": 128,
+    "inval": 3,
+    "chunk": "16384",
+    "ram": 0,
+    "cap": 180,
+    "eta": 0.4,
+    "mfu": 0.45,
+    "user_median": 60,
+    "think": 45
+   },
+   "observed_rel": 0.078,
+   "max_rel": 0.081,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states after Q38FN's kv_bpt change, and this state's draw sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "power_per_gpu_w",
+   "where": {
+    "model": "Q38FN",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 2,
+    "tp": 1,
+    "users": 128,
+    "inval": 3,
+    "chunk": "16384",
+    "ram": 0,
+    "cap": 180,
+    "eta": 0.4,
+    "mfu": 0.45,
+    "user_median": 60,
+    "think": 45
+   },
+   "observed_rel": 0.0228,
+   "max_rel": 0.026,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states after Q38FN's kv_bpt change, and this state's draw sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "cache_hit_rate",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 1,
+    "tp": 1,
+    "users": 64,
+    "inval": 1,
+    "chunk": "32768",
+    "ram": 0,
+    "cap": 180,
+    "eta": 0.29,
+    "mfu": 0.45,
+    "user_median": 31,
+    "think": 30
+   },
+   "observed_rel": 0.1477,
+   "max_rel": 0.151,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "max_users_saturation",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 1,
+    "tp": 1,
+    "users": 64,
+    "inval": 1,
+    "chunk": "32768",
+    "ram": 0,
+    "cap": 180,
+    "eta": 0.29,
+    "mfu": 0.45,
+    "user_median": 31,
+    "think": 30
+   },
+   "observed_rel": 0.1193,
+   "max_rel": 0.123,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "max_users_cold_wait",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 1,
+    "tp": 1,
+    "users": 64,
+    "inval": 1,
+    "chunk": "32768",
+    "ram": 0,
+    "cap": 180,
+    "eta": 0.29,
+    "mfu": 0.45,
+    "user_median": 31,
+    "think": 30
+   },
+   "observed_rel": 0.1456,
+   "max_rel": 0.149,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "max_users_cache",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp8",
+    "ngpu": 1,
+    "tp": 1,
+    "users": 64,
+    "inval": 1,
+    "chunk": "32768",
+    "ram": 0,
+    "cap": 180,
+    "eta": 0.29,
+    "mfu": 0.45,
+    "user_median": 31,
+    "think": 30
+   },
+   "observed_rel": 0.1477,
+   "max_rel": 0.151,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "cache_hit_rate",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 7,
+    "tp": 1,
+    "users": 128,
+    "inval": 10,
+    "chunk": "32768",
+    "ram": 0,
+    "cap": 64,
+    "eta": 0.2,
+    "mfu": 0.55,
+    "user_median": 31,
+    "think": 15
+   },
+   "observed_rel": 0.1405,
+   "max_rel": 0.144,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "max_users_saturation",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 7,
+    "tp": 1,
+    "users": 128,
+    "inval": 10,
+    "chunk": "32768",
+    "ram": 0,
+    "cap": 64,
+    "eta": 0.2,
+    "mfu": 0.55,
+    "user_median": 31,
+    "think": 15
+   },
+   "observed_rel": 0.1104,
+   "max_rel": 0.114,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
+  },
+  {
+   "quantity": "max_users_cache",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "wdt": "fp8",
+    "kv": "fp16",
+    "ngpu": 7,
+    "tp": 1,
+    "users": 128,
+    "inval": 10,
+    "chunk": "32768",
+    "ram": 0,
+    "cap": 64,
+    "eta": 0.2,
+    "mfu": 0.55,
+    "user_median": 31,
+    "think": 15
+   },
+   "observed_rel": 0.1405,
+   "max_rel": 0.144,
+   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states and Q38FN's pool moved with its kv_bpt, so this state, whose vector is unchanged, sits just past the narrower band (2026-11-09)."
   }
  ]
 }
