@@ -394,10 +394,11 @@ def read_measured(run_dirs: list[str | Path]) -> dict:
             need = (tk.get("server_prompt_tokens"), tk.get("server_output_tokens"),
                     tk.get("server_cached_prompt_tokens"),
                     tm.get("time_to_first_token_ms"))
-            if any(v is None for v in need):
-                skipped += 1
-                continue
             e2e = tm["e2e_latency_ms"] / 1000
+            if any(v is None for v in need):
+                skipped += 1     # out of the rows, still in the lane's clock
+                t += e2e + (j.get("replayed_tool_delay_ms") or 0) / 1000
+                continue
             gen = (tm.get("generation_ms") or 0) / 1000
             out = tk["server_output_tokens"]
             lr.append({"task": j.get("task_id"),

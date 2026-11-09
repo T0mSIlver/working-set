@@ -46,7 +46,8 @@ def has_spec_decode(text: str) -> bool:
 
 
 def read_server(base_url: str, api_key: str, metrics_url: str | None,
-                headers: dict | None = None, engine: str | None = None) -> dict:
+                headers: dict | None = None, engine: str | None = None,
+                model: str | None = None) -> dict:
     """{"max_model_len", "model", "block_size", "pool_tokens",
     "prefix_caching", "spec_decode", "errors"}: each value None when the
     server does not give it, and `errors` says what could not be read."""
@@ -54,7 +55,7 @@ def read_server(base_url: str, api_key: str, metrics_url: str | None,
     s: dict = {"max_model_len": None, "model": "", "block_size": None,
                "pool_tokens": None, "prefix_caching": None,
                "spec_decode": None, "resolved": None, "errors": []}
-    info = _endpoint_info(base_url.rstrip("/"), api_key)
+    info = _endpoint_info(base_url.rstrip("/"), api_key, model)
     if "error" in info:
         s["errors"].append(f"GET {base_url}/models failed ({info['error']})")
     else:

@@ -1807,19 +1807,33 @@ def print_report(rec: dict, out=None) -> None:
 # ============================================================================
 # command
 # ============================================================================
-def _endpoint_info(base_url: str, api_key: str) -> dict:
+def _endpoint_info(base_url: str, api_key: str,
+                   model: str | None = None) -> dict:
     """The served model id and its max_model_len, from /models (vLLM lists
-    both). Empty when the endpoint does not answer."""
+    both): the entry for `model`, or the only one served. {"error": ...}
+    when the endpoint does not answer, does not serve `model`, or serves
+    several and none was named."""
     import httpx
     try:
         r = httpx.get(f"{base_url}/models", timeout=10.0, headers=(
             {"Authorization": f"Bearer {api_key}"} if api_key else {}))
         r.raise_for_status()
-        data = (r.json().get("data") or [{}])[0]
-        return {"model": data.get("id", ""),
-                "max_model_len": data.get("max_model_len")}
+        data = r.json().get("data") or []
     except Exception as e:                          # noqa: BLE001
         return {"error": str(e)}
+    ids = [d.get("id", "") for d in data]
+    if model:
+        pick = [d for d in data if d.get("id") == model]
+        if not pick:
+            return {"error": f"it does not serve {model!r} (served: "
+                             f"{', '.join(ids) or 'none'})"}
+    elif len(data) == 1:
+        pick = data
+    else:
+        return {"error": f"it serves {len(data)} models "
+                         f"({', '.join(ids) or 'none'}): pass --model"}
+    return {"model": pick[0].get("id", ""),
+            "max_model_len": pick[0].get("max_model_len")}
 
 
 def default_shared_prefix(trace: AgentTrace) -> int:
@@ -1914,7 +1928,7 @@ def cmd_replay(args) -> int:
         print(f"ws replay: {msg}", file=sys.stderr)
         return 2
 
-    info = _endpoint_info(base, key)       # a dry run reads it too
+    info = _endpoint_info(base, key, args.model)   # a dry run reads it too
     if "error" in info:
         return fail(f"GET {base}/models failed ({info['error']}): check "
                     "--base-url and --api-key-env")

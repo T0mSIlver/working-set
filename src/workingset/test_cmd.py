@@ -603,7 +603,7 @@ def check_server(cfg, opts, ep, args, metrics_url):
                                read_server)
     server = read_server(ep.base_url, ep.api_key, metrics_url,
                          _metrics_headers(args, ep) if metrics_url else {},
-                         getattr(args, "engine", None))
+                         getattr(args, "engine", None), ep.model or None)
     diffs, notes = check_config(cfg, server, metrics_url)
     blind = blind_metrics(server)
     if blind and not getattr(args, "allow_blind_metrics", False):

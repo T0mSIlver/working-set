@@ -150,17 +150,24 @@ def _hit(ptok, cached):
     return trace(1, "hit", 1.0, 0.1, tps=10, ctok=5, ptok=ptok, cached=cached)
 
 
+def _warm(prev, cached, block=1600):
+    """warm_share of one hit whose session sent `prev` tokens before."""
+    first = trace(1, "first", 0.0, 0.1, ptok=prev)
+    hit = trace(1, "hit", 1.0, 0.1, tps=10, ctok=5, ptok=prev + 2000,
+                cached=cached)
+    return warm_share([hit], block, [first, hit])
+
+
 def test_a_warm_request_is_judged_against_the_block_not_a_fraction():
-    # 1,600-token blocks: a 3,300-token prompt caches 3,200 and is warm; the
-    # old 0.5 x ptok test would also pass it, but a 2,000-token prompt that
-    # cached only its first block (1,600) is warm under the block rule
-    assert warm_share([_hit(3300, 1600)], 1600) == pytest.approx(1.0)
-    assert warm_share([_hit(3300, 0)], 1600) == pytest.approx(0.0)
+    # 1,600-token blocks: a 3,300-token previous prompt is two whole blocks;
+    # one block short (1,600 cached) is still warm, none cached is not
+    assert _warm(3300, 1600) == pytest.approx(1.0)
+    assert _warm(3300, 0) == pytest.approx(0.0)
     # 40,000 tokens: 25 blocks, floor 24 x 1600 = 38,400; cached 38,400 warm
-    assert warm_share([_hit(40_000, 38_400)], 1600) == pytest.approx(1.0)
-    assert warm_share([_hit(40_000, 20_000)], 1600) == pytest.approx(0.0)
+    assert _warm(40_000, 38_400) == pytest.approx(1.0)
+    assert _warm(40_000, 20_000) == pytest.approx(0.0)
     # under two blocks the test cannot judge
-    assert math.isnan(warm_share([_hit(1700, 1600)], 1600))
+    assert math.isnan(_warm(1700, 1600))
 
 
 def test_an_unknown_block_with_cached_tokens_names_the_flag():
@@ -367,3 +374,56 @@ def test_turns_without_server_counts_are_left_out_and_counted(tmp_path,
     out = read_measured([d])
     assert out["turns"] == 1 and out["turns_skipped_no_server_counts"] == 1
     assert "1 successful turn(s) left out" in capsys.readouterr().err
+
+
+def test_a_skipped_turn_keeps_its_time_in_the_lane(tmp_path):
+    from workingset.aa_local import read_measured
+    d = tmp_path / "lane0"
+    d.mkdir()
+
+    def turn(**tok):
+        return json.dumps({"success": True, "task_id": "a", "tokens": tok,
+                           "timing": {"e2e_latency_ms": 2000,
+                                      "generation_ms": 1000,
+                                      "time_to_first_token_ms": 500}})
+    full = dict(server_prompt_tokens=1000, server_output_tokens=11,
+                server_cached_prompt_tokens=900)
+    (d / "turns.jsonl").write_text("\n".join([
+        turn(**full), turn(server_prompt_tokens=1000), turn(**full)]))
+    out = read_measured([d])
+    assert out["turns"] == 2 and out["wall_s"] == pytest.approx(6.0)
+
+
+def test_a_warm_hit_is_judged_against_the_previous_prompt():
+    from workingset.probe.population import warm_share
+    from workingset.probe.request import RequestTrace
+    first = RequestTrace(uid=1, kind="first", t_send=0.0, ptok_achieved=31_000)
+    hit = RequestTrace(uid=1, kind="hit", t_send=1.0, ptok_achieved=33_000,
+                       cached_tokens=30_992)
+    assert warm_share([hit], 16, [first, hit]) == 1.0
+    hit.cached_tokens = 20_000
+    assert warm_share([hit], 16, [first, hit]) == 0.0
+
+
+def test_replies_without_completion_tokens_stop_the_run():
+    from workingset.probe.population import RATIO_MIN_N, check_decode_counts
+    from workingset.probe.request import RequestTrace
+    ts = [RequestTrace(uid=i, ttft=0.1, t_end=1.0, tokens_estimated=True)
+          for i in range(RATIO_MIN_N)]
+    with pytest.raises(ValueError, match="completion_tokens"):
+        check_decode_counts(ts)
+    ts[0].tokens_estimated = False
+    check_decode_counts(ts)
+
+
+def test_models_are_read_for_the_named_model(monkeypatch):
+    import httpx
+
+    from workingset import bench as B
+    body = {"data": [{"id": "small", "max_model_len": 8192},
+                     {"id": "big", "max_model_len": 180_000}]}
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(
+        200, json=body, request=httpx.Request("GET", "http://h/v1/models")))
+    assert B._endpoint_info("http://h/v1", "", "big")["max_model_len"] == 180_000
+    assert "pass --model" in B._endpoint_info("http://h/v1", "")["error"]
+    assert "does not serve 'x'" in B._endpoint_info("http://h/v1", "", "x")["error"]

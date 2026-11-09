@@ -336,7 +336,7 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
     # the server's own answer, where it gives one
     cached = [t for t in hit if t.cached_tokens is not None and t.ptok_achieved]
     if cached:
-        res.cached_frac = warm_share(cached, opts.kv_block_tokens)
+        res.cached_frac = warm_share(cached, opts.kv_block_tokens, traces)
     # eviction. Without `cached_tokens` the server's prefill histogram says
     # how many tokens each request computed; failing that, the baseline's
     # TTFT classifier (queueing alone can push a warm hit over its threshold).
@@ -406,11 +406,27 @@ def eval_rung(pop: int, n_sub: int, traces: list, measure_start: float,
 # ============================================================================
 # the closed loop
 # ============================================================================
-def warm_share(cached: list, block: int) -> float:
+def reusable_prefix(traces: list) -> dict:
+    """id(trace) -> the tokens it could reuse: the prompt of its session's
+    previous non-miss request (a miss is salted ahead of the prefix, so
+    nothing after it matches it). A warm turn adds fresh text after that, so
+    the whole new prompt is never cached."""
+    out, last = {}, {}
+    for t in sorted(traces, key=lambda t: (t.uid, t.is_sub, t.t_send)):
+        k = (t.uid, t.is_sub)
+        if k in last:
+            out[id(t)] = last[k]
+        if t.kind != "miss" and t.ptok_achieved:
+            last[k] = t.ptok_achieved
+    return out
+
+
+def warm_share(cached: list, block: int, traces: list | None = None) -> float:
     """Share of hit turns the server served warm: cached_tokens no more than
-    one KV block short of the prompt's whole blocks. The server caches whole
-    blocks, so a fixed fraction of the prompt fails on a short prompt when the
-    block is large (1,600 tokens on a hybrid model). nan when no prompt is
+    one KV block short of the whole blocks of the prefix the turn could reuse
+    (its session's previous prompt, from `traces`). The server caches whole
+    blocks, so a fixed fraction fails on a short prompt when the block is
+    large (1,600 tokens on a hybrid model). nan when no reusable prefix is
     over two blocks (the test cannot tell it from a miss). Raises ValueError
     when the block is unknown."""
     if block <= 0:
@@ -420,8 +436,10 @@ def warm_share(cached: list, block: int) -> float:
             "caches whole blocks, so a prompt is up to one block short of "
             "its cached prefix): pass --kv-block-tokens, or --metrics-url "
             "for a vLLM /metrics that carries cache_config_info")
-    judged = [(t.ptok_achieved // block) * block - block for t in cached]
-    pairs = [(t, f) for t, f in zip(cached, judged) if f > 0]
+    prev = reusable_prefix(traces if traces is not None else cached)
+    pairs = [(t, (prev[id(t)] // block) * block - block)
+             for t in cached if id(t) in prev]
+    pairs = [(t, f) for t, f in pairs if f > 0]
     if not pairs:
         return float("nan")
     return sum(1 for t, f in pairs if t.cached_tokens >= f) / len(pairs)
@@ -429,6 +447,21 @@ def warm_share(cached: list, block: int) -> float:
 
 RATIO_BAND = (0.9, 1.1)     # achieved / intended prompt tokens
 RATIO_MIN_N = 8             # text-only turns before the ratio is judged
+
+
+def check_decode_counts(traces: list) -> None:
+    """A rung judged on the decode floor needs the server's completion token
+    counts: without them no request carries a decode rate, and the floor
+    would pass unmeasured. Raises ValueError once RATIO_MIN_N finished
+    requests all came back without them."""
+    done = [t for t in traces if not t.error and t.ttft is not None
+            and t.t_end is not None]
+    if len(done) >= RATIO_MIN_N and all(t.tokens_estimated for t in done):
+        raise ValueError(
+            f"{len(done)} replies came back without usage.completion_tokens, "
+            "so no request has a decode speed and the decode floor cannot be "
+            "judged. The server must send usage in the stream (vLLM does with "
+            "stream_options include_usage; a proxy may strip it)")
 
 
 def check_prompt_tokens(opts, traces: list) -> None:
@@ -525,6 +558,7 @@ async def run_population(client, ep: EndpointSpec, cfg, opts, pop: int,
         while (left := end - time.monotonic()) > 0:
             await asyncio.sleep(min(left, 5.0))
             check_prompt_tokens(opts, traces)
+            check_decode_counts(traces)
     finally:
         stop.set()
         for t in tasks:
@@ -637,7 +671,7 @@ def eval_sample(traces: list, server: dict | None = None,
     s.images = image_split(hit, 95)
     cached = [t for t in hit if t.cached_tokens is not None and t.ptok_achieved]
     if cached:
-        s.cached_frac = warm_share(cached, kv_block_tokens)
+        s.cached_frac = warm_share(cached, kv_block_tokens, traces)
     s.spike = spike_evidence(traces, cap_tokens)
     s.traces = list(traces)
     return s

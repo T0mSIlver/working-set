@@ -504,6 +504,9 @@ def test_eval_rung_eviction_and_cached_fractions():
     cfg, opts = small_cfg(), small_opts(measure_s=1.0)
     tr = [
         trace(1, "miss", 1.0, 10.0, tps=100, ctok=10),
+        # each hit's session sent 990 tokens before: what it can reuse
+        trace(2, "first", 0.0, 0.1, ptok=990),
+        trace(3, "first", 0.0, 0.1, ptok=990),
         trace(2, "hit", 1.0, 0.1, tps=100, ctok=10, ptok=1000, cached=990),
         # >= 0.4 x 10 s -> the classifier calls this a re-prefill
         trace(3, "hit", 1.0, 5.0, tps=100, ctok=10, ptok=1000, cached=0),
@@ -966,12 +969,13 @@ def test_eval_sample_excludes_establishing_turns():
 
 def test_eval_sample_on_synthetic_traces():
     s = eval_sample([
+        trace(1, "first", 0.5, 0.4, tps=100, gaps_ms=[3, 3], ctok=10, ptok=99),
         trace(1, "miss", 1.0, 2.0, tps=90, gaps_ms=[3, 3], ctok=10),
         trace(1, "hit", 2.0, 0.4, tps=110, gaps_ms=[3, 3], ctok=10,
               ptok=100, intended=100, cached=99),
         trace(2, "hit", 2.0, 0.6, tps=None, err="boom"),
     ], kv_block_tokens=16)
-    assert s.n == 3 and s.n_ok == 2 and s.n_err == 1
+    assert s.n == 4 and s.n_ok == 2 and s.n_err == 1   # a first turn is not judged
     assert s.ttft_miss_mean == pytest.approx(2.0)
     assert s.decode_p50 == pytest.approx(100.0)
     assert s.cached_frac == pytest.approx(1.0)
