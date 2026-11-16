@@ -79,6 +79,10 @@ function modelFor(key){
   // fixed mixed-precision buffer, state_fp32_ok) — the UI disables both.
   if (state.state_dt === "fp32" && m.deltanet_state > 0 && m.state_fp32_ok !== false)
     m = { ...m, deltanet_state: m.deltanet_state*2, name: m.name + " [fp32 state]" };
+  // Engram tables in HBM instead of vLLM's host-memory default (with_engram).
+  // No-op on a model without the tables — the UI disables the control there.
+  if (state.engram === "gpu" && m.w_engram > 0)
+    m = { ...m, engram_in_hbm: true, name: m.name + " [Engram in HBM]" };
   // +15% deployed-weight overhead. Never applied to the 27B, whose 28.8 GiB is
   // already the as-deployed footprint (that is where the 15% came from) — the
   // UI disables the control on that model.
@@ -405,7 +409,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
 function frontierWarmSig(wl){
   // kvshard changes every row's pool and decode reads (codex F4 on the
   // layout change: without it a Replicated page reused Sharded rows)
-  return `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|${state.kvshard}|`
+  return `${state.gpu}|${state.wdt}|${state.kv}|${state.state_dt}|${state.wover}|${state.kvshard}|${state.engram}|`
        + `${state.cap}|${state.ram}|${state.user_median}|${state.user_sigma}|`
        + `${state.sub_median}|${state.sub_sigma}|${state.sub_ratio}|`
        + `${state.sub_shares_prefix}|${state.sys}|${wl.invalidation}`;

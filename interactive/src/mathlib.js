@@ -39,7 +39,8 @@ export function samplingSig(){
           state.acc,state.dspec,state.eta,state.t0,state.tar,state.trec,state.union,state.mfu,state.ngpu,state.tp,state.ram,state.cap,
           state.user_median,state.user_sigma,state.sub_median,state.sub_sigma,
           state.sub_ratio,state.sub_shares_prefix,state.sys,state.inval,
-          ...(state.kvshard && state.kvshard !== "dcp" ? [state.kvshard] : [])].join('|');
+          ...(state.kvshard && state.kvshard !== "dcp" ? [state.kvshard] : []),
+          ...(state.engram && state.engram !== "cpu" ? ["engram:" + state.engram] : [])].join('|');
 }
 // _spare must be dropped too: a half-used Box-Muller pair carried across a
 // reseed makes the section's draws depend on whatever sampled BEFORE it, so

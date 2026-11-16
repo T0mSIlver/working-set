@@ -373,9 +373,9 @@ def main():
 
     print("\n== DSv4.1-Flash compressed-sparse decode: CSA2 pricing vs dense-read ==")
     print("  four full-axis fp4 indexer scans (170 B/ctx token), then top-512")
-    print("  FP4 latents on 38 layers, four candidate-pool indexer reads and the")
-    print("  128-entry windows; dense-read streams the 890 B/token cache instead.")
-    print("  (the two agree to the printed digit: at 890 B/token the whole cache")
+    print("  FP8 latents on 38 layers, four candidate-pool indexer reads and the")
+    print("  128-entry windows; dense-read streams the 1,460 B/token cache instead.")
+    print("  (the two agree to the printed digit: at 1,460 B/token the whole cache")
     print("  is a rounding error next to the 297 GB expert union past n = 64)")
     t_h8 = M.topology("tp", 8)
     dsf_dense = dataclasses.replace(MODELS["DSV41F"], kv_decode_bpt=None,

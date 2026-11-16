@@ -157,6 +157,7 @@ def _deploy_overrides(args) -> dict:
                              ("weight_dtype", args.weight_dtype),
                              ("kv_dtype", args.kv_dtype),
                              ("kv_sharding", getattr(args, "kv_sharding", None)),
+                             ("engram", getattr(args, "engram", None)),
                              ("max_num_batched_tokens", args.chunk),
                              ("max_model_len", args.max_model_len),
                              ("max_num_seqs", args.max_num_seqs),
@@ -283,6 +284,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kv-sharding", choices=M.KV_SHARDS,
                    help="dcp (default; decode context parallelism, one copy of "
                         "the KV) or replicate (plain --tensor-parallel-size)")
+    p.add_argument("--engram", choices=M.ENGRAM_PLACES,
+                   help="where a model with Engram tables keeps them: cpu "
+                        "(default; vLLM offloads them to host memory) or gpu")
     _add_deploy_flags(p)
     p.set_defaults(fn=cmd_init)
 

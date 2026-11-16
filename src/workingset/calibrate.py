@@ -309,11 +309,11 @@ def pool_from_log(path: str) -> int | None:
 
 def fit_reserve(pool_tokens: float, cfg: RunConfig) -> Fit:
     """The per-GPU reserve the reported pool implies:
-    reserve = (tp x vram - w_resident - N x kv_bpt) / tp."""
+    reserve = (tp x vram - weights in HBM - N x kv_bpt) / tp."""
     m, topo = cfg.to_model(), cfg.to_topology()
     kv = M._replicated(m, topo).kv_bpt
     tp = topo.tp
-    reserve = (tp * topo.gpu.vram - m.w_resident - pool_tokens * kv) / tp
+    reserve = (tp * topo.gpu.vram - M.hbm_weights(m) - pool_tokens * kv) / tp
     if reserve <= 0:
         raise ValueError(
             f"the pool of {pool_tokens:,.0f} tokens leaves a negative reserve "

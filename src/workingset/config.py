@@ -98,6 +98,12 @@ class Deployment:
     # keeps a full copy; the pool divides by tp / kv_heads and each rank
     # re-reads the whole cache per step. research/kv_tp_sharding.md.
     kv_sharding: str = "dcp"              # dcp | replicate
+    # Where a model with Engram tables (DeepSeek-V4.1-Flash's Engram,
+    # Qwen3.8-Flash-Next's n-gram table) keeps them. "cpu" (the default):
+    # pinned host memory, vLLM's default (EngramConfig cpu_offload=True), so
+    # they cost no HBM. "gpu": in HBM, where they shrink the pool and raise
+    # the fit. Refused on a model without the tables.
+    engram: str = "cpu"                   # cpu | gpu
 
     @property
     def gpus(self) -> str:
@@ -237,6 +243,8 @@ class RunConfig:
         if d.recurrent_state_dtype == "fp32" and _fp32_state_applies(m):
             m = replace(m, deltanet_state=m.deltanet_state * 2,
                         name=m.name + " [fp32 state]")
+        if d.engram == "gpu":
+            m = M.with_engram(m, "gpu")
         if d.weight_overhead and _weight_overhead_applies(d.model):
             m = replace(m, w_resident=m.w_resident * (1 + d.weight_overhead),
                         name=m.name + f" [+{d.weight_overhead:.0%} weights]")
@@ -350,6 +358,13 @@ class RunConfig:
                 f"{M.MODELS[d.model].name}: recurrent_state_dtype 'fp32' does "
                 "nothing here — the model carries no bf16 recurrent state to "
                 "widen (deltanet_state 0, or a fixed mixed-precision buffer)")
+        if d.engram not in M.ENGRAM_PLACES:
+            raise ValueError(f"deployment.engram must be one of "
+                             f"{M.ENGRAM_PLACES}, got {d.engram!r}")
+        if d.engram == "gpu" and not M.MODELS[d.model].w_engram:
+            raise ValueError(
+                f"{M.MODELS[d.model].name}: engram 'gpu' does nothing here — "
+                "the model has no Engram tables")
         if d.weight_overhead < 0:
             raise ValueError("deployment.weight_overhead must be >= 0")
         if d.weight_overhead and not _weight_overhead_applies(d.model):

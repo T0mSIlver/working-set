@@ -72,6 +72,10 @@ The two ideas that set the constants (tech report § 2.2–2.3):
 
 ## 2. KV bytes per token — four shared FP4 caches: 890 B, the paper's figure
 
+> **Superseded for pricing (2026-11-16, § 7):** vLLM serves this model with
+> `--kv-cache-dtype fp8`, which stores the main latent in FP8: 1,460 B/token.
+> The catalogue prices that; this section's 890 B is the model's own layout.
+
 Cached-entry layout (tensors and quantization groups from `inference/model.py`;
 packed byte widths from the technical report § 2.4.4, which the reference
 implementation dequantizes into BF16 — see the provenance note):
@@ -461,6 +465,41 @@ card does not say.
   this time); the reference implementation promotes the ratio-2 compressors
   to fp32 and `wo_a` to bf16 at runtime — the checkpoint's bf16/fp8 bytes are
   charged, as "the explorer prices what the checkpoint weighs".
+
+## 7. What vLLM stores (startup log on 4×B300, read 2026-11-16)
+
+A startup log of this model on 4×B300 (vLLM 0.33.0, TP4,
+`--kv-cache-dtype fp8`) settles two facts the sections above priced
+otherwise. The raw log stays private; the derived figures are these.
+
+- **Cache.** The reported pool divided into the per-GPU KV memory gives
+  **1,467 B per token** (one latent head, so every rank holds the whole
+  cache), against the 890 priced until then. The FP8 cache keeps the FP4
+  indexer keys and stores the main latent as 512 FP8 bytes plus one 4-B scale
+  (516 B per entry):
+
+  ```
+  kv_bpt = 3 x (516 + 68) / 2 + (516 + 68) = 876 + 584 = 1,460 B/token
+  ```
+
+  With the 2.8 MiB of windows spread over the 1,048,576-token concurrency the
+  log divides by (+2.8 B), that is 1,462.8 against 1,467.3, −0.3%. An E8M0
+  scale per 32 (528 B per entry) would give 1,490 (+1.7%), FP8 indexer keys
+  1,620 (+10%). The vLLM layout is not read from its source; the fit is the
+  evidence. The top-512 decode reads move with it: `kv_decode_const =
+  38 x 512 x 516 + 4 x 16,384 x 68 + 40 x 128 x 528 = 17,199,104 B`.
+- **Engram.** vLLM resolves `EngramConfig(cpu_offload=True)` by default and
+  logs each rank's share of the two tables going to pinned host memory
+  (~96.0M rows x 264 B = 23.60 GiB per table per rank). `w_resident` is now
+  the 307,527,990,600 B that stay on the GPUs and `w_engram` the
+  202,758,032,400 B of tables (768,022,850 rows x 264 B). The explorer's
+  "Engram tables" control and `deployment.engram = "gpu"` put them back in
+  HBM (510 GB: from 5 H200 by arithmetic rather than 3). The logged per-GPU
+  weight footprint sits ~10 GiB above 307.5 GB / 4: weights replicated under
+  TP, left to the reserve.
+- **The pool still needs the deployment's reserve.** A deployment that caps
+  GPU memory below the default and captures large CUDA graphs holds back far
+  more than the study's default reserve; `ws calibrate --vllm-log` fits it.
 
 ## Sources
 

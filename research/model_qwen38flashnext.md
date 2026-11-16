@@ -194,11 +194,14 @@ the option out. Revisit if NVIDIA ships an official recipe.
   pool arithmetic, like 1×B300 (same two-tier phrasing as GLM-5.2's floor).
   Contexts past 262,144 need YaRN `rope_parameters` +
   `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`.
-- **n-gram table residency:** charged fully GPU-resident (default serving;
-  the recipe's opt-in host offload needs ≥51 GB of host RAM plus headroom).
-  Offloaded, `w_resident` drops by 51.2e9 B (≈ 28%) and the H200 min-TP
+- **n-gram table residency (2026-11-16):** host memory. vLLM 0.33.0 resolves
+  `EngramConfig(cpu_offload=True)` by default (a startup log on 4×B300 shows
+  it, with the per-GPU weight footprint to match), so `w_resident` is
+  134,301,986,808 B and the table is `w_engram` (51,200,245,762 B); the
+  explorer's "Engram tables" control puts it back in HBM. The H200 min-TP
   story does not change (134.3e9 still exceeds one GPU's 121.7e9 budget); a
-  B300 gains ~4.0M pool tokens (51,200,245,762 / 13,741). Conservative
+  B300 gains ~3.7M pool tokens (51,200,245,762 / 13,741). Until this date it
+  was charged GPU-resident, the conservative side
   direction: resident (biases capacity DOWN). § 6.
 - **Speculative decoding:** in-checkpoint MTP (1 hybrid layer, "trained with
   multi-steps"); the vLLM recipe runs `{"method":"mtp",
@@ -238,7 +241,7 @@ the option out. Revisit if NVIDIA ships an official recipe.
   13,056 B/token stored and 768 B/ctx-token scanned (+3% / +100% on two
   small terms; capacity moves < 3%). Neither the recipe nor the card states
   the dtype — re-verify when the serving path is documented.
-- **n-gram table charged GPU-resident** (§ 5); its per-token lookup rows
+- **n-gram table in host memory** (§ 5, vLLM's default); its per-token lookup rows
   (~5 KB) excluded from the decode read like all embedding lookups.
 - Prefill quadratic term priced as **dense** attention on the 12 QSA layers
   (`attn_layers=12, attn_d=24×256`): an upper bound — QSA's prefill-side

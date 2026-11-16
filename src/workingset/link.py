@@ -82,6 +82,7 @@ KNOBS: tuple[Knob, ...] = (
     Knob("wover", D + "weight_overhead",
          lambda c: WOVER[_nearest_wover(c.deployment.weight_overhead)], "pub"),
     Knob("kvshard", D + "kv_sharding", lambda c: c.deployment.kv_sharding, "dcp"),
+    Knob("engram", D + "engram", lambda c: c.deployment.engram, "cpu"),
     Knob("chunk", D + "max_num_batched_tokens",
          lambda c: str(c.deployment.max_num_batched_tokens), "32768"),
     Knob("ngpu", D + "tensor_parallel x replicas",

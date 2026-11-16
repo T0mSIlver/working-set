@@ -326,11 +326,12 @@ export const CATALOG = {
   },
   "DSV41F": {
    "name": "DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)",
-   "kv_bpt": 890,
+   "kv_bpt": 1460,
    "deltanet_state": 2930688,
    "state_step_bytes": 45696,
    "state_fp32_ok": false,
-   "w_resident": 510286023000,
+   "w_resident": 307527990600,
+   "w_engram": 202758032400,
    "w_decode_shared": 8522921408,
    "w_route_pertok": 4512153600,
    "w_route_total": 288777830400,
@@ -343,13 +344,13 @@ export const CATALOG = {
    "spec_tokens": 5,
    "draft_method": "dspark",
    "nvfp4_w": [
-    527273322840,
+    324515290440,
     8522921408,
     4777580160,
     305765130240
    ],
    "kv_decode_bpt": 170,
-   "kv_decode_const": 12763136,
+   "kv_decode_const": 17199104,
    "kv_decode_topk": 1024,
    "kv_fp16_ok": false,
    "max_ctx": 1048576,
@@ -371,8 +372,8 @@ export const CATALOG = {
    },
    "explorer": {
     "short": "DSv4.1-Flash",
-    "tip": "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four FP4 compressed caches across the 40 layers: 890 B/token stored — 4× below V4-Flash-0731, ~40× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far, but its heaviest fit after GLM-5.3: vLLM keeps the 203 GB Engram tables in HBM, so 510 GB resident — 8×H200 (5 by arithmetic) / 2×B300. Native MXFP4 experts (384, 6 routed: kink n = 64); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1.",
-    "kv_tip": "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels, quantization-aware trained) and the sliding windows FP8 — that native layout is what the FP8 arm prices; no serving stack offers a BF16 main KV, so the toggle is disabled.",
+    "tip": "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four compressed caches across the 40 layers: 1,460 B/token stored under vLLM's fp8 cache (890 B in the model's own FP4 layout) — 2.4× below V4-Flash-0731, ~27× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far. vLLM keeps the 203 GB Engram tables in host memory, so 307.5 GB stays on the GPUs — 4×H200 (3 by arithmetic) / 2×B300; with the tables in GPU memory, 510 GB — 8×H200 (5 by arithmetic). Native MXFP4 experts (384, 6 routed: kink n = 64); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1.",
+    "kv_tip": "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels), but vLLM's --kv-cache-dtype fp8 stores the latent in FP8 (516 B per entry against 288), keeping the FP4 indexer keys and the FP8 windows: 1,460 B/token, matched to a B300 startup log within 0.3%. That is what the FP8 arm prices. No serving stack offers a BF16 main KV, so the toggle is disabled.",
     "state_tip": "DeepSeek-V4.1-Flash pays a fixed {state_mib} MiB/session (fp8 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled.",
     "speculative_config": "{\"method\":\"dspark\",\"num_speculative_tokens\":5,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"block\",\"enable_adaptive_verification\":true}"
    }
@@ -382,7 +383,8 @@ export const CATALOG = {
    "kv_bpt": 13741,
    "kv_index_bpt": 429,
    "deltanet_state": 59572224,
-   "w_resident": 185502232570,
+   "w_resident": 134301986808,
+   "w_engram": 51200245762,
    "w_decode_shared": 8623999000,
    "w_route_pertok": 2359584000,
    "w_route_total": 120810700800,
@@ -394,7 +396,7 @@ export const CATALOG = {
    "acceptance": 0.971,
    "spec_tokens": 3,
    "nvfp4_w": [
-    132639846394,
+    81439600632,
     8623999000,
     1327115520,
     67948314624
@@ -420,7 +422,7 @@ export const CATALOG = {
    },
    "explorer": {
     "short": "Q3.8-Flash",
-    "tip": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 13.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN.",
+    "tip": "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 13.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 81.4 vs 134.3 GB on the GPUs, fixed read unchanged. vLLM keeps the 51.2 GB n-gram table in host memory. 262k native context, 1M via YaRN.",
     "recipe": [
      {
       "when": {
@@ -662,6 +664,8 @@ export const CATALOG = {
    "w_draft": 0.0,
    "w_draft_route_pertok": 0.0,
    "weights_as_deployed": false,
+   "w_engram": 0.0,
+   "engram_in_hbm": false,
    "weight_dtype": "fp8",
    "kv_decode_const": 0.0,
    "kv_fp16_ok": true,

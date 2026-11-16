@@ -143,6 +143,11 @@ function enforceConstraints(){
   sync('seg-wdt', state.wdt); sync('seg-kv', state.kv);
   sync('seg-state', state.state_dt); sync('seg-wover', state.wover);
   sync('seg-kvshard', state.kvshard);
+  // Engram tables: only a model that has them can move them to HBM
+  const engramOk = (m.w_engram || 0) > 0;
+  if (!engramOk && state.engram === "gpu") state.engram = "cpu";
+  sync('seg-engram', state.engram);
+  document.querySelector('#seg-engram button[data-v="gpu"]').disabled = !engramOk;
   // the KV-layout control only prices something once a group is wider than
   // the model's KV heads; below that both arms are one copy (kvReplication)
   const kvshardMatters = state.tp > (m.kv_heads || 1);
@@ -177,6 +182,9 @@ function enforceConstraints(){
       : ` At TP${tp} plain TP stores ${copies}× the cache and re-reads it ${copies}× per decode step: the pool divides by ${copies} and decode slows. "Sharded" prices vLLM's decode context parallelism (--decode-context-parallel-size ${Math.max(1, Math.floor(tp / heads))}, emitted in the recipe), which splits those copies along the sequence — the layout the study's capacity numbers have always assumed. Its cost: speculative decoding under DCP is still in development in vLLM (2026-08), so the MTP slider and this arm may not be available together.`;
     return head + now + " research/kv_tp_sharding.md.";
   })());
+  document.getElementById('engram-tip').setAttribute('data-tip', engramOk
+    ? `${short} keeps ${fmt(m.w_engram/1e9,1)} GB of Engram lookup tables, read a few rows per token. vLLM offloads them to pinned host memory by default (EngramConfig cpu_offload=True, seen in vLLM 0.33.0 startup logs), so they cost no GPU memory: that is "CPU memory", and every catalogue figure. "GPU memory" charges them to HBM, which shrinks the KV pool and can raise the GPUs the model needs. Either way they are never streamed per step. The recipe emits no flag for it.`
+    : `${short} has no Engram tables, so this control is disabled.`);
   document.getElementById('wover-tip').setAttribute('data-tip', woverOk
     ? "Slack between a checkpoint's stated bytes and the server's real resident footprint. This model's figure is raw/on-disk — an under-estimate by an unknown margin; +15% is the one calibrated data point (the 27B's as-deployed 28.8 GiB vs its raw params), transferred here as an extrapolation."
     : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Its NVFP4 figure is a measured checkpoint total under the same convention, so the knob stays disabled on this model.");
@@ -478,6 +486,7 @@ const URL_ENUMS = {
   wdt:   () => ["fp8","nvfp4"], kv: () => ["fp8","fp16"],
   state_dt: () => ["bf16","fp32"], wover: () => ["pub","p15"],
   kvshard: () => ["dcp","replicate"],
+  engram: () => ["cpu","gpu"],
   pue: () => ["1.2","1.5","2.0"],
   pay: () => ["rent","own"],
   chunk: () => ["2048","4096","8192","16384","32768","65536"],
