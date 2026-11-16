@@ -488,7 +488,21 @@ def read_metrics(url: str, headers: dict[str, str]) -> str:
                          "or gateway?). Pass each engine's own /metrics with "
                          "--metrics-url, once per replica behind a router, "
                          "or --no-metrics")
+    from .metrics.identity import check_one_server
+    note = check_one_server(url, headers)
+    if note:
+        print("  " + note, file=sys.stderr)
     return r.text
+
+
+def default_metrics_url(base: str) -> str:
+    """`<base without /v1>/metrics`: a route that serves the API under a
+    path prefix (KServe: /<namespace>/<service>/v1) serves /metrics under the
+    same prefix, not at the host's root."""
+    b = base.rstrip("/")
+    if b.endswith("/v1"):
+        b = b[:-3]
+    return b + "/metrics"
 
 
 @dataclass
@@ -1916,9 +1930,7 @@ def cmd_replay(args) -> int:
               "other", file=sys.stderr)
         return 2
     if not murls and not args.no_metrics:
-        from urllib.parse import urlsplit
-        murls = ["{0.scheme}://{0.netloc}/metrics".format(urlsplit(b))
-                 for b in bases]
+        murls = [default_metrics_url(b) for b in bases]
         print("  --metrics-url not given: reading " + ", ".join(murls))
     if murls and len(bases) > 1 and len(murls) != len(bases):
         print(f"ws replay: {len(murls)} --metrics-url for {len(bases)} "

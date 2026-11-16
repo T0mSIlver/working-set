@@ -611,7 +611,8 @@ async def sweep(args) -> dict:
     base = args.base_url.rstrip("/")
     origin = re.match(r"^\w+://[^/]+", base).group(0)
     if not args.metrics_url:
-        args.metrics_url = origin + "/metrics"
+        from .bench import default_metrics_url
+        args.metrics_url = default_metrics_url(base)
     same = args.metrics_url.startswith(origin + "/")
     mh = dict(hdr) if same else {}
     for h in args.metrics_header or []:
@@ -624,6 +625,14 @@ async def sweep(args) -> dict:
             httpx.AsyncClient(limits=limits, verify=_verify(args)) as mc:
         ep = Endpoint(c, args, mh, mc)
         _, s0, text0 = await ep.scrape()
+        from .metrics.identity import check_one_server
+        note = await asyncio.to_thread(
+            check_one_server, args.metrics_url, mh, verify=_verify(args),
+            timeout=args.timeout,
+            fix="Point --base-url and --metrics-url at one pod: the sweep "
+                "times one server's forward passes")
+        if note:
+            print("  " + note)
         engines = engines_in(text0)
         if len(engines) > 1 and args.engine is None:
             raise ValueError(

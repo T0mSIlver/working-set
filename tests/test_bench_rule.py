@@ -603,7 +603,7 @@ def test_an_unreachable_metrics_names_the_flags_that_get_past_it():
         B.read_metrics("http://127.0.0.1:9/metrics", {})
 
 
-def test_several_urls_default_their_metrics_to_each_origin(
+def test_several_urls_default_their_metrics_under_each_route(
         tmp_path, capsys, monkeypatch):
     path = tmp_path / "t.json"
     path.write_text(json.dumps(_trace().to_dict()))
@@ -613,7 +613,7 @@ def test_several_urls_default_their_metrics_to_each_origin(
     assert main(["replay", str(path), "--base-url", "http://a:8000/v1",
                  "--base-url", "https://b.example/api/v1", "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "reading http://a:8000/metrics, https://b.example/metrics" in out
+    assert "reading http://a:8000/metrics, https://b.example/api/metrics" in out
 
 
 def test_one_router_url_reads_every_replica_metrics(tmp_path, capsys,
