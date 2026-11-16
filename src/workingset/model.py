@@ -284,6 +284,16 @@ class Model:
     # the +15% weight-overhead allowance (calibrated on exactly that figure)
     # must not be added on top.
     weights_as_deployed: bool = False
+    # Engram tables (DeepSeek-V4.1-Flash's Engram, Qwen3.8-Flash-Next's
+    # n-gram embedding): hashed lookup tables a step reads a few rows of,
+    # NOT counted in w_resident. vLLM keeps them in pinned host memory by
+    # default (EngramConfig cpu_offload=True in vLLM 0.33.0 startup logs of
+    # both models), so they cost no HBM. with_engram(model,
+    # "gpu") sets engram_in_hbm: the tables then count against the pool and
+    # the fit (hbm_weights). Never streamed: the prefill weight stream and
+    # the decode reads leave them out on both arms.
+    w_engram: float = 0.0
+    engram_in_hbm: bool = False
     weight_dtype: str = "fp8"   # set via with_weight_dtype(); gates GPU choice
     # NVFP4-checkpoint weight bytes (w_resident, w_decode_shared,
     # w_route_pertok, w_route_total), or None if no NVFP4 variant exists.
@@ -547,6 +557,35 @@ def with_weight_dtype(model: Model, weight_dtype: str) -> Model:
     return replace(model, w_resident=wr, w_decode_shared=wds,
                    w_route_pertok=wpt, w_route_total=wtot,
                    weight_dtype="nvfp4", name=model.name + " [NVFP4]")
+
+
+# ---- Engram placement ----------------------------------------------------------
+ENGRAM_PLACES = ("cpu", "gpu")
+
+
+def hbm_weights(model: Model) -> float:
+    """Weight bytes the GPUs hold: w_resident, plus the Engram tables when
+    they sit in HBM. What the pool and the fit charge (not the prefill
+    stream, which never reads the tables whole)."""
+    return model.w_resident + (model.w_engram if model.engram_in_hbm else 0.0)
+
+
+def with_engram(model: Model, where: str) -> Model:
+    """Return `model` with its Engram tables in host memory ("cpu", vLLM's
+    default and every catalogue figure) or in HBM ("gpu")."""
+    if where not in ENGRAM_PLACES:
+        raise ValueError(f"engram must be one of {ENGRAM_PLACES}, got {where!r}")
+    if where == "cpu":
+        if model.engram_in_hbm:
+            raise ValueError(f"{model.name}: cannot move the Engram tables back; "
+                             "start from the MODELS[...] base entry")
+        return model
+    if model.w_engram <= 0:
+        raise ValueError(f"{model.name}: has no Engram tables, so engram = 'gpu' "
+                         "prices nothing")
+    if model.engram_in_hbm:
+        return model
+    return replace(model, engram_in_hbm=True, name=model.name + " [Engram in HBM]")
 
 
 # ---- GPU-coupled FP8 cache row -------------------------------------------------
@@ -844,7 +883,7 @@ def min_tp_for(model: Model, gpu: str = "H200") -> int:
     usable = g.vram - (ACT_RESERVE + g.reserve_extra)
     if usable <= 0:
         raise ValueError(f"{g.name}: reserve exceeds VRAM; no topology can fit")
-    return int(np.floor(model.w_resident / usable)) + 1
+    return int(np.floor(hbm_weights(model) / usable)) + 1
 
 
 def node_splits(model: Model, gpu: str = "H200", node: int = 8):
@@ -872,7 +911,7 @@ TOPOLOGIES = {
 def _act_reserve() -> float:
     m = MODELS["27B"]
     pool_bytes = BASELINE_POOL_TOKENS_27B_1GPU * m.kv_bpt
-    return VRAM_PER_GPU - m.w_resident - pool_bytes
+    return VRAM_PER_GPU - hbm_weights(m) - pool_bytes
 
 ACT_RESERVE = _act_reserve()   # per-GPU activation/workspace/fragmentation reserve
 
@@ -906,7 +945,7 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     # original order makes every pre-existing configuration bit-identical to the
     # pre-grid code (tp=1 reproduces the old single/DP branch, tp=n the old TP
     # branch) rather than merely equal after formatting.
-    pool_bytes = topo.tp * topo.gpu.vram - model.w_resident - topo.tp * reserve
+    pool_bytes = topo.tp * topo.gpu.vram - hbm_weights(model) - topo.tp * reserve
     # ...in tokens of the cache the group STORES: a replicated layout pays
     # kv_bpt x copies per token (kv_replication), so the same bytes hold
     # fewer tokens. 1.0 on every default ("dcp") topology at a TP the KV
@@ -3618,10 +3657,23 @@ def _selfcheck():
     # the vision tower's 0.93 GB moves neither boundary
     assert min_tp_for(MODELS["DSV4FV"], "H200") == 2
     assert min_tp_for(MODELS["DSV4FV"], "B300") == 1
-    # DSv4.1-Flash: 510.3 GB resident (the 203 GB Engram tables live in HBM
-    # under vLLM) — 5 x 121.7 GB usable H200, 2 x 259.3 GB usable B300
-    assert min_tp_for(MODELS["DSV41F"], "H200") == 5
+    # DSv4.1-Flash: 307.5 GB on the GPUs (vLLM offloads the 203 GB Engram
+    # tables to host memory) — 3 x 121.7 GB usable H200, 2 x 259.3 GB usable
+    # B300; with the tables in HBM, 510.3 GB: 5 H200, still 2 B300
+    assert min_tp_for(MODELS["DSV41F"], "H200") == 3
     assert min_tp_for(MODELS["DSV41F"], "B300") == 2
+    dsf_hbm = with_engram(MODELS["DSV41F"], "gpu")
+    assert hbm_weights(dsf_hbm) == 510_286_023_000
+    assert min_tp_for(dsf_hbm, "H200") == 5 and min_tp_for(dsf_hbm, "B300") == 2
+    assert hbm_weights(with_engram(MODELS["Q38FN"], "gpu")) == 185_502_232_570
+    for k in MODELS:
+        if not MODELS[k].w_engram:
+            try:
+                with_engram(MODELS[k], "gpu")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"{k}: engram 'gpu' must refuse a model without tables")
     assert min_tp_for(MODELS["Q38FN"], "H200") == 2
     assert min_tp_for(MODELS["Q38FN"], "B300") == 1
     assert min_tp_for(_arm("GLM53F", "H200"), "H200") == 3
@@ -3661,7 +3713,7 @@ def _selfcheck():
                          ("DSV4F", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
                          ("DSV4FV", "H200", [(4, 2), (2, 4), (1, 8)]),
                          ("DSV4FV", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
-                         ("DSV41F", "H200", [(1, 8)]),
+                         ("DSV41F", "H200", [(2, 4), (1, 8)]),
                          ("DSV41F", "B300", [(4, 2), (2, 4), (1, 8)]),
                          ("Q38FN", "H200", [(4, 2), (2, 4), (1, 8)]),
                          ("Q38FN", "B300", [(8, 1), (4, 2), (2, 4), (1, 8)]),
@@ -3700,7 +3752,7 @@ def _selfcheck():
         g_ = GPUS[gk]
         V, R = g_.vram, ACT_RESERVE + g_.reserve_extra
         for t in node_splits(MODELS[mk], gk, node=8):
-            closed = (8 * (V - R) - 8 * MODELS[mk].w_resident / t.tp) / MODELS[mk].kv_bpt
+            closed = (8 * (V - R) - 8 * hbm_weights(MODELS[mk]) / t.tp) / MODELS[mk].kv_bpt
             actual = t.replicas * kv_pool_tokens(MODELS[mk], t)
             assert abs(actual - closed) < 1e-6, f"closed form mismatch {mk}/{gk}"
     # ...and the strictness is conditional on a material weight charge: a
@@ -3869,14 +3921,16 @@ def _selfcheck():
     assert ds4v.nvfp4_w is None
 
     # DSv4.1-Flash identities (research/model_dsv41flash.md): four shared
-    # compressed caches (CSA2), FP4 main KV, CED prefill
+    # compressed caches (CSA2), FP8 main latent under vLLM, CED prefill
     DEEPSEEK_FLASH = ("DSV4F", "DSV4FV", "DSV41F")   # fixed window + compressor state
     # every model whose deltanet_state is a FIXED latent window, not a bf16
     # recurrent state: the DeepSeek Flash models and Mistral-Large-4's DSpark
     # drafter windows
     FIXED_STATE = DEEPSEEK_FLASH + ("ML4",)
     dsf = MODELS["DSV41F"]
-    assert dsf.kv_bpt == 3 * (288 + 68) / 2 + (288 + 68)           # 890 B, the paper's figure
+    # vLLM's fp8 cache: 512-B latent + 4-B scale over the paper's 288-B FP4
+    # entry, FP4 indexer keys kept (1,460 B; the paper's FP4 layout is 890)
+    assert dsf.kv_bpt == 3 * (516 + 68) / 2 + (516 + 68)
     assert dsf.deltanet_state == 43 * 128 * 528 + 3 * 2 * 2 * 512 * 4  # windows + fp32 state
     assert dsf.state_step_bytes == 40 * 528 + 3 * 2 * 2 * 512 * 4        # slot writes + state r/w
     assert dsf.state_traffic == dsf.state_step_bytes and all(
@@ -3889,14 +3943,14 @@ def _selfcheck():
     assert dsf.w_route_total == 384 * 18_800_640 * 40
     assert abs(dsf.w_route_total / dsf.w_route_pertok - 64) < 1e-9  # kink at n = 64
     assert dsf.kv_decode_bpt == 3 * 68 / 2 + 68                 # four full-axis scans
-    assert dsf.kv_decode_const == (38 * 512 * 288 + 4 * 16_384 * 68
+    assert dsf.kv_decode_const == (38 * 512 * 516 + 4 * 16_384 * 68
                                    + 40 * 128 * 528)
     assert dsf.kv_decode_topk == 1_024
     assert abs(dsf.attn_layers * dsf.attn_d - 3 * (32 * 128 / 2 / 2)) < 1e-9  # 3 QK-only indexers
     # CED: prefill activates ~half of decode's 16B (8B), and the Engram
-    # tables are 40% of the resident bytes — the fit is set by them
+    # tables are 40% of the checkpoint — the fit is set by where they sit
     assert 7.5e9 < dsf.params_prefill < 8.5e9
-    assert dsf.w_resident > 2 * (dsf.w_route_total + dsf.w_decode_shared) * 0.8
+    assert dsf.w_resident + dsf.w_engram > 2 * (dsf.w_route_total + dsf.w_decode_shared) * 0.8
     # NVIDIA's NVFP4 repacks the natively-4-bit experts with denser scales,
     # as on 0731: heavier everywhere but the fixed read, and only experts move
     dsf_4 = with_weight_dtype(dsf, "nvfp4")
@@ -4027,7 +4081,8 @@ def _selfcheck():
     # read is BF16-heavy (~2 B/param on 4.3e9 params) and the resident total
     # (n-gram table, embed, vision, MTP) far exceeds what a step can touch
     assert q38.w_decode_shared == 8_623_999_000                 # exact ledger sum (note #4)
-    assert q38.w_resident > q38.w_route_total + q38.w_decode_shared + 50e9
+    assert q38.w_resident + q38.w_engram > q38.w_route_total + q38.w_decode_shared + 50e9
+    assert q38.w_engram == 51_200_245_762 and not q38.engram_in_hbm   # host memory
     # NVIDIA's NVFP4: routed experts x0.5625 (4 bits + E4M3 block-16 scales),
     # everything else — n-gram table included — byte-identical
     q384 = with_weight_dtype(q38, "nvfp4")
@@ -4128,8 +4183,7 @@ def _selfcheck():
 
     # sparse-attention decode: GLM's DSA pricing must beat the dense-read
     # pricing of the same bytes at long context (that is DSA's entire point);
-    # same check for DSv4.1-Flash's compressed-sparse reads (8xH200: the
-    # smallest H200 node split that holds its 510 GB)
+    # same check for DSv4.1-Flash's compressed-sparse reads (8xH200)
     glm_dense_read = replace(glm_h, kv_decode_bpt=None, kv_decode_const=0.0)
     t8 = topology("tp", 8)
     _, p_dsa, _, _ = decode_curves(glm_h, t8, wl, [64], n_iter=300)

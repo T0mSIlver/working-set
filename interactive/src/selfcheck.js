@@ -89,7 +89,7 @@ export function unitChecks(){
                  minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["DSV4FV"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["DSV4FV"],"B300")===1 &&
-                 minTpFor(CONFIG.MODELS["DSV41F"],"H200")===5 &&
+                 minTpFor(CONFIG.MODELS["DSV41F"],"H200")===3 &&
                  minTpFor(CONFIG.MODELS["DSV41F"],"B300")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["Q38FN"],"B300")===1 &&
@@ -236,11 +236,14 @@ export function unitChecks(){
   console.assert(kv_pool_tokens(glmH, makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(glmH, makeTopo("tp",8,"H200")) > 0,
     "GLM-5.3 FP8 must not fit 1 GPU but fit 8xH200");
-  console.assert(kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",4,"H200")) === 0 &&
-                 kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",8,"H200")) > 0 &&
+  console.assert(kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",2,"H200")) === 0 &&
+                 kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",4,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",1,"B300")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",2,"B300")) > 0,
-    "DSv4.1-Flash (510 GB incl. Engram) must fit from 8xH200 (5 by arithmetic) and 2xB300");
+    "DSv4.1-Flash (307.5 GB, Engram in host memory) must fit from 4xH200 (3 by arithmetic) and 2xB300");
+  console.assert(minTpFor({ ...CONFIG.MODELS["DSV41F"], engram_in_hbm: true }, "H200") === 5 &&
+                 minTpFor({ ...CONFIG.MODELS["DSV41F"], engram_in_hbm: true }, "B300") === 2,
+    "DSv4.1-Flash with the Engram tables in HBM (510 GB) fits from 5xH200 by arithmetic and 2xB300");
   console.assert(kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",2,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"B300")) > 0,
@@ -326,8 +329,8 @@ export function unitChecks(){
     "DSV4FV resident = 0731's measured total + ViT + aligner + image embeddings + fp32 gate biases");
   // DSv4.1-Flash identities (research/model_dsv41flash.md; mirror _selfcheck)
   const dsf = CONFIG.MODELS["DSV41F"];
-  console.assert(dsf.kv_bpt === 3*(288+68)/2 + (288+68),
-    "DSV41F kv_bpt = four shared FP4 caches (3 ratio-2 + 1 ratio-1) = 890 B/token");
+  console.assert(dsf.kv_bpt === 3*(516+68)/2 + (516+68),
+    "DSV41F kv_bpt = four shared caches under vLLM's fp8 (516-B latent, 68-B FP4 indexer) = 1,460 B/token");
   console.assert(dsf.deltanet_state === 43*128*528 + 3*2*2*512*4,
     "DSV41F per-session state = fp8 windows + fp32 compressor buffers");
   console.assert(dsf.state_step_bytes === 40*528 + 3*2*2*512*4 && state_traffic(dsf) === dsf.state_step_bytes
@@ -340,7 +343,7 @@ export function unitChecks(){
                  Math.abs(dsf.w_route_total/dsf.w_route_pertok - 64) < 1e-9,
     "DSV41F expert bytes (MXFP4 packed + E8M0 scales); kink at n = 64");
   console.assert(dsf.kv_decode_bpt === 3*68/2 + 68 &&
-                 dsf.kv_decode_const === 38*512*288 + 4*16384*68 + 40*128*528 &&
+                 dsf.kv_decode_const === 38*512*516 + 4*16384*68 + 40*128*528 &&
                  dsf.kv_decode_topk === 1024, "DSV41F sparse-decode pricing");
   console.assert(Math.abs(dsf.attn_layers*dsf.attn_d - 3*(32*128/2/2)) < 1e-9,
     "DSV41F prefill quadratic term = three QK-only encoder indexers over the ratio-2 axis");
@@ -365,7 +368,7 @@ export function unitChecks(){
                  q38.kv_decode_topk === 2048, "Q38FN QSA sparse-decode pricing");
   console.assert(q38.w_decode_shared === 8623999000,
     "Q38FN shared per-step read = the exact BF16 ledger sum");
-  console.assert(q38.w_resident > q38.w_route_total + q38.w_decode_shared + 50e9,
+  console.assert(q38.w_resident + q38.w_engram > q38.w_route_total + q38.w_decode_shared + 50e9,
     "Q38FN resident (n-gram table, embed, vision, MTP) far exceeds the touchable bytes");
   // NVIDIA's NVFP4: routed experts x0.5625, everything else byte-identical
   console.assert(q38.nvfp4_w[3] === 512*2764824*48 && q38.nvfp4_w[2] === 10*2764824*48,

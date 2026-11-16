@@ -24,6 +24,10 @@ export const state = {
   // model's KV heads keeps a full copy — the MLA / MQA models pay tp copies.
   // research/kv_tp_sharding.md.
   kvshard: "dcp",
+  // engram: where a model with Engram tables (DSv4.1-Flash, Qwen3.8-Flash-
+  // Next's n-gram table) keeps them. "cpu" is vLLM's default (host memory,
+  // no HBM cost) and every catalogue figure; "gpu" charges them to HBM.
+  engram: "cpu",
   // Efficiency knobs, GLOBAL (one value for every row, never reseeded per
   // model): eta (decode: achieved fraction of raw HBM bandwidth) and mfu
   // (prefill, and the decode verify compute). t0 / tar / trec are the step

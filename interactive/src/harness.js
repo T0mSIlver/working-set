@@ -92,6 +92,7 @@ export function workingsetConfig(state, model, topo, wl){
       // reproduce them.
       ['recurrent_state_dtype', state.state_dt],
       ['kv_sharding', state.kvshard],
+      ['engram', state.engram],
       ['weight_overhead', state.wover === 'p15' ? 0.15 : 0],
       // written only when set, as `ws` writes it: unset = no cap
       ...(state.mns !== null ? [['max_num_seqs', int(state.mns)]] : []),

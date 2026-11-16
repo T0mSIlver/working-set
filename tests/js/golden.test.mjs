@@ -201,7 +201,7 @@ test('golden vectors: the JS mirror agrees with workingset.model', (t) => {
       // the page prints "≥ N") is a lower bound, not an estimate: Python's
       // reference must sit at or above it, within the band. The explorer's
       // cap is a UI cost guard, not a modelling difference, and a count past
-      // it (DSv4.1-Flash at 890 B/token holds 10^5 sessions on 8xB300) binds
+      // it (DSv4.1-Flash at 1,460 B/token holds tens of thousands of sessions on 8xB300) binds
       // nothing the page decides — the users slider ends at 1,024. The same
       // holds for what WARM_BOUNDED prices off it: past a knee of 10^4+ users.
       if (js._warm_censored && (WARM_COUNTS.has(q) || WARM_BOUNDED.has(q))){

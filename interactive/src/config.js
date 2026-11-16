@@ -132,6 +132,10 @@ for (const t of Object.values(CONFIG.TOPOLOGIES)) t.gpu = CONFIG.GPUS["H200"];
 
 /* ---- model helpers ---- */
 export function is_moe(m){ return m.w_route_total > 0; }
+// weight bytes the GPUs hold: w_resident, plus the Engram tables when they
+// sit in HBM (engram_in_hbm) — what the pool and the fit charge, never the
+// prefill stream. Mirrors hbm_weights().
+export function hbmWeights(m){ return m.w_resident + (m.engram_in_hbm ? (m.w_engram || 0) : 0); }
 // concurrency at which the no-overlap expert union saturates (every routed
 // expert read each step): n_sat = total/pertok = E/k_e routed positions
 export function unionKink(m){ return is_moe(m) ? Math.round(m.w_route_total / m.w_route_pertok) : null; }
@@ -254,7 +258,7 @@ export function servableKv(m, kv, gpuKey){
 function actReserve(){
   const m = CONFIG.MODELS["27B"];
   const poolBytes = CONFIG.BASELINE_POOL_TOKENS_27B_1GPU * m.kv_bpt;
-  return CONFIG.VRAM_PER_GPU - m.w_resident - poolBytes;
+  return CONFIG.VRAM_PER_GPU - hbmWeights(m) - poolBytes;
 }
 // 17.98 GiB. Independently corroborated: the 2xH200 TP2 FP16 startup log
 // implies 18.24 GiB per GPU (+1.4%), with nothing about TP2 or FP16 fitted.
@@ -325,7 +329,7 @@ export function kv_pool_tokens(m, topo){
   // NOT factored as tp*(vram - R) - w: the three terms in this order make every
   // pre-existing configuration bit-identical to the pre-grid code (and to
   // Python's kv_pool_tokens), rather than merely equal after formatting.
-  const poolBytes = topo.tp * gpu.vram - m.w_resident - topo.tp * R;
+  const poolBytes = topo.tp * gpu.vram - hbmWeights(m) - topo.tp * R;
   // ...in tokens of the cache the group STORES: a replicated layout pays
   // kv_bpt x copies per token (kvReplication) — mirrors _replicated()
   return Math.max(poolBytes, 0) / replicated(m, topo).kv_bpt;
@@ -377,7 +381,7 @@ export function replicated(m, topo){
 // bump is reflected in the threshold the Split control reports.
 export function minTpFor(m, gpuKey){
   const gpu = CONFIG.GPUS[gpuKey || "H200"];
-  return Math.floor(m.w_resident / (gpu.vram - (ACT_RESERVE + (gpu.reserve_extra || 0)))) + 1;
+  return Math.floor(hbmWeights(m) / (gpu.vram - (ACT_RESERVE + (gpu.reserve_extra || 0)))) + 1;
 }
 
 // topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()

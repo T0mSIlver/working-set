@@ -802,3 +802,19 @@ def test_decode_crossing_beyond_the_search_cap_is_a_lower_bound(tmp_path, capsys
     assert cli.main(["predict", str(path), "--n-iter", "100"]) == 0
     out = capsys.readouterr().out
     assert "≥ " in out and "(recommended, lower bound)" in out
+
+
+def test_engram_gpu_costs_pool_and_is_refused_without_tables():
+    """deployment.engram = "gpu" moves the Engram tables into HBM: the pool
+    shrinks by exactly their bytes. On a model without tables it is refused,
+    not silently ignored."""
+    base = {"model": "DSV41F", "gpu": "B300", "tensor_parallel": 4}
+    cpu = RunConfig.from_dict({"deployment": base})
+    gpu = RunConfig.from_dict({"deployment": {**base, "engram": "gpu"}})
+    cpu.validate(), gpu.validate()
+    m = M.MODELS["DSV41F"]
+    lost = (M.kv_pool_tokens(cpu.to_model(), cpu.to_topology())
+            - M.kv_pool_tokens(gpu.to_model(), gpu.to_topology()))
+    assert lost == pytest.approx(m.w_engram / m.kv_bpt)
+    with pytest.raises(ValueError, match="no Engram tables"):
+        RunConfig.from_dict({"deployment": {"model": "27B", "engram": "gpu"}}).validate()

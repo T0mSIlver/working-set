@@ -17,6 +17,7 @@ max_model_len = 180000
 ram_gib = 0
 recurrent_state_dtype = "bf16"
 kv_sharding = "dcp"
+engram = "cpu"
 weight_overhead = 0
 max_num_seqs = 48
 

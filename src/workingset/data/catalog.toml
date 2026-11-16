@@ -488,21 +488,30 @@ note = "priced as a text workload: image encoding (ViT prefill) and image tokens
 # in FP4 (E2M1 + E4M3/16 = 288 B/entry) and indexer keys in FP4 (68 B) ->
 # 890 B/token, the paper's own figure; plus 2.8 MiB/session of fp8
 # 128-entry windows on 43 layers and fp32 compressor state, carried in
-# deltanet_state. Decode reads four full-axis indexer scans (170 B/ctx
-# token) + top-512 latents on 38 layers, four candidate-pool (16,384
-# entry) indexer reads and the windows (12.8 MB/seq). The 384 routed
-# experts are native MXFP4 (kink at n = 384/6 = 64); vLLM keeps the
-# Engram tables in HBM ("plan capacity for them" — recipe), so the fit
-# starts at 5xH200 / 2xB300. NVIDIA's NVFP4 repack is 3.3% heavier.
+# deltanet_state. vLLM serves it with --kv-cache-dtype fp8, which stores
+# the main latent in FP8 (512 + a 4-B scale = 516 B/entry) and keeps the
+# FP4 indexer keys: 1,460 B/token, within 0.3% of the pool a vLLM 0.33.0
+# startup log reports on 4xB300; the 890 B native FP4 layout is no vLLM
+# option. Decode reads
+# four full-axis indexer scans (170 B/ctx token) + top-512 latents on 38
+# layers, four candidate-pool (16,384 entry) indexer reads and the windows
+# (17.2 MB/seq). The 384 routed experts are native MXFP4 (kink at n =
+# 384/6 = 64). vLLM offloads the 203 GB Engram tables to pinned host
+# memory (EngramConfig cpu_offload=True by default), so 307.5 GB stays
+# on the GPUs; NVIDIA's NVFP4 repack is 3.3% heavier.
 # research/model_dsv41flash.md.
 [models.DSV41F]
 name = "DeepSeek-V4.1-Flash (MoE 552B+196B Engram, CED+CSA2)"
-kv_bpt = 890                     # 3 x (288+68)/2 ratio-2 caches + (288+68) ratio-1 cache
+kv_bpt = 1_460                   # 3 x (516+68)/2 ratio-2 caches + (516+68) ratio-1 cache:
+                                 # fp8 latent + fp32 scale, fp4 indexer keys (fits a
+                                 # startup log's pool within 0.3%; vLLM layout not read)
 deltanet_state = 2_930_688       # 43 x 128 x 528 fp8 windows + 24,576 fp32 compressor state
 state_step_bytes = 45_696        # per step: 40 x 528 ring-slot writes + 24,576 compressor
                                  # state r/w — the window READS are in kv_decode_const
 state_fp32_ok = false            # already fp8/fp32-mixed; doubling models nothing
-w_resident = 510_286_023_000     # measured safetensors total (header-verified), Engram in HBM
+w_resident = 307_527_990_600     # safetensors total 510,286,023,000 (header-verified) less
+                                 # the Engram tables, offloaded to host memory by vLLM
+w_engram = 202_758_032_400       # 768,022,850 rows x 264 B (FP8 + E8M0 scale), 2 tables
 w_decode_shared = 8_522_921_408  # exact ledger: attn 5.07 + shared exp 1.42 + gates/mHC/
                                  # compressors/indexers/engram-proj 0.71 + lm_head 1.32
 w_route_pertok = 4_512_153_600   # 6 experts x 18,800,640 B (MXFP4 packed + E8M0 scales) x 40
@@ -526,17 +535,17 @@ draft_method = "dspark"
 # repack was. Everything else byte-identical, so the arm is 3.3%
 # HEAVIER than native. research/nvfp4_2026-10.md.
 nvfp4_w = [
-    527_273_322_840,
+    324_515_290_440,  # 527,273,322,840 less the 202,758,032,400 Engram tables
     8_522_921_408,
     4_777_580_160,  # 6 x 19,906,584 x 40
     305_765_130_240,  # 384 x 19,906,584 x 40
 ]
 kv_decode_bpt = 170              # 3 x 68/2 + 68: full-axis fp4 indexer scans (layers 2/8/14/20)
-kv_decode_const = 12_763_136     # 38 x 512 x 288 top-k + 4 x 16,384 x 68 candidate pool
+kv_decode_const = 17_199_104     # 38 x 512 x 516 top-k + 4 x 16,384 x 68 candidate pool
                                  # + 40 x 128 x 528 windows
 kv_decode_topk = 1_024           # 512 compressed entries x ratio 2, in token space
 kv_fp16_ok = false               # FP4 main KV is the TRAINED cache format (QAT, tech
-                                 # report 2.4.4); no stack serves a BF16 main KV
+                                 # report 2.4.4); vLLM serves it fp8, no stack BF16
 max_ctx = 1_048_576              # native 1M (YaRN x16 over 65,536 baked into the config)
 # prefill: CED runs the 20 encoder layers only — active GEMM params
 # excl embed/lm_head 7.90e9 (encoder ledger + the layer-20 CED
@@ -561,8 +570,8 @@ source = { tb21 = "vendor card (DeepSeek Harness Minimal mode, max reasoning eff
 
 [models.DSV41F.explorer]
 short = "DSv4.1-Flash"
-tip = "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four FP4 compressed caches across the 40 layers: 890 B/token stored — 4× below V4-Flash-0731, ~40× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far, but its heaviest fit after GLM-5.3: vLLM keeps the 203 GB Engram tables in HBM, so 510 GB resident — 8×H200 (5 by arithmetic) / 2×B300. Native MXFP4 experts (384, 6 routed: kink n = 64); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1."
-kv_tip = "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels, quantization-aware trained) and the sliding windows FP8 — that native layout is what the FP8 arm prices; no serving stack offers a BF16 main KV, so the toggle is disabled."
+tip = "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four compressed caches across the 40 layers: 1,460 B/token stored under vLLM's fp8 cache (890 B in the model's own FP4 layout) — 2.4× below V4-Flash-0731, ~27× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far. vLLM keeps the 203 GB Engram tables in host memory, so 307.5 GB stays on the GPUs — 4×H200 (3 by arithmetic) / 2×B300; with the tables in GPU memory, 510 GB — 8×H200 (5 by arithmetic). Native MXFP4 experts (384, 6 routed: kink n = 64); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1."
+kv_tip = "DeepSeek-V4.1-Flash: the main KV cache is FP4 by training (E2M1 + one E4M3 scale per 16 channels), but vLLM's --kv-cache-dtype fp8 stores the latent in FP8 (516 B per entry against 288), keeping the FP4 indexer keys and the FP8 windows: 1,460 B/token, matched to a B300 startup log within 0.3%. That is what the FP8 arm prices. No serving stack offers a BF16 main KV, so the toggle is disabled."
 state_tip = "DeepSeek-V4.1-Flash pays a fixed {state_mib} MiB/session (fp8 windows + fp32 compressor state), but its precision is set by the serving stack — no bf16/fp32 knob to turn, so the control is disabled."
 speculative_config = '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block","enable_adaptive_verification":true}'
 
@@ -573,7 +582,9 @@ speculative_config = '{"method":"dspark","num_speculative_tokens":5,"draft_sampl
 # experts and the n-gram table are FP8 in the serving checkpoint — the
 # always-active blocks stay BF16, so the shared per-step read is heavy
 # (8.6 GB) while the cache is light (13.4 KiB/token). Deepest expert-union
-# kink in the study: n = 512/10 = 51.2. research/model_qwen38flashnext.md.
+# kink in the study: n = 512/10 = 51.2. vLLM offloads the n-gram table to
+# pinned host memory (EngramConfig cpu_offload=True by default, seen in a
+# vLLM 0.33.0 startup log on 4xB300), so it is w_engram, not w_resident. research/model_qwen38flashnext.md.
 [models.Q38FN]
 name = "Qwen3.8-Flash-Next (MoE 125B-A6B, QSA+n-gram)"
 kv_bpt = 13_741                  # 13 attn (12 + the MTP layer) x 2 KV x 256 x 2(K,V) x 1B
@@ -581,7 +592,9 @@ kv_bpt = 13_741                  # 13 attn (12 + the MTP layer) x 2 KV x 256 x 2
                                  # = 13,312 + 429; decode (kv_decode_*) excludes the MTP layer
 kv_index_bpt = 429               # the single-head indexer share of kv_bpt: replicates x tp
 deltanet_state = 59_572_224      # 36 DN layers x 48 vheads x 128x128 bf16 + conv (10,240 x 4)
-w_resident = 185_502_232_570     # FP8 ckpt metadata.total_size, shard-header-verified
+w_resident = 134_301_986_808     # FP8 ckpt metadata.total_size 185,502,232,570 (shard-header-
+                                 # verified) less the n-gram table, in host memory
+w_engram = 51_200_245_762        # n-gram table: 51.2e9 params FP8 + BF16 scales
 w_decode_shared = 8_623_999_000  # exact per-tensor ledger sum — BF16 always-active:
                                  # attn 1.23 + DN 4.17 + shared exp 0.47 + routers 0.13
                                  # + hyper-conns 1.28 + PLE 0.07 + lm_head 1.27
@@ -604,7 +617,7 @@ spec_tokens = 3                  # num_speculative_tokens: vLLM recipe
 # (2,764,824 B/expert, x0.5625 of FP8); n-gram table, MTP experts,
 # attention, DeltaNet, heads byte-identical. research/nvfp4_2026-09.md.
 nvfp4_w = [
-    132_639_846_394,
+    81_439_600_632,  # 132,639,846,394 less the 51,200,245,762 n-gram table
     8_623_999_000,
     1_327_115_520,  # 10 experts x 2,764,824 B x 48
     67_948_314_624,  # 512 experts x 2,764,824 B x 48
@@ -629,7 +642,7 @@ aa = "qwen3-8-flash-next"
 
 [models.Q38FN.explorer]
 short = "Q3.8-Flash"
-tip = "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 13.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 132.6 vs 185.5 GB resident, fixed read unchanged. 262k native context, 1M via YaRN."
+tip = "Qwen3.8-Flash-Next — MoE 125B-A6B (+51B FP8 n-gram table): 48 layers (36 DeltaNet + 12 QSA sparse attention) → 13.4 KiB/token stored, decode reads top-2048 tokens + an indexer scan; 512 experts / 10 routed (deepest expert-union kink, n = 51.2) and a 56.8 MiB bf16 state per session. Fits from 2×H200; 1×B300 by pool arithmetic (recipe floor TP2 — TP1 hit compilation OOM on GB300). NVFP4: NVIDIA checkpoint (2026-09-02), routed experts only, ×0.5625 per expert — 81.4 vs 134.3 GB on the GPUs, fixed read unchanged. vLLM keeps the 51.2 GB n-gram table in host memory. 262k native context, 1M via YaRN."
 
 # vLLM recipe: plain TP8 is incompatible with the FP8 checkpoint (128-wide quantization blocks), so TP8 must run as TEP8
 [[models.Q38FN.explorer.recipe]]
