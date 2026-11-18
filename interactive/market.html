@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Rent against token prices</title>
+</head>
+<body>
+<!-- ARTIFACT:BEGIN -->
+<style>
+/* One chart is the page: a shared log axis of USD per million tokens, one row per model,
+   the rented-GPU cost as a band that the utilisation slider moves, listed prices as dots. */
+:root{
+  --page:#ffffff; --surface:#ffffff;
+  --text:#1a1a1a; --text-2:#45464a; --muted:#6b6b6b;
+  --grid:#eceef1; --axis:#c9cbd0; --border:#e4e5e8;
+  --control:#f3f4f6; --control-active:#ffffff;
+  --paper:#f0f1f3; --hover:#f6f7f8;
+  --band:#0d9488; --warm:#e0662f; --ghost:#e6e8eb;
+  --mono:ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --page:#0c0c0d; --surface:#0c0c0d;
+    --text:#e8e8e6; --text-2:#b4b4b1; --muted:#8a8a8a;
+    --grid:#202124; --axis:#3a3b3f; --border:#26272a;
+    --control:#1a1b1e; --control-active:#2c2d31;
+    --paper:#17181a; --hover:#151619;
+    --band:#0f9e8f; --warm:#e0662f; --ghost:#1d1f22;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --page:#0c0c0d; --surface:#0c0c0d;
+  --text:#e8e8e6; --text-2:#b4b4b1; --muted:#8a8a8a;
+  --grid:#202124; --axis:#3a3b3f; --border:#26272a;
+  --control:#1a1b1e; --control-active:#2c2d31;
+  --paper:#17181a; --hover:#151619;
+  --band:#0f9e8f; --warm:#e0662f; --ghost:#1d1f22;
+  color-scheme:dark;
+}
+html,body{margin:0}
+body{
+  background-color:var(--page); color:var(--text);
+  font-family:var(--sans); font-size:14px; line-height:1.45; letter-spacing:-.003em;
+}
+.mk{max-width:1160px; margin:0 auto; box-sizing:border-box;
+  padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px));
+  padding-block:28px 48px; display:flex; flex-direction:column; gap:18px}
+.mk *{box-sizing:border-box}
+a{color:var(--band); text-underline-offset:2px}
+.lbl{font-family:var(--mono); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.09em; color:var(--muted)}
+.mk h1{font-size:clamp(22px,4vw,30px); line-height:1.15; margin:4px 0 0; font-weight:650; letter-spacing:-.015em; text-wrap:balance}
+.lede{max-width:68ch; color:var(--text-2); margin:0; font-size:15px}
+.panel{background:var(--surface); border:1px solid var(--border)}
+.controls{display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:18px 28px; padding:18px}
+@media (max-width:720px){.controls{grid-template-columns:minmax(0,1fr)}}
+.util{display:flex; flex-direction:column; gap:8px; min-width:0}
+.bignum{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap}
+.bignum output{font-family:var(--mono); font-size:56px; font-weight:700; line-height:1; letter-spacing:-.04em; font-variant-numeric:tabular-nums; color:var(--text)}
+.bignum span{color:var(--text-2); max-width:30ch}
+input[type=range]{width:100%; accent-color:var(--band); height:32px; margin:0}
+.foot{margin:6px 0 4px; font-size:12px; color:var(--muted); max-width:90ch}
+.caveat{margin:0; font-size:12.5px; color:var(--text-2); max-width:62ch}
+.toggles{display:flex; flex-direction:column; gap:12px; min-width:0}
+.tg{display:flex; flex-direction:column; gap:5px}
+.seg{display:inline-flex; flex-wrap:wrap; border:1px solid var(--border); background:var(--control); width:max-content; max-width:100%}
+.seg button{font:inherit; font-size:13px; border:0; background:transparent; color:var(--text-2); padding:6px 11px; cursor:pointer; white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--control-active); color:var(--text); font-weight:600; box-shadow:inset 0 0 0 1px var(--axis)}
+.seg button:focus-visible,select:focus-visible,input:focus-visible,.mk [tabindex]:focus-visible,summary:focus-visible{outline:2px solid var(--band); outline-offset:2px}
+select{font:inherit; font-size:13px; color:var(--text); background:var(--control); border:1px solid var(--border); padding:5px 8px; max-width:100%}
+.count{font-size:16px; margin:0; max-width:72ch}
+.count b{font-variant-numeric:tabular-nums}
+.legend{display:flex; flex-wrap:wrap; gap:8px 20px; align-items:center; font-size:12.5px; color:var(--text-2)}
+.legend span{display:inline-flex; align-items:center; gap:7px}
+.legend svg{flex:none}
+.axistitle{font-family:var(--mono); font-size:11px; color:var(--text-2); margin:12px 0 2px}
+.chartwrap{position:relative; padding:10px 14px 6px; min-width:0}
+#chart{display:block; width:100%; overflow:visible}
+#chart text{font-family:var(--sans); fill:var(--text)}
+#chart .tick{font-family:var(--mono); font-size:11px; fill:var(--muted)}
+#chart .rowname{font-size:13px; font-weight:600}
+#chart .rowsub{font-size:11px; fill:var(--muted); font-family:var(--mono)}
+#chart .row{cursor:pointer}
+#chart .row:hover .rowbg,#chart .row.pinned .rowbg{fill:var(--hover)}
+#chart .dot{transition:fill .18s, stroke .18s}
+#chart .hit{fill:transparent; cursor:pointer}
+#chart .hit:focus{outline:none}
+#chart .hit:focus-visible{stroke:var(--band); stroke-width:2}
+.tt{position:absolute; z-index:5; pointer-events:none; background:var(--surface); border:1px solid var(--axis); padding:10px 12px; font-size:12.5px; line-height:1.4; width:max-content; max-width:min(340px, calc(100% - 8px)); color:var(--text)}
+.tt h4{margin:0 0 2px; font-size:13px}
+.tt .sub{color:var(--muted); margin-bottom:6px}
+.tt dl{display:grid; grid-template-columns:auto 1fr; gap:2px 10px; margin:0}
+.tt dt{color:var(--muted)}
+.tt dd{margin:0; font-variant-numeric:tabular-nums}
+.tt p{margin:6px 0 0; color:var(--text-2)}
+.pin{padding:14px; display:flex; flex-direction:column; gap:10px; min-width:0; overflow:hidden}
+.pin h2{font-size:16px; margin:0}
+.tablewrap{overflow-x:auto; min-width:0; max-width:100%; -webkit-overflow-scrolling:touch}
+table{border-collapse:collapse; font-size:12.5px; width:100%; font-variant-numeric:tabular-nums}
+th,td{text-align:right; padding:5px 6px; border-bottom:1px solid var(--grid); white-space:nowrap}
+th:first-child,td:first-child,th.l,td.l{text-align:left}
+td:first-child{white-space:normal; min-width:130px; max-width:220px}
+td.wrap{white-space:normal; min-width:140px; max-width:220px; text-align:left; color:var(--text-2)}
+th{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:700}
+th button{font:inherit; color:inherit; background:none; border:0; padding:0; cursor:pointer; text-transform:inherit; letter-spacing:inherit}
+th button[data-active="true"]{color:var(--text)}
+details.src{padding:0}
+details.src>summary{cursor:pointer; padding:12px 14px; list-style:none; display:flex; gap:10px; align-items:baseline}
+details.src>summary::before{content:"+"; font-family:var(--mono); color:var(--muted)}
+details.src[open]>summary::before{content:"\2212"}
+.srcbody{padding:0 14px 16px; display:flex; flex-direction:column; gap:14px; max-width:100%}
+.srcbody h3{font-size:13px; margin:0}
+.srcbody p,.srcbody li{max-width:76ch; color:var(--text-2); margin:0}
+.srcbody ol,.srcbody ul{margin:0; padding-left:20px; display:flex; flex-direction:column; gap:4px}
+.muted{color:var(--muted)}
+@media (prefers-reduced-motion: reduce){#chart .dot{transition:none}}
+</style>
+<main class="mk" id="market">
+  <header>
+    <div class="lbl">Working Set · market</div>
+    <h1>Token prices against the GPU rent they have to cover</h1>
+  </header>
+  <p class="lede" id="lede">An agentic coding session re-reads its history on every request, so 93% of the tokens it sends are cache reads.</p>
+
+  <section class="panel controls" aria-label="Assumptions you can change">
+    <div class="util">
+      <label class="lbl" for="u">Utilisation</label>
+      <div class="bignum"><output id="uOut" for="u">50%</output><span>of the predicted limit, averaged over every rented hour</span></div>
+      <input type="range" id="u" min="5" max="100" step="1" value="50">
+      <p class="caveat" id="caveat">Illustrative GPU-rent coverage for this workload; the gap is not provider margin. Utilisation means average live sessions divided by the model’s latency-based session limit, not GPU busy time. Provider hardware, cache behaviour and traffic are unknown.</p>
+    </div>
+    <div class="toggles">
+      <div class="tg"><span class="lbl" id="termLbl">GPU rent</span>
+        <div class="seg" role="group" aria-labelledby="termLbl" id="term"></div></div>
+      <div class="tg"><span class="lbl" id="unitLbl">Unit</span>
+        <div class="seg" role="group" aria-labelledby="unitLbl" id="unit">
+          <button type="button" id="unit-tok" data-v="tok" aria-pressed="true">per million tokens</button>
+          <button type="button" id="unit-char" data-v="char" aria-pressed="false">per million characters</button>
+        </div></div>
+      <div class="tg" id="kindWrap" hidden><label class="lbl" for="kind">Text</label>
+        <select id="kind">
+          <option value="code">code</option>
+          <option value="english">English</option>
+          <option value="french">French</option>
+          <option value="json_tool_calls">tool-call JSON</option>
+        </select></div>
+    </div>
+  </section>
+
+  <p class="count" id="count" aria-live="polite"></p>
+
+  <section class="panel">
+    <div class="chartwrap" id="chartwrap">
+      <div class="legend" id="legend"></div>
+      <div class="axistitle" id="axisTitle"></div>
+      <svg id="chart" role="img" aria-labelledby="count"></svg>
+      <div class="tt" id="tt" hidden></div>
+      <p class="foot" id="foot"></p>
+    </div>
+  </section>
+
+  <section class="panel pin" id="pin" hidden></section>
+
+  <details class="panel src" id="sources">
+    <summary><span class="lbl">Sources and assumptions</span></summary>
+    <div class="srcbody" id="srcbody"></div>
+  </details>
+</main>
+<!-- ARTIFACT:END -->
+<script type="module" src="src/market.js"></script>
+</body>
+</html>
