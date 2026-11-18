@@ -146,6 +146,49 @@ def other_pricing(pricing: dict, where: str) -> dict:
     return other
 
 
+def _minutes(hhmm: int) -> int:
+    h, m = divmod(int(hhmm), 100)
+    if not (0 <= h <= 24 and 0 <= m < 60):
+        sys.exit(f"error: override window time {hhmm!r} is not HHMM")
+    return h * 60 + m
+
+
+def time_weighted(rec: dict, where: str) -> dict | None:
+    """Derived: the 24-hour time-weighted price when pricing.overrides has UTC windows.
+
+    Each window [utc_start, utc_end) is HHMM UTC, wrapping past midnight when
+    utc_end <= utc_start. Minutes no window covers bill at the listed base price.
+    A price a window omits falls back to the base price. Overlapping windows are an error.
+    """
+    windows = rec["other_pricing"].get("overrides")
+    if not windows:
+        return None
+    covered = [None] * 1440
+    used = []
+    for i, w in enumerate(windows):
+        for k in ("utc_start", "utc_end"):
+            if k not in w:
+                sys.exit(f"error: {where}.pricing.overrides[{i}] has no field '{k}'")
+        a, b = _minutes(w["utc_start"]), _minutes(w["utc_end"])
+        span = (b - a) % 1440 or 1440
+        for t in range(a, a + span):
+            if covered[t % 1440] is not None:
+                sys.exit(f"error: {where}.pricing.overrides windows overlap at minute {t % 1440}")
+            covered[t % 1440] = i
+        used.append({"utc_start": w["utc_start"], "utc_end": w["utc_end"], "hours": span / 60,
+                     **{f: w.get(k, rec[f]) for k, f in PRICE_FIELDS.items() if k != "input_cache_write"}})
+    base_minutes = covered.count(None)
+    out = {"what": "24-hour time-weighted price over the UTC windows below; the listed base price "
+                   "covers any minute no window covers", "windows": used,
+           "base_hours": base_minutes / 60}
+    for k, f in PRICE_FIELDS.items():
+        if k == "input_cache_write":
+            continue
+        vals = [(used[i][f] if i is not None else rec[f]) for i in covered]
+        out[f] = None if any(v is None for v in vals) else round(sum(vals) / 1440, 9)
+    return out
+
+
 def endpoint_record(e: dict, where: str, nulls: Counter) -> dict:
     pricing = require(e, "pricing", where)
     for k in ("prompt", "completion"):
@@ -157,6 +200,7 @@ def endpoint_record(e: dict, where: str, nulls: Counter) -> dict:
     for k, field in PRICE_FIELDS.items():
         rec[field] = per_mtok(pricing.get(k))
     rec["other_pricing"] = other_pricing(pricing, where)
+    rec["time_weighted"] = time_weighted(rec, where)
     rec["context_length"] = require(e, "context_length", where)
     rec["max_completion_tokens"] = e.get("max_completion_tokens")
     rec["quantization"] = e.get("quantization")

@@ -12,6 +12,8 @@ tokens, converted with `decimal` from the per-token strings), context length,
 quantization, uptime and status to `data/market/openrouter-<date>.json`.
 Prices OpenRouter does not publish are `null`; `pricing.discount` and
 time-of-day prices (`pricing.overrides`) are kept under `other_pricing`.
+Where an endpoint has time-of-day prices, `time_weighted` gives the price
+averaged over 24 hours of UTC windows; the listed price stays as published.
 
 The snapshot is not in the repo. OpenRouter's
 [Terms of Service](https://openrouter.ai/terms) (Last Updated: August 31, 2026)
@@ -37,7 +39,10 @@ is the published source. Each provider's terms were checked first: Alibaba,
 Moonshot, Z.ai, Fireworks, Novita, Parasail, SiliconFlow, Cerebras, SambaNova
 and Groq forbid scraping or reusing site content, so they have no rows (the
 clause is under `providers`); Nebius's page returned 403. Rows come from
-DeepInfra, Together AI, Mistral and DeepSeek.
+DeepInfra, Together AI and Mistral. A row whose model is a different checkpoint
+from the catalogue's is under `dropped` with the reason: DeepSeek's
+`deepseek-flash` is V4.1-Flash-1017, not DSV41F, and "Qwen3.8-Flash" is not
+confirmed to be Qwen3.8-Flash-Next.
 
 `price_crosscheck.json` sets 12 of those rows against OpenRouter's listing for
 the same provider. OpenRouter's prices are the providers' current prices after
