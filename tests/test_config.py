@@ -196,7 +196,8 @@ def test_explorer_toml_names_every_field():
         # dumps() does (explorer_every_knob.toml carries tau_0_us)
         want -= {"tau_0_us", "tau_ar_us", "tau_rec_us", "union"}
         # `ws calibrate` only: the page has no reserve control and no fit record
-        want -= {"reserve_gib", "fit"}
+        want -= {"reserve_gib", "fit", "gpu_memory_utilization", "gpu_total_gib",
+                 "activation_gib", "non_torch_gib"}
         # like the image keys, written only off their defaults (the page has
         # controls; explorer_every_knob.toml carries both)
         want -= {"slowed_share_max", "cold_wait_budget_s"}

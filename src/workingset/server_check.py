@@ -118,9 +118,7 @@ def check_config(cfg, server: dict, metrics_url: str | None
             diffs.append(
                 f"the server's KV pool is {got:,} tokens, the config predicts "
                 f"{pred:,.0f} (deployment.kv_sharding = {layout!r}; "
-                f"calibration.reserve_gib "
-                + ("unset" if cfg.calibration.reserve_gib is None
-                   else f"{cfg.calibration.reserve_gib:g}") + ")")
+                + _reserve_setting(cfg) + ")")
     spec = cfg.to_model().spec_tokens
     if server["spec_decode"] is not None:
         if spec > 0 and not server["spec_decode"]:
@@ -132,6 +130,17 @@ def check_config(cfg, server: dict, metrics_url: str | None
                          "has spec_tokens 0: the server drafts and the "
                          "prediction does not")
     return diffs, notes
+
+
+def _reserve_setting(cfg) -> str:
+    """How the config sets the per-GPU reserve, for a pool mismatch."""
+    c = cfg.calibration
+    if c.reserve_terms() is not None:
+        return ("calibration reserve terms: gpu_memory_utilization "
+                f"{c.gpu_memory_utilization:g}, gpu_total_gib {c.gpu_total_gib:g}, "
+                f"activation_gib {c.activation_gib:g}, non_torch_gib {c.non_torch_gib:g}")
+    return "calibration.reserve_gib " + (
+        "unset" if c.reserve_gib is None else f"{c.reserve_gib:g}")
 
 
 MISMATCH_HELP = (

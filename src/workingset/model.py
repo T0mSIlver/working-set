@@ -679,6 +679,42 @@ def check_dtype_supported(model: Model, topo: Topology) -> None:
 KV_SHARDS = ("dcp", "replicate")
 
 
+@dataclass(frozen=True)
+class ReserveTerms:
+    """What vLLM holds back from the KV pool on each GPU, as the three terms
+    its start-up profile reports (research/reserve_terms.md; `ws calibrate
+    --vllm-log` reads them):
+
+      holdback    (1 - gpu_memory_utilization) x gpu_total: the share of the
+                  GPU vLLM never requests. Scales with the GPU's memory.
+      activation  the profile run's transient peak plus vLLM's CUDA graph
+                  estimate ("peak activation"). Charged on every GPU.
+      non_torch   memory the worker took outside torch's allocator after its
+                  start-up snapshot ("consumed" less the weights).
+
+    gpu_total is the device's total memory as vLLM reads it
+    (torch.cuda.mem_get_info), not GPU.vram: the H200's catalogue vram is
+    the vendor's 141e9, its CUDA total about 150e9. All four in bytes,
+    except the utilisation.
+    """
+    gpu_memory_utilization: float
+    gpu_total: float
+    activation: float
+    non_torch: float
+
+    @property
+    def holdback(self) -> float:
+        return (1.0 - self.gpu_memory_utilization) * self.gpu_total
+
+    def reserve(self, gpu: "GPU") -> float:
+        """The per-GPU reserve these terms imply against `gpu`.vram, the
+        figure kv_pool_tokens subtracts: vLLM's pool per GPU is
+        utilisation x gpu_total - weights - activation - non_torch, and the
+        model's is vram - weights - reserve."""
+        return (gpu.vram - self.gpu_memory_utilization * self.gpu_total
+                + self.activation + self.non_torch)
+
+
 @dataclass
 class Topology:
     name: str
@@ -702,6 +738,11 @@ class Topology:
     # reserve; a deployment whose vLLM start-up line reported its pool sets
     # the reserve that pool implies (`ws calibrate`, [calibration] reserve_gib).
     reserve: float | None = None
+    # The same reserve as vLLM's three terms, read from a start-up log
+    # (`ws calibrate --vllm-log`, [calibration] gpu_memory_utilization,
+    # gpu_total_gib, activation_gib, non_torch_gib). Set at most one of
+    # reserve and reserve_terms.
+    reserve_terms: ReserveTerms | None = None
 
     @property
     def n_gpu(self) -> int:
@@ -916,6 +957,23 @@ def _act_reserve() -> float:
 ACT_RESERVE = _act_reserve()   # per-GPU activation/workspace/fragmentation reserve
 
 
+def per_gpu_reserve(topo: Topology) -> float:
+    """Bytes held back from the KV pool on each GPU of `topo`: the three
+    reserve terms when the topology carries them, else its single measured
+    reserve, else the H200-solved ACT_RESERVE plus the part's reserve_extra."""
+    if topo.reserve_terms is not None:
+        if topo.reserve is not None:
+            raise ValueError(
+                "the topology carries both a single reserve and the three "
+                "reserve terms: set calibration.reserve_gib or "
+                "gpu_memory_utilization, gpu_total_gib, activation_gib and "
+                "non_torch_gib, not both")
+        return topo.reserve_terms.reserve(topo.gpu)
+    if topo.reserve is None:
+        return ACT_RESERVE + topo.gpu.reserve_extra
+    return topo.reserve
+
+
 def kv_pool_tokens(model: Model, topo: Topology) -> float:
     """KV-cache capacity of ONE cache (tokens), from the transparent memory model.
 
@@ -937,10 +995,11 @@ def kv_pool_tokens(model: Model, topo: Topology) -> float:
     on every part, plus the part's reserve_extra — the measured H200 HBM
     over-provision the solved reserve implicitly absorbed, added back on parts
     that do not share it (see GPU.reserve_extra and docs/scenarios.md).
+    A topology that carries a measured reserve (Topology.reserve, or the three
+    terms in Topology.reserve_terms) uses it instead: per_gpu_reserve().
     """
     check_dtype_supported(model, topo)
-    reserve = (ACT_RESERVE + topo.gpu.reserve_extra if topo.reserve is None
-               else topo.reserve)
+    reserve = per_gpu_reserve(topo)
     # NOT factored as tp*(vram - reserve) - w: keeping the three terms in the
     # original order makes every pre-existing configuration bit-identical to the
     # pre-grid code (tp=1 reproduces the old single/DP branch, tp=n the old TP

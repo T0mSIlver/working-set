@@ -65,7 +65,11 @@ domain at 8 the way single-node H200 systems do.
    **plus the measured `reserve_extra` correction** (item 2). Activation/
    workspace scale mostly with model and batch, not VRAM, so the transfer
    itself remains plausible; a vLLM startup log on a B300 (as was captured
-   for 2×H200 TP2) would still be a welcome end-to-end check.
+   for 2×H200 TP2) would still be a welcome end-to-end check. *2026-11-18:*
+   vLLM's utilisation holdback, `(1 - u) x total`, is the part of the reserve
+   that does scale with VRAM, and the transfer leaves about 10 GiB per GPU of
+   it out at u = 0.92; defaults unchanged until the logs listed in
+   `research/reserve_terms.md` exist.
 2. **Unit-convention mismatch across generations — RESOLVED BY MEASUREMENT
    (2026-07-27), promoted from sensitivity to central.** Both sides are now
    pinned: thundergolfer.com (read in full) documents the H200 delivering

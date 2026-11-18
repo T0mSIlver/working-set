@@ -92,7 +92,7 @@ prefix caching and the metrics keys from the endpoint, and stops when the
 config's `deployment.max_model_len` differs or the KV pool differs from the
 predicted one by more than 15% (set `deployment.kv_sharding`,
 `deployment.engram` (`"cpu"`, vLLM's default, or `"gpu"`: where a model's
-Engram tables sit), `calibration.reserve_gib` or run `ws calibrate --vllm-log`;
+Engram tables sit), `calibration.reserve_gib` (or the reserve terms) or run `ws calibrate --vllm-log`;
 `--allow-config-mismatch` runs anyway and records the differences). It also
 stops when `--metrics-url` gives neither `requests_running` nor
 `kv_cache_usage` (`--allow-blind-metrics`), when the server's token counts
