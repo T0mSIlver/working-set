@@ -230,6 +230,9 @@ def _proj(name, rows, cols=128, n=4):
       "num_key_value_heads": None},
      [("transformer.h.#.self_attention.query_key_value.weight", "BF16", [192, 128], 4)],
      2, 16),
+    # DCLM-7B (open_lm): attention.in_proj
+    ({"num_key_value_heads": None},
+     [("model.layers.#.attention.in_proj.weight", "F32", [3 * 128, 128], 4)], 8, 16),
     # Baichuan's W_pack, Molmo's att_proj (MHA, no num_key_value_heads)
     ({"num_key_value_heads": None}, [_proj("W_pack", 3 * 128)], 8, 16),
     ({}, [("model.transformer.blocks.#.att_proj.weight", "F32", [(8 + 4) * 16, 128], 4)],
@@ -280,15 +283,16 @@ def test_a_null_kv_head_count_is_one_per_query_head():
       "vocab_size": 128}, "a state-space model"),
     # aya-101 (T5)
     ({**_BASE, "model_type": "t5", "is_encoder_decoder": True}, "an encoder-decoder"),
-    # OLMo-7B, DCLM-7B: n_layers; OpenELM: num_transformer_layers
-    ({**{k: v for k, v in _BASE.items() if k != "num_hidden_layers"}, "n_layers": 32},
-     r"no num_hidden_layers; it has \{'n_layers': 32\}"),
+    # OpenELM: num_transformer_layers, with per-layer head counts
+    ({**{k: v for k, v in _BASE.items() if k != "num_hidden_layers"},
+      "num_transformer_layers": 16},
+     r"no num_hidden_layers; it has \{'num_transformer_layers': 16\}"),
     # SmolVLM2: text_config leaves the head count to LlamaConfig's default
     ({"text_config": {k: v for k, v in _BASE.items() if k != "num_attention_heads"}},
      "config.json text_config: num_attention_heads is None"),
-    # Qwen2.5-Omni: the language model is thinker_config.text_config
-    ({"thinker_config": {"text_config": dict(_BASE)}, "talker_config": dict(_BASE)},
-     r"nested configs \['talker_config', 'thinker_config.text_config'\]"),
+    # a nested config this command does not look in
+    ({"speech_config": {"decoder_config": dict(_BASE)}},
+     r"nested configs \['speech_config.decoder_config'\]"),
     # Llama-3.3-Nemotron-Super-49B: per-layer attention in block_configs
     ({**_BASE, "num_key_value_heads": None,
       "block_configs": [{"attention": {"n_heads_in_group": 8, "no_op": False}}]},
@@ -383,6 +387,47 @@ def test_cross_layer_attention_gets_no_kv_bpt():
     assert "kv_bpt" in draft(_ck({"use_cla": False, "cla_share_factor": 2})).fields
     d = draft(_ck({"use_cla": True, "cla_share_factor": 2}))
     assert "kv_bpt" not in d.fields and "use_cla" in render(d)
+
+
+_NO_LAYERS = {k: v for k, v in _BASE.items() if k != "num_hidden_layers"}
+
+
+@pytest.mark.parametrize("cfg", [
+    # OLMo-7B (hf_olmo), DCLM-7B (openlm): n_layers and n_heads
+    {**{k: v for k, v in _NO_LAYERS.items() if k != "num_attention_heads"},
+     "n_layers": 4, "n_heads": 8},
+    # EXAONE-3: num_layers
+    {**_NO_LAYERS, "num_layers": 4},
+    # InternVL, NVLM: llm_config; Qwen2.5-Omni: thinker_config.text_config
+    {"llm_config": dict(_BASE), "vision_config": {"num_hidden_layers": 27}},
+    {"thinker_config": {"text_config": dict(_BASE)}, "talker_config": dict(_BASE)},
+])
+def test_a_layer_count_under_another_name_or_config_is_read(cfg):
+    """The sweep refused OLMo, DCLM, EXAONE-3, chatglm, InternVL, NVLM and
+    Qwen-Omni on a missing num_hidden_layers."""
+    d = draft(hf.Checkpoint("org/m", "0" * 40, cfg, [_proj("q_proj", 128),
+                                                      _proj("k_proj", 32)], 1, None))
+    assert d.fields["layers"][0] == 4 and d.fields["kv_bpt"][0] == 4 * 2 * 16 * 2
+
+
+def test_an_aliased_layer_count_the_headers_contradict_stops():
+    cfg = {**_NO_LAYERS, "n_layers": 6}
+    with pytest.raises(ValueError, match="n_layers = 6 is read as num_hidden_layers"):
+        draft(hf.Checkpoint("org/m", "0" * 40, cfg, [_proj("q_proj", 128)], 1, None))
+
+
+def test_chatglm2_reads_its_own_names():
+    """chatglm2-6b: num_layers, multi_query_group_num, seq_length and
+    padded_vocab_size (vLLM configs/chatglm.py, models/chatglm.py:61-65)."""
+    cfg = {"model_type": "chatglm", "num_layers": 4, "num_attention_heads": 8,
+           "multi_query_attention": True, "multi_query_group_num": 2,
+           "seq_length": 32768, "padded_vocab_size": 128, "ffn_hidden_size": 64}
+    qkv = ("transformer.encoder.layers.#.self_attention.query_key_value.weight",
+           "BF16", [(8 + 4) * 16, 128], 4)
+    d = draft(hf.Checkpoint("org/m", "0" * 40, cfg, [qkv], 1, None))
+    assert d.fields["kv_heads"][0] == 2 and d.fields["kv_bpt"][0] == 4 * 2 * 16 * 2
+    assert d.fields["max_ctx"] == (32768, "seq_length")
+    assert d.fields["layers"] == (4, "num_layers")
 
 
 def test_missing_layer_count_stops():

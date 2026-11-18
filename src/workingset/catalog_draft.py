@@ -174,7 +174,8 @@ def _layer_counts(t: dict) -> tuple:
 # which is a Conv1D stored [in, out])
 _Q_PROJ = re.compile(r"\.(q_proj|query)\.weight$")
 _K_PROJ = re.compile(r"\.(k_proj|key)\.weight$")
-_QKV_PROJ = re.compile(r"\.(qkv_proj|query_key_value|Wqkv|W_pack|att_proj|c_attn)\.weight$")
+_QKV_PROJ = re.compile(r"\.(qkv_proj|query_key_value|Wqkv|W_pack|att_proj|c_attn|"
+                       r"attention\.in_proj)\.weight$")   # the last: DCLM's open_lm
 # keys that name a layer count where num_hidden_layers is absent
 _LAYER_KEYS = ("num_hidden_layers", "n_layers", "n_layer", "num_layers",
                "num_transformer_layers", "num_decoder_layers", "n_layers_decoder")
@@ -199,7 +200,7 @@ def _refuse_unmodelled(cfg: dict, t: dict) -> None:
 
 
 def _no_layer_count(cfg: dict, t: dict) -> str:
-    where = "config.json text_config" if t is not cfg else "config.json"
+    where = f"config.json {t['_path']}" if t.get("_path") else "config.json"
     found = {k: t[k] for k in _LAYER_KEYS if k in t}
     if found:
         return (f"{where}: no num_hidden_layers; it has {found}, a layer count "
@@ -213,7 +214,23 @@ def _no_layer_count(cfg: dict, t: dict) -> str:
                     if any(x in v2 for x in _LAYER_KEYS))
     return (f"{where}: no layer count (tried {list(_LAYER_KEYS)})"
             + (f"; nested configs {nested} have one" if nested else "")
-            + (f"; text_config holds only {sorted(t)[:8]}" if t is not cfg else ""))
+            + (f"; {t['_path']} holds only "
+               f"{sorted(k for k in t if not k.startswith('_'))[:8]}"
+               if t.get("_path") else ""))
+
+
+_LAYER_ROW = re.compile(r"(^|\.)(layers|h|blocks|layer|encoder\.layers)\.#\.")
+
+
+def _check_layer_count(ck: Checkpoint, n: int, alias: str) -> None:
+    """A layer count read under another name must be one the shard headers
+    show: some per-layer tensor occurs exactly n times."""
+    counts = {c for p, _dt, _sh, c in ck.census
+              if _LAYER_ROW.search(p) and p.count("#") == 1}
+    if n not in counts:
+        raise ValueError(f"config.json: {alias} = {n} is read as num_hidden_layers, "
+                         f"but no per-layer tensor in the shard headers occurs "
+                         f"{n} times (counts {sorted(counts)[:6]})")
 
 
 def _proj_rows(ck: Checkpoint, rx: re.Pattern, layers: int) -> set:
@@ -280,7 +297,10 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     n = t.get("num_hidden_layers")
     if not isinstance(n, int) or n <= 0:
         raise ValueError(_no_layer_count(cfg, t))
-    d.set("layers", n, "num_hidden_layers")
+    alias = t["_read_as"].get("num_hidden_layers")
+    if alias:
+        _check_layer_count(ck, n, alias)
+    d.set("layers", n, alias or "num_hidden_layers")
     attn, rec, unknown = _layer_counts(t)
 
     # transformers sets sliding_window to None for these model types when
@@ -308,7 +328,7 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     heads = t.get("num_attention_heads")
     if not isinstance(heads, int) or isinstance(heads, bool) or heads <= 0:
         # SmolVLM2's text_config leaves it to LlamaConfig's default
-        raise ValueError(f"config.json{' text_config' if t is not cfg else ''}: "
+        raise ValueError(f"config.json{' ' + t['_path'] if t.get('_path') else ''}: "
                          f"num_attention_heads is {heads!r}; a model type's "
                          f"default is not read in its place")
     kvh, kv_how = (None, None) if mla or compressed else kv_heads_of(t)
@@ -514,7 +534,8 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     if isinstance(ctx, int) and ctx > 0:
         rope = t.get("rope_scaling") or t.get("rope_parameters") or {}
         rt = rope.get("rope_type") or rope.get("type")
-        d.set("max_ctx", ctx, "max_position_embeddings"
+        d.set("max_ctx", ctx, t["_read_as"].get("max_position_embeddings",
+                                            "max_position_embeddings")
               + (f" ({rt} x{rope.get('factor')} over "
                  f"{rope.get('original_max_position_embeddings')})"
                  if rt == "yarn" else ""))
