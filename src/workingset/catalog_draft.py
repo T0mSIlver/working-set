@@ -59,13 +59,17 @@ _EXPERT_TOPK = ("num_experts_per_tok", "num_experts_per_token", "experts_per_tok
                 "moe_top_k")
 # a tensor name a mixture of experts leaves even when the config names no count
 _MOE_TENSOR = re.compile(r"(^|\.)(experts?|block_sparse_moe|moe|router)(\.|_)")
-# config keys that lay out non-attention layers in a form _layer_counts does
-# not read (LFM2's full_attn_idxs, Jamba's attn_layer_period, Nemotron-H's
-# hybrid_override_pattern, Zamba's layers_block_type, Mamba / SSM state sizes)
+# config keys that lay out non-attention or windowed layers in a form
+# _layer_counts does not read (LFM2's full_attn_idxs, Jamba's
+# attn_layer_period, Nemotron-H's hybrid_override_pattern, Zamba's
+# layers_block_type, Mamba / SSM state sizes; Ling-3's KDA groups, MiMo-V2's
+# hybrid_layer_pattern of full and window layers, Inkling-2's local_layer_ids
+# and short convolutions)
 _HYBRID_KEY = re.compile(
     r"^(full_attn_idxs|attn_layer_|attn_type_list|hybrid_override_pattern|"
     r"layers_block_type|layer_block_types|block_types|mamba_|ssm_|state_size|"
-    r"conv_L_cache|conv_kernel|rwkv_|time_step)")
+    r"conv_L_cache|conv_kernel|rwkv_|time_step|kda_|short_conv|sconv_|"
+    r"layer_group_size|hybrid_layer_pattern|local_layer_ids|sliding_window_size|swa_)")
 # model types whose transformers config drops sliding_window when
 # use_sliding_window is false (transformers 5.20.2, `if self.use_sliding_window else None`)
 _WINDOW_FLAG_TYPES = {"qwen2", "qwen3", "qwen3_moe", "qwen2_vl", "qwen2_5_vl",
@@ -274,9 +278,10 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     # keys _layer_counts does not read (then every layer would count as attention)
     layout = (f"layer_types {unknown} are not ones this command knows "
               f"({sorted(ATTENTION_TYPES | RECURRENT_TYPES | WINDOW_TYPES)})" if unknown
-              else f"the config lays out non-attention layers with {hybrid}, which "
-              f"this command does not read"
+              else f"the config lays out its layers with {hybrid}, which this "
+              f"command does not read"
               if hybrid and not isinstance(t.get("layer_types"), list) and not kda
+              and not t.get("full_attention_interval")
               else None)
 
     lt = t.get("layer_types")

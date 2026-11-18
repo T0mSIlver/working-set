@@ -162,6 +162,15 @@ def test_a_plain_config_drafts_its_cache():
     # Granite-4.0-H: Mamba2 and attention layer types
     ({"layer_types": ["mamba", "attention", "mamba", "mamba"], "mamba_d_state": 128},
      "mamba"),
+    # Ling-3.0-tiny: KDA groups of layer_group_size around MLA layers
+    ({"kda_safe_gate": True, "layer_group_size": 4, "short_conv_kernel_size": 4},
+     "layer_group_size"),
+    # MiMo-V2.6-Pro: hybrid_layer_pattern, 0 full and 1 sliding-window
+    ({"hybrid_layer_pattern": [0, 1, 1, 1], "sliding_window_size": 128},
+     "hybrid_layer_pattern"),
+    # Inkling-2-Small: local_layer_ids and short convolutions, no model_type
+    ({"local_layer_ids": [0, 1, 2], "sconv_kernel_size": 4,
+      "sliding_window_size": 1024}, "local_layer_ids"),
 ])
 def test_a_hybrid_layout_it_cannot_read_is_not_all_attention(extra, named):
     """Granite-4.0-H-Small and LFM2-1.2B drafted every layer as attention or
