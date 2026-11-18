@@ -291,3 +291,13 @@ def test_expert_union_counts_speculative_verify_positions():
         m.w_decode_shared + m.w_route_total)
     dense = M.MODELS["27B"]                    # no experts: drafts change nothing
     assert dense.w_decode(1) == dense.w_decode(600) == dense.w_decode_shared
+
+
+def test_steady_decode_point_sizes_its_own_resident_draw():
+    """resident=None on a large pool (35B-A3B, 8xB300): the warm fill it runs
+    must be drawn to the pool's size, not the 2,000 default warm_capacity
+    refuses as censored."""
+    m = M.with_gpu(M.MODELS["35BA3B"], "B300")
+    t = M.topology_grid(1, 8, "B300")
+    sp = M.steady_decode_point(m, t, M.Workload(), 10.0, n_iter=100)
+    assert sp["n"] > 0 and sp["per_user_tok_s"] > 0

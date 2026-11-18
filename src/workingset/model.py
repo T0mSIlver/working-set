@@ -2660,8 +2660,11 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     reps = topo.replicas
     demand = rate_group * out_tokens
     if resident is None:
+        # a draw sized to the pool (warm_draw): the default 2,000 leaves a
+        # large pool's budget unexhausted, which warm_capacity refuses
         resident = float(warm_capacity(model, topo, wl, ram_gib=0,
-                                       n_iter=max(40, n_iter // 4), seed=seed,
+                                       n_iter=max(40, n_iter // 4),
+                                       draw=warm_draw(model, topo), seed=seed,
                                        which="gpu")[2])
     # at least one sequence decodes if anything does; below one resident
     # context decode_curves itself refuses (no pool), so the floor is safe
