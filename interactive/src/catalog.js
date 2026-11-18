@@ -101,9 +101,8 @@ export const CATALOG = {
      "ref": "research/prefill.md"
     },
     "power": {
-     "kind": "measured",
-     "on": "H100",
-     "note": "extrapolated: Hopper's measured fractions of TDP on the 1,400 W plate; no Blackwell Ultra power measurement exists",
+     "kind": "guess",
+     "note": "extrapolated: Hopper's measured fractions of TDP put on the 1,400 W plate; no Blackwell Ultra power measurement exists",
      "ref": "research/power.md"
     },
     "price": {
@@ -1443,7 +1442,7 @@ export const CATALOG = {
     "decode": "fitted on H200 and transferred",
     "decode_fixed": "guess",
     "prefill": "guess",
-    "power": "fitted on H100 and transferred",
+    "power": "guess",
     "price": "vendor figure"
    },
    "models": {

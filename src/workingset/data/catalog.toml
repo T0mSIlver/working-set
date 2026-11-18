@@ -97,7 +97,7 @@ reserve = { kind = "derived", basis = "measurement", on = "H200", note = "the H2
 decode = { kind = "measured", on = "H200", note = "eta read off the H200 held-batch sweep, unchanged; bandwidth is NVIDIA's 8 TB/s", ref = "research/decode-model.md" }
 decode_fixed = { kind = "guess", note = "the H200 priors and the tau_rec solved from the H200 intercept, unchanged", ref = "research/decode-model.md" }
 prefill = { kind = "guess", note = "the Hopper MFU bracket, carried over; peak 4.5 PFLOPS dense is the DGX B300 sparse figure halved, never measured here", ref = "research/prefill.md" }
-power = { kind = "measured", on = "H100", note = "extrapolated: Hopper's measured fractions of TDP on the 1,400 W plate; no Blackwell Ultra power measurement exists", ref = "research/power.md" }
+power = { kind = "guess", note = "extrapolated: Hopper's measured fractions of TDP put on the 1,400 W plate; no Blackwell Ultra power measurement exists", ref = "research/power.md" }
 price = { kind = "vendor", note = "rent: getdeploying.com's cross-provider median (2026-09); purchase: Supermicro's listing (2026-09-21)" }
 
 # ============================================================================

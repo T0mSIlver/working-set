@@ -10,11 +10,13 @@ import { esc } from './svg.js';
 const LABELS = CATALOG.provenance_labels, WORDS = CATALOG.provenance_words;
 
 // the inputs each ceiling is priced from, as [side, quantity]. A decode step
-// streams bytes and runs the verify GEMMs at the prefill compute rate; a cold
-// request is priced by prefill, and how many requests are cold by the pool.
-const DECODE = [['gpu','decode'], ['gpu','decode_fixed'], ['gpu','prefill'], ['model','decode'], ['model','kv'],
-  ['model','draft'], ['model','acceptance'], ['model','prefill']];
-const COLD = [['gpu','prefill'], ['model','prefill'], ['gpu','memory'], ['gpu','reserve'], ['model','weights'], ['model','kv']];
+// streams bytes and runs the verify GEMMs at the prefill compute rate, and
+// max_num_seqs caps its batch at the GPU-resident sessions the pool holds; a
+// cold request is priced by prefill, and how many requests are cold by the pool.
+const POOL = [['gpu','memory'], ['gpu','reserve'], ['model','weights'], ['model','kv']];
+const DECODE = [['gpu','decode'], ['gpu','decode_fixed'], ['gpu','prefill'], ['model','decode'],
+  ['model','draft'], ['model','acceptance'], ['model','prefill'], ...POOL];
+const COLD = [['gpu','prefill'], ['model','prefill'], ...POOL];
 export const CEILING_INPUTS = {
   decode: DECODE,
   cold_wait: COLD,
