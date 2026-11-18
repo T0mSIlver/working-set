@@ -9,7 +9,8 @@
 # code keeps the expression in its comment ("= 32 * KIB").
 #
 # Adding a model: one [models.KEY] table here, then `uv run scripts/catalog.py`
-# and `uv run scripts/golden.py`.
+# and `uv run scripts/golden.py`. `uv run ws catalog HF_REPO --key KEY` drafts
+# the table from the repo's config.json and safetensors headers.
 
 # ============================================================================
 # GPUs
