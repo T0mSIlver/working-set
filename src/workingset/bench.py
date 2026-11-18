@@ -1521,10 +1521,13 @@ def check_cache_reporting(rows, plan: Plan) -> None:
             f"eviction. Pass --kv-block-tokens {g} if that is the block")
 
 
-async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
+async def run(ep, plan: Plan, metrics=None, on_step=_say,
+              on_progress=None) -> dict:
     """`ep`: an EndpointSpec, or a list of them (a data-parallel deployment,
     routed by `plan.routing`); `metrics`: a sampler, or a list paired with
-    them. The endpoint alone is fitted on the first."""
+    them. The endpoint alone is fitted on the first. `on_progress(res)` gets
+    the result so far (the same keys as the return value) after the
+    calibration and after every judged step."""
     eps = list(ep) if isinstance(ep, (list, tuple)) else [ep]
     ep0 = eps[0]
     target = Router(eps, plan.routing) if len(eps) > 1 else ep0
@@ -1566,6 +1569,13 @@ async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
         on_step(describe_speed(speed, trace, plan))
         results: dict[int, bool | None] = {}
         steps: list[Step] = []
+
+        def progress() -> None:
+            if on_progress:
+                on_progress({"speed": speed, "calibration": cal_rows,
+                             "steps": steps, "nonce": nonce,
+                             "answer": answer(results, plan.max_sessions)})
+        progress()
         while (n := next_sessions(results, plan.max_sessions,
                                   plan.start_sessions)) is not None:
             on_step(f"\n--- {n} session{'s' if n != 1 else ''} ---")
@@ -1575,6 +1585,7 @@ async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
             steps.append(step)
             results[n] = None if step.no_evidence else step.passed
             on_step(step_line(step))
+            progress()
     return {"speed": speed, "calibration": cal_rows, "steps": steps,
             "answer": answer(results, plan.max_sessions), "nonce": nonce}
 
@@ -1798,6 +1809,17 @@ def headline(rec: dict) -> str:
            f"{a['fails_at']}{out}"
 
 
+def unfinished_line(rec: dict) -> str:
+    """What a record of a run that stopped says in place of an answer."""
+    n = len(rec["steps"])
+    a = rec["answer"]
+    last = (f"; the steps judged so far serve {a['serves']} sessions"
+            + (f" and fail at {a['fails_at']}" if a["fails_at"] else "")
+            if n else "")
+    return (f"UNFINISHED: the run stopped after {n} judged step"
+            f"{'s' if n != 1 else ''}, so this is not an answer{last}")
+
+
 def print_report(rec: dict, out=None) -> None:
     out = out or sys.stdout
     w = lambda s="": print(s, file=out)          # noqa: E731
@@ -1815,6 +1837,9 @@ def print_report(rec: dict, out=None) -> None:
         w(f"         {len(eps)} URLs, routing {rec['plan'].get('routing')}: "
           + ", ".join(e["base_url"] for e in eps))
     w("=" * 78)
+    if not rec.get("complete", True):
+        w(f"UNFINISHED RUN: it stopped after {len(rec['steps'])} judged "
+          "step(s); what follows is the part that ran")
     sp = Speed.from_dict(rec["speed"])
     pl = rec["plan"]
     w(f"alone ({sp.n} requests): "
@@ -1880,7 +1905,10 @@ def print_report(rec: dict, out=None) -> None:
                     w(f"{'':>8}    URL #{i}: {signals(srv) or 'no reading'}")
         w(f"  {RAN_OUT_RULES}")
     w()
-    w(headline(rec))
+    if rec.get("complete", True):
+        w(headline(rec))
+    else:
+        w(unfinished_line(rec))
     small = [s.sessions for s in steps if s.turns and s.turns < 10]
     if small:
         w(f"  few turns at {', '.join(map(str, small))} session(s): their "
@@ -2183,12 +2211,45 @@ def cmd_replay(args) -> int:
                                     bases[i] if len(bases) > 1 else base, u))
                    for i, u in enumerate(murls)]
 
+    def record(res: dict, complete: bool) -> dict:
+        return {"format": FORMAT, "version": VERSION,
+                "complete": complete, "workingset": __version__,
+                "trace": {"path": args.trace, "sessions": len(trace.sessions),
+                          "requests": trace.n_requests},
+                "endpoint": ep.redacted(), "plan": asdict(plan),
+                "endpoints": [e.redacted() for e in eps],
+                "run_nonce": res["nonce"],
+                "speed": res["speed"].to_dict(),
+                "turn_alone_s": _turns_alone(trace, res["speed"], plan),
+                "capped": capped_requests(trace, plan.context_cap_tokens),
+                "calibration": [r.to_dict() for r in res["calibration"]],
+                "steps": [s.to_dict() for s in res["steps"]],
+                "answer": res["answer"],
+                "prompt_token_ratio": _prompt_token_ratio(
+                    res["calibration"]
+                    + [r for s in res["steps"] for r in s.rows]),
+                "prediction": pred}
+
+    saved: list[int] = []       # the steps in the record on disk, once written
+
+    def checkpoint(res: dict) -> None:
+        if args.out:
+            write_record(args.out, record(res, False))
+            saved[:] = [len(res["steps"])]
+
+    def stopped() -> None:
+        if saved:
+            n = saved[0]
+            print(f"ws replay: the record at {args.out} holds {n} judged "
+                  f"step{'s' if n != 1 else ''} and is marked unfinished "
+                  '("complete": false)', file=sys.stderr)
+
     async def go():
         from .test_cmd import _maybe
         for m in metrics or ():
             await _maybe(m, "start", "open")
         try:
-            return await run(eps, plan, metrics)
+            return await run(eps, plan, metrics, on_progress=checkpoint)
         finally:
             for m in metrics or ():
                 await _maybe(m, "stop", "aclose", "close")
@@ -2197,28 +2258,18 @@ def cmd_replay(args) -> int:
         res = asyncio.run(go())
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
+        stopped()
         return 130
     except ValueError as e:
         print(f"ws replay: {e}", file=sys.stderr)
+        stopped()
         return 3
-    rec = {"format": FORMAT, "version": VERSION, "workingset": __version__,
-           "trace": {"path": args.trace, "sessions": len(trace.sessions),
-                     "requests": trace.n_requests},
-           "endpoint": ep.redacted(), "plan": asdict(plan),
-           "endpoints": [e.redacted() for e in eps],
-           "run_nonce": res["nonce"],
-           "speed": res["speed"].to_dict(),
-           "turn_alone_s": _turns_alone(trace, res["speed"], plan),
-           "capped": capped_requests(trace, plan.context_cap_tokens),
-           "calibration": [r.to_dict() for r in res["calibration"]],
-           "steps": [s.to_dict() for s in res["steps"]],
-           "answer": res["answer"],
-           "prompt_token_ratio": _prompt_token_ratio(
-               res["calibration"] + [r for s in res["steps"] for r in s.rows]),
-           "prediction": pred}
+    except Exception:
+        stopped()
+        raise
+    rec = record(res, True)
     if args.out:
-        Path(args.out).write_text(json.dumps(rec, indent=1) + "\n",
-                                  encoding="utf-8")
+        write_record(args.out, rec)
     print_report(rec)
     if args.out:
         print(f"\nrun record written to {args.out}")
@@ -2229,6 +2280,26 @@ def cmd_replay(args) -> int:
               file=sys.stderr)
         return 4
     return 0
+
+
+def write_record(path: str, rec: dict) -> None:
+    """Write the run record whole or not at all: a temp file next to it,
+    then a rename, so a stop in the middle leaves the last good record."""
+    import os
+    import tempfile
+    out = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=out.resolve().parent,
+                               prefix=out.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(rec, indent=1) + "\n")
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(tmp, 0o666 & ~mask)        # mkstemp makes it private
+        os.replace(tmp, out)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def is_record(d: dict) -> bool:
@@ -2406,5 +2477,9 @@ def add_subparser(sub) -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--dry-run", action="store_true",
                    help="print the plan, send nothing")
-    p.add_argument("-o", "--out", help="write the run record here (JSON)")
+    p.add_argument("-o", "--out",
+                   help="write the run record here (JSON), after the "
+                        "calibration and after every judged step, so a "
+                        'stopped run keeps its steps (marked "complete": '
+                        "false until it finishes)")
     p.set_defaults(fn=cmd_replay)

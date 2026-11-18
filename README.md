@@ -200,6 +200,14 @@ requests, prefix hits).
 averages next to it, and never feeds the verdict. Two deployments replayed
 with the same trace and `--seed` compare directly.
 
+`--out FILE` writes the run record after the calibration and again after
+every judged step, each time whole or not at all (a temp file, then a
+rename). The record carries `"complete": false` until the run ends, so a run
+stopped by Ctrl-C, a dropped connection or an error keeps the steps it
+judged, and the error line says how many. `ws report` prints such a record
+marked UNFINISHED, with no answer. A record without the field (from before
+it) counts as complete.
+
 Other flags shape the load:
 
 - `--base-url` repeated benches a data-parallel deployment (give one
