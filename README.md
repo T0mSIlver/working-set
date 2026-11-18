@@ -133,8 +133,9 @@ uv run ws report run.json                 # re-print it
    `max_model_len` from `/models` (`--max-model-len`), the KV block and prefix
    caching from `/metrics` (`--kv-block-tokens`, `--metrics-url`,
    `--no-metrics`), chars per token from the server's prompt token counts
-   (`--chars-per-token`, `--tokenizer`), and whether the server reports cached
-   tokens (`--skip-eviction-check`).
+   (`--chars-per-token`, `--tokenizer`), the tokens its chat template adds
+   (`--template-tokens`), and whether the server reports cached tokens
+   (`--skip-eviction-check`).
 1. **Alone.** One replayed session sends 40 requests back to back, one in
    flight at a time. The endpoint's own speed is fitted from them: time to
    first token from the uncached tokens and the context, then time per output
@@ -158,6 +159,16 @@ uv run ws report run.json                 # re-print it
      hybrid model), since every warm request would then read as an eviction.
      vLLM reports cached tokens with `--enable-prompt-tokens-details`; the run
      stops on a server that does not, unless `--skip-eviction-check`.
+     A request short by more than a block is a boundary miss, not an
+     eviction, when the previous prompt ended within the chat template's
+     tokens past a block boundary (the template's closing tokens sat in the
+     last full block and the reply replaced them) and the request still found
+     everything the previous one found cached. Hybrid models in vLLM's Mamba
+     `align` mode resume only where a state was saved, so they come back
+     several blocks short there. Boundary misses stay in the count of warm
+     requests and are reported apart. The template's tokens are measured at
+     the start of the run from one request of a single character, or given
+     with `--template-tokens`.
    - The p90 time to first token of warm requests is at most 3 s
      (`--max-warm-ttft-s`).
    - The p10 decode speed per request, (output tokens - 1) / (last token

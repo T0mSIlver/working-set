@@ -19,7 +19,13 @@ priced by the model or read from a config:
      previous prompt are what the server should have cached; an eviction is
      `usage.prompt_tokens_details.cached_tokens` short of that by more than a
      block. A server that never reports cached_tokens leaves the check
-     "unknown": it does not gate;
+     "unknown": it does not gate. A request that is short by more than a
+     block is a boundary miss, not an eviction, when the session's previous
+     prompt ended within the chat template's tokens past a block boundary
+     (the last full block held the template's closing tokens, which the new
+     request replaces with the reply) and the request still found everything
+     the previous request had found cached. Boundary misses stay in the
+     count of warm requests and are reported apart;
    - the p90 time to first token of warm requests is at most 3 s;
    - the p10 decode speed per request, (output - 1) / (last - first token),
      over requests of at least 32 output tokens, is at least 50 tok/s;
@@ -252,6 +258,8 @@ class Row:
     cold: bool = False      # a session's first request, or after a compaction
     expected: int = 0       # prompt tokens it shares with the previous request
     cached: int | None = None       # tokens the server says it served cached
+    # cached tokens the server reported on the session's previous request
+    prev_cached: int | None = None
     span: float = float("nan")      # first to last token, seconds
     url: int = 0            # which --base-url it went to
 
@@ -386,7 +394,7 @@ async def _seat_loop(client, ep, opts, seat: _Seat, rows: list, t0: float,
     except asyncio.TimeoutError:
         pass
     turn = 0
-    prev_ok, prev_ptok, prev_want = False, None, 0
+    prev_ok, prev_ptok, prev_want, prev_cached = False, None, 0, None
     while not stop.is_set() and (limit is None or seat.n_turn < limit):
         if seat.n_turn and gaps:
             try:
@@ -417,8 +425,10 @@ async def _seat_loop(client, ep, opts, seat: _Seat, rows: list, t0: float,
             shared = prev_ptok or prev_want
             now = tr.ptok_achieved or want
             row.expected = min(shared, now)
+            row.prev_cached = prev_cached
         prev_ok = tr.error is None and tr.ttft is not None
         prev_ptok, prev_want = tr.ptok_achieved, want
+        prev_cached = tr.cached_tokens
         recording, pos = seat._s, seat._pos
         seat.commit(reply)
         if spawn is not None:
@@ -517,6 +527,9 @@ class Limits:
     max_slowdown: float | None = None   # gates only when given
     min_samples: int = MIN_SAMPLES
     eviction_check: bool = True         # False: --skip-eviction-check
+    # tokens the chat template adds around one user message (0: no boundary
+    # misses are told from evictions)
+    template_tokens: int = 0
 
 
 # the checks, in the order they are reported
@@ -593,6 +606,9 @@ class Step:
     checks: dict = field(default_factory=dict)
     warm_requests: int = 0
     evictions: int = 0
+    # warm requests short by more than a block that sit at a block boundary
+    # and kept what the previous request found cached (see `_boundary_miss`)
+    boundary_misses: int = 0
     # the block the eviction check rounded to: the plan's, or larger when the
     # server's cached_tokens all came in whole blocks of a larger size
     kv_block_tokens: int = 0
@@ -700,6 +716,20 @@ def _decode_rates(rows: list, min_tokens: int) -> list[float]:
             and math.isfinite(r.span) and r.span > 0]
 
 
+def _boundary_miss(r: Row, block: int, template: int) -> bool:
+    """A warm request short by more than a block that is the chat template's
+    doing, not an eviction. The previous prompt ended `template` tokens or
+    fewer past a block boundary, so its last full block held the template's
+    closing tokens (end of turn, assistant header), which this request
+    replaces with the reply. A server that resumes only where it saved a
+    state (vLLM's Mamba `align` mode) then falls back to where the request
+    before that one stopped hitting. It is no eviction when the request still
+    found everything the previous one found cached."""
+    return (template > 0 and r.expected % block < template
+            and r.prev_cached is not None
+            and r.cached >= r.prev_cached // block * block)
+
+
 def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     """Score a step's requests against the pass rule (`Limits`; the module
     docstring says it) and, as information, against the endpoint alone. Every
@@ -760,9 +790,13 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     known = [r for r in warm if r.ok and r.cached is not None]
     block = max(lim.kv_block_tokens, 1)
     step.kv_block_tokens = block
-    evicted = [r for r in known
-               if r.cached < r.expected // block * block - block]
+    evicted, boundary = [], []
+    for r in known:
+        if r.cached < r.expected // block * block - block:
+            (boundary if _boundary_miss(r, block, lim.template_tokens)
+             else evicted).append(r)
     step.evictions = len(evicted)
+    step.boundary_misses = len(boundary)
     ms = lim.min_samples
     if not lim.eviction_check:
         checks["evictions"] = _check("skipped", limit=lim.max_eviction_share,
@@ -781,12 +815,14 @@ def judge(step: Step, speed: Speed, limits=None, min_turns: int = 0) -> Step:
     elif len(known) < ms or not known:
         share = len(evicted) / len(known) if known else float("nan")
         checks["evictions"] = _check("few", share, lim.max_eviction_share,
-                                     len(known), count=len(evicted), min=ms)
+                                     len(known), count=len(evicted), min=ms,
+                                     boundary=len(boundary))
     else:
         share = len(evicted) / len(known)
         checks["evictions"] = _check(
             "pass" if share <= lim.max_eviction_share else "fail", share,
-            lim.max_eviction_share, len(known), count=len(evicted), min=ms)
+            lim.max_eviction_share, len(known), count=len(evicted), min=ms,
+            boundary=len(boundary))
         if share > lim.max_eviction_share:
             step.reasons.append(
                 f"evictions: {len(evicted)} of {len(known)} warm requests "
@@ -1039,13 +1075,18 @@ class Plan:
     # --tokenizer), "measured" (the server's prompt token counts), "default"
     cpt_source: str = "given"
     cpt_probes: int = 0
+    # tokens the chat template adds around one user message: "given"
+    # (--template-tokens) or "measured" (one request of a single character)
+    template_tokens: int | None = None
+    template_source: str = "measured"
 
     def limits(self) -> Limits:
         return Limits(self.max_eviction_share, self.max_warm_ttft_s,
                       self.min_decode_tok_s, self.max_failed_share,
                       self.warm_new_tokens, self.kv_block_tokens,
                       self.max_slowdown, self.min_samples,
-                      eviction_check=self.eviction_check)
+                      eviction_check=self.eviction_check,
+                      template_tokens=self.template_tokens or 0)
 
     @property
     def measure_cap_s(self) -> float:
@@ -1279,6 +1320,18 @@ async def measure_chars_per_token(client, ep, plan: Plan,
     return chars / toks if toks else None
 
 
+async def measure_template_tokens(client, ep, plan: Plan) -> int | None:
+    """Tokens the server adds around one user message: send the single
+    character "a" with one output token and subtract its one token from the
+    prompt tokens the server counts. None when the server counts none."""
+    opts = plan.options()
+    tr = RequestTrace(uid=-100, kind="probe", t_send=time.monotonic())
+    await send_request(client, ep, opts, "a", tr, 1, None)
+    if tr.error or not tr.ptok_achieved:
+        return None
+    return max(tr.ptok_achieved - 1, 0)
+
+
 def lognormal_tokens(rng: random.Random, mean: float, sigma: float,
                      lo: int = 1) -> int:
     """A length with this mean, drawn lognormal: mu = ln(mean) - sigma^2 / 2
@@ -1492,6 +1545,18 @@ async def run(ep, plan: Plan, metrics=None, on_step=_say) -> dict:
                     "the server reported no prompt token counts, so chars "
                     "per token cannot be measured: pass --chars-per-token or "
                     "--tokenizer")
+        if plan.template_tokens is None:
+            tmpl = await measure_template_tokens(client, ep0, plan)
+            if tmpl is not None:
+                plan.template_tokens = tmpl
+                on_step(f"template tokens {tmpl}, from one request of a "
+                        "single character")
+            elif plan.eviction_check:
+                raise ValueError(
+                    "the server reported no prompt token count, so the "
+                    "template tokens (what the chat template adds around a "
+                    "message) cannot be measured: pass --template-tokens "
+                    "(0 for none), or --skip-eviction-check")
         prefix = _prefix_text(plan)
         on_step(f"alone: up to {plan.calibrate_requests} requests back to "
                 "back, one in flight")
@@ -1601,6 +1666,9 @@ def check_cells(s: Step) -> dict[str, str]:
             cell = (f"too few samples ({c['n']} < {c['min']}), not judged"
                     + (f": {cell}" if v is not None else ""))
         out[name] = f"{cell}{' FAIL' if st == 'fail' else ''}"
+        if name == "evictions" and c.get("boundary"):
+            out[name] += (f"; {c['boundary']} more short at a block "
+                          "boundary, not counted")
     return out
 
 
@@ -1770,6 +1838,10 @@ def print_report(rec: dict, out=None) -> None:
     w(f"text: {pl['chars_per_token']:.3g} chars per token ({src}); a session "
       "is a tree: a recording's subagents start where it spawned them and "
       "count in the turn that spawned them")
+    tt = pl.get("template_tokens")
+    w("template tokens: " + (
+        f"{tt} ({pl.get('template_source', 'measured')})" if tt is not None
+        else "not measured (--skip-eviction-check)"))
     w()
     w(f"{'sessions':>8} {'turns':>6} {'req':>6} {'fail':>5} "
       f"{'turn p90 [90% CI]':>21} {'mean':>6} {'vs 1 stream':>12} "
@@ -1938,6 +2010,10 @@ def cmd_replay(args) -> int:
               "--base-url with several --metrics-url is a router in front of "
               "replicas)", file=sys.stderr)
         return 2
+    if args.template_tokens is not None and args.template_tokens < 0:
+        print("ws replay: --template-tokens cannot be negative",
+              file=sys.stderr)
+        return 2
     for flag, v, lo in (("--output-scale", args.output_scale, 0.0),
                         ("--chat-rate", args.chat_rate, -1e-9)):
         if not v > lo:
@@ -2019,6 +2095,9 @@ def cmd_replay(args) -> int:
                 context_cap_tokens=int(cap), chars_per_token=cpt,
                 tokenizer=args.tokenizer, seed=args.seed,
                 cpt_source=cpt_source,
+                template_tokens=args.template_tokens,
+                template_source=("given" if args.template_tokens is not None
+                                 else "measured"),
                 request_timeout_s=args.request_timeout_s,
                 calibrate_requests=CALIBRATE_REQUESTS,
                 calibrate_max_s=CALIBRATE_MAX_S)
@@ -2043,6 +2122,11 @@ def cmd_replay(args) -> int:
           f"{plan.chars_per_token:.3g} chars per token"
           + (" (until measured from the server's prompt token counts)"
              if cpt_source == "default" else ""))
+    print("  template tokens "
+          + (f"{plan.template_tokens} (--template-tokens)"
+             if plan.template_tokens is not None else
+             "measured at the start of the run (one request of a single "
+             "character)"))
     print(f"  KV block {plan.kv_block_tokens:,} tokens ("
           + ("from /metrics" if plan.kv_block_source == "/metrics" else
              "--kv-block-tokens" + (f"; /metrics says {seen:,}"
@@ -2216,6 +2300,15 @@ def add_subparser(sub) -> None:
                    help="run without the eviction check (a server that "
                         "reports no cached tokens, or runs without prefix "
                         "caching)")
+    g.add_argument("--template-tokens", type=int, default=None,
+                   help="tokens the chat template adds around one user "
+                        "message (default: measured at the start of the run "
+                        "from one request of a single character). A warm "
+                        "request short by more than a block is a boundary "
+                        "miss, not an eviction, when the previous prompt "
+                        "ended within this many tokens past a block "
+                        "boundary and nothing the previous request found "
+                        "cached is gone")
     g.add_argument("--max-warm-ttft-s", type=float, default=MAX_WARM_TTFT_S,
                    help="p90 time to first token of warm requests, seconds "
                         "(default %(default)s)")

@@ -109,6 +109,58 @@ def test_evictions_over_one_percent_fail_and_are_named():
     assert _judge(_warm(99, cached=1000) + _warm(1, cached=0)).passed
 
 
+# a warm request at a block boundary: block 16, the previous prompt ended at
+# 1000 = 62 blocks + 8 tokens, so the template's closing tokens (10) sit in
+# the last full block, and the request is short of the 976 the check expects
+def _boundary(n=20, cached=900, prev_cached=900, expected=1000, **kw):
+    return _warm(n, cached=cached, expected=expected, prev_cached=prev_cached,
+                 **kw)
+
+
+def _tmpl(n):
+    return B.Limits(min_samples=1, template_tokens=n)
+
+
+def test_a_miss_at_a_block_boundary_that_kept_the_previous_hit_is_no_eviction():
+    s = _judge(_boundary(), _tmpl(10))
+    assert s.evictions == 0 and s.boundary_misses == 20 and s.passed
+    c = s.checks["evictions"]
+    assert c["status"] == "pass" and c["boundary"] == 20 and c["n"] == 20
+    # they stay in the denominator: 1 eviction among 10 is 10%
+    mixed = _warm(8, cached=1000) + _boundary(1) + _warm(1, cached=0)
+    s = _judge(mixed, _tmpl(10))
+    assert (s.evictions, s.boundary_misses) == (1, 1)
+    assert s.checks["evictions"]["n"] == 10 and not s.passed
+    assert "1 of 10 warm requests" in s.reasons[0]
+    cell = B.check_cells(s)["evictions"]
+    assert cell.endswith("FAIL; 1 more short at a block boundary, not counted")
+
+
+def test_no_boundary_note_when_there_is_none():
+    s = _judge(_warm(20, cached=1000), _tmpl(10))
+    assert s.boundary_misses == 0
+    assert "boundary" not in B.check_cells(s)["evictions"]
+
+
+@pytest.mark.parametrize("rows, lim", [
+    # the previous prompt ended further past the boundary than the template
+    # adds: 1020 % 16 = 12 >= 10
+    (lambda: _boundary(expected=1020), _tmpl(10)),
+    # exactly the template's tokens past the boundary is not within them
+    (lambda: _boundary(), _tmpl(8)),
+    # it lost a block the previous request had found cached
+    (lambda: _boundary(cached=900, prev_cached=976), _tmpl(10)),
+    # the template was measured as none
+    (lambda: _boundary(), _tmpl(0)),
+    # the previous request reported no cached tokens: nothing to compare to
+    (lambda: _boundary(prev_cached=None), _tmpl(10)),
+], ids=["past-the-template", "at-the-template", "lost-a-block", "no-template",
+        "no-previous"])
+def test_a_short_request_that_is_not_a_boundary_miss_is_an_eviction(rows, lim):
+    s = _judge(rows(), lim)
+    assert s.evictions == 20 and s.boundary_misses == 0 and not s.passed
+
+
 def test_a_step_where_the_server_stopped_reporting_cached_tokens_fails():
     s = _judge(_warm(20, cached=None))
     assert s.checks["evictions"]["status"] == "unknown" and not s.passed
@@ -358,7 +410,7 @@ def _endpoint_fake(per_token=0.005, evict=False, report=True, on_request=None,
                     k += 1
                 lcp = max(lcp, k)
         seen.append(prompt)
-        ptok = int(len(prompt) / 4)
+        ptok = max(1, int(len(prompt) / 4))
         usage = {"prompt_tokens": ptok, "completion_tokens": n}
         if report:
             usage["prompt_tokens_details"] = {
@@ -446,6 +498,75 @@ def test_what_the_replay_cannot_read_stops_it_before_any_load(
         'caching="True"', 'caching="False"'), rc=2)
     assert "--skip-eviction-check" in capsys.readouterr().err
     assert sent == []
+
+
+def test_a_warm_row_carries_the_cached_tokens_of_the_previous_request(
+        tmp_path, monkeypatch):
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1")
+    rows = sorted(rec["steps"][0]["rows"], key=lambda r: r["sent"])
+    warm = [(a, b) for a, b in zip(rows, rows[1:]) if b["warm"]]
+    assert len(warm) > 3
+    assert all(b["prev_cached"] == a["cached"] for a, b in warm)
+    assert any(b["prev_cached"] for _, b in warm)       # not all zero
+
+
+def _template_server(template, seen):
+    """The single character "a" costs 1 + `template` prompt tokens; every
+    other request is the plain fake's."""
+    plain = _endpoint_fake()
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body["prompt"])
+        if body["prompt"] != "a":
+            return plain(request)
+
+        async def gen():
+            yield _sse({"choices": [{"text": "t", "index": 0}]})
+            usage = {"completion_tokens": 1}
+            if template is not None:
+                usage["prompt_tokens"] = 1 + template
+            yield _sse({"choices": [], "usage": usage})
+            yield b"data: [DONE]\n\n"
+        return httpx.Response(200, content=gen(),
+                              headers={"content-type": "text/event-stream"})
+    return handler
+
+
+def test_the_template_tokens_are_measured_from_one_character(
+        tmp_path, monkeypatch, capsys):
+    seen: list[str] = []
+    rec = _run(tmp_path, monkeypatch, _template_server(3, seen),
+               "--max-sessions", "1", "--chars-per-token", "4")
+    assert seen.count("a") == 1 and seen[0] == "a"      # before any load
+    assert rec["plan"]["template_tokens"] == 3
+    assert rec["plan"]["template_source"] == "measured"
+    assert "template tokens 3, from one request of a single character" \
+        in capsys.readouterr().out
+
+
+def test_template_tokens_given_skip_the_probe(tmp_path, monkeypatch, capsys):
+    seen: list[str] = []
+    rec = _run(tmp_path, monkeypatch, _template_server(3, seen),
+               "--max-sessions", "1", "--chars-per-token", "4",
+               "--template-tokens", "7")
+    assert "a" not in seen
+    assert (rec["plan"]["template_tokens"], rec["plan"]["template_source"]) \
+        == (7, "given")
+    assert "template tokens 7 (--template-tokens)" in capsys.readouterr().out
+
+
+def test_a_server_that_counts_no_prompt_tokens_needs_the_template_flag(
+        tmp_path, monkeypatch, capsys):
+    seen: list[str] = []
+    _run(tmp_path, monkeypatch, _template_server(None, seen),
+         "--max-sessions", "1", "--chars-per-token", "4", rc=3)
+    assert "--template-tokens" in capsys.readouterr().err
+    assert seen == ["a"]                                # no load was sent
+    rec = _run(tmp_path, monkeypatch, _template_server(None, []),
+               "--max-sessions", "1", "--chars-per-token", "4",
+               "--skip-eviction-check")
+    assert rec["plan"]["template_tokens"] is None
 
 
 def test_a_server_that_forgets_the_prefix_fails_on_evictions(
