@@ -139,6 +139,11 @@ details.src[open]>summary::before{content:"\2212"}
           <button type="button" id="unit-tok" data-v="tok" aria-pressed="true">per million tokens</button>
           <button type="button" id="unit-char" data-v="char" aria-pressed="false">per million characters</button>
         </div></div>
+      <div class="tg" id="cacheWrap" hidden><span class="lbl" id="cacheLbl">Prompts</span>
+        <div class="seg" role="group" aria-labelledby="cacheLbl" id="cache">
+          <button type="button" id="cache-cached" data-v="cached" aria-pressed="true">with cache reads</button>
+          <button type="button" id="cache-fresh" data-v="fresh" aria-pressed="false">every prompt fresh</button>
+        </div></div>
       <div class="tg" id="kindWrap" hidden><label class="lbl" for="kind">Text</label>
         <select id="kind">
           <option value="code">code</option>

@@ -17,16 +17,21 @@ const BIND = {
 const TERM_NAME = { 'on-demand': 'on-demand', 'committed-short': 'committed under 3 months', 'committed-long': 'committed 12 months or more' };
 const termName = (t) => TERM_NAME[t] ?? t;
 const TERM_SHORT = { 'on-demand': 'on-demand', 'committed-short': 'committed < 3 mo', 'committed-long': 'committed ≥ 12 mo' };
-const S = { u: 0.5, term: 'on-demand', unit: 'tok', kind: 'code', pinned: null, sort: ['u1', 1] };
+const S = { fresh: false, u: 0.5, term: 'on-demand', unit: 'tok', kind: 'code', pinned: null, sort: ['u1', 1] };
 const TPH = M.workload.mixed_tokens_per_session_hour;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ---------- the model ----------
 const rent = (gpu, term, level) => M.rent[gpu][term][level];
-function best(m, term) {
+const HAS_NC = M.models.every((m) => m.nc);
+const cfgs = (m, fresh = S.fresh) => (fresh ? m.nc.configs : m.configs);
+const price = (p, fresh = S.fresh) => (fresh ? p.nc.mix : p.mix);
+const pSH = (p) => (S.fresh ? p.nc.sh : p.sh);
+const pU = (p) => (S.fresh ? p.nc.u[S.term] : p.u[S.term]);
+function best(m, term, fresh = S.fresh) {
   let b = null, bc = Infinity;
-  for (const c of m.configs) {
+  for (const c of cfgs(m, fresh)) {
     const v = c.n * rent(c.gpu, term, 'median') / c.limit;
     if (v < bc) { bc = v; b = c; }
   }
@@ -52,20 +57,22 @@ function pct(x) {
 const tickLabel = (v) => '$' + (v >= 1 ? v.toFixed(0) : String(+v.toPrecision(1)));
 
 // ---------- axis domain, fixed per unit so the slider moves bands, not the axis ----------
-function domainFor(unit) {
+function domainFor(unit, fresh) {
   let lo = Infinity, hi = -Infinity;
   const kinds = unit === 'char' ? Object.keys(KIND_NAME) : [null];
   for (const m of M.models) for (const k of kinds) {
     const d = k ? m.cpt[k] : 1;
     for (const term of M.terms) {
-      const c = best(m, term);
+      const c = best(m, term, fresh);
       if (c) { lo = Math.min(lo, costTok(c, term, 'low', 1) / d); hi = Math.max(hi, costTok(c, term, 'high', 0.05) / d); }
     }
-    for (const p of m.prov) if (p.mix != null) { lo = Math.min(lo, p.mix / d); hi = Math.max(hi, p.mix / d); }
+    for (const p of m.prov) if (price(p, fresh) != null) { lo = Math.min(lo, price(p, fresh) / d); hi = Math.max(hi, price(p, fresh) / d); }
   }
   return [lo / 1.25, hi * 1.25];
 }
-const DOMAIN = { tok: domainFor('tok'), char: domainFor('char') };
+const DOMAIN = { tok: domainFor('tok', false), char: domainFor('char', false) };
+const DOMAIN_NC = HAS_NC ? { tok: domainFor('tok', true), char: domainFor('char', true) } : null;
+const dom = () => (S.fresh ? DOMAIN_NC : DOMAIN)[S.unit];
 function ticks([lo, hi]) {
   const out = [];
   for (let e = Math.floor(Math.log10(lo)) - 1; e <= Math.ceil(Math.log10(hi)); e++)
@@ -80,10 +87,10 @@ function covered(u) {
   for (const m of M.models) {
     const c = best(m, S.term);
     for (const p of m.prov) {
-      if (p.mix == null || !c) continue;
+      if (price(p) == null || !c) continue;
       n++;
       who.add(p.p);
-      if (p.mix >= costTok(c, S.term, 'median', u)) k++;
+      if (price(p) >= costTok(c, S.term, 'median', u)) k++;
     }
   }
   return [k, n, who.size];
@@ -91,7 +98,7 @@ function covered(u) {
 function countSentence() {
   const [k, n, np] = covered(S.u), [k1] = covered(1);
   const up = Math.round(S.u * 100);
-  let s = `At <b>${up}%</b> utilisation and median ${termName(S.term)} rent, <b>${k}</b> of ${n} listed prices (endpoint and tier rows from ${np} providers) cover the GPU rent the model predicts.`;
+  let s = `${S.fresh ? 'With every prompt computed fresh (rough sensitivity): a' : 'A'}t <b>${up}%</b> utilisation and median ${termName(S.term)} rent, <b>${k}</b> of ${n} listed prices (endpoint and tier rows from ${np} providers) cover the GPU rent the model predicts.`;
   if (up < 100) s += ` At 100%, <b>${k1}</b> do.`;
   $('count').innerHTML = s;
 }
@@ -105,7 +112,7 @@ function render() {
   const R = small ? 3 : 4.5, RING = R + 2, LANE = small ? 5 : 7, GAP = 2 * R + 1;
   const labelW = narrow ? 0 : 220;
   const rowH = narrow ? 78 : 50, cy = narrow ? 54 : 25, top = 22;
-  const [d0, d1] = DOMAIN[S.unit];
+  const [d0, d1] = dom();
   const x0 = labelW + 8, x1 = W - 12;
   const X = (v) => x0 + (Math.log(v) - Math.log(d0)) / (Math.log(d1) - Math.log(d0)) * (x1 - x0);
 
@@ -118,10 +125,10 @@ function render() {
   const svg = $('chart');
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('height', H);
-  const unitTxt = S.unit === 'tok' ? 'USD per million tokens of this mix (cached input included)' : `USD per million characters of ${KIND_NAME[S.kind]} text, same mix (cached input included)`;
+  const unitTxt = (S.fresh ? 'Every prompt fresh. ' : '') + (S.unit === 'tok' ? 'USD per million tokens of this mix (cached input included)' : `USD per million characters of ${KIND_NAME[S.kind]} text, same mix (cached input included)`);
   $('axisTitle').textContent = unitTxt + ', log scale';
   let g = '';
-  for (const t of ticks(DOMAIN[S.unit])) {
+  for (const t of ticks(dom())) {
     const x = X(t);
     g += `<line x1="${x}" x2="${x}" y1="${top - 6}" y2="${H - 6}" stroke="var(--grid)" stroke-width="1"/>`;
     g += `<text class="tick" x="${x}" y="${top - 11}" text-anchor="middle">${tickLabel(t)}</text>`;
@@ -154,7 +161,7 @@ function render() {
     }
     // beeswarm: deterministic lanes
     const med = c ? costTok(c, S.term, 'median', S.u) : null;
-    const pts = m.prov.filter((p) => p.mix != null).map((p) => ({ p, x: X(p.mix / d) }))
+    const pts = m.prov.filter((p) => price(p) != null).map((p) => ({ p, x: X(price(p) / d) }))
       .sort((a, b) => a.x - b.x || a.p.p.localeCompare(b.p.p));
     const lanes = [0, -1, 1, -2, 2, -3, 3, -4, 4].map((k) => k * LANE).filter((o) => Math.abs(o) <= Math.min(cy - 4, narrow ? 3 * LANE : 3 * LANE));
     const placed = lanes.map(() => []);
@@ -168,14 +175,14 @@ function render() {
       pt.y = y + lanes[li];
     }
     for (const pt of pts) {
-      const covers = med != null && pt.p.mix >= med;
+      const covers = med != null && price(pt.p) >= med;
       marks.push({ p: pt.p, m, c });
       const mi = marks.length - 1;
       g += `<circle cx="${pt.x}" cy="${pt.y}" r="${RING}" fill="var(--surface)"/>`;
       g += covers
         ? `<circle class="dot" cx="${pt.x}" cy="${pt.y}" r="${R}" fill="var(--text)"/>`
         : `<circle class="dot" cx="${pt.x}" cy="${pt.y}" r="${R - 0.5}" fill="var(--surface)" stroke="var(--warm)" stroke-width="${small ? 1.5 : 2}"/>`;
-      g += `<circle class="hit" data-mark="${mi}" tabindex="0" role="button" aria-label="${esc(pt.p.p)}, ${esc(usd(pt.p.mix / d))}" cx="${pt.x}" cy="${pt.y}" r="10"/>`;
+      g += `<circle class="hit" data-mark="${mi}" tabindex="0" role="button" aria-label="${esc(pt.p.p)}, ${esc(usd(price(pt.p) / d))}" cx="${pt.x}" cy="${pt.y}" r="10"/>`;
     }
     g += '</g>';
   });
@@ -219,22 +226,22 @@ function sourceLine(p) {
     : `${esc(p.p)}’s price page, read ${esc(p.read)}`;
 }
 function markTip({ p, m }) {
-  const us = p.u[S.term];
+  const us = pU(p);
   const d = div(m);
   const unitWord = S.unit === 'tok' ? 'M tokens' : `M chars of ${KIND_NAME[S.kind]}`;
   let h = `<h4>${esc(p.p)}</h4><div class="sub">${esc(p.tag)}</div><dl>`;
   h += `<dt>Input</dt><dd>${usd(p.in)} per M tokens</dd><dt>Output</dt><dd>${usd(p.out)}</dd><dt>Cached input</dt><dd>${usd(p.cr)}</dd>`;
   if (p.cw != null) h += `<dt>Cache write</dt><dd>${usd(p.cw)}</dd>`;
-  h += `<dt>This mix</dt><dd>${usd(p.mix / d)} per ${esc(unitWord)} · ${usd(p.sh)} per session-hour</dd>`;
+  h += `<dt>${S.fresh ? 'All fresh' : 'This mix'}</dt><dd>${usd(price(p) / d)} per ${esc(unitWord)} · ${usd(pSH(p))} per session-hour</dd>`;
   h += `<dt>Quantization</dt><dd>${esc(p.q ?? 'not declared')}</dd><dt>Priced as</dt><dd>${esc(p.arm)}</dd>`;
   if (p.ctx) h += `<dt>Context</dt><dd>${p.ctx.toLocaleString('en-US')} tokens, ${pct(p.ctxr)} of the model’s own</dd>`;
   if (us) h += `<dt>Break-even u</dt><dd>${us.map(pct).join(' / ')}<br><span class="muted">at low / median / high ${esc(termName(S.term))} rent</span></dd>`;
   h += `<dt>Source</dt><dd>${sourceLine(p)}</dd></dl>`;
-  if (p.tw) {
-    const ws = p.tw.windows.map((w) => `${esc(w.utc_start)}–${esc(w.utc_end)} UTC: ${usd(w.usd_per_mtok_input)} in, ${usd(w.usd_per_mtok_output)} out`).join('; ');
-    h += `<p>Time-of-day prices: plotted at the 24-hour time-weighted price. Listed windows: ${ws}; the other ${+(p.tw.base_hours ?? 0).toFixed(1)} hours at the prices above.</p>`;
+  if (p.lw && !S.fresh) {
+    const lu = p.lw.u[S.term];
+    h += `<p>Time-of-day prices: plotted at the 24-hour time-weighted price. The cheapest listed window is ${usd(p.lw.in)} in, ${usd(p.lw.out)} out, ${usd(p.lw.cr)} cached${lu ? `; break-even u there ${lu.map(pct).join(' / ')}` : ''}.</p>`;
   }
-  if (p.src === 'openrouter') for (const t of m.notes) h += `<p>${esc(t)}</p>`;
+  if (p.src === 'openrouter' && m.note) h += `<p>${esc(m.note)}</p>`;
   if (us && us.some((x) => x != null && x > 1))
     h += `<p>Above 100%: does not cover the rent at the predicted limit even fully loaded, under these assumptions.</p>`;
   if (!p.fits) h += `<p>Context below the workload’s ${M.workload.cap.toLocaleString('en-US')}-token cap: ${pct(p.over)} of requests are longer.</p>`;
@@ -257,8 +264,10 @@ function bandTip({ r }) {
   h += `<dt>${esc(c.gpu)} rent</dt><dd>${LEVELS.map((l) => usd(rr[l])).join(' / ')} per GPU-hour<br><span class="muted">low / median / high of ${rr.n} ${esc(termName(S.term))} sellers</span></dd>`;
   h += `<dt>At ${Math.round(S.u * 100)}%</dt><dd>${LEVELS.map((l) => usd(costTok(c, S.term, l, S.u) / d)).join(' / ')} per ${unitWord}</dd>`;
   h += `<dt>At 100%</dt><dd>${LEVELS.map((l) => usd(costTok(c, S.term, l, 1) / d)).join(' / ')}</dd>`;
-  h += `<dt>Model error</dt><dd>${errText(c.err)}</dd></dl>`;
-  for (const t of m.notes) h += `<p>${esc(t)}</p>`;
+  h += `<dt>Model error</dt><dd>${c.err ? errText(c.err) : 'capacity unchecked: rough sensitivity'}</dd></dl>`;
+  if (m.sens && !S.fresh) h += `<p>Most sensitive to: ${esc(m.sens.words)}.</p>`;
+  if (S.fresh && m.nc.note) h += `<p>${esc(m.nc.note)}.</p>`;
+  if (m.note && m.prov.some((p) => p.src === 'openrouter')) h += `<p>${esc(m.note)}</p>`;
   return h;
 }
 function showTip(el) {
@@ -310,8 +319,8 @@ function pin(key) {
 }
 const COLS = [
   ['p', 'Provider', (p) => p.p], ['src', 'Source', (p) => p.src], ['in', 'In', (p) => p.in], ['out', 'Out', (p) => p.out],
-  ['cr', 'Cached', (p) => p.cr], ['sh', '$/session-h', (p) => p.sh],
-  ['u0', 'u* low', (p) => p.u[S.term]?.[0]], ['u1', 'u* median', (p) => p.u[S.term]?.[1]], ['u2', 'u* high', (p) => p.u[S.term]?.[2]],
+  ['cr', 'Cached', (p) => p.cr], ['sh', '$/session-h', (p) => pSH(p)],
+  ['u0', 'u* low', (p) => pU(p)?.[0]], ['u1', 'u* median', (p) => pU(p)?.[1]], ['u2', 'u* high', (p) => pU(p)?.[2]],
   ['q', 'Quant', (p) => p.q], ['ctxr', 'Context', (p) => p.ctxr], ['mo', 'Max out', (p) => p.mo],
 ];
 function renderPin() {
@@ -328,16 +337,16 @@ function renderPin() {
     return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * dir;
   });
   let h = `<h2>${esc(shortName(m))}: ${m.prov.length} listed price${m.prov.length === 1 ? '' : 's'}</h2>`;
-  for (const t of m.notes) h += `<div class="muted">${esc(t)}</div>`;
+  if (m.note && m.prov.some((p) => p.src === 'openrouter')) h += `<div class="muted">${esc(m.note)}</div>`;
   h += `<div class="muted">USD per million tokens. u* is the utilisation at which the price covers the ${esc(termName(S.term))} rent at low / median / high seller prices.</div>`;
   if (!m.prov.length) { box.innerHTML = h + '<p class="muted">No listed price in this data set.</p>'; box.hidden = false; return; }
   h += '<div class="tablewrap"><table><thead><tr>';
   for (const [k, label] of COLS) h += `<th${k === 'p' || k === 'src' || k === 'q' ? ' class="l"' : ''}><button type="button" id="sort-${k}" data-sort="${k}" data-active="${k === sk}">${esc(label)}${k === sk ? (dir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`;
   h += '<th class="l">Flags</th></tr></thead><tbody>';
   for (const p of rowsP) {
-    const u = p.u[S.term] || [null, null, null];
+    const u = pU(p) || [null, null, null];
     h += `<tr><td>${esc(p.p)}<div class="muted">${esc(p.tag)}</div></td><td class="l">${p.src === 'openrouter' ? 'OpenRouter' : `<a href="${esc(p.url)}" target="_blank" rel="noopener">own page</a>`}</td>`;
-    h += `<td>${usd(p.in)}</td><td>${usd(p.out)}</td><td>${usd(p.cr)}</td><td>${usd(p.sh)}</td>`;
+    h += `<td>${usd(p.in)}</td><td>${usd(p.out)}</td><td>${usd(p.cr)}</td><td>${usd(pSH(p))}</td>`;
     h += u.map((x) => `<td>${pct(x)}</td>`).join('');
     h += `<td class="l">${esc(p.q ?? 'not declared')}</td><td>${p.ctxr != null ? pct(p.ctxr) : 'n/a'}</td><td>${p.mo != null ? Math.round(p.mo / 1000) + 'k' : '—'}</td>`;
     h += `<td class="wrap">${esc([...p.flags, ...(p.fits ? [] : [`${pct(p.over)} of requests exceed its context`])].join('; '))}</td></tr>`;
@@ -368,6 +377,7 @@ function sources() {
     <li>An endpoint’s price for the mix applies its listed input, cached-input and output prices to the same session, assuming cache entries live 300 s.</li>
     <li>Break-even u* = cost per session-hour at full load ÷ the endpoint’s price per session-hour. Above 100%, the price does not cover the rent at the predicted limit even fully loaded, under these assumptions.</li></ol>
     <p>Per million characters divides both by the model’s characters per token, measured with its own tokenizer on fixed public text (code, English, French, tool-call JSON). The provider’s hardware, engine, contract rents and traffic are unknown.</p>`;
+  if (HAS_NC) h += `<h3>Every prompt fresh</h3><p>Rough sensitivity: limits re-predicted with an explicit max_num_seqs, every prompt computed fresh and billed at the input price. It moves both the bands and the dots.</p>`;
   h += `<h3>GPU rent, USD per GPU-hour</h3>`;
   if (M.rent_tiers) h += `<p>The band counts ${esc(M.rent_tiers)} offers only${M.rent_other ? `; rows marked “not counted” are ${esc(M.rent_other.tiers)}-tier offers left out of it` : ''}. Aggregators and GB300 instances are left out.</p>`;
   for (const gpu of Object.keys(M.rent)) for (const term of M.terms) {
@@ -398,6 +408,10 @@ function setSeg(id, v) { for (const b of $(id).querySelectorAll('button')) b.set
 $('u').addEventListener('input', (e) => { S.u = +e.target.value / 100; $('uOut').textContent = e.target.value + '%'; hideTip(); render(); });
 $('term').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.term = b.dataset.v; setSeg('term', S.term); hideTip(); render(); });
 $('unit').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.unit = b.dataset.v; setSeg('unit', S.unit); $('kindWrap').hidden = S.unit !== 'char'; hideTip(); render(); });
+if (HAS_NC) {
+  $('cacheWrap').hidden = false;
+  $('cache').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.fresh = b.dataset.v === 'fresh'; setSeg('cache', b.dataset.v); hideTip(); render(); });
+}
 $('kind').addEventListener('change', (e) => { S.kind = e.target.value; hideTip(); render(); });
 
 const mix = M.mix;

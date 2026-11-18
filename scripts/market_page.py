@@ -62,11 +62,6 @@ def rent_block(rent: dict, TERMS) -> dict:
     return out
 
 
-# Quiet notes on a row, keyed by catalogue model; each names where it comes from.
-ROW_NOTES = {
-    "Q38FN": {"openrouter": "OpenRouter's listing names the Qwen3.8-Flash-Next repository; "
-                            "it may serve the later production release."},
-}
 
 
 def build(comp: dict, sources: str, snapshot: Path) -> dict:
@@ -81,7 +76,9 @@ def build(comp: dict, sources: str, snapshot: Path) -> dict:
 
     out_models = []
     pp_pages = {}
-    billing = []
+    SENS_WORDS = {"cache_as_input": "the price of cached input", "mfu": "prefill speed", "decode": "decode speed",
+                  "limit": "the predicted session limit", "rent": "GPU rent",
+                  "ttl": "how long the provider keeps a prompt cached"}
     for key, m in models.items():
         if json.dumps(m["rent"], sort_keys=True) != rent0:
             raise ValueError(f"{key}: rent differs from the first model's; the page assumes one rent table")
@@ -132,36 +129,47 @@ def build(comp: dict, sources: str, snapshot: Path) -> dict:
                 "over": sig(p.get("share_requests_over_context"), 3),
                 "flags": p["flags"], "u": us, "url": url, "read": read,
             })
-            tw = p.get("time_weighted")
-            if tw:
-                provs[-1]["tw"] = {"base_hours": tw.get("base_hours"),
-                                   "windows": [{k: w.get(k) for k in ("utc_start", "utc_end", "hours",
-                                                                       "usd_per_mtok_input", "usd_per_mtok_output",
-                                                                       "usd_per_mtok_cache_read")}
-                                               for w in tw.get("windows", [])],
-                                   "listed": {k: tw.get(k) for k in ("listed_usd_per_mtok_mixed",)}}
-            b = p.get("billed_per_request")
-            if b:
-                tot = b["cached"] + b["fresh"] + b["output"]
-                billing.append((round(p["cache_ttl_s"]), round(p["miss"], 3), round(b["cached"] / tot, 3)))
-        notes = [t for src, t in ROW_NOTES.get(key, {}).items() if any(q["src"] == src for q in provs)]
+            lw = p.get("listed_window_prices")
+            if lw:
+                provs[-1]["lw"] = {"in": lw.get("usd_per_mtok_input"), "out": lw.get("usd_per_mtok_output"),
+                                   "cr": lw.get("usd_per_mtok_cache_read"),
+                                   "u": {t: [sig(v.get(l), 4) for l in LEVELS] for t, v in (p.get("u_star_listed_window") or {}).items()}}
+        # every prompt fresh: the comparison's rough contrast, used only if it covers every row
+        cn = m.get("contrast_no_cache")
+        nc = None
+        if cn:
+            if cn["workload"]["mixed_tokens_per_session_hour"] != wl0["mixed_tokens_per_session_hour"]:
+                raise ValueError(f"{key}: contrast_no_cache uses another token count per session-hour")
+            ncp = {(q["provider"], q["tag"], q["source"]): q for q in cn["providers"]}
+            for pr in provs:
+                q = ncp.get((pr["p"], pr["tag"], pr["src"]))
+                if q is None:
+                    raise KeyError(f"{key}: {pr['p']} / {pr['tag']} missing from contrast_no_cache.providers")
+                pr["nc"] = {"mix": sig(q["usd_per_mtok_mixed"]), "sh": sig(q["usd_per_session_hour"]),
+                            "u": {t: [sig(v[l]["u_star"], 4) if v.get(l) else None for l in LEVELS]
+                                  for t, v in q["u_star"].items() if isinstance(v, dict) and "low" in v}}
+            nc = {"configs": [{"id": c["id"], "gpu": c["gpu"], "tp": c["tp"], "arm": c["arm"], "n": c["n_gpu"],
+                               "limit": c["limit"], "bind": c["binding"]} for c in cn["configs"] if c["limit"] > 0],
+                  "mix": {k: sig(v, 4) for k, v in cn["workload"]["mix_billed"].items()},
+                  "note": cn.get("workload_note")}
+        sens = sorted(m["sensitivity"]["assumptions"], key=lambda a: -(a["median_abs_dln"] or 0))
+        top = sens[0] if sens else None
         out_models.append({"key": key, "name": m["model_name"], "cpt": cpt, "configs": configs, "prov": provs,
-                           "notes": notes,
+                           "note": m.get("model_note"), "nc": nc,
+                           "sens": ({"words": SENS_WORDS.get(top["kind"], re.sub(r"\s*\([^)]*\)$", "", top["label"])),
+                                     "label": top["label"]} if top else None),
                            "max_ctx": next((p["fidelity"]["model_max_context"] for p in m["providers"]), None)})
 
-    if not billing:
-        raise ValueError("no provider row carries billed_per_request; the page states the billing mix from it")
-    from collections import Counter
-    (ttl, miss, cached), n_same = Counter(billing).most_common(1)[0]
+    mb = need(wl0, "mix_billed", "workload")
     mix = wl0["mix_at_miss_rate"]
     snap = first["snapshot"]
     return {
-        "date": comp.get("date"), "sources": sources,
+        "date": comp.get("date"), "sources": sources, "caveat": first.get("caveat"),
         "workload": {k: sig(wl0[k]) if isinstance(wl0[k], float) else wl0[k]
                      for k in ("prompt_mean", "output", "warm_turn", "think_time_s", "sub_ratio", "cap", "miss_rate",
                                "requests_per_session_hour", "mixed_tokens_per_session_hour")},
         "mix": {k: sig(v, 4) for k, v in mix.items()},
-        "billing": {"ttl_s": ttl, "miss": miss, "cached": cached, "n_same": n_same, "n": len(billing)},
+        "billing": {"ttl_s": mb["cache_ttl_s"], "miss": sig(mb["miss"], 4), "cached": sig(mb["cached"], 4)},
         "rent_tiers": first.get("rent_tiers"),
         "rent_other": ({"tiers": first["rent_other_tiers"]["tiers"], "rent": rent_block(first["rent_other_tiers"]["rent"], TERMS)}
                        if first.get("rent_other_tiers") else None),
