@@ -118,7 +118,7 @@ The model prices 310k-token sequences, InferenceX's median input per AgentX requ
 
 ### GPU memory cap and draft setting (KV pool)
 
-The model sizes the pool from the whole HBM less a fixed reserve; vLLM recipes report pools at `--gpu-memory-utilization 0.85` and without a drafter, whose cache rows the model charges. Neither is an input, so these rows mix both effects:
+By default the model sizes the pool from the whole HBM less a fixed reserve. The memory cap is an input only through `calibration.gpu_memory_utilization`, one of the reserve terms `ws calibrate --vllm-log` reads from a start-up log (research/reserve_terms.md); the drafter is not an input. vLLM recipes report pools at `--gpu-memory-utilization 0.85` and without a drafter, whose cache rows the model charges, and the rows below are priced at the default reserve, so they mix both effects:
 
 | conditions | measured | predicted | error | source | date |
 |---|---|---|---|---|---|
@@ -150,7 +150,7 @@ The 27B TP2 FP16 log reports 2 × 110.59 GiB of KV memory; its 3,233,564 tokens 
 - FP4 weights on Hopper: InferenceX runs them on H200; the model prices FP8 there.
 - Sparse attention in prefill: DSA layers are priced as dense attention, an upper bound on prefill time.
 - The decode step jump past n ≈ 64 (issue #74).
-- Per-deployment reserves (CUDA graphs, a lowered memory cap): `ws calibrate --vllm-log` fits the reserve, the default does not.
+- Per-deployment reserves (CUDA graphs, a lowered memory cap): `ws calibrate --vllm-log` reads the reserve, or its three terms, from the start-up log; the default does not.
 
 ## Excluded
 
