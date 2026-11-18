@@ -1,7 +1,114 @@
 {
  "source": {
   "read": "2026-11-18",
-  "method": "Each seller's own price page or price API, fetched with curl and read from the HTML/JSON; Crusoe and CoreWeave tables resolved in a headless browser. Per-GPU-hour = listed price / GPUs in the unit (/ hours in the term for whole-term or monthly prices), x the ECB USD/EUR rate for EUR prices. Prices exclude VAT. Aggregators are kind 'aggregator' and never stand in for a seller. B300 records whose instance names GB300 are Grace-Blackwell racks, not HGX B300. Blocked: Google Cloud (JS-only page, no public price data without an API key), Scaleway (bot check), Lambda (lists no H200 or B300), Azure (no B300/GB300 rows in the Retail Prices API)."
+  "method": "Each seller's own price page or price API, fetched with curl and read from the HTML/JSON; Crusoe and CoreWeave tables resolved in a headless browser. Per-GPU-hour = listed price / GPUs in the unit (/ hours in the term for whole-term or monthly prices), x the ECB USD/EUR rate for EUR prices. Prices exclude VAT. Aggregators are kind 'aggregator' and never stand in for a seller. tier: managed (the seller's own fleet), community (third-party hosts under the seller's brand), marketplace (a median over independent hosts), null for aggregators. platform: HGX, GB300 (Grace-Blackwell racks, not HGX B300) or unstated, as the page names it. availability: the page's words when it marks the offer, else null. multi_gpu: the largest GPU count per instance the page offers at that price, null where not stated. Blocked: Google Cloud (JS-only page, no public price data without an API key), Scaleway (bot check), Lambda (lists no H200 or B300), Azure (no B300/GB300 rows in the Retail Prices API).",
+  "terms": {
+   "Nebius": {
+    "restrictive": false,
+    "url": "https://docs.nebius.com/legal/terms-of-use/",
+    "quote": "(i) copy, modify, or create a derivative work of the Platform and services",
+    "note": "platform terms of use; no clause on the website's published prices found",
+    "read": "2026-11-18"
+   },
+   "CoreWeave": {
+    "restrictive": false,
+    "url": "https://docs.coreweave.com/policies/terms-of-service",
+    "quote": null,
+    "note": "service terms; no clause on reusing the website's content found",
+    "read": "2026-11-18"
+   },
+   "Crusoe": {
+    "restrictive": false,
+    "url": "https://legal.crusoe.ai/",
+    "quote": "engaging in disruptive crawling or scraping",
+    "note": "acceptable-use clause against disruptive scraping; nothing on reusing published prices",
+    "read": "2026-11-18"
+   },
+   "Together AI": {
+    "restrictive": false,
+    "url": "https://www.together.ai/terms-of-service",
+    "quote": null,
+    "note": "no clause on reusing the website's content found",
+    "read": "2026-11-18"
+   },
+   "RunPod": {
+    "restrictive": true,
+    "url": "https://www.runpod.io/legal/terms-of-service",
+    "quote": "Systematically retrieve data or other content from the Site to create or compile, directly or indirectly, a collection, compilation, database, or directory without written permission from us.",
+    "note": "also bans 'any spider, robot, cheat utility, scraper, or offline reader that accesses the Site'",
+    "read": "2026-11-18"
+   },
+   "DigitalOcean": {
+    "restrictive": true,
+    "url": "https://www.digitalocean.com/legal/terms-of-service-agreement",
+    "quote": "No part of DigitalOcean's Website may be reproduced, modified, or distributed in any form or manner without the prior written permission of DigitalOcean.",
+    "note": "",
+    "read": "2026-11-18"
+   },
+   "Verda": {
+    "restrictive": false,
+    "url": "https://verda.com/terms-and-conditions",
+    "quote": "engage in any malicious automated use of the Services, including but not limited to the malicious use of scripts, bots, scrapers",
+    "note": "only malicious automated use is barred",
+    "read": "2026-11-18"
+   },
+   "OVHcloud": {
+    "restrictive": true,
+    "url": "https://www.ovhcloud.com/en-ie/terms-and-conditions/",
+    "quote": "Any partial or full reproduction or representation of the website or its components by any process whatsoever, for any purposes whatsoever, is prohibited without the express consent of OVH.",
+    "note": "",
+    "read": "2026-11-18"
+   },
+   "Oracle OCI": {
+    "restrictive": true,
+    "url": "https://www.oracle.com/legal/terms/",
+    "quote": "You agree not to use any robot, spider, scraper or other automated means to access the Site or any Oracle accounts, computer systems or networks without Oracle's express written permission.",
+    "note": "bars automated access, not reuse; the price list was read through Oracle's public price-list API",
+    "read": "2026-11-18"
+   },
+   "Microsoft Azure": {
+    "restrictive": true,
+    "url": "https://www.microsoft.com/en-us/legal/terms-of-use",
+    "quote": "Unless otherwise specified, the Services are for your personal and non-commercial use. You may not modify, copy, distribute, transmit, display, perform, reproduce, publish, license, create derivative works from, transfer, or sell any information, software, products or services obtained from the Services.",
+    "note": "Microsoft's general website terms; the Retail Prices API has no separate terms found",
+    "read": "2026-11-18"
+   },
+   "AWS": {
+    "restrictive": true,
+    "url": "https://aws.amazon.com/terms/",
+    "quote": "This license does not include any resale or commercial use of the AWS Site or its contents; any derivative use of the AWS Site or its contents; ... or any use of data mining, robots, or similar data gathering and extraction tools.",
+    "note": "also: 'may not be reproduced, duplicated, copied, sold, resold, visited, or otherwise exploited for any commercial purpose without express written consent'",
+    "read": "2026-11-18"
+   },
+   "Vantage (instances.vantage.sh)": {
+    "restrictive": null,
+    "url": "https://www.vantage.sh/",
+    "quote": null,
+    "note": "terms page not found (404 at /terms and /legal/terms-of-service); not read",
+    "read": "2026-11-18"
+   },
+   "Jarvislabs": {
+    "restrictive": null,
+    "url": "https://jarvislabs.ai/termsandservice",
+    "quote": null,
+    "note": "page drawn by JavaScript; not read",
+    "read": "2026-11-18"
+   },
+   "Vast.ai": {
+    "restrictive": true,
+    "url": "https://vast.ai/terms",
+    "quote": "Using any robot, spider, crawler, scraper, script, browser automation, web scraping, web harvesting, web data extraction, data-mining tool or any other automated method to access, query, copy, download, monitor, collect, cache, store or extract data from the W[ebsite]",
+    "note": "also: Company Content 'may not be used, copied, reproduced, aggregated, distributed ... without the prior written consent'. The records here came from its public search API",
+    "read": "2026-11-18"
+   },
+   "getdeploying.com": {
+    "restrictive": true,
+    "url": "https://getdeploying.com/terms",
+    "quote": "scrape, extract, or systematically copy content from the Services, including for AI or machine learning training purposes, without our prior written consent",
+    "note": "aggregator",
+    "read": "2026-11-18"
+   }
+  }
  },
  "fx": {
   "usd_per_eur": 1.0968,
@@ -27,7 +134,11 @@
    "url": "https://nebius.com/prices",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX H200 | 16 | 200 | from $0.79 | $5.40",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -46,7 +157,11 @@
    "url": "https://nebius.com/prices",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX H200 | 16 | 200 | from $0.79 | $5.40",
-   "note": "column 'Preemptible, GPU-hour *': a 'from' floor of a market-driven spot price; the live prices sit on nebius.com/spot-prices (JS-only, not read). Leave out of spot medians"
+   "note": "column 'Preemptible, GPU-hour *': a 'from' floor of a market-driven spot price; the live prices sit on nebius.com/spot-prices (JS-only, not read). Leave out of spot medians",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -65,7 +180,11 @@
    "url": "https://nebius.com/prices",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX B300 | 24 | 346 | from $0.99 | $9.50",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -84,7 +203,11 @@
    "url": "https://nebius.com/prices",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX B300 | 24 | 346 | from $0.99 | $9.50",
-   "note": "column 'Preemptible, GPU-hour *': a 'from' floor of a market-driven spot price; the live prices sit on nebius.com/spot-prices (JS-only, not read). Leave out of spot medians"
+   "note": "column 'Preemptible, GPU-hour *': a 'from' floor of a market-driven spot price; the live prices sit on nebius.com/spot-prices (JS-only, not read). Leave out of spot medians",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -103,7 +226,11 @@
    "url": "https://nebius.com/prices",
    "read": "2026-11-18",
    "quote": "NVIDIA GB300 NVL72 | 112 | 800 | - | Contact us",
-   "note": "GB300 rack, contact sales; not an HGX B300"
+   "note": "GB300 rack, contact sales; not an HGX B300",
+   "tier": "managed",
+   "platform": "GB300",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -122,7 +249,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX H200 | 8 | 141 | 128 | 2,048 | 61.44 | $50.44 | $20.93 | $6.31",
-   "note": "the $6.31 'Inference Single GPU Price' column applies only to CoreWeave inference-platform customers (footnote 2); not used"
+   "note": "the $6.31 'Inference Single GPU Price' column applies only to CoreWeave inference-platform customers (footnote 2); not used",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -141,7 +272,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX H200 | 8 | 141 | 128 | 2,048 | 61.44 | $50.44 | $20.93 | $6.31",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -160,7 +295,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX H200 | 8 | 141 | 128 | 2,048 | 61.44 | $50.44 | $20.64",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -179,7 +318,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "CoreWeave offers up to 60% discounts over our On-Demand prices for committed usage.",
-   "note": "contact sales; 'up to 60%' off on-demand would floor at $2.52/GPU-h, not a listed price"
+   "note": "contact sales; 'up to 60%' off on-demand would floor at $2.52/GPU-h, not a listed price",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -198,7 +341,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX B300 | 8 | 270 | 192 | 4,096 | 61.44 | Contact sales | $35.84",
-   "note": "on-demand is 'Contact sales'; the page lists the B300 VRAM as 270 GB"
+   "note": "on-demand is 'Contact sales'; the page lists the B300 VRAM as 270 GB",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -217,7 +364,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX B300 | 8 | 270 | 192 | 4,096 | 61.44 | Contact sales | $35.84",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -236,7 +387,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX B300 | 8 | 270 | 192 | 4,096 | 61.44 | Contact sales | $36.70",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -255,7 +410,11 @@
    "url": "https://www.coreweave.com/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA GB300 NVL72 | 4^1 | 279 | 144 | 960 | 61.44 | Contact sales",
-   "note": "GB300 rack, contact sales; not an HGX B300"
+   "note": "GB300 rack, contact sales; not an HGX B300",
+   "tier": "managed",
+   "platform": "GB300",
+   "availability": null,
+   "multi_gpu": 4
   },
   {
    "gpu": "H200",
@@ -274,7 +433,11 @@
    "url": "https://crusoe.ai/cloud/pricing",
    "read": "2026-11-18",
    "quote": "GPU instances pricing: NVIDIA H200 | 141GB | HGX | Current on-demand $4.29 / GPU-hr | New on-demand starting Dec 1, 2026 $5.40 / GPU-hr",
-   "note": "the page announces $5.40/GPU-h from 2026-12-01"
+   "note": "the page announces $5.40/GPU-h from 2026-12-01",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -293,7 +456,11 @@
    "url": "https://crusoe.ai/cloud/pricing",
    "read": "2026-11-18",
    "quote": "GPU instances pricing: NVIDIA B300 | 288GB | HGX | Current on-demand $8.96 / GPU-hr | New on-demand starting Dec 1, 2026 $9.90 / GPU-hr",
-   "note": "the page announces $9.90/GPU-h from 2026-12-01; GB300 NVL72 is 'Contact sales'; the separate Self-Serve Deployments table (managed endpoints, B300 $13.80 from Dec 1) is not raw rental and is not recorded"
+   "note": "the page announces $9.90/GPU-h from 2026-12-01; GB300 NVL72 is 'Contact sales'; the separate Self-Serve Deployments table (managed endpoints, B300 $13.80 from Dec 1) is not raw rental and is not recorded",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -312,7 +479,11 @@
    "url": "https://crusoe.ai/cloud/pricing",
    "read": "2026-11-18",
    "quote": "contact us to lock in guaranteed resources at our lowest rates.",
-   "note": "reserved: contact sales"
+   "note": "reserved: contact sales",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -331,7 +502,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX H200 | $2.99 | $5.99 | $4.99 | $4.15 | Request Capacity",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -350,7 +525,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX H200 | $2.99 | $5.99 | $4.99 | $4.15 | Request Capacity",
-   "note": "column 'Preemptible'"
+   "note": "column 'Preemptible'",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -369,7 +548,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX H200 | $2.99 | $5.99 | $4.99 | $4.15 | Request Capacity",
-   "note": "reserved 3-30 days; commit_months is the 3-day lower bound"
+   "note": "reserved 3-30 days; commit_months is the 3-day lower bound",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -388,7 +571,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX H200 | $2.99 | $5.99 | $4.99 | $4.15 | Request Capacity",
-   "note": "reserved 31-90 days; 91+ days is 'Request Capacity'"
+   "note": "reserved 31-90 days; 91+ days is 'Request Capacity'",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -407,7 +594,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX B300 | $5.75 | $11.49 | $10.59 | $9.89 | Request Capacity",
-   "note": "the page's availability script pins B300 to 'Sold Out' (FIXED = { B300: 'none' })"
+   "note": "the page's availability script pins B300 to 'Sold Out' (FIXED = { B300: 'none' })",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": "sold out",
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -426,7 +617,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX B300 | $5.75 | $11.49 | $10.59 | $9.89 | Request Capacity",
-   "note": "column 'Preemptible'; shown sold out"
+   "note": "column 'Preemptible'; shown sold out",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": "sold out",
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -445,7 +640,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX B300 | $5.75 | $11.49 | $10.59 | $9.89 | Request Capacity",
-   "note": "reserved 3-30 days; commit_months is the 3-day lower bound"
+   "note": "reserved 3-30 days; commit_months is the 3-day lower bound",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -464,7 +663,11 @@
    "url": "https://www.together.ai/pricing",
    "read": "2026-11-18",
    "quote": "GPU Clusters: Preemptible | On-Demand | Reserved 3-30 days | 31-90 days | 91+ days. NVIDIA HGX B300 | $5.75 | $11.49 | $10.59 | $9.89 | Request Capacity",
-   "note": "reserved 31-90 days"
+   "note": "reserved 31-90 days",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -483,7 +686,11 @@
    "url": "https://www.runpod.io/pricing",
    "read": "2026-11-18",
    "quote": "H200 | 141 GB VRAM | 276 GB RAM | 24 | vCPUs | $ | 5.29 | /hr (Secure Cloud)",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -502,7 +709,11 @@
    "url": "https://www.runpod.io/pricing",
    "read": "2026-11-18",
    "quote": "On-demand H200 cloud GPU rental on Runpod. Community Cloud $3.59/hr, Secure Cloud $5.29/hr.",
-   "note": "Community Cloud runs on third-party hosts; read from the page's schema.org Product data"
+   "note": "Community Cloud runs on third-party hosts; read from the page's schema.org Product data",
+   "tier": "community",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -521,7 +732,11 @@
    "url": "https://www.runpod.io/pricing",
    "read": "2026-11-18",
    "quote": "Instant Clusters: H200 SXM | $ | 6.35 | /GPU/hr",
-   "note": "multi-node instant cluster rate"
+   "note": "multi-node instant cluster rate",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -540,7 +755,11 @@
    "url": "https://www.runpod.io/pricing",
    "read": "2026-11-18",
    "quote": "B300 | 288 GB HBM3e | 251 GB RAM | 32 | vCPUs | $ | 8.99 | /hr (Secure Cloud)",
-   "note": "RunPod does not say HGX or DGX"
+   "note": "RunPod does not say HGX or DGX",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -559,7 +778,11 @@
    "url": "https://www.runpod.io/pricing",
    "read": "2026-11-18",
    "quote": "On-demand B300 cloud GPU rental on Runpod. Community Cloud $6.94/hr, Secure Cloud $8.99/hr.",
-   "note": "Community Cloud runs on third-party hosts; read from the page's schema.org Product data"
+   "note": "Community Cloud runs on third-party hosts; read from the page's schema.org Product data",
+   "tier": "community",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -578,7 +801,11 @@
    "url": "https://www.runpod.io/pricing",
    "read": "2026-11-18",
    "quote": "Instant Clusters: B300 | $ | 10.79 | /GPU/hr",
-   "note": "multi-node instant cluster rate"
+   "note": "multi-node instant cluster rate",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -597,7 +824,11 @@
    "url": "https://www.digitalocean.com/pricing/gpu-droplets",
    "read": "2026-11-18",
    "quote": "NVIDIA HGX H200 | $4.47 | /GPU/hour | On-Demand Price | GPUs per Droplet | Choose between 1 or 8 GPU's per droplet",
-   "note": "'New pricing is effective as of August 1, 2026.'"
+   "note": "'New pricing is effective as of August 1, 2026.'",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -616,7 +847,11 @@
    "url": "https://www.digitalocean.com/pricing/gpu-droplets",
    "read": "2026-11-18",
    "quote": "12 Month Reserved Plans | NVIDIA HGX H200 | $3.40 | /GPU/hour | 12 Month Reserved Price*",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -635,7 +870,11 @@
    "url": "https://www.digitalocean.com/pricing/gpu-droplets",
    "read": "2026-11-18",
    "quote": "12 Month Reserved Plans | NVIDIA HGX B300 | $7.94 | /GPU/hour | 12 Month Reserved Price*",
-   "note": "no on-demand B300 plan listed"
+   "note": "no on-demand B300 plan listed",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -654,7 +893,11 @@
    "url": "https://www.digitalocean.com/pricing/gpu-droplets",
    "read": "2026-11-18",
    "quote": "Spot Plans | NVIDIA HGX B300 | $6.17 | /GPU/hour | Current Spot Price*",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -673,7 +916,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "GPU instances, On-demand: 1x H200 SXM5 141GB | 44 | 170 GB | 141 GB | $6.904/h | $3.452/h",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -692,7 +939,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "GPU instances, On-demand: 1x H200 SXM5 141GB | 44 | 170 GB | 141 GB | $6.904/h | $3.452/h",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -711,7 +962,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "Reserved | Commitment | Discount | 1 month | 2% off on-demand | 3 months | 3% off on-demand | 6 months | 4% off on-demand | 1 year | 8% off on-demand | 2 years | 25% off on-demand",
-   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 8% one-year discount"
+   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 8% one-year discount",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -730,7 +985,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "Reserved | Commitment | Discount | 1 month | 2% off on-demand | 3 months | 3% off on-demand | 6 months | 4% off on-demand | 1 year | 8% off on-demand | 2 years | 25% off on-demand",
-   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 25% two-year discount"
+   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 25% two-year discount",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -749,7 +1008,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "GPU instances, On-demand: 1x B300 SXM6 268GB | 30 | 255 GB | 268 GB | $12.79/h | $6.395/h",
-   "note": "Verda lists the B300 at 268 GB"
+   "note": "Verda lists the B300 at 268 GB",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -768,7 +1031,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "GPU instances, On-demand: 1x B300 SXM6 268GB | 30 | 255 GB | 268 GB | $12.79/h | $6.395/h",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -787,7 +1054,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "Reserved | Commitment | Discount | 1 month | 2% off on-demand | 3 months | 3% off on-demand | 6 months | 4% off on-demand | 1 year | 8% off on-demand | 2 years | 25% off on-demand",
-   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 8% one-year discount"
+   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 8% one-year discount",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -806,7 +1077,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "Reserved | Commitment | Discount | 1 month | 2% off on-demand | 3 months | 3% off on-demand | 6 months | 4% off on-demand | 1 year | 8% off on-demand | 2 years | 25% off on-demand",
-   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 25% two-year discount"
+   "note": "derived: price_listed is the on-demand rate; usd_per_gpu_h applies the listed 25% two-year discount",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -825,7 +1100,11 @@
    "url": "https://verda.com/pricing",
    "read": "2026-11-18",
    "quote": "1x GB300 SXM6 288GB | 32 | 225 GB | 288 GB | $14.71/h | $7.354/h",
-   "note": "GB300 (Grace-Blackwell), not an HGX B300"
+   "note": "GB300 (Grace-Blackwell), not an HGX B300",
+   "tier": "managed",
+   "platform": "GB300",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -844,7 +1123,11 @@
    "url": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
    "read": "2026-11-18",
    "quote": "\"name\":\"h200-1920\" ... \"hour\":{\"formatted\":\"€42\",\"price\":42} ... \"regions\":[\"EU-WEST-PAR\"]",
-   "note": "price excl. VAT; the USD site (ovhcloud.com/en/) lists $49.56/h for the same plan"
+   "note": "price excl. VAT; the USD site (ovhcloud.com/en/) lists $49.56/h for the same plan",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -863,7 +1146,11 @@
    "url": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
    "read": "2026-11-18",
    "quote": "\"name\":\"b300-1920\" ... \"hour\":{\"formatted\":\"€85.6\",\"price\":85.6} ... \"regions\":[\"GRA11\"]",
-   "note": "price excl. VAT; the USD site lists $99.3/h"
+   "note": "price excl. VAT; the USD site lists $99.3/h",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -882,7 +1169,11 @@
    "url": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
    "read": "2026-11-18",
    "quote": "\"svp-12\":{\"formatted\":\"€43,741.60 *\",\"price\":43741.6}",
-   "note": "12-month savings plan; hours per month 730 read off the page's own month/hour ratio (€62,488 / €85.6)"
+   "note": "12-month savings plan; hours per month 730 read off the page's own month/hour ratio (€62,488 / €85.6)",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -901,7 +1192,11 @@
    "url": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
    "read": "2026-11-18",
    "quote": "\"svp-36\":{\"formatted\":\"€31,244.00 *\",\"price\":31244}",
-   "note": "36-month savings plan"
+   "note": "36-month savings plan",
+   "tier": "managed",
+   "platform": "HGX",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -914,13 +1209,17 @@
    "currency_listed": "USD",
    "unit_listed": "per GPU-hour",
    "n_gpu_in_unit": 1,
-   "instance": "BM.GPU.H200.8 (billed per GPU)",
+   "instance": "GPU - H200, price-list part B110519 (billed per GPU)",
    "region": "",
    "includes": "",
    "url": "https://apexapps.oracle.com/pls/apex/cetools/api/v1/products/?currencyCode=USD",
    "read": "2026-11-18",
    "quote": "\"partNumber\": \"B110519\", \"displayName\": \"OCI - Compute - GPU - H200\", \"metricName\": \"GPU Per Hour\", ... \"PAY_AS_YOU_GO\", \"value\": 10",
-   "note": "NVIDIA AI Enterprise is a separate optional $2.50/GPU-h line (B111830)"
+   "note": "NVIDIA AI Enterprise is a separate optional $2.50/GPU-h line (B111830)",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -933,13 +1232,17 @@
    "currency_listed": "USD",
    "unit_listed": "per GPU-hour",
    "n_gpu_in_unit": 1,
-   "instance": "BM.GPU.B300.8 (billed per GPU)",
+   "instance": "GPU - B300, price-list part B112237 (billed per GPU)",
    "region": "",
    "includes": "",
    "url": "https://apexapps.oracle.com/pls/apex/cetools/api/v1/products/?currencyCode=USD",
    "read": "2026-11-18",
    "quote": "\"partNumber\": \"B112237\", \"displayName\": \"Oracle Cloud Infrastructure - Compute - GPU - B300\", \"metricName\": \"GPU Per Hour\", ... \"PAY_AS_YOU_GO\", \"value\": 15",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -952,13 +1255,17 @@
    "currency_listed": "USD",
    "unit_listed": "per GPU-hour",
    "n_gpu_in_unit": 1,
-   "instance": "GB300 (billed per GPU)",
+   "instance": "GPU - GB300, price-list part B112140 (billed per GPU)",
    "region": "",
    "includes": "",
    "url": "https://apexapps.oracle.com/pls/apex/cetools/api/v1/products/?currencyCode=USD",
    "read": "2026-11-18",
    "quote": "\"partNumber\": \"B112140\", \"displayName\": \"OCI - Compute - GPU - GB300\", \"metricName\": \"GPU Per Hour\", ... \"PAY_AS_YOU_GO\", \"value\": 18",
-   "note": "GB300 (Grace-Blackwell rack), not an HGX B300"
+   "note": "GB300 (Grace-Blackwell rack), not an HGX B300",
+   "tier": "managed",
+   "platform": "GB300",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -977,7 +1284,11 @@
    "url": "https://prices.azure.com/api/retail/prices?$filter=contains(armSkuName,'H200')",
    "read": "2026-11-18",
    "quote": "armSkuName \"Standard_ND96isr_H200_v5\", armRegionName \"eastus2\", type \"Consumption\", retailPrice 84.8, unitOfMeasure \"1 Hour\"",
-   "note": "Linux; Europe: northeurope $101.76, francecentral $106.00, swedencentral $110.272 per instance-hour"
+   "note": "Linux; Europe: northeurope $101.76, francecentral $106.00, swedencentral $110.272 per instance-hour",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -996,7 +1307,11 @@
    "url": "https://prices.azure.com/api/retail/prices?$filter=contains(armSkuName,'H200')",
    "read": "2026-11-18",
    "quote": "armSkuName \"Standard_ND96isr_H200_v5\", armRegionName \"eastus2\", type \"Reservation\", reservationTerm \"1 Year\", retailPrice 407526.0",
-   "note": "the API's unitOfMeasure reads '1 Hour' but a reservation retailPrice is the whole term; divided by 8,760 h"
+   "note": "the API's unitOfMeasure reads '1 Hour' but a reservation retailPrice is the whole term; divided by 8,760 h",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -1015,7 +1330,11 @@
    "url": "https://prices.azure.com/api/retail/prices?$filter=contains(armSkuName,'H200')",
    "read": "2026-11-18",
    "quote": "armSkuName \"Standard_ND96isr_H200_v5\", armRegionName \"eastus2\", type \"Reservation\", reservationTerm \"3 Years\", retailPrice 1109592.0",
-   "note": "whole-term price divided by 26,280 h; the API lists a Spot row at the on-demand $84.8, not recorded"
+   "note": "whole-term price divided by 26,280 h; the API lists a Spot row at the on-demand $84.8, not recorded",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -1034,7 +1353,11 @@
    "url": "https://aws.amazon.com/ec2/capacityblocks/pricing/",
    "read": "2026-11-18",
    "quote": "p5en.48xlarge | US East (N. Virginia) | $63.158 USD ($7.895 USD) | 8 x H200",
-   "note": "EC2 Capacity Block: capacity booked in advance for a fixed span of days, paid upfront; commit_months unset (blocks run days to months)"
+   "note": "EC2 Capacity Block: capacity booked in advance for a fixed span of days, paid upfront; commit_months unset (blocks run days to months)",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -1053,7 +1376,11 @@
    "url": "https://aws.amazon.com/ec2/capacityblocks/pricing/",
    "read": "2026-11-18",
    "quote": "p6-b300.48xlarge | US East (N. Virginia) | $129.168 USD ($16.146 USD) | 8 x B300",
-   "note": "EC2 Capacity Block, as for p5en"
+   "note": "EC2 Capacity Block, as for p5en",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -1072,7 +1399,11 @@
    "url": "https://instances.vantage.sh/aws/ec2/p5en.48xlarge",
    "read": "2026-11-18",
    "quote": "$63.296 | On Demand | $39.885 | Spot | N/A | 1-Year Reserved",
-   "note": "mirror of the AWS price list; AWS's own on-demand page is JS-only. Spot $39.885 per instance-hour"
+   "note": "mirror of the AWS price list; AWS's own on-demand page is JS-only. Spot $39.885 per instance-hour",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "B300",
@@ -1091,7 +1422,11 @@
    "url": "https://instances.vantage.sh/aws/ec2/p6-b300.48xlarge",
    "read": "2026-11-18",
    "quote": "$142.416 | On Demand | $76.131 | Spot | N/A | 1-Year Reserved",
-   "note": "mirror of the AWS price list. Spot $76.131 per instance-hour"
+   "note": "mirror of the AWS price list. Spot $76.131 per instance-hour",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -1110,7 +1445,11 @@
    "url": "https://jarvislabs.ai/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA H200 SXM | 141 | GB VRAM · | 28 | vCPU · | 300 | GB RAM | On-demand / hr | $4.59 | Spot / hr | $2.29",
-   "note": "no B300 listed"
+   "note": "no B300 listed",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -1129,7 +1468,11 @@
    "url": "https://jarvislabs.ai/pricing",
    "read": "2026-11-18",
    "quote": "NVIDIA H200 SXM | ... | On-demand / hr | $4.59 | Spot / hr | $2.29",
-   "note": ""
+   "note": "",
+   "tier": "managed",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": 8
   },
   {
    "gpu": "H200",
@@ -1148,7 +1491,11 @@
    "url": "https://console.vast.ai/api/v0/bundles/?q=%7B%22gpu_name%22%3A%7B%22in%22%3A%5B%22H200%22%2C%22B300%22%2C%22H200%20NVL%22%5D%7D%2C%22rentable%22%3A%7B%22eq%22%3Atrue%7D%2C%22num_gpus%22%3A%7B%22gte%22%3A1%7D%2C%22type%22%3A%22on-demand%22%2C%22limit%22%3A200%7D",
    "read": "2026-11-18",
    "quote": "11 rentable on-demand 'H200' offers, dph_total / num_gpus: 3.659, 3.688, 3.692, 4.343, 4.344, 5.264, 6.291, 6.292, 6.295, 6.666, 6.667",
-   "note": "marketplace of independent hosts: price is the median of 11 offers; lowest 3.659, lowest verified host 3.659"
+   "note": "marketplace of independent hosts: price is the median of 11 offers; lowest 3.659, lowest verified host 3.659",
+   "tier": "marketplace",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -1167,7 +1514,11 @@
    "url": "https://console.vast.ai/api/v0/bundles/?q=%7B%22gpu_name%22%3A%7B%22in%22%3A%5B%22H200%22%2C%22B300%22%2C%22H200%20NVL%22%5D%7D%2C%22rentable%22%3A%7B%22eq%22%3Atrue%7D%2C%22num_gpus%22%3A%7B%22gte%22%3A1%7D%2C%22type%22%3A%22on-demand%22%2C%22limit%22%3A200%7D",
    "read": "2026-11-18",
    "quote": "4 rentable on-demand 'B300' offers, dph_total / num_gpus: 10.000, 10.001, 10.314, 10.626",
-   "note": "marketplace of independent hosts: price is the median of 4 offers; lowest 10.000, lowest verified host 10.314"
+   "note": "marketplace of independent hosts: price is the median of 4 offers; lowest 10.000, lowest verified host 10.314",
+   "tier": "marketplace",
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -1186,7 +1537,11 @@
    "url": "https://getdeploying.com/gpus/nvidia-h200",
    "read": "2026-11-18",
    "quote": "As of November 18, 2026, the median on-demand price is $4.59 per GPU per hour across 37 providers with a priced on-demand config. On-demand: 143 configs, median $4.59 ... Reserved: 114 configs, median $3.62 ... Spot: 26 configs, median $3.00",
-   "note": "cross-provider median; the catalogue's eur_gpu_h comes from this page's 2026-09 median"
+   "note": "cross-provider median; the catalogue's eur_gpu_h comes from this page's 2026-09 median",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -1205,7 +1560,11 @@
    "url": "https://getdeploying.com/gpus/nvidia-h200",
    "read": "2026-11-18",
    "quote": "As of November 18, 2026, the median on-demand price is $4.59 per GPU per hour across 37 providers with a priced on-demand config. On-demand: 143 configs, median $4.59 ... Reserved: 114 configs, median $3.62 ... Spot: 26 configs, median $3.00",
-   "note": "reserved configs of mixed lengths"
+   "note": "reserved configs of mixed lengths",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "H200",
@@ -1224,7 +1583,11 @@
    "url": "https://getdeploying.com/gpus/nvidia-h200",
    "read": "2026-11-18",
    "quote": "As of November 18, 2026, the median on-demand price is $4.59 per GPU per hour across 37 providers with a priced on-demand config. On-demand: 143 configs, median $4.59 ... Reserved: 114 configs, median $3.62 ... Spot: 26 configs, median $3.00",
-   "note": ""
+   "note": "",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -1243,7 +1606,11 @@
    "url": "https://getdeploying.com/gpus/nvidia-b300",
    "read": "2026-11-18",
    "quote": "As of November 18, 2026, the median on-demand price is $9.00 per GPU per hour across 16 providers with a priced on-demand config. On-demand: 55 configs, median $9.00 ... Reserved: 134 configs, median $5.77 ... Spot: 32 configs, median $6.36",
-   "note": "cross-provider median; the catalogue's eur_gpu_h comes from this page's 2026-09 median"
+   "note": "cross-provider median; the catalogue's eur_gpu_h comes from this page's 2026-09 median",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -1262,7 +1629,11 @@
    "url": "https://getdeploying.com/gpus/nvidia-b300",
    "read": "2026-11-18",
    "quote": "As of November 18, 2026, the median on-demand price is $9.00 per GPU per hour across 16 providers with a priced on-demand config. On-demand: 55 configs, median $9.00 ... Reserved: 134 configs, median $5.77 ... Spot: 32 configs, median $6.36",
-   "note": "reserved configs of mixed lengths"
+   "note": "reserved configs of mixed lengths",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   },
   {
    "gpu": "B300",
@@ -1281,7 +1652,11 @@
    "url": "https://getdeploying.com/gpus/nvidia-b300",
    "read": "2026-11-18",
    "quote": "As of November 18, 2026, the median on-demand price is $9.00 per GPU per hour across 16 providers with a priced on-demand config. On-demand: 55 configs, median $9.00 ... Reserved: 134 configs, median $5.77 ... Spot: 32 configs, median $6.36",
-   "note": ""
+   "note": "",
+   "tier": null,
+   "platform": "unstated",
+   "availability": null,
+   "multi_gpu": null
   }
  ]
 }

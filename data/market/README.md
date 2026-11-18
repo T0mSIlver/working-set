@@ -112,19 +112,30 @@ Prices exclude VAT. A seller that shows "Contact sales" has a record with
 `usd_per_gpu_h: null`. Verda's committed rows apply its listed term discounts
 to its on-demand rate; their `note` says so.
 
-| per GPU-hour, sellers only | on-demand | committed | spot |
+Four fields keep unlike offers apart. `tier` is `managed` (the seller's own
+fleet), `community` (third-party hosts under the seller's brand: RunPod
+Community Cloud) or `marketplace` (Vast.ai: a median over independent
+hosts), and `null` for aggregators. `platform` is `HGX`, `GB300` (a
+Grace-Blackwell rack, not an HGX B300) or `unstated`, as the page names it.
+`availability` holds the page's words when it marks an offer (Together's B300:
+"sold out"), else `null`. `multi_gpu` is the largest GPU count per instance
+the page offers at that price, `null` where the page does not say: eight
+1-GPU instances are not one connected 8-GPU node.
+
+One figure per seller, its cheapest offer; GB300 rows excluded by `platform`:
+
+| per GPU-hour, low / median / high (sellers) | on-demand | committed | spot |
 |---|---|---|---|
-| H200, low / median / high | $3.59 / $5.58 / $10.60 (14) | $3.40 / $5.23 / $7.90 (8) | $2.29 / $2.62 / $3.45 (5) |
-| B300, low / median / high | $6.94 / $10.47 / $15.00 (10) | $5.87 / $9.74 / $16.15 (8) | $4.48 / $5.75 / $6.40 (5) |
+| H200, all tiers | $3.59 / $5.58 / $10.60 (12) | $3.40 / $5.18 / $7.89 (5) | $2.29 / $2.79 / $3.45 (4) |
+| H200, managed | $4.29 / $5.76 / $10.60 (11) | $3.40 / $5.18 / $7.89 (5) | $2.29 / $2.79 / $3.45 (4) |
+| B300, all tiers | $6.94 / $10.82 / $15.00 (8) | $5.87 / $9.59 / $16.15 (5) | $4.48 / $5.96 / $6.39 (4) |
+| B300, managed | $8.96 / $11.49 / $15.00 (7) | $5.87 / $9.59 / $16.15 (5) | $4.48 / $5.96 / $6.39 (4) |
 
-These count every offer, so a seller with several offers counts several times. `ws market` takes one figure per seller, its cheapest offer: the on-demand medians are then $5.58 (H200) and $10.82 (B300).
-
-The B300 rows count HGX B300 offers only: records whose `instance` names
-GB300 are Grace-Blackwell racks and stay out. Nebius's preemptible "from
-$0.79" and "from $0.99" are floors of a market price and stay out of spot.
+Nebius's preemptible "from $0.79" and "from $0.99" are floors of a market
+price and stay out of spot.
 The catalogue's `eur_gpu_h` (€3.80 for the H200, €6.80 for the B300, a
 getdeploying.com median from 2026-09) comes to $4.17 and $7.46 at this rate:
-below the sellers' on-demand medians by about 25% and 30%, and below
+below the managed sellers' on-demand medians by about 28% and 35%, and below
 getdeploying's own medians of the day ($4.59 and $9.00), which rose 12% and
 18% over 90 days by its account.
 
@@ -143,3 +154,13 @@ prints the current median of the offers instead.
 ```
 python3 scripts/market_gpu_rental.py [data/market/gpu_rental-<date>.json]
 ```
+
+`source.terms` quotes each seller's website terms where they restrict
+copying or automated collection of the site's content, with the URL; eight of
+the fifteen have such a clause (`restrictive: true`), two were not read.
+
+`gpu_rental_history.json` holds the same offers on earlier dates, read from
+Internet Archive captures of the same pages (2025-01 to 2026-11). It has the
+fields above plus `captured` and `archive_url`. A record is a capture where a
+price was seen, so a price holds between two records of the same offer.
+EUR prices use the 2026-11-18 rate.
