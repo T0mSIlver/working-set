@@ -285,6 +285,9 @@ def test_a_record_from_before_the_checks_still_reads_and_reports():
     out = io.StringIO()
     B.print_report(rec, out)
     assert "serves at least 1 sessions within p90 turn <= 1.5x" in out.getvalue()
+    # its plan has no template tokens: the report must not blame a flag
+    assert "template tokens: not in this record" in out.getvalue()
+    assert "--skip-eviction-check" not in out.getvalue()
 
 
 def test_the_new_step_round_trips_through_its_record():
