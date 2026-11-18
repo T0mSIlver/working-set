@@ -278,6 +278,8 @@ bytes, priced from one vLLM anchor, give 24M. Method, sources and the misses:
   cold-spike tolerance.
 - [docs/decode-sweep.md](docs/decode-sweep.md) — `ws decode-sweep`: decode step
   time at n held sequences, from a vLLM endpoint and its `/metrics`.
+- [docs/accuracy.md](docs/accuracy.md) — how far the model's predictions are
+  from every public measured figure, per quantity.
 - [scripts/](scripts/) — everything is reproducible:
 
   ```bash
