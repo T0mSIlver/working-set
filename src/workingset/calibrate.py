@@ -1,6 +1,7 @@
 """`ws calibrate`: fit the model's constants from runs on one deployment.
 
     ws calibrate SWEEP.json [MORE.json ...] --config workingset.toml [--write]
+    ws calibrate --vllm-log server.log --config workingset.toml [--reserve terms]
 
 Reads `ws decode-sweep` records (and `ws replay` records, for prefill) taken
 on the deployment the config names, fits what the runs identify, keeps every
@@ -23,6 +24,17 @@ What each run identifies (research/calibrate.md has the estimators):
       cache_config_info; `--vllm-log` reads "GPU KV cache size: N tokens"),
       turned into the per-GPU reserve that pool implies. It absorbs the
       activation reserve and any weight overhead in one read number.
+  the reserve terms  `--vllm-log` only: what vLLM held back on each GPU, from
+      its start-up lines (research/reserve_terms.md):
+        gpu_memory_utilization, gpu_total   "Free memory on device (free/total
+            GiB) on startup. Desired GPU memory utilization is (u, ...)";
+            the holdback is (1 - u) x total
+        activation   "... GiB for peak activation" on the same line
+        non_torch    "... GiB for consumed memory (weights + non-torch)" less
+            "Model loading took X GiB memory"
+      They are printed with the reserve they sum to. `--write` stores
+      reserve_gib (`--reserve pool`, the default) or these four
+      (`--reserve terms`), never both.
   mfu               `ws replay` records' requests sent alone: time to first
       token against the model's prefill FLOPs.
 
@@ -47,6 +59,36 @@ from .config import RunConfig, load_config
 
 GIB = 1024 ** 3
 _KV_LOG = re.compile(r"GPU KV cache size:\s*([\d,]+)\s*tokens")
+_NUM = r"(-?[\d.]+)"
+# vLLM 0.33 start-up lines (vllm/v1/worker/gpu_worker.py, gpu/model_runner.py,
+# v1/core/kv_cache_utils.py at v0.33.0); research/reserve_terms.md
+_LOG = {
+    "version": re.compile(r"vLLM server version ([\w.+-]+)"),
+    "tp": re.compile(r"tensor_parallel_size=(\d+)"),
+    "weights": re.compile(r"Model loading took " + _NUM + r" GiB memory"),
+    "kv_memory": re.compile(r"Available KV cache memory: " + _NUM + r" GiB"),
+    "pool": re.compile(r"(GPU(?: \+ host)?) KV cache size:\s*([\d,]+)\s*tokens"),
+    "concurrency": re.compile(r"Maximum concurrency for ([\d,]+) tokens per request: "
+                              + _NUM + "x"),
+    "free": re.compile(
+        r"Free memory on device \(" + _NUM + "/" + _NUM + r" GiB\) on startup\. "
+        r"Desired GPU memory utilization is \(" + _NUM + ", " + _NUM + r" GiB\)\. "
+        r"Actual usage is " + _NUM + r" GiB for consumed memory \(weights \+ "
+        r"non-torch\), " + _NUM + r" GiB for peak activation, and " + _NUM
+        + r" GiB for CUDAGraph memory"),
+    "util": re.compile(r"The current --gpu-memory-utilization=" + _NUM + " is equivalent"),
+    "graph_estimate": re.compile(r"CUDA graph pool memory: " + _NUM
+                                 + r" GiB \(actual\), " + _NUM + r" GiB \(estimated\)"),
+    "fixed_kv": re.compile(r"reserved " + _NUM + r" GiB memory for KV Cache as "
+                           r"specified by kv_cache_memory_bytes config"),
+}
+LINE_FREE = "Free memory on device (free/total GiB) on startup. Desired GPU memory utilization is ..."
+LINE_WEIGHTS = "Model loading took X GiB memory"
+LINE_POOL = "GPU KV cache size: N tokens"
+# the [calibration] key each reserve term is written to
+TERM_KEYS = {"gpu_memory_utilization": "gpu_memory_utilization",
+             "gpu_total": "gpu_total_gib", "activation": "activation_gib",
+             "non_torch": "non_torch_gib"}
 
 
 @dataclass
@@ -61,7 +103,7 @@ class Fit:
         v = self.value * scale
         se = "" if self.stderr is None else f" ± {self.stderr * scale:.3g}"
         tail = f" ({self.status}, {self.n} points)" if self.status == "measured" else f" ({self.status})"
-        return f"  {name:<12} {v:.4g}{se}{unit}{tail}" + (f" — {self.note}" if self.note else "")
+        return f"  {name:<22} {v:.4g}{se}{unit}{tail}" + (f" — {self.note}" if self.note else "")
 
 
 # ---------------------------------------------------------------------------
@@ -307,10 +349,221 @@ def pool_from_log(path: str) -> int | None:
     return int(m[-1].replace(",", "")) if m else None
 
 
+@dataclass
+class VllmMemory:
+    """What a vLLM start-up log says about memory on one GPU, in bytes (the
+    utilisation as a fraction). None: the log has no line for it."""
+    version: str | None = None
+    tensor_parallel: int | None = None
+    weights: float | None = None          # Model loading took X GiB memory
+    gpu_free: float | None = None         # free at vLLM's start-up snapshot
+    gpu_total: float | None = None
+    gpu_memory_utilization: float | None = None
+    requested: float | None = None        # utilisation x total
+    consumed: float | None = None         # weights + non-torch
+    activation: float | None = None       # profile peak + CUDA graph estimate
+    cuda_graph: float | None = None       # captured graph pool
+    graph_estimate: float | None = None   # vLLM's CUDA graph estimate
+    kv_memory: float | None = None        # Available KV cache memory
+    pool_tokens: int | None = None
+    concurrency: float | None = None      # requests at max_model_len the pool holds
+    max_model_len: int | None = None
+    fixed_kv: float | None = None         # --kv-cache-memory: no profile ran
+    notes: list = None
+
+    @property
+    def non_torch(self) -> float | None:
+        if self.consumed is None or self.weights is None:
+            return None
+        return self.consumed - self.weights
+
+    def missing(self) -> dict[str, str]:
+        """{term: the start-up line it needs} for every term the log lacks."""
+        out = {}
+        for term in ("gpu_memory_utilization", "gpu_total", "activation"):
+            if getattr(self, term) is None:
+                out[term] = LINE_FREE
+        if self.non_torch is None:
+            out["non_torch"] = LINE_FREE if self.consumed is None else LINE_WEIGHTS
+        return out
+
+    def terms(self) -> M.ReserveTerms:
+        """The three reserve terms, or ValueError naming each missing line and
+        the [calibration] key that supplies the term instead."""
+        if self.fixed_kv is not None:
+            raise ValueError(
+                f"the server set its KV memory by hand (--kv-cache-memory, "
+                f"{self.fixed_kv / GIB:g} GiB) and skipped vLLM's memory profile, "
+                "so the log carries no reserve terms: use --reserve pool, or "
+                "restart without --kv-cache-memory")
+        miss = self.missing()
+        if miss:
+            raise ValueError(
+                "the log lacks what the reserve terms need: " + "; ".join(
+                    f"{t} needs \"{line}\" (or set calibration.{TERM_KEYS[t]})"
+                    for t, line in miss.items())
+                + ". vLLM prints the first line after CUDA graph capture, at "
+                "INFO level, unless --kv-cache-memory is set")
+        return M.ReserveTerms(self.gpu_memory_utilization, self.gpu_total,
+                              self.activation, self.non_torch)
+
+
+def read_vllm_log(text: str) -> VllmMemory:
+    """Every start-up memory figure vLLM 0.33 prints at INFO level, per GPU.
+    A log holding several starts is read from its last one; workers that
+    print different figures are read from the one with the least KV memory
+    (vLLM sizes every worker's cache to the smallest)."""
+    G = GIB
+    out = VllmMemory(notes=[])
+    starts = [m.start() for m in _LOG["version"].finditer(text)]
+    if len(starts) > 1:
+        text = text[starts[-1]:]
+        out.notes.append(f"the log holds {len(starts)} server starts: read the last")
+    if m := _LOG["version"].search(text):
+        out.version = m.group(1)
+    if m := _LOG["fixed_kv"].search(text):
+        out.fixed_kv = float(m.group(1)) * G
+        out.notes.append("the server set its KV memory with --kv-cache-memory: "
+                         "no memory profile ran, so no reserve terms")
+    tps = {int(v) for v in _LOG["tp"].findall(text)}
+    if len(tps) > 1:
+        raise ValueError(f"the log names several tensor_parallel_size values "
+                         f"({sorted(tps)}): pass one server's log")
+    out.tensor_parallel = tps.pop() if tps else None
+    weights = sorted({float(v) for v in _LOG["weights"].findall(text)})
+    if weights:
+        out.weights = weights[-1] * G
+        if weights[-1] - weights[0] > 0.01:
+            out.notes.append(f"workers loaded {weights[0]:g} to {weights[-1]:g} GiB "
+                             "of weights: non_torch uses the largest")
+    frees = [tuple(float(x) for x in m) for m in _LOG["free"].findall(text)]
+    if frees:
+        # the binding worker: least left for the cache
+        free, total, util, req, cons, act, graph = min(
+            frees, key=lambda f: f[3] - f[4] - f[5])
+        if len(set(frees)) > 1:
+            out.notes.append(f"{len(set(frees))} workers printed different "
+                             "memory figures: read the one with the least KV memory")
+        out.gpu_free, out.gpu_total = free * G, total * G
+        out.gpu_memory_utilization, out.requested = util, req * G
+        out.consumed, out.activation, out.cuda_graph = cons * G, act * G, graph * G
+    utils = {float(v) for v in _LOG["util"].findall(text)}
+    if (out.gpu_memory_utilization is not None and utils
+            and any(abs(u - out.gpu_memory_utilization) > 1e-3 for u in utils)):
+        raise ValueError(f"the log prints two utilisations ({sorted(utils)} and "
+                         f"{out.gpu_memory_utilization:g}): pass one server's log")
+    if out.gpu_memory_utilization is None and len(utils) == 1:
+        out.gpu_memory_utilization = utils.pop()
+        out.notes.append("gpu_memory_utilization read from the CUDA graph "
+                         "profiling line; the log has no \"" + LINE_FREE + "\"")
+    if est := _LOG["graph_estimate"].findall(text):
+        out.graph_estimate = max(float(e) for _, e in est) * G
+    kvs = [float(v) for v in _LOG["kv_memory"].findall(text)]
+    if kvs:
+        out.kv_memory = min(kvs) * G
+    pools = _LOG["pool"].findall(text)
+    if pools:
+        where, n = pools[-1]
+        if where != "GPU":
+            raise ValueError(
+                f"the log's pool is \"{where} KV cache size\": it counts host "
+                "memory, which the model's HBM pool does not. Set "
+                "calibration.reserve_gib by hand")
+        out.pool_tokens = int(n.replace(",", ""))
+    if conc := _LOG["concurrency"].findall(text):
+        mml, c = conc[-1]
+        out.max_model_len, out.concurrency = int(mml.replace(",", "")), float(c)
+    if out.requested is not None and out.kv_memory is not None:
+        gap = out.requested - out.consumed - out.activation - out.kv_memory
+        if abs(gap) > 0.05 * G:
+            out.notes.append(
+                f"requested {out.requested / G:.2f} - consumed {out.consumed / G:.2f} "
+                f"- activation {out.activation / G:.2f} GiB misses the available "
+                f"KV memory {out.kv_memory / G:.2f} GiB by {gap / G:+.2f} GiB")
+    return out
+
+
+def fit_terms(mem: VllmMemory, cfg: RunConfig, notes: list) -> dict[str, Fit]:
+    """The three reserve terms as fits, and the reserve they sum to. A term
+    the log lacks is left out and said in `notes`."""
+    m, topo = cfg.to_model(), cfg.to_topology()
+    out: dict[str, Fit] = {}
+    if mem.fixed_kv is not None:
+        return out
+    by_line: dict[str, list[str]] = {}
+    for term, line in mem.missing().items():
+        by_line.setdefault(line, []).append(term)
+    for line, terms_ in by_line.items():
+        notes.append(f"{', '.join(terms_)}: not read, the log has no \"{line}\" line "
+                     f"({', '.join('calibration.' + TERM_KEYS[t] for t in terms_)} "
+                     f"suppl{'ies' if len(terms_) == 1 else 'y'} "
+                     f"{'it' if len(terms_) == 1 else 'them'})")
+    G = GIB
+    if mem.gpu_total is not None:
+        out["gpu_total"] = Fit(mem.gpu_total, None, 1, "measured",
+                               f"vLLM's CUDA total; catalogue vram {topo.gpu.vram / G:.2f} GiB")
+    if mem.gpu_memory_utilization is not None:
+        hb = ("" if mem.gpu_total is None else
+              f"holdback {(1 - mem.gpu_memory_utilization) * mem.gpu_total / G:.2f} GiB")
+        out["gpu_memory_utilization"] = Fit(mem.gpu_memory_utilization, None, 1,
+                                            "measured", hb)
+    if mem.activation is not None:
+        note = ("" if mem.graph_estimate is None else
+                f"profile peak {(mem.activation - mem.graph_estimate) / G:.2f} + CUDA "
+                f"graph estimate {mem.graph_estimate / G:.2f} GiB")
+        out["activation"] = Fit(mem.activation, None, 1, "measured", note)
+    if mem.non_torch is not None:
+        out["non_torch"] = Fit(mem.non_torch, None, 1, "measured",
+                               f"consumed {mem.consumed / G:.2f} - weights "
+                               f"{mem.weights / G:.2f} GiB")
+    if mem.missing():
+        return out
+    terms = mem.terms()
+    tp = topo.tp
+    w_model = M.hbm_weights(m) / tp
+    notes.append(
+        f"reserve terms: holdback {terms.holdback / G:.2f} + activation "
+        f"{terms.activation / G:.2f} + non_torch {terms.non_torch / G:.2f} = "
+        f"{(terms.holdback + terms.activation + terms.non_torch) / G:.2f} GiB of "
+        f"{terms.gpu_total / G:.2f} GiB per GPU; against the catalogue's vram "
+        f"({topo.gpu.vram / G:.2f} GiB) the reserve is "
+        f"{terms.reserve(topo.gpu) / G:.2f} GiB per GPU, the default "
+        f"{M.per_gpu_reserve(replace(topo, reserve=None, reserve_terms=None)) / G:.2f}")
+    if mem.weights is not None and abs(mem.weights - w_model) > 0.05 * G:
+        notes.append(f"vLLM loaded {mem.weights / G:.2f} GiB of weights per GPU, the "
+                     f"model holds {w_model / G:.2f}: the terms do not carry the "
+                     "difference, the pool from them is off by that much per GPU")
+    with_terms = M.kv_pool_tokens(m, replace(topo, reserve=None, reserve_terms=terms))
+    if mem.pool_tokens:
+        notes.append(f"pool from the terms {with_terms:,.0f} tokens; vLLM reported "
+                     f"{mem.pool_tokens:,} ({with_terms / mem.pool_tokens - 1:+.1%})")
+        if mem.kv_memory is not None and mem.concurrency and mem.max_model_len:
+            # vLLM's token figure is concurrency x max_model_len, and one
+            # request's blocks include its fixed pages (recurrent state, window
+            # rings, padding layers): vllm/v1/core/kv_cache_utils.py,
+            # get_max_concurrency_for_kv_cache_config, at v0.33.0
+            kv_bpt = M._replicated(m, topo).kv_bpt
+            per_req = mem.kv_memory * tp / mem.concurrency
+            fixed = per_req - mem.max_model_len * kv_bpt
+            if abs(fixed) > 0.01 * per_req:
+                notes.append(
+                    f"vLLM's token figure is {mem.concurrency:g} requests x "
+                    f"{mem.max_model_len:,} tokens, and it charges each request "
+                    f"{fixed / G:.2f} GiB beyond its tokens at the model's cache "
+                    f"bytes (recurrent-state pages, window rings, padding layers"
+                    + ("" if m.deltanet_state else
+                       "; or check deployment.kv_sharding and deployment.kv_dtype")
+                    + f"): a reserve fitted from the token figure absorbs "
+                    f"{mem.concurrency * fixed / tp / G:.2f} GiB per GPU of it, an "
+                    "amount that changes with max_model_len")
+    return out
+
+
 def fit_reserve(pool_tokens: float, cfg: RunConfig) -> Fit:
     """The per-GPU reserve the reported pool implies:
     reserve = (tp x vram - weights in HBM - N x kv_bpt) / tp."""
     m, topo = cfg.to_model(), cfg.to_topology()
+    topo = replace(topo, reserve=None, reserve_terms=None)
     kv = M._replicated(m, topo).kv_bpt
     tp = topo.tp
     reserve = (tp * topo.gpu.vram - M.hbm_weights(m) - pool_tokens * kv) / tp
@@ -322,7 +575,7 @@ def fit_reserve(pool_tokens: float, cfg: RunConfig) -> Fit:
             "deployment.kv_sharding (plain TP is \"replicate\"), "
             "deployment.kv_dtype and the model's kv_bpt")
     note = (f"pool {pool_tokens:,.0f} tokens; the default reserve gives "
-            f"{M.kv_pool_tokens(m, replace(topo, reserve=None)):,.0f}")
+            f"{M.kv_pool_tokens(m, topo):,.0f}")
     return Fit(reserve, 0.0, 1, "measured", note)
 
 
@@ -361,9 +614,11 @@ def fit_mfu(replays: list[dict], cfg: RunConfig) -> Fit | None:
 # the command
 # ---------------------------------------------------------------------------
 def calibrate(cfg: RunConfig, runs: list[dict], vllm_log: str | None = None,
-              notes: list | None = None) -> dict[str, Fit]:
-    """Every fit the runs support. What a fit left out or fell back on goes
-    in `notes`; what cannot be fitted honestly raises ValueError."""
+              notes: list | None = None, reserve: str = "pool") -> dict[str, Fit]:
+    """Every fit the runs and the log support. What a fit left out or fell
+    back on goes in `notes`; what cannot be fitted honestly raises
+    ValueError, and so does a log that lacks a reserve term when `reserve`
+    is "terms" (the terms are then what --write stores)."""
     notes = [] if notes is None else notes
     sweeps = [r for r in runs if _is_sweep(r)]
     replays = [r for r in runs if _is_replay(r)]
@@ -381,9 +636,27 @@ def calibrate(cfg: RunConfig, runs: list[dict], vllm_log: str | None = None,
         acc = fit_acceptance(sweeps)
         if acc is not None:
             out["acceptance"] = acc
-    pool = pool_from_log(vllm_log) if vllm_log else None
-    if vllm_log and pool is None:
-        raise ValueError(f"{vllm_log} has no 'GPU KV cache size: N tokens' line")
+    pool = None
+    if vllm_log:
+        mem = read_vllm_log(Path(vllm_log).read_text(encoding="utf-8", errors="replace"))
+        tp = cfg.deployment.tensor_parallel
+        if mem.tensor_parallel is not None and mem.tensor_parallel != tp:
+            raise ValueError(
+                f"{vllm_log} is a TP{mem.tensor_parallel} server and the config's "
+                f"deployment.tensor_parallel is {tp}: its per-GPU figures and "
+                "pool belong to that width. Set deployment.tensor_parallel to match")
+        if mem.tensor_parallel is None:
+            notes.append(f"{vllm_log} names no tensor_parallel_size: read as "
+                         f"the config's TP{tp}")
+        if reserve == "terms":
+            mem.terms()          # raises on a missing line
+        notes.extend(mem.notes)
+        if mem.version:
+            notes.append(f"vLLM {mem.version} start-up log")
+        out.update(fit_terms(mem, cfg, notes))
+        pool = mem.pool_tokens
+        if pool is None:
+            raise ValueError(f"{vllm_log} has no '{LINE_POOL}' line")
     if pool is None:
         tp = cfg.deployment.tensor_parallel
         other = [r.get("_path", "sweep") for r in sweeps if _run_tp(r, cfg) != tp]
@@ -403,17 +676,29 @@ def calibrate(cfg: RunConfig, runs: list[dict], vllm_log: str | None = None,
 
 _KEYS = {"eta": ("eta", 1.0), "tau_0": ("tau_0_us", 1e6), "tau_ar": ("tau_ar_us", 1e6),
          "tau_rec": ("tau_rec_us", 1e6), "acceptance": ("acceptance", 1.0),
-         "reserve": ("reserve_gib", 1 / GIB), "mfu": ("mfu", 1.0)}
+         "reserve": ("reserve_gib", 1 / GIB), "mfu": ("mfu", 1.0),
+         "gpu_memory_utilization": ("gpu_memory_utilization", 1.0),
+         "gpu_total": ("gpu_total_gib", 1 / GIB), "activation": ("activation_gib", 1 / GIB),
+         "non_torch": ("non_torch_gib", 1 / GIB)}
+RESERVE_FORMS = {"pool": ("reserve",), "terms": tuple(TERM_KEYS)}
 
 
-def apply(cfg: RunConfig, fits: dict[str, Fit], sources: str) -> RunConfig:
+def apply(cfg: RunConfig, fits: dict[str, Fit], sources: str,
+          reserve: str = "pool") -> RunConfig:
     """The config with every measured fit written into [calibration] and its
-    provenance under [calibration.fit.<name>]."""
+    provenance under [calibration.fit.<name>]. `reserve` picks which form of
+    the reserve is written, "pool" (reserve_gib) or "terms" (the four reserve
+    term keys); writing one clears the other, since a config carries one."""
     cal = cfg.calibration
     kw, prov = {}, dict(cal.fit)
     today = time.strftime("%Y-%m-%d")
+    other = [n for form, names in RESERVE_FORMS.items() if form != reserve for n in names]
+    if any(n in fits for n in RESERVE_FORMS[reserve]):
+        for n in other:
+            kw[_KEYS[n][0]] = None
+            prov.pop(_KEYS[n][0], None)
     for name, f in fits.items():
-        if f.status != "measured":
+        if f.status != "measured" or name in other:
             continue
         key, scale = _KEYS[name]
         kw[key] = round(float(f.value) * scale, 6)
@@ -431,6 +716,12 @@ def cmd_calibrate(args) -> int:
         cfg = load_config(args.config)
         cfg.validate()
         runs = [_load_run(p) for p in args.runs]
+        if not runs and not args.vllm_log:
+            raise ValueError("nothing to read: pass decode-sweep or replay "
+                             "records, or --vllm-log")
+        if getattr(args, "reserve", "pool") == "terms" and not args.vllm_log:
+            raise ValueError("--reserve terms reads the terms from a vLLM "
+                             "start-up log: pass --vllm-log")
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
         print(f"ws calibrate: {e}", file=sys.stderr)
         return 2
@@ -440,8 +731,9 @@ def cmd_calibrate(args) -> int:
               file=sys.stderr)
         return 2
     notes: list[str] = []
+    reserve = getattr(args, "reserve", "pool")
     try:
-        fits = calibrate(cfg, runs, args.vllm_log, notes)
+        fits = calibrate(cfg, runs, args.vllm_log, notes, reserve)
     except ValueError as e:
         print(f"ws calibrate: {e}", file=sys.stderr)
         return 2
@@ -450,7 +742,9 @@ def cmd_calibrate(args) -> int:
           f"{len(runs)} run(s)")
     units = {"eta": ("", 1.0), "tau_0": (" us", 1e6), "tau_ar": (" us", 1e6),
              "tau_rec": (" us", 1e6), "acceptance": ("", 1.0),
-             "reserve": (" GiB/GPU", 1 / GIB), "mfu": ("", 1.0)}
+             "reserve": (" GiB/GPU", 1 / GIB), "mfu": ("", 1.0),
+             "gpu_memory_utilization": ("", 1.0), "gpu_total": (" GiB/GPU", 1 / GIB),
+             "activation": (" GiB/GPU", 1 / GIB), "non_torch": (" GiB/GPU", 1 / GIB)}
     for name, f in fits.items():
         u, sc = units[name]
         print(f.show(name, u, sc))
@@ -462,9 +756,11 @@ def cmd_calibrate(args) -> int:
             f"{k} ({fits[k].status})" for k in unwritten))
     if not fits:
         print("  nothing to fit: no clean rung, no spec-decode counters, no pool reading")
-    sources = ",".join(r["_sha"] for r in runs)
+    sources = ",".join([r["_sha"] for r in runs] + (
+        [hashlib.sha256(Path(args.vllm_log).read_bytes()).hexdigest()[:12]]
+        if args.vllm_log else []))
     if args.write:
-        new = apply(cfg, fits, sources)
+        new = apply(cfg, fits, sources, reserve)
         Path(args.config).write_text(new.dumps("toml"), encoding="utf-8")
         print(f"wrote [calibration] to {args.config}")
     return 0
@@ -473,11 +769,16 @@ def cmd_calibrate(args) -> int:
 def add_subparser(sub) -> None:
     p = sub.add_parser("calibrate", help="fit decode, acceptance, pool and MFU from runs",
                        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("runs", nargs="+", help="ws decode-sweep or ws replay JSON records")
+    p.add_argument("runs", nargs="*", help="ws decode-sweep or ws replay JSON records")
     p.add_argument("--config", required=True,
                    help="workingset.toml naming the deployment the runs were taken on")
-    p.add_argument("--vllm-log", help="vLLM server log; its 'GPU KV cache size' line "
-                   "gives the KV pool")
+    p.add_argument("--vllm-log", help="vLLM server log: its 'GPU KV cache size' line "
+                   "gives the KV pool, its start-up memory lines the reserve terms")
+    p.add_argument("--reserve", choices=tuple(RESERVE_FORMS), default="pool",
+                   help="what --write stores for the KV pool: 'pool', the single "
+                   "reserve_gib the reported pool implies (default); 'terms', the "
+                   "three reserve terms read from --vllm-log (refused if a line is "
+                   "missing)")
     p.add_argument("--write", action="store_true",
                    help="store the measured fits in the config's [calibration]")
     p.set_defaults(fn=cmd_calibrate)

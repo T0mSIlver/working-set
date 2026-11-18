@@ -193,6 +193,10 @@ def _unmapped(cfg: RunConfig) -> list[str]:
     if c.reserve_gib is not None:
         out.append(f"calibration.reserve_gib = {c.reserve_gib:g}: the explorer prices the "
                    "default reserve, so its KV pool differs from ws predict's")
+    if c.gpu_memory_utilization is not None:
+        out.append("calibration's reserve terms (gpu_memory_utilization, gpu_total_gib, "
+                   "activation_gib, non_torch_gib): the explorer prices the default "
+                   "reserve, so its KV pool differs from ws predict's")
     if d.weight_overhead not in WOVER:
         near = _nearest_wover(d.weight_overhead)
         out.append(f"deployment.weight_overhead = {d.weight_overhead:g}: the explorer "

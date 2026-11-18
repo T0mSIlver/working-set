@@ -31,6 +31,10 @@ from typing import Any
 from . import model as M
 
 SCHEMA_VERSION = 1
+GIB = 1024 ** 3
+# [calibration] keys that carry vLLM's three reserve terms (model.ReserveTerms)
+RESERVE_TERM_KEYS = ("gpu_memory_utilization", "gpu_total_gib", "activation_gib",
+                     "non_torch_gib")
 STATE_DTYPES = ("bf16", "fp32")
 # [calibration] keys of the two decode pricings retired in 0.4 (one step
 # equation replaced the MBU fold and the opt-in latency form)
@@ -202,10 +206,47 @@ class Calibration:
     # reserve. One read number for activations, workspace and any weight
     # overhead.
     reserve_gib: float | None = None
+    # The same reserve as vLLM's three terms, per GPU, as its start-up log
+    # reports them (`ws calibrate --vllm-log --reserve terms`;
+    # research/reserve_terms.md). All four or none, and not with reserve_gib:
+    #   gpu_memory_utilization  vLLM's --gpu-memory-utilization; the holdback
+    #                           is (1 - it) x gpu_total_gib
+    #   gpu_total_gib           the GPU's total memory as vLLM reads it
+    #   activation_gib          vLLM's "peak activation" (profile peak + CUDA
+    #                           graph estimate)
+    #   non_torch_gib           vLLM's "consumed memory" less the weights
+    gpu_memory_utilization: float | None = None
+    gpu_total_gib: float | None = None
+    activation_gib: float | None = None
+    non_torch_gib: float | None = None
     # Provenance of each fitted value, keyed like the scalars above:
     # {value, stderr, n, status, source, date, note}. Written by
     # `ws calibrate --write`; [calibration.fit.<key>] in TOML.
     fit: dict = field(default_factory=dict)
+
+    def reserve_terms(self) -> M.ReserveTerms | None:
+        """The three reserve terms, or None when none is set. A partial set
+        is refused: a missing term would otherwise price as zero."""
+        vals = {k: getattr(self, k) for k in RESERVE_TERM_KEYS}
+        given = [k for k, v in vals.items() if v is not None]
+        if not given:
+            return None
+        missing = [k for k in RESERVE_TERM_KEYS if vals[k] is None]
+        if missing:
+            raise ValueError(
+                f"calibration sets {', '.join(given)} but not "
+                f"{', '.join(missing)}: the reserve terms go together. Read all "
+                "four from a vLLM start-up log with `ws calibrate --vllm-log`, "
+                "or drop them and set calibration.reserve_gib")
+        if self.reserve_gib is not None:
+            raise ValueError(
+                "calibration sets both reserve_gib and the reserve terms "
+                f"({', '.join(RESERVE_TERM_KEYS)}): keep one")
+        return M.ReserveTerms(
+            gpu_memory_utilization=vals["gpu_memory_utilization"],
+            gpu_total=vals["gpu_total_gib"] * GIB,
+            activation=vals["activation_gib"] * GIB,
+            non_torch=vals["non_torch_gib"] * GIB)
 
 
 @dataclass(frozen=True)
@@ -261,7 +302,10 @@ class RunConfig:
             raise KeyError(f"unknown GPU {d.gpu!r}; known: {sorted(M.GPUS)}")
         t = M.topology_grid(d.replicas, d.tensor_parallel, d.gpu, d.kv_sharding)
         r = self.calibration.reserve_gib
-        return t if r is None else replace(t, reserve=r * (1024 ** 3))
+        if r is not None:
+            t = replace(t, reserve=r * (1024 ** 3))
+        terms = self.calibration.reserve_terms()
+        return t if terms is None else replace(t, reserve_terms=terms)
 
     def to_workload(self) -> M.Workload:
         w = self.workload
@@ -379,6 +423,13 @@ class RunConfig:
             raise ValueError("calibration.spec_tokens must be >= 0")
         if c.reserve_gib is not None and c.reserve_gib < 0:
             raise ValueError("calibration.reserve_gib must be >= 0")
+        if c.reserve_terms() is not None:
+            if not 0 < c.gpu_memory_utilization <= 1:
+                raise ValueError("calibration.gpu_memory_utilization must be in (0, 1]")
+            if not c.gpu_total_gib > 0:
+                raise ValueError("calibration.gpu_total_gib must be > 0")
+            if c.activation_gib < 0:
+                raise ValueError("calibration.activation_gib must be >= 0")
         for k, v in c.fit.items():
             if not isinstance(v, dict) or "value" not in v:
                 raise ValueError(f"calibration.fit.{k} must be a table with a value")

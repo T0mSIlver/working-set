@@ -156,3 +156,37 @@ records. Each fit prints with its standard error and the reason when it is not
 identified. `--write` stores the values in `[calibration]` and their provenance
 under `[calibration.fit.<key>]`; `ws predict` prices with them and prints where
 each came from. The equation and its priors: `research/decode-model.md`.
+
+### The reserve from a vLLM start-up log
+
+```bash
+uv run ws calibrate --vllm-log server.log --config workingset.toml [--write [--reserve terms]]
+```
+
+`--vllm-log` reads the pool from `GPU KV cache size: N tokens` and, per GPU,
+the three terms vLLM holds back from it (`research/reserve_terms.md`):
+
+| term | `[calibration]` key | log line |
+|---|---|---|
+| holdback, `(1 - utilisation) x total` | `gpu_memory_utilization`, `gpu_total_gib` | `Free memory on device (free/total GiB) on startup. Desired GPU memory utilization is (u, ...)` |
+| activation | `activation_gib` | `... GiB for peak activation` on the same line |
+| non_torch | `non_torch_gib` | `... GiB for consumed memory (weights + non-torch)` less `Model loading took X GiB memory` |
+
+It prints each term, the reserve they sum to against the catalogue's `vram`
+next to the default, the weights vLLM loaded next to the model's, and the
+pool the terms give next to the one vLLM reported. A log from another TP
+width than `deployment.tensor_parallel`, or whose pool counts host memory, is
+refused; one from a server started with `--kv-cache-memory` gives the pool
+and no terms. vLLM
+prints the breakdown line at INFO after CUDA graph capture, so keep the log
+past start-up.
+
+`--write` stores one form of the reserve, and clears the other:
+`reserve_gib`, the single reserve the reported pool implies (`--reserve
+pool`, the default), or the four term keys (`--reserve terms`, refused when
+the log lacks a line a term needs). The pool from the terms is priced in the
+model's bytes per token, so on a hybrid model it is larger than the pool
+vLLM reports: vLLM's token figure is concurrency x `max_model_len`, with
+each request's recurrent-state and window pages inside the concurrency.
+`[calibration]` carries all four term keys or none, and not with
+`reserve_gib`.
