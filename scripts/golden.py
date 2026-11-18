@@ -869,6 +869,12 @@ NAMED_STATES = [
      {"chunk": "16384", "cap": 262, "user_median": 68, "user_sigma": 0.69,
       "inval": 2.5, "think": 46, "out": 807, "decode_floor": 50, "mfu": 0.33,
       "mns": 96, "users": 48}),
+    # WS-48, from the review of PR #142: at 100% misses the decode population
+    # (cold sessions) runs far past chart C's warm axis, so the explorer's
+    # steady search needs samples of its own through it; Python bisects to
+    # it directly. Prefill duty ~47%: a real steady batch, not saturation.
+    (dict(model="35BA3B", gpu="B300", wdt="fp8", kv="fp8", ngpu=8, tp=8),
+     {"inval": 100.0, "users": 360, "think": 30, "out": 8000}),
 ]
 
 

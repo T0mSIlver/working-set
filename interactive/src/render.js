@@ -7,7 +7,7 @@ import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
          SPIKE_SLA_S, slowedShare, slowedStretch, coldWait, stretchPct, ttftMoments } from './prefill.js';
 import { samplingSig, seedFor } from './mathlib.js';
 import { p_sub } from './workload.js';
-import { decodeCurves, decodePlan, decodeState, warmCapacity } from './capacity.js';
+import { decodeCurves, decodePlan, decodeState, steadyCurve, warmCapacity } from './capacity.js';
 import { currentTopo, currentWL, ramPerCache, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartEData, clearChartGeomCD, interpAt, renderChartA, renderChartB,
@@ -25,7 +25,7 @@ import { renderFrontierChart, renderFrontierTable } from './frontier.js';
    ========================================================================== */
 export let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null, lastCS=null;
 // the chosen load's decode point — recomputed every frame from lastDC
-export let lastSteady=null;
+export let lastSteady=null, lastDCSteady=null;
 
 // active model with the dtype, weight-overhead and MTP-speedup knobs applied.
 // FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py); fp32 doubles the
@@ -181,7 +181,10 @@ export function computeAndRender(draft, deferFrontierDecode){
   // the curves already drawn, so it costs nothing and can be recomputed on
   // every frame — including while the users / think / output sliders are being
   // dragged, which are exactly the knobs that move it.
-  lastSteady=steadyDecodePoint(dc, topo,
+  // the steady search reads samples through the decode population, which
+  // can run past chart C's warm axis when cold sessions outnumber warm ones
+  lastDCSteady=steadyCurve(dc, model, topo, wl, steadyResident(lastWarmCur.r95), draft);
+  lastSteady=steadyDecodePoint(lastDCSteady, topo,
                 serverRate(state.users, state.think, wl.sub_ratio)
                   / (topo.replicas || 1),
                 state.out, steadyResident(lastWarmCur.r95));
@@ -765,7 +768,7 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   const offl = warm.o5;
   // ---- the STEADY-STATE decode point (act 2's honest counterpart to act 1's
   // stress test). Every quantity below is per replica GROUP, like groupRate.
-  const sd = noFit ? null : (steady || steadyDecodePoint(dc, topo, groupRate, state.out, steadyResident(warm.r95)));
+  const sd = noFit ? null : (steady || steadyDecodePoint(lastDCSteady || dc, topo, groupRate, state.out, steadyResident(warm.r95)));
   // prefill duty at this load. Above 1 the queue is unbounded, so there is no
   // steady state to be in: requests never reach the decode batch at all, and
   // quoting a decode speed for them would be the most misleading number on the

@@ -1,6 +1,6 @@
 import { CONFIG, DECODE_ETA, GIB, PREFILL_MFU, decodeConstants, decodeStepSeconds, is_moe,
          kv_pool_tokens, replicated, state_traffic, tokensPerStep } from './config.js';
-import { percentiles } from './mathlib.js';
+import { percentiles, seedFor } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
 
@@ -121,6 +121,19 @@ export function decodePlan(gpuP95, draft){
   const iter = Math.max(q.DECODE_ITER_MIN,
                         Math.min(q.DECODE_ITER, Math.round(q.DECODE_BUDGET / nMax)));
   return { nMax, step, iter };
+}
+
+// The curve the steady decode search reads. Chart C's plan is sized from the
+// warm band (g95); the steady search stops at the decode population
+// (resident, which counts cold sessions where they outnumber warm ones), so
+// when that runs past the chart's axis it gets its own samples through it,
+// seeded apart. Otherwise it is the chart's curve itself, no new draw.
+// steady_decode_point samples to its own stop the same way (WS-48).
+export function steadyCurve(dc, model, topo, wl, resident, draft){
+  if (!(resident > dc.ns[dc.ns.length-1])) return dc;
+  const plan = decodePlan(resident, draft);
+  seedFor('decodeSteady');
+  return decodeCurves(model, topo, wl, plan.nMax, plan.step, plan.iter);
 }
 
 // The decode constants and the prefill MFU, read through helpers so nothing
