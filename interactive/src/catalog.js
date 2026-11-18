@@ -30,7 +30,12 @@ export const CATALOG = {
     "decode": {
      "kind": "measured",
      "on": "H200",
-     "note": "eta and tau_rec fitted to a held-batch decode sweep (27B, 4×H200 TP4); tau_0 and tau_ar are priors inside its measured intercept; bandwidth is NVIDIA's 4.8 TB/s",
+     "note": "eta, the share of HBM bandwidth a decode step streams at, read off a held-batch decode sweep (27B, 4×H200 TP4); bandwidth is NVIDIA's 4.8 TB/s",
+     "ref": "research/decode-model.md"
+    },
+    "decode_fixed": {
+     "kind": "guess",
+     "note": "tau_0 and tau_ar are priors; tau_rec is what the sweep's measured 2.7 ms intercept leaves after them",
      "ref": "research/decode-model.md"
     },
     "prefill": {
@@ -80,7 +85,12 @@ export const CATALOG = {
     "decode": {
      "kind": "measured",
      "on": "H200",
-     "note": "eta and the three taus fitted on H200, unchanged; bandwidth is NVIDIA's 8 TB/s",
+     "note": "eta read off the H200 held-batch sweep, unchanged; bandwidth is NVIDIA's 8 TB/s",
+     "ref": "research/decode-model.md"
+    },
+    "decode_fixed": {
+     "kind": "guess",
+     "note": "the H200 priors and the tau_rec solved from the H200 intercept, unchanged",
      "ref": "research/decode-model.md"
     },
     "prefill": {
@@ -1308,6 +1318,7 @@ export const CATALOG = {
     "memory": "vendor figure",
     "reserve": "measured on this GPU",
     "decode": "measured on this GPU",
+    "decode_fixed": "guess",
     "prefill": "guess",
     "power": "fitted on H100 and transferred",
     "price": "vendor figure"
@@ -1428,6 +1439,7 @@ export const CATALOG = {
     "memory": "measured on this GPU",
     "reserve": "fitted on H200 and transferred",
     "decode": "fitted on H200 and transferred",
+    "decode_fixed": "guess",
     "prefill": "guess",
     "power": "fitted on H100 and transferred",
     "price": "vendor figure"
@@ -1558,7 +1570,8 @@ export const CATALOG = {
   "gpu": {
    "memory": "GPU memory",
    "reserve": "pool reserve",
-   "decode": "decode constants",
+   "decode": "decode efficiency",
+   "decode_fixed": "decode fixed costs",
    "prefill": "prefill constants",
    "power": "power",
    "price": "price"

@@ -11,7 +11,7 @@ const LABELS = CATALOG.provenance_labels, WORDS = CATALOG.provenance_words;
 
 // the inputs each ceiling is priced from, as [side, quantity]. A cold request
 // is priced by prefill, and how many requests are cold by the cache pool.
-const DECODE = [['gpu','decode'], ['model','decode'], ['model','kv'], ['model','draft'], ['model','acceptance']];
+const DECODE = [['gpu','decode'], ['gpu','decode_fixed'], ['model','decode'], ['model','kv'], ['model','draft'], ['model','acceptance']];
 const COLD = [['gpu','prefill'], ['model','prefill'], ['gpu','memory'], ['gpu','reserve'], ['model','weights'], ['model','kv']];
 export const CEILING_INPUTS = {
   decode: DECODE,

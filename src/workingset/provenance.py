@@ -18,7 +18,7 @@ Every quantity that feeds a verdict carries a provenance in
   model  measured only: the model it was measured on, when not this one
   note   how, in one line; ref: the research note or doc that has the rest
 
-A group of constants (the decode constants, the power rows) takes the kind of
+A group of constants (the decode fixed costs, the power rows) takes the kind of
 its weakest member; the note names the stronger ones.
 
 `label` turns one provenance into the words the explorer shows for the GPU
@@ -46,7 +46,8 @@ MODEL_QUANTITIES = {
 GPU_QUANTITIES = {
     "memory": "GPU memory",
     "reserve": "pool reserve",
-    "decode": "decode constants",
+    "decode": "decode efficiency",
+    "decode_fixed": "decode fixed costs",
     "prefill": "prefill constants",
     "power": "power",
     "price": "price",
