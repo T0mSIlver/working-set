@@ -122,6 +122,39 @@ the replicated windows (8 × 2.9 MB per session) enter the step.
 - Prefill-side replication: irrelevant to the FLOP roofline the prefill
   model prices.
 
+## 6. The TP sizes vLLM accepts
+
+vLLM splits these dimensions evenly over the TP ranks and refuses a
+`--tensor-parallel-size` that does not divide one of them. Checked in
+vLLM v0.33.0 (commit `4ba787ec`); `workingset.vllm_tp` implements them and
+`ws catalog` prints the result for a repo.
+
+| Rule | vLLM v0.33.0 source |
+|---|---|
+| attention heads % tp == 0 | `vllm/config/model.py:1557-1564` (`verify_with_parallel_config`) |
+| KV heads: kv % tp == 0 below kv ranks, tp % kv == 0 from kv ranks up (the cache replicates) | `vllm/model_executor/layers/linear.py:1065-1070` (`QKVParallelLinear`, `divide`) |
+| MLA models: no KV rule, one latent head | `vllm/config/model.py:1673-1675`, `use_mla` at `:2068-2081` |
+| dense MLP width % tp == 0 | `vllm/model_executor/layers/linear.py:497` (`ColumnParallelLinear`) |
+| expert width % tp == 0, lifted by `--enable-expert-parallel` | `vllm/model_executor/layers/fused_moe/config.py:1352`, EP at `:1211-1251` |
+| vocabulary padded to 64, then % tp == 0 | `vllm/model_executor/layers/vocab_parallel_embedding.py:36,95,111` |
+| Qwen DeltaNet key and value heads % tp == 0 | `vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py:651,946` |
+| KDA heads % tp == 0 | `vllm/model_executor/layers/mamba/gdn/kimi_gdn_linear_attn.py:189-190` |
+| DCP: tp % dcp == 0; GQA: tp > kv, dcp <= tp // kv, (heads / kv) % dcp == 0 | `vllm/config/parallel.py:597-600`, `vllm/config/model.py:1579-1609` |
+
+Not checked: FP8 block-scale alignment of a shard
+(`quantization/utils/fp8_utils.py:1296-1372`), because the MoE path refines
+the scale grid or pads the shard depending on the kernel backend
+(`fused_moe/oracle/fp8.py`, `resolve_fp8_moe_weight_block_shape`); and
+layers a model implements itself (DeepSeek-V4's grouped output projection,
+indexers, vision towers). An accepted size is necessary, not sufficient.
+
+**Result on the catalogue (2026-11-18):** within one 8-GPU node vLLM
+accepts TP 1, 2, 4 and 8 for all eleven models and refuses 3, 5, 6 and 7 for
+every one of them (`tests/test_catalog_draft.py`). The explorer offers the
+odd widths (any divisor of 1–8 GPUs) and prices them as an extrapolation;
+§ 3 already says vLLM refuses them. The study's DCP layout
+(`dcp_size`) passes vLLM's DCP rules at every accepted width.
+
 ## Sources
 
 - vLLM, *Efficient Decode Context Parallelism for Long Context Workloads*

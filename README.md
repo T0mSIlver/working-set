@@ -49,6 +49,7 @@ uv run ws test workingset.toml --exclusive --out run.json   # measure it
 uv run ws calibrate sweep.json --config workingset.toml --write   # fit the decode constants to a ws decode-sweep run
 uv run ws report run.json                # re-print the verdicts
 uv run ws models                         # model / GPU keys
+uv run ws catalog Qwen/Qwen3.8-27B-FP8   # a draft catalog.toml table for a new model
 uv run ws api workingset.toml --hours 84 # one seat on each API; what each coding plan holds
 uv run pytest                            # self-checks + config round-trips
 ```
@@ -70,6 +71,18 @@ page on a config (`--base http://127.0.0.1:PORT/` for a local copy of
 it clamps each slider to its range and resets combinations it does not price,
 so when a config sets one of those, or a value the page would move, `ws link`
 names the field on stderr with what the page shows instead.
+
+`ws catalog REPO` reads a Hugging Face repo's `config.json` and every
+safetensors header (two range requests per shard, no weights downloaded) and
+prints a draft `[models.KEY]` table for
+`src/workingset/data/catalog.toml`. It fills the fields the published files
+determine: layer counts, KV heads, `kv_bpt` for plain K/V attention, the
+resident bytes, the native context, and the tensor-parallel sizes vLLM 0.33
+accepts. Each field that depends on the architecture (latent or compressed
+caches, recurrent state, the MoE split, draft modules, Engram tables) is a
+`# TODO` line naming what to determine and the research note of the closest
+catalogue model. Gated repos read `HF_TOKEN`; `--save DIR` also writes the
+test fixture.
 
 `ws test` puts the predictions to a live endpoint, one falsifiable hypothesis
 at a time. Without `--exclusive` it runs only the hypotheses that need a

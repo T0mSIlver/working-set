@@ -7,6 +7,8 @@
     ws init [--model KEY --gpu PART --tp N ...] write a starter config
     ws link CONFIG [--base URL]                the explorer URL showing CONFIG
     ws models                                  list model / GPU keys
+    ws catalog REPO                            draft a catalog.toml model table
+                                               from a Hugging Face repo
     ws selfcheck                               run the model's self-checks
     ws metrics probe|tail|window ...           sample a live /metrics endpoint
     ws workload --prometheus URL --range 7d    measure the real workload and
@@ -568,6 +570,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_calibrate(sub)
     from .api_cost import add_subparser as _add_api
     _add_api(sub)
+    from .catalog_draft import add_subparser as _add_catalog
+    _add_catalog(sub)
     return ap
 
 
