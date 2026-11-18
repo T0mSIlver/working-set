@@ -1866,7 +1866,10 @@ def print_report(rec: dict, out=None) -> None:
     tt = pl.get("template_tokens")
     w("template tokens: " + (
         f"{tt} ({pl.get('template_source', 'measured')})" if tt is not None
-        else "not measured (--skip-eviction-check)"))
+        else "not measured (--skip-eviction-check)"
+        if "template_tokens" in pl else
+        "not in this record (written before ws measured them): a miss at a "
+        "block boundary counts as an eviction"))
     w()
     w(f"{'sessions':>8} {'turns':>6} {'req':>6} {'fail':>5} "
       f"{'turn p90 [90% CI]':>21} {'mean':>6} {'vs 1 stream':>12} "
