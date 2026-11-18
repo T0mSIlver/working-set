@@ -44,7 +44,7 @@ eur_capex_gpu = 36418.0
 # (workingset.provenance; kinds as in data/external/README.md).
 [gpus.H200.provenance]
 memory = { kind = "vendor", note = "NVIDIA's 141 GB; the part delivers ~150.75e9 B, and the solved reserve absorbs the difference", ref = "research/gpu_b300.md" }
-reserve = { kind = "measured", on = "H200", note = "solved so the 27B fills its one-H200 anchor pool; a TP2 FP16 pool read from a vLLM startup log agrees within 1%", ref = "docs/scenarios.md" }
+reserve = { kind = "derived", basis = "measurement", on = "H200", note = "solved so the 27B fills its one-H200 anchor pool, itself projected from a measured FP16 pool; a TP2 FP16 pool read from a vLLM startup log agrees within 1%", ref = "docs/scenarios.md" }
 decode = { kind = "measured", on = "H200", note = "eta, the share of HBM bandwidth a decode step streams at, read off a held-batch decode sweep (27B, 4×H200 TP4); bandwidth is NVIDIA's 4.8 TB/s", ref = "research/decode-model.md" }
 decode_fixed = { kind = "guess", note = "tau_0 and tau_ar are priors; tau_rec is what the sweep's measured 2.7 ms intercept leaves after them", ref = "research/decode-model.md" }
 prefill = { kind = "guess", note = "MFU 0.45 (bracket 0.30-0.55) rests on measurements not published here; peak is NVIDIA's dense FP8 figure", ref = "research/prefill.md" }
@@ -93,7 +93,7 @@ eur_capex_gpu = 73538.0
 # (workingset.provenance; kinds as in data/external/README.md).
 [gpus.B300.provenance]
 memory = { kind = "measured", on = "B300", note = "an nvidia-smi dump of an OCI BM.GPU.B300.8 reads 288.4e9 B per GPU", ref = "research/gpu_b300.md" }
-reserve = { kind = "measured", on = "H200", note = "the H200-solved reserve, plus the H200's measured hidden HBM margin (9.75e9 B) added back", ref = "research/gpu_b300.md" }
+reserve = { kind = "derived", basis = "measurement", on = "H200", note = "the H200-solved reserve, plus the H200's measured hidden HBM margin (9.75e9 B) added back", ref = "research/gpu_b300.md" }
 decode = { kind = "measured", on = "H200", note = "eta read off the H200 held-batch sweep, unchanged; bandwidth is NVIDIA's 8 TB/s", ref = "research/decode-model.md" }
 decode_fixed = { kind = "guess", note = "the H200 priors and the tau_rec solved from the H200 intercept, unchanged", ref = "research/decode-model.md" }
 prefill = { kind = "guess", note = "the Hopper MFU bracket, carried over; peak 4.5 PFLOPS dense is the DGX B300 sparse figure halved, never measured here", ref = "research/prefill.md" }

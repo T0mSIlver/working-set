@@ -22,9 +22,10 @@ export const CATALOG = {
      "ref": "research/gpu_b300.md"
     },
     "reserve": {
-     "kind": "measured",
+     "kind": "derived",
+     "basis": "measurement",
      "on": "H200",
-     "note": "solved so the 27B fills its one-H200 anchor pool; a TP2 FP16 pool read from a vLLM startup log agrees within 1%",
+     "note": "solved so the 27B fills its one-H200 anchor pool, itself projected from a measured FP16 pool; a TP2 FP16 pool read from a vLLM startup log agrees within 1%",
      "ref": "docs/scenarios.md"
     },
     "decode": {
@@ -77,7 +78,8 @@ export const CATALOG = {
      "ref": "research/gpu_b300.md"
     },
     "reserve": {
-     "kind": "measured",
+     "kind": "derived",
+     "basis": "measurement",
      "on": "H200",
      "note": "the H200-solved reserve, plus the H200's measured hidden HBM margin (9.75e9 B) added back",
      "ref": "research/gpu_b300.md"
@@ -1316,7 +1318,7 @@ export const CATALOG = {
   "H200": {
    "gpu": {
     "memory": "vendor figure",
-    "reserve": "measured on this GPU",
+    "reserve": "derived from a measurement on this GPU",
     "decode": "measured on this GPU",
     "decode_fixed": "guess",
     "prefill": "guess",

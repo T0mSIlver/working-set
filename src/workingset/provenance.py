@@ -9,12 +9,12 @@ Every quantity that feeds a verdict carries a provenance in
                      by us or a third party under a stated method
            vendor    a figure from a party with a stake: a datasheet, a model
                      card, a seller's price
-           derived   computed by us from the model's config or checkpoint
-                     (basis says which) or from other figures
+           derived   computed by us from the model's config, its checkpoint
+                     or a measurement (basis says which)
            guess     an assumption with no measurement behind it
-  basis  derived only: "config" or "checkpoint"
-  on     measured only: the GPU it was measured or fitted on, when the
-         quantity depends on the GPU
+  basis  derived only: "config", "checkpoint" or "measurement"
+  on     measured, or derived from a measurement: the GPU it was measured or
+         fitted on, when the quantity depends on the GPU
   model  measured only: the model it was measured on, when not this one
   note   how, in one line; ref: the research note or doc that has the rest
 
@@ -52,7 +52,7 @@ GPU_QUANTITIES = {
     "power": "power",
     "price": "price",
 }
-BASES = ("config", "checkpoint")
+BASES = ("config", "checkpoint", "measurement")
 FIELDS = ("kind", "basis", "on", "model", "note", "ref")
 
 
@@ -83,9 +83,13 @@ def _parse(row: dict, where: str) -> Provenance:
         raise ProvenanceError(f"{where}: a derived value needs basis in {BASES}")
     if kind != "derived" and "basis" in row:
         raise ProvenanceError(f"{where}: basis is for derived values only")
-    for f in ("on", "model"):
-        if f in row and kind != "measured":
-            raise ProvenanceError(f"{where}: {f} is for measured values only")
+    if "model" in row and kind != "measured":
+        raise ProvenanceError(f"{where}: model is for measured values only")
+    from_measurement = kind == "measured" or row.get("basis") == "measurement"
+    if "on" in row and not from_measurement:
+        raise ProvenanceError(f"{where}: on is for values measured or derived from a measurement")
+    if row.get("basis") == "measurement" and "on" not in row:
+        raise ProvenanceError(f"{where}: a value derived from a measurement names the GPU it was taken on")
     return Provenance(**row)
 
 
@@ -138,6 +142,9 @@ def label(p: Provenance, gpu: str, model: str | None = None) -> str:
             return f"fitted on {p.on} and transferred"
         return "measured on this GPU" if p.on is not None else "measured"
     if p.kind == "derived":
+        if p.basis == "measurement":
+            return ("derived from a measurement on this GPU" if p.on == gpu
+                    else f"fitted on {p.on} and transferred")
         return f"derived from the {p.basis}"
     return {"vendor": "vendor figure", "guess": "guess"}[p.kind]
 

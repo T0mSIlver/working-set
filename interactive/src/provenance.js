@@ -9,15 +9,17 @@ import { esc } from './svg.js';
 
 const LABELS = CATALOG.provenance_labels, WORDS = CATALOG.provenance_words;
 
-// the inputs each ceiling is priced from, as [side, quantity]. A cold request
-// is priced by prefill, and how many requests are cold by the cache pool.
-const DECODE = [['gpu','decode'], ['gpu','decode_fixed'], ['model','decode'], ['model','kv'], ['model','draft'], ['model','acceptance']];
+// the inputs each ceiling is priced from, as [side, quantity]. A decode step
+// streams bytes and runs the verify GEMMs at the prefill compute rate; a cold
+// request is priced by prefill, and how many requests are cold by the pool.
+const DECODE = [['gpu','decode'], ['gpu','decode_fixed'], ['gpu','prefill'], ['model','decode'], ['model','kv'],
+  ['model','draft'], ['model','acceptance'], ['model','prefill']];
 const COLD = [['gpu','prefill'], ['model','prefill'], ['gpu','memory'], ['gpu','reserve'], ['model','weights'], ['model','kv']];
 export const CEILING_INPUTS = {
   decode: DECODE,
   cold_wait: COLD,
   saturation: COLD,
-  slowed: [...COLD, ...DECODE.filter(([s, q]) => !(s === 'model' && q === 'kv'))],
+  slowed: [...COLD, ...DECODE.filter(([s, q]) => !COLD.some(([s2, q2]) => s === s2 && q === q2))],
 };
 
 function entry(model, gpu, wdt, side, q){

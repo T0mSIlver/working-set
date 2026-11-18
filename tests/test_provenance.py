@@ -63,7 +63,8 @@ def test_acceptance_measured_agrees_with_the_provenance():
 
 def test_labels():
     lab = P.labels()
-    assert lab["H200"]["gpu"]["reserve"] == "measured on this GPU"
+    assert lab["H200"]["gpu"]["reserve"] == "derived from a measurement on this GPU"
+    assert lab["H200"]["gpu"]["decode"] == "measured on this GPU"
     assert lab["B300"]["gpu"]["reserve"] == "fitted on H200 and transferred"
     assert lab["H200"]["models"]["35BA3B"]["acceptance"] == "fitted on Qwen3.8-27B and transferred"
     assert lab["B300"]["models"]["27B"]["kv"] == "derived from the config"
