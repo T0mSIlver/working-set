@@ -204,6 +204,10 @@ def test_an_unused_sliding_window_does_not_withhold_the_cache():
             "sliding_window": 131072, "max_window_layers": 28}
     d = draft(_ck(qwen))
     assert d.fields["kv_bpt"][0] == 256 and d.fields["deltanet_state"][0] == 0.0
+    # Fara-7B: the flag sits in a Qwen2.5-VL text_config
+    vl = {"model_type": "qwen2_5_vl", "text_config": {**_BASE, **qwen, "sliding_window": 1024,
+                                                      "model_type": "qwen2_5_vl_text"}}
+    assert draft(hf.Checkpoint("org/m", "0" * 40, vl, [], 1, None)).fields["kv_bpt"][0] == 256
     d = draft(_ck({**qwen, "use_sliding_window": True, "sliding_window": 1024}))
     assert "kv_bpt" not in d.fields and "deltanet_state" not in d.fields
 
@@ -229,6 +233,10 @@ def _proj(name, rows, cols=128, n=4):
     # GPT-2 Conv1D c_attn stored [in, out]
     ({"num_key_value_heads": None},
      [("transformer.h.#.attn.c_attn.weight", "BF16", [128, 3 * 128], 4)], 8, 16),
+    # MiniCPM-o: Whisper and TTS projections beside the decoder's
+    ({}, [_proj("q_proj", 128), _proj("k_proj", 32),
+          ("apm.layers.#.self_attn.k_proj.weight", "BF16", [32, 32], 3),
+          ("tts.model.layers.#.self_attn.k_proj.weight", "BF16", [24, 24], 2)], 2, 16),
     # another tower's projections, other width and count: the decoder's are
     # the ones found once per layer (MiniCPM-V's SigLIP before vpm was named)
     ({}, [_proj("q_proj", 128), _proj("k_proj", 32),

@@ -89,7 +89,8 @@ _HYBRID_KEY = re.compile(
 # model types whose transformers config drops sliding_window when
 # use_sliding_window is false (transformers 5.20.2, `if self.use_sliding_window else None`)
 _WINDOW_FLAG_TYPES = {"qwen2", "qwen3", "qwen3_moe", "qwen2_vl", "qwen2_5_vl",
-                      "qwen2_5_omni"}
+                      "qwen2_5_omni", "qwen2_vl_text", "qwen2_5_vl_text",
+                      "qwen2_5_omni_text", "qwen2_5_omni_talker"}
 
 NOTES = {
     "mla": "research/model_glm52.md (MLA + indexer) and research/model_mistral_large4.md",
@@ -209,13 +210,13 @@ def _no_layer_count(cfg: dict, t: dict) -> str:
 
 
 def _proj_rows(ck: Checkpoint, rx: re.Pattern, layers: int) -> set:
-    """Output widths of the matching decoder projections (vision, draft
-    excluded). When they differ, the width found once per attention layer is
+    """Output widths of the matching decoder projections (vision, audio and
+    draft excluded). When they differ, the width found once per attention layer is
     the decoder's: another tower's projections come in other counts."""
     rows: dict = {}
     for pat, _dt, shape, n in ck.census:
         if rx.search(pat) and len(shape) == 2 and not (
-                _VISION.search(pat) or _DRAFT.search(pat)):
+                _VISION.search(pat) or _AUDIO.search(pat) or _DRAFT.search(pat)):
             w = shape[1] if pat.endswith("c_attn.weight") else shape[0]
             rows[w] = rows.get(w, 0) + n
     if len(rows) > 1:
