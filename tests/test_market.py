@@ -42,14 +42,20 @@ def test_rent_levels_over_sellers_only(snap):
     lv = MK.rent_levels(snap["rental"], "H200", "on-demand")
     assert (lv["low"], lv["median"], lv["high"]) == (2.0, 3.0, 4.0)
     assert lv["n_sellers"] == 3 and lv["n_aggregators_excluded"] == 1
-    assert MK.rent_levels(snap["rental"], "B300", "on-demand")["median"] == 5.0
+    assert lv["other_tiers_excluded"] == ["fixture-d (community)"]
+    b = MK.rent_levels(snap["rental"], "B300", "on-demand")
+    # fixture-e is GB300 and never counts; fixture-f is sold out and counts
+    assert (b["low"], b["median"], b["high"]) == (4.0, 6.0, 7.0)
+    assert b["gb300_excluded"] == ["fixture-e"] and b["sold_out"] == ["fixture-f"]
+    a = MK.rent_levels(snap["rental"], "H200", "on-demand", "all")
+    assert a["low"] == 1.0 and a["n_sellers"] == 4
 
 
 def test_rent_one_figure_per_seller_and_nulls_recorded():
     rental = {"records": [
-        {"gpu": "H200", "seller": "s", "kind": "seller", "term": "on-demand", "usd_per_gpu_h": 5.0},
-        {"gpu": "H200", "seller": "s", "kind": "seller", "term": "on-demand", "usd_per_gpu_h": 3.0},
-        {"gpu": "H200", "seller": "t", "kind": "seller", "term": "on-demand", "usd_per_gpu_h": None}]}
+        {"gpu": "H200", "seller": "s", "kind": "seller", "tier": "managed", "platform": "HGX", "term": "on-demand", "usd_per_gpu_h": 5.0},
+        {"gpu": "H200", "seller": "s", "kind": "seller", "tier": "managed", "platform": "HGX", "term": "on-demand", "usd_per_gpu_h": 3.0},
+        {"gpu": "H200", "seller": "t", "kind": "seller", "tier": "managed", "platform": "HGX", "term": "on-demand", "usd_per_gpu_h": None}]}
     lv = MK.rent_levels(rental, "H200", "on-demand")
     assert lv["n_sellers"] == 1 and lv["low"] == lv["high"] == 3.0
     assert lv["sellers_without_price"] == ["t"]
@@ -61,6 +67,8 @@ def test_price_per_session_hour_without_a_cache_price(glm):
     wv = MK.default_workload()
     p = _provider(glm, "fixture-b")
     want = wv.req_per_hour * (0.5 * wv.prompt_mean + 2.0 * wv.out) / 1e6
+    assert p["u_star_no_cache_discount"]["on-demand"]["median"] == pytest.approx(
+        p["u_star"]["on-demand"]["median"]["u_star"])
     assert p["usd_per_session_hour"] == pytest.approx(want, rel=1e-9)
     assert p["usd_per_mtok_mixed"] == pytest.approx(
         want / (wv.req_per_hour * (wv.prompt_mean + wv.out)) * 1e6)
@@ -118,7 +126,7 @@ def test_context_below_cap_is_flagged(glm):
 
 def test_flags_and_arms(glm):
     b = _provider(glm, "fixture-b")
-    assert any("discount" in f for f in b["flags"])
+    assert any("after a published promotion of 50%" in f for f in b["flags"])
     assert b["arms"] == ["fp8", "nvfp4"]                  # declared unknown
     assert _provider(glm, "fixture-a")["arms"] == ["fp8"]
     assert MK._arms_for("K31P", "mxfp4")[0] == ["fp8"]   # native MXFP4 base arm
@@ -130,6 +138,9 @@ def test_unchecked_model_says_so(glm):
     for c in glm["configs"]:
         assert c["error"]["status"] == "unchecked"
         assert c["error"]["limit_low"] is None
+    for p in glm["providers"]:
+        if p["u_star"]["on-demand"]["median"]:
+            assert p["u_star"]["on-demand"]["model_error"] == {"status": "capacity unchecked"}
 
 
 def test_json_is_strict(glm):
@@ -164,3 +175,84 @@ def test_rows_shape_is_read(tmp_path):
         {"source": {"id": "fixture-rows"}, "rows": [{**ep, "ws_model": "GLM52", "tier": "list"}]}))
     rows = MK.provider_rows(MK.load_snapshot(tmp_path), "GLM52", MK.default_workload(), 300.0)
     assert len(rows) == 1 and rows[0]["source"] == "fixture-rows" and rows[0]["tag"] == "list"
+
+
+@pytest.fixture(scope="module")
+def glm_sens(snap):
+    wv = MK.default_workload()
+    ev = MK.Evaluator(wv, n_iter=100)
+    res = MK.compare("GLM52", snap, gpus=("B300",), evaluator=ev)
+    return MK.sensitivity(res, snap, ev)
+
+
+def test_sensitivity_identities(glm_sens):
+    a = {x["key"]: x for x in glm_sens["assumptions"]}
+    # u* = C / L / R: rent elasticity +1, the limit's -1, exactly
+    assert a["rent"]["median_elasticity"] == pytest.approx(1.0)
+    assert a["limit"]["median_elasticity"] == pytest.approx(-1.0)
+    mags = [x["median_abs_dln"] or 0 for x in glm_sens["assumptions"]]
+    assert mags == sorted(mags, reverse=True)
+
+
+def test_cache_switch_moves_only_a_discounted_endpoint(glm_sens):
+    p = {x["provider"]: x for x in glm_sens["providers"]}
+    # fixture-b publishes no cache price: billing cached tokens at input changes nothing
+    assert p["fixture-b"]["abs_dln_by_assumption"]["cache_as_input"] == pytest.approx(0.0, abs=1e-12)
+    # fixture-a's cache read is a fifth of input: u* falls when it earns full input
+    assert p["fixture-a"]["abs_dln_by_assumption"]["cache_as_input"] > 0.5
+    assert p["fixture-a"]["most_sensitive_to"] not in ("rent", "limit")
+
+
+def test_committed_split_by_length(snap):
+    short = MK.rent_levels(snap["rental"], "H200", "committed-short")
+    long_ = MK.rent_levels(snap["rental"], "H200", "committed-long")
+    assert short["n_sellers"] == 0 and long_["n_sellers"] == 1
+    assert long_["commit_months"] == [12]
+    rental = {"records": [
+        {"gpu": "H200", "seller": "s", "kind": "seller", "tier": "managed", "platform": "HGX", "term": "committed",
+         "commit_months": 1, "usd_per_gpu_h": 4.0},
+        {"gpu": "H200", "seller": "t", "kind": "seller", "tier": "managed", "platform": "HGX", "term": "committed",
+         "commit_months": 6, "usd_per_gpu_h": 3.0},
+        {"gpu": "H200", "seller": "v", "kind": "seller", "tier": "managed", "platform": "HGX", "term": "committed",
+         "commit_months": None, "usd_per_gpu_h": 3.0}]}
+    s = MK.rent_levels(rental, "H200", "committed-short")
+    assert s["low"] == 4.0 and s["commitments_left_out"] == ["t", "v"]
+    assert MK.rent_levels(rental, "H200", "committed-long")["n_sellers"] == 0
+
+
+def test_rent_record_without_tier_fails_loudly():
+    rental = {"records": [{"gpu": "H200", "seller": "s", "kind": "seller", "platform": "HGX",
+                           "term": "on-demand", "usd_per_gpu_h": 3.0}]}
+    with pytest.raises(MK.MarketDataError, match=r"records\[0\].*'tier'"):
+        MK.rent_levels(rental, "H200", "on-demand")
+    rental["records"][0]["tier"] = "boutique"
+    with pytest.raises(MK.MarketDataError, match="tier 'boutique'"):
+        MK.rent_levels(rental, "H200", "on-demand")
+
+
+def test_time_weighted_price_is_priced(tmp_path):
+    shutil.copy(FIX / "gpu_rental-2026-11-18.json", tmp_path)
+    raw = json.loads((FIX / "provider_prices.json").read_text())
+    ep = raw["models"][0]["endpoints"][1]           # fixture-b: no cache price
+    ep["time_weighted"] = {"usd_per_mtok_input": 1.0, "usd_per_mtok_output": 4.0,
+                           "usd_per_mtok_cache_read": None}
+    (tmp_path / "provider_prices.json").write_text(json.dumps(raw))
+    wv = MK.default_workload()
+    row = MK.provider_rows(MK.load_snapshot(tmp_path), "GLM52", wv, 300.0)[1]
+    # every price doubled over the listed window: twice the revenue
+    assert row["usd_per_session_hour"] == pytest.approx(2 * row["usd_per_session_hour_listed_window"])
+    assert any("time-weighted" in f for f in row["flags"])
+
+
+def test_no_cache_contrast_bills_every_prompt_token_at_input(snap):
+    ev = MK.evaluator_for("no-cache", n_iter=50)
+    res = MK.compare("GLM52", snap, gpus=("B300",), evaluator=ev, workload_name="no-cache")
+    wv = ev.wv
+    p = _provider(res, "fixture-a")
+    want = wv.req_per_hour * (1.0 * wv.prompt_mean + 4.0 * wv.out) / 1e6
+    assert p["usd_per_session_hour"] == pytest.approx(want, rel=1e-9)
+    assert res["workload"]["mix_at_miss_rate"]["cached"] == 0.0
+    # the cap is explicit, not predict()'s recommendation of 1
+    c = res["configs"][0]
+    cfg = ev.limit("GLM52", c["gpu"], c["tp"], c["arm"])["cfg"]
+    assert cfg.deployment.max_num_seqs > 1

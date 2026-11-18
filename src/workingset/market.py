@@ -41,15 +41,27 @@ from pathlib import Path
 
 from . import api_cost as A
 from . import model as M
-from .config import Calibration, Deployment, RunConfig
+from .config import Calibration, Deployment, RunConfig, WorkloadCfg
 from .predict import predict
 
-SCHEMA = "workingset.market/1"
+SCHEMA = "workingset.market/2"
 NODE = 8                                  # one 8-GPU node: the explorer's frontier
 UTILISATIONS = (0.2, 0.5, 0.8, 1.0)
-U_GRID = tuple(round(0.05 * i, 2) for i in range(1, 21))
 CACHE_TTL_DEFAULT = 300.0                 # s; providers publish no TTL (assumption)
-TERMS = ("on-demand", "committed")
+# A committed listing is short (under 3 months: Together's 1-week and
+# 1-month prices) or long (12 months and more); a commitment of 3 to 12
+# months, or of unstated length, is counted and left out.
+TERMS = ("on-demand", "committed-short", "committed-long")
+SHORT_COMMIT_MONTHS = 3.0
+LONG_COMMIT_MONTHS = 12.0
+# Which offers a rent band counts. "managed": a provider's own managed cloud
+# (the default); "all" adds community-cloud and marketplace offers, whose
+# hosts, availability and eight-GPU fabric are not the seller's to state.
+# GB300 (Grace-Blackwell) instances are a different platform from the HGX
+# B300 the catalogue prices and never count, whichever the tier set.
+RENT_TIERS = {"managed": ("managed",), "all": ("managed", "community", "marketplace")}
+SELLER_TIERS = ("managed", "community", "marketplace")
+PLATFORMS = ("HGX", "GB300", "unstated")
 LEVELS = ("low", "median", "high")
 DEFAULT_SNAPSHOT = Path(__file__).resolve().parents[2] / "data" / "market"
 
@@ -122,18 +134,51 @@ def load_snapshot(dir_: str | Path | None = None) -> dict:
     return out
 
 
-def rent_levels(rental: dict, gpu: str, term: str) -> dict:
+def _record_term(r: dict, where: str) -> str | None:
+    """The TERMS entry a rental record counts under, None when none."""
+    t = _need(r, "term", where)
+    if t != "committed":
+        return t
+    months = r.get("commit_months")
+    if months is None:
+        return None
+    if months < SHORT_COMMIT_MONTHS:
+        return "committed-short"
+    if months >= LONG_COMMIT_MONTHS:
+        return "committed-long"
+    return None
+
+
+def rent_levels(rental: dict, gpu: str, term: str, tiers: str = "managed") -> dict:
     """Low, median and high USD per GPU-hour over sellers for one GPU and
-    term. Aggregator records are counted and left out."""
+    term, over the offers of `tiers` (RENT_TIERS). Aggregator records,
+    other tiers and GB300 instances are counted and left out; a sold-out
+    offer counts and is listed."""
+    if tiers not in RENT_TIERS:
+        raise ValueError(f"tiers must be one of {tuple(RENT_TIERS)}, got {tiers!r}")
     recs = _need(rental, "records", "gpu_rental")
     best: dict = {}
-    aggs, unpriced = 0, []
+    aggs, unpriced, other_tier, gb300 = 0, [], [], []
     for i, r in enumerate(recs):
         where = f"gpu_rental records[{i}]"
-        if _need(r, "gpu", where) != gpu or _need(r, "term", where) != term:
+        tier, platform = _need(r, "tier", where), _need(r, "platform", where)
+        if _need(r, "kind", where) == "seller":
+            if tier not in SELLER_TIERS:
+                raise MarketDataError(f"{where} ({r.get('seller')}): tier {tier!r} is not "
+                                      f"one of {SELLER_TIERS}")
+            if platform not in PLATFORMS:
+                raise MarketDataError(f"{where} ({r.get('seller')}): platform {platform!r} "
+                                      f"is not one of {PLATFORMS}")
+        if _need(r, "gpu", where) != gpu or _record_term(r, where) != term:
             continue
-        if _need(r, "kind", where) != "seller":
+        if r["kind"] != "seller":
             aggs += 1
+            continue
+        if platform == "GB300":
+            gb300.append(r.get("seller"))
+            continue
+        if tier not in RENT_TIERS[tiers]:
+            other_tier.append(f"{r.get('seller')} ({tier})")
             continue
         v = _need(r, "usd_per_gpu_h", where)
         if v is None:                     # a recorded null: listed, no price read
@@ -147,13 +192,25 @@ def rent_levels(rental: dict, gpu: str, term: str) -> dict:
         if s not in best or v < best[s]["usd_per_gpu_h"]:
             best[s] = r
     rows = list(best.values())
-    base = {"gpu": gpu, "term": term, "n_sellers": len(rows),
-            "n_aggregators_excluded": aggs, "sellers_without_price": sorted(set(unpriced)) }
+    left_out = sorted({r.get("seller") for i, r in enumerate(recs)
+                       if r.get("gpu") == gpu and r.get("term") == "committed"
+                       and term.startswith("committed")
+                       and _record_term(r, f"gpu_rental records[{i}]") is None})
+    base = {"gpu": gpu, "term": term, "tiers": tiers, "n_sellers": len(rows),
+            "n_aggregators_excluded": aggs, "sellers_without_price": sorted(set(unpriced)),
+            "other_tiers_excluded": sorted(set(other_tier)),
+            "gb300_excluded": sorted(set(gb300)),
+            "sold_out": sorted({r.get("seller") for r in rows if r.get("availability")
+                                and "sold out" in str(r.get("availability"))}),
+            "commitments_left_out": left_out,
+            "commit_months": sorted({r.get("commit_months") for r in rows
+                                     if r.get("commit_months") is not None})}
     if not rows:
         return {**base, "low": None, "median": None, "high": None, "sellers": []}
     xs = sorted(r["usd_per_gpu_h"] for r in rows)
     return {**base, "low": xs[0], "median": statistics.median(xs), "high": xs[-1],
             "sellers": [{k: r.get(k) for k in ("seller", "usd_per_gpu_h", "commit_months",
+                                               "tier", "platform", "availability",
                                                "read", "url")}
                         for r in sorted(rows, key=lambda r: r["usd_per_gpu_h"])]}
 
@@ -175,13 +232,17 @@ class WorkloadView:
         return self.req_per_hour * self.tokens_per_request
 
 
-def default_workload() -> WorkloadView:
-    cfg = RunConfig()
+def workload_view(wcfg: WorkloadCfg | None = None) -> WorkloadView:
+    cfg = RunConfig() if wcfg is None else RunConfig(workload=wcfg)
     w, wl = cfg.workload, cfg.to_workload()
     f = A.request_flows(wl, wl.invalidation, w.warm_turn_tokens, w.max_output_tokens)
     return WorkloadView(cfg, wl, float(w.warm_turn_tokens), float(w.max_output_tokens),
                         float(w.think_time_s), A.requests_per_hour(wl, w.think_time_s),
                         f.prompt, f.prompt + f.output)
+
+
+def default_workload() -> WorkloadView:
+    return workload_view(None)
 
 
 # ---------------------------------------------------------------- capacity
@@ -222,12 +283,13 @@ class _ScaledDecode(RunConfig):
 
 
 def _cfg(model_key: str, gpu: str, tp: int, arm: str, decode_factor: float = 1.0,
-         prefill_factor: float = 1.0) -> RunConfig:
+         prefill_factor: float = 1.0, wcfg: WorkloadCfg | None = None) -> RunConfig:
     dep = _base_deployment(model_key, gpu, tp, arm)
     cal = Calibration(mfu=M.MFU_DEFAULT / prefill_factor)
+    wcfg = WorkloadCfg() if wcfg is None else wcfg
     if decode_factor == 1.0:
-        return RunConfig(deployment=dep, calibration=cal)
-    c = _ScaledDecode(deployment=dep, calibration=cal)
+        return RunConfig(deployment=dep, workload=wcfg, calibration=cal)
+    c = _ScaledDecode(deployment=dep, workload=wcfg, calibration=cal)
     object.__setattr__(c, "_factor", decode_factor)
     return c
 
@@ -235,18 +297,32 @@ def _cfg(model_key: str, gpu: str, tp: int, arm: str, decode_factor: float = 1.0
 class Evaluator:
     """Predictions per configuration, cached for one run."""
 
-    def __init__(self, wv: WorkloadView, n_iter: int = 400):
-        self.wv, self.n_iter = wv, n_iter
+    def __init__(self, wv: WorkloadView, n_iter: int = 400, explicit_cap: bool = False):
+        """`explicit_cap`: set max_num_seqs to the contexts of mean length the
+        HBM pool holds (hbm_contexts) instead of predict()'s recommendation,
+        which counts only reusable sessions and so falls to 1 when every
+        request misses."""
+        self.wv, self.n_iter, self.explicit_cap = wv, n_iter, explicit_cap
         self._cache: dict = {}
 
-    def limit(self, model_key, gpu, tp, arm, decode_factor=1.0, prefill_factor=1.0):
-        key = (model_key, gpu, tp, arm, decode_factor, prefill_factor)
+    def limit(self, model_key, gpu, tp, arm, decode_factor=1.0, prefill_factor=1.0,
+              wcfg: WorkloadCfg | None = None):
+        """predict() on one configuration, at this evaluator's workload
+        unless `wcfg` names another; cached per (configuration, workload)."""
+        wcfg = self.wv.cfg.workload if wcfg is None else wcfg
+        key = (model_key, gpu, tp, arm, decode_factor, prefill_factor, wcfg)
         if key not in self._cache:
-            cfg = _cfg(model_key, gpu, tp, arm, decode_factor, prefill_factor)
+            cfg = _cfg(model_key, gpu, tp, arm, decode_factor, prefill_factor, wcfg)
             m, t = cfg.to_model(), cfg.to_topology()
             if M.kv_pool_tokens(m, t) <= 0:
                 self._cache[key] = {"skip": "the weights leave no KV pool"}
             else:
+                if self.explicit_cap:
+                    cap = hbm_contexts(m, t, workload_view(wcfg).prompt_mean)
+                    capped = replace(cfg, deployment=replace(cfg.deployment, max_num_seqs=cap))
+                    if isinstance(cfg, _ScaledDecode):     # replace() drops the factor
+                        object.__setattr__(capped, "_factor", cfg._factor)
+                    cfg = capped
                 p = predict(cfg, n_iter=self.n_iter)
                 self._cache[key] = {"pred": p, "cfg": cfg}
         return self._cache[key]
@@ -291,6 +367,27 @@ class Evaluator:
         return {"u": u, "d_prefill": pd["d_p"], "d_decode": pd["d_d"],
                 "miss": wl_u.invalidation, "fresh_per_request": fl.written,
                 "cached_per_request": fl.read}
+
+
+def hbm_contexts(m: M.Model, t: M.Topology, prompt_mean: float) -> int:
+    """Contexts of the mean prompt length (plus each session's recurrent
+    state) one group's HBM pool holds: what a batch of cold requests, none
+    sharing a prefix, can decode at once."""
+    per = prompt_mean + m.deltanet_state / m.kv_bpt
+    return max(1, int(M.kv_pool_tokens(m, t) // per))
+
+
+# The no-cache contrast: the default workload with every request a miss, so
+# every prompt token is computed fresh and billed at the input price.
+NO_CACHE_NOTE = ("rough sensitivity, not an estimate: every prompt computed fresh "
+                 "(miss rate 100%) and billed at the input price; capacity "
+                 "re-predicted with max_num_seqs set to the contexts of mean "
+                 "length the HBM pool holds, because predict()'s recommendation "
+                 "counts only reusable sessions and falls to 1 at 100% misses")
+
+
+def no_cache_workload() -> WorkloadCfg:
+    return replace(WorkloadCfg(), miss_rate=1.0)
 
 
 def split_cost(usd_per_hour: float, limit: float, u: float, d: dict,
@@ -403,15 +500,17 @@ def _arms_for(model_key: str, declared: str | None) -> tuple[list[str], str]:
     return priced, f"declared {q}: every priced arm ({', '.join(priced)})"
 
 
-def _offer(ep: dict, where: str, ttl_s: float) -> tuple[A.ApiOffer | None, str]:
-    """An api_cost offer from one endpoint's price sheet, or None with why."""
+def _offer(ep: dict, where: str, ttl_s: float,
+           cache_as_input: bool = False) -> tuple[A.ApiOffer | None, str]:
+    """An api_cost offer from one endpoint's price sheet, or None with why.
+    `cache_as_input` bills cached tokens at the input price (no discount)."""
     inp = _need(ep, "usd_per_mtok_input", where)
     outp = _need(ep, "usd_per_mtok_output", where)
     cr = _need(ep, "usd_per_mtok_cache_read", where)
     cw = _need(ep, "usd_per_mtok_cache_write", where)
     if inp is None or outp is None:
         return None, "input or output price not published"
-    read = inp if cr is None else cr
+    read = inp if (cr is None or cache_as_input) else cr
     write = inp if cw is None else cw
     note = ("cached tokens at the published cache-read price" if cr is not None
             else "no cache-read price: cached tokens billed as input")
@@ -426,9 +525,13 @@ def _flags(ep: dict) -> list[str]:
     out = []
     op = ep.get("other_pricing") or {}
     if op.get("discount"):
-        out.append(f"discount {op['discount']:g} published; prices read as listed")
-    if op.get("overrides"):
-        out.append("time-of-day prices published; priced at the listed base")
+        out.append(f"listed price is after a published promotion of {op['discount'] * 100:g}%")
+    if ep.get("time_weighted"):
+        out.append("time-of-day prices: u* at the 24-hour time-weighted price; the "
+                   "listed price is the cheapest window")
+    elif op.get("overrides"):
+        out.append("time-of-day prices published, no time-weighted price recorded; "
+                   "priced at the listed base")
     st = ep.get("status")
     if st not in (None, 0):
         out.append(f"status {st}")
@@ -436,7 +539,7 @@ def _flags(ep: dict) -> list[str]:
 
 
 def provider_rows(snapshot: dict, model_key: str, wv: WorkloadView,
-                  ttl_s: float) -> list[dict]:
+                  ttl_s: float, cache_as_input: bool = False) -> list[dict]:
     rows = []
     for src in snapshot["prices"]:
         for mrow in src["models"]:
@@ -444,7 +547,17 @@ def provider_rows(snapshot: dict, model_key: str, wv: WorkloadView,
                 continue
             for i, ep in enumerate(_need(mrow, "endpoints", src["file"])):
                 where = f"{src['file']} {model_key} endpoints[{i}]"
-                offer, cache_note = _offer(ep, where, ttl_s)
+                tw = ep.get("time_weighted")
+                listed_offer, ep_listed = None, ep
+                if tw:
+                    for k in ("usd_per_mtok_input", "usd_per_mtok_output",
+                              "usd_per_mtok_cache_read"):
+                        _need(tw, k, f"{where} time_weighted")
+                    listed_offer, _ = _offer(ep, where, ttl_s, cache_as_input)
+                    ep = {**ep, **{k: tw[k] for k in ("usd_per_mtok_input",
+                                                       "usd_per_mtok_output",
+                                                       "usd_per_mtok_cache_read")}}
+                offer, cache_note = _offer(ep, where, ttl_s, cache_as_input)
                 row = {"source": src["source"].get("id", src["file"]), "file": src["file"],
                        "provider": _need(ep, "provider", where), "tag": ep.get("tag"),
                        "usd_per_mtok_input": ep["usd_per_mtok_input"],
@@ -469,6 +582,13 @@ def provider_rows(snapshot: dict, model_key: str, wv: WorkloadView,
                     row["miss"] = rc.miss
                     row["billed_per_request"] = {"cached": fl.read, "fresh": fl.written,
                                                  "output": fl.output}
+                    row["listed_window_prices"] = (None if listed_offer is None else {
+                        k: ep_listed[k] for k in ("usd_per_mtok_input", "usd_per_mtok_output",
+                                                  "usd_per_mtok_cache_read")})
+                    row["usd_per_session_hour_listed_window"] = (
+                        None if listed_offer is None else
+                        A.request_cost(listed_offer, wv.wl, wv.turn, wv.out).usd
+                        * wv.req_per_hour)
                 ctx = row["context_length"]
                 cap = wv.wl.cap
                 if not ctx:
@@ -496,7 +616,8 @@ def _share_over(wl: M.Workload, ctx: float) -> float:
 def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
             gpus: tuple | None = None, utilisations=UTILISATIONS,
             ttl_s: float = CACHE_TTL_DEFAULT, n_iter: int = 400,
-            evaluator: Evaluator | None = None) -> dict:
+            evaluator: Evaluator | None = None, rent_tiers: str = "managed",
+            workload_name: str = "default") -> dict:
     if model_key not in M.MODELS:
         raise KeyError(f"unknown model {model_key!r}; known: {sorted(M.MODELS)}")
     if term not in TERMS:
@@ -506,7 +627,9 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
     m = M.MODELS[model_key]
     rental = snapshot["rental"]
     gpus = tuple(gpus) if gpus else tuple(M.GPUS)
-    rents = {g: {t: rent_levels(rental, g, t) for t in TERMS} for g in gpus}
+    rents = {g: {t: rent_levels(rental, g, t, rent_tiers) for t in TERMS} for g in gpus}
+    other = "all" if rent_tiers == "managed" else "managed"
+    rents_other = {g: {t: rent_levels(rental, g, t, other) for t in TERMS} for g in gpus}
 
     configs, skipped = [], []
     for c in candidate_configs(model_key):
@@ -530,7 +653,9 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
             skipped.append({**c, "id": cid, "why": f"limit {limit} ({p.binding_constraint})"})
             continue
         row["viable"] = True
-        row["duties"] = [ev.duties(r, u) for u in U_GRID]
+        # the model's split of GPU time at each priced utilisation (the
+        # per-token convention reads it; the page needs only u, limit, rent)
+        row["duties"] = {f"{u:g}": ev.duties(r, u) for u in utilisations}
         row["error"] = error_band(ev, model_key, c, limit, p.binding_constraint)
         row["decode"] = ev.decode_speeds(r)
         row["cost"] = {}
@@ -545,8 +670,7 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
                 c_h = n_gpu * rent
                 at = {}
                 for u in utilisations:
-                    d = next(x for x in row["duties"] if abs(x["u"] - u) < 1e-9) \
-                        if u in U_GRID else ev.duties(r, u)
+                    d = row["duties"][f"{u:g}"]
                     at[f"{u:g}"] = {
                         "usd_per_session_hour": c_h / (limit * u),
                         "usd_per_mtok_mixed": c_h / (limit * u) / wv.mixed_per_session_hour * 1e6,
@@ -562,6 +686,11 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
         return min(cands, key=lambda c: c["cost"][t][level]["usd_per_session_hour_full"])
 
     providers = provider_rows(snapshot, model_key, wv, ttl_s)
+    # the revenue side alone with no cache discount: same limit, cached
+    # tokens billed at the input price
+    no_disc = provider_rows(snapshot, model_key, wv, ttl_s, cache_as_input=True)
+    for p, nd in zip(providers, no_disc):
+        p["_rev_no_disc"] = nd["usd_per_session_hour"]
     for p in providers:
         arms, note = _arms_for(model_key, p["quantization"])
         p["arms"], p["arm_note"] = arms, note
@@ -591,18 +720,29 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
                 band[level] = {"u_star": min(vals)[0], "config": min(vals)[1],
                                "u_star_max_over_arms": max(vals)[0]}
             p["u_star"][t] = band
-            # model error on the best config at median rent, shown apart
+            # revenue-side variants at the same configuration and limit
+            for key, r_alt in (("u_star_no_cache_discount", p["_rev_no_disc"]),
+                               ("u_star_listed_window",
+                                p.get("usd_per_session_hour_listed_window"))):
+                p.setdefault(key, {})[t] = None if r_alt is None else {
+                    lv: (None if band[lv] is None else band[lv]["u_star"] * rev / r_alt)
+                    for lv in LEVELS}
+            # model error on the best config at median rent, shown apart.
+            # Only a row on the BINDING quantity bounds the limit; a row on
+            # another quantity says only whether that one could take over.
             med = band.get("median")
             if med:
                 cfg = next(c for c in configs if c["id"] == med["config"])
                 e = cfg["error"]
-                if e["status"] == "checked" and e["limit_low"]:
+                if e["binding_status"] == "checked":
                     c_full = cfg["cost"][t]["median"]["usd_per_hour"]
                     band["model_error"] = {
+                        "status": "checked",
                         "u_star_at_limit_low": c_full / e["limit_low"] / rev,
                         "u_star_at_limit_high": c_full / e["limit_high"] / rev}
                 else:
-                    band["model_error"] = {"status": "unchecked"}
+                    band["model_error"] = {"status": "capacity unchecked"}
+        p.pop("_rev_no_disc")
 
     # throughput: an endpoint's published tok/s beside the model's per-user
     # decode range over the configurations its declared weights map to
@@ -628,15 +768,8 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
                 mix = p.get("usd_per_mtok_mixed")
                 p["usd_per_mchar_mixed"] = (None if mix is None else
                                             {k: mix / v for k, v in cpt.items()})
-            for c in configs:
-                for t in TERMS:
-                    for lv in LEVELS:
-                        cc = c["cost"][t][lv]
-                        if cc is None:
-                            continue
-                        for a in cc["at"].values():
-                            a["usd_per_mchar_mixed"] = {k: a["usd_per_mtok_mixed"] / v
-                                                        for k, v in cpt.items()}
+            # a configuration's per-character cost is its usd_per_mtok_mixed
+            # over the same chars_per_token, left to the reader
 
     return {
         "schema": SCHEMA, "model": model_key, "model_name": m.name,
@@ -647,9 +780,16 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
                                        "fetched": s["source"].get("fetched") or s["source"].get("read")}
                                        for s in snapshot["prices"]],
                      "chars_file": snapshot["chars_file"]},
-        "assumptions": assumptions(wv, term, ttl_s),
-        "workload": workload_block(wv),
-        "rent": rents,
+        "caveat": CAVEAT,
+        "workload_name": workload_name,
+        "workload_note": NO_CACHE_NOTE if workload_name == "no-cache" else None,
+        "model_note": MODEL_NOTES.get(model_key),
+        "n_providers": len({p["provider"] for p in providers}),
+        "n_rows": len(providers),
+        "assumptions": assumptions(wv, term, ttl_s, rent_tiers),
+        "workload": workload_block(wv, ttl_s),
+        "rent": rents, "rent_tiers": rent_tiers,
+        "rent_other_tiers": {"tiers": other, "rent": rents_other},
         "term": term,
         "utilisations": list(utilisations),
         "configs": configs, "skipped_configs": skipped,
@@ -660,40 +800,224 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
     }
 
 
-def workload_block(wv: WorkloadView) -> dict:
-    f = A.request_flows(wv.wl, wv.wl.invalidation, wv.turn, wv.out)
+CAVEAT = ("This is rent coverage for a hypothetical deployment at our workload, cache "
+          "assumptions, scheduler settings and latency limits; it does not estimate a "
+          "provider's actual utilisation, throughput capacity or profit.")
+
+# per-model notes on what a price row names
+MODEL_NOTES = {
+    "Q38FN": "OpenRouter's qwen/qwen3.8-flash names the Flash-Next repository but may "
+             "be the later production release",
+}
+
+
+def billing_miss(wv: WorkloadView, ttl_s: float) -> float:
+    """The miss share the price-sheet side bills at: the workload's own
+    invalidation plus expiry of a ttl_s cache over the traced gaps."""
+    inv = wv.wl.invalidation
+    return min(1.0, inv + (1.0 - inv) * A.expiry_miss(ttl_s))
+
+
+def workload_block(wv: WorkloadView, ttl_s: float = CACHE_TTL_DEFAULT) -> dict:
     tot = wv.tokens_per_request
+
+    def mix(q):
+        f = A.request_flows(wv.wl, q, wv.turn, wv.out)
+        return {"miss": q, "fresh": f.written / tot, "cached": f.read / tot,
+                "output": f.output / tot}
+
     return {"prompt_mean": wv.prompt_mean, "output": wv.out, "warm_turn": wv.turn,
             "think_time_s": wv.think, "sub_ratio": wv.wl.sub_ratio, "cap": wv.wl.cap,
             "miss_rate": wv.wl.invalidation,
             "requests_per_session_hour": wv.req_per_hour,
             "tokens_per_request": tot,
             "mixed_tokens_per_session_hour": wv.mixed_per_session_hour,
-            "mix_at_miss_rate": {"fresh": f.written / tot, "cached": f.read / tot,
-                                 "output": f.output / tot}}
+            "mix_denominator": "every prompt token plus the output, per request",
+            # capacity side: the model's own miss rate
+            "mix_at_miss_rate": mix(wv.wl.invalidation),
+            # billing side: the assumed cache lifetime
+            "mix_billed": {**mix(billing_miss(wv, ttl_s)), "cache_ttl_s": ttl_s}}
 
 
-def assumptions(wv: WorkloadView, term: str, ttl_s: float) -> list[str]:
+def assumptions(wv: WorkloadView, term: str, ttl_s: float, rent_tiers: str = "managed") -> list[str]:
+    tiers = ("managed-cloud offers only (community-cloud and marketplace offers "
+             "left out; `--rent-tiers all` counts them)" if rent_tiers == "managed"
+             else "every tier: managed, community-cloud and marketplace offers")
     return [
-        "Workload: RunConfig()'s [workload], the explorer's opening one.",
-        "Rent is paid every hour, 24/7; u is the time-average of live sessions over "
+        "Workload: RunConfig()'s [workload], the explorer's opening one. Tool and "
+        "human pauses are inside a live session, so u is not GPU busy time.",
+        "Rent is paid every hour, 24/7; u is the time average of live sessions over "
         "the predicted limit across every rented hour.",
-        f"Rent: low / median / high over sellers (aggregators left out), {term}.",
+        f"Rent: low / median / high over sellers, one figure per seller (its cheapest "
+        f"listing), {term}, {tiers}; aggregators and GB300 instances left out; "
+        "sold-out offers kept and named. Posted offers: availability and eight-GPU "
+        "fabric are not verified.",
         "Capacity: one 8-GPU node, every TP width vLLM accepts (catalogue vllm_tp); "
         "DP replicas multiply sessions and GPUs alike, so only DP1 is priced.",
-        "Limit: predicted_limit_users, the verdict's binding ceiling, at the default SLO.",
-        f"Provider cache: a {ttl_s:g} s TTL (none is published); cached tokens at the "
-        "cache-read price where published, else at the input price.",
-        "Prices read as listed; a published discount or time-of-day override is "
-        "flagged, not applied.",
+        "Limit: the lowest of four ceilings at the explorer's default latency limits: "
+        "slowed streams at most 15% of wall time in cold-prefill steps, p95 cold "
+        "queue wait at most 5 s, prefill saturation, and decode at a 40 tok/s floor "
+        "under the recommended max_num_seqs. These are the explorer's defaults, not "
+        "a provider's commitments.",
+        f"Provider cache: the price files carry no cache lifetime; a {ttl_s:g} s TTL is "
+        "assumed. Cached tokens at the cache-read price where published, else at the "
+        "input price.",
+        "Prices as listed. A listed price is already after any published promotion; "
+        "an endpoint with time-of-day prices is priced at its 24-hour time-weighted "
+        "price, the listed window beside it.",
         "u* = (rent per hour / limit) / provider price per live session-hour. "
         "u* > 1: the price does not cover the rent at the model's predicted limit "
-        "even fully loaded, under these assumptions. The provider's hardware, "
-        "engine, contract prices and workload are unknown.",
+        "even fully loaded, under these assumptions.",
         "Per-token costs split GPU time by the model's duties (prefill to fresh "
-        "input, decode to output, idle in proportion); a convention u* does not use.",
-        "Model error is shown apart from the rent band, never multiplied into it.",
+        "input, decode to output, idle in proportion); a convention u* does not use. "
+        "Cached tokens carry no prefill, but their KV holds HBM and decode reads it.",
+        "Model error is shown apart from the rent band, never multiplied into it; "
+        "'capacity unchecked' where the binding quantity has no measurement for this model.",
     ]
+
+
+# ---------------------------------------------------------------- sensitivity
+STEP = 0.2                                # the ±20% finite difference
+
+
+def _variants(w: WorkloadCfg, ttl_s: float) -> list[dict]:
+    """Every assumption u* rests on, as its variants. `kind` says which side
+    a variant moves: rent (C), limit (L, re-predicted unless `scale`),
+    revenue (R) or workload (L and R both)."""
+    lo, hi = 1.0 - STEP, 1.0 + STEP
+    out = [
+        {"key": "rent", "label": "GPU rent", "kind": "rent", "values": [lo, hi], "ref": 1.0},
+        {"key": "limit", "label": "predicted limit (scaled directly)", "kind": "limit",
+         "values": [lo, hi], "ref": 1.0},
+        {"key": "decode_step", "label": "decode step time", "kind": "decode",
+         "values": [lo, hi], "ref": 1.0},
+        {"key": "prefill_mfu", "label": "prefill MFU", "kind": "mfu",
+         "values": [lo, hi], "ref": 1.0},
+        {"key": "cache_ttl", "label": "provider cache TTL (s)", "kind": "ttl",
+         "values": [60.0, 3600.0], "ref": ttl_s, "switch": True},
+        {"key": "cache_as_input", "label": "cached tokens billed at the input price",
+         "kind": "cache_as_input", "values": [True], "ref": False, "switch": True},
+        {"key": "output_tokens", "label": "output tokens per request", "kind": "workload",
+         "field": "max_output_tokens", "values": [200, 800], "ref": w.max_output_tokens},
+    ]
+    for key, field_, label, typ in (
+            ("miss_rate", "miss_rate", "miss rate", float),
+            ("warm_turn", "warm_turn_tokens", "warm turn Δ (tokens)", int),
+            ("think_time", "think_time_s", "think time (s)", float),
+            ("prompt_median", "user_prompt_median_tokens", "prompt median (tokens)", int)):
+        x = getattr(w, field_)
+        out.append({"key": key, "label": label, "kind": "workload", "field": field_,
+                    "values": [typ(round(x * lo, 6)) if typ is float else typ(round(x * lo)),
+                               typ(round(x * hi, 6)) if typ is float else typ(round(x * hi))],
+                    "ref": x})
+    return out
+
+
+def sensitivity(res: dict, snapshot: dict, ev: Evaluator, *, term: str = "on-demand",
+                level: str = "median", ttl_s: float = CACHE_TTL_DEFAULT) -> dict:
+    """How far each assumption moves each endpoint's u* at one rent level.
+
+    The configuration is held at the endpoint's cheapest one (`res`): a
+    variant re-prices that configuration and does not re-choose it. For a
+    two-sided ±20% step the elasticity is d ln u* / d ln x by central
+    difference; for a named switch (cache TTL, cache price) it is the
+    change ln(u*_variant / u*). Rankings use the largest |ln change| over an
+    assumption's variants, the median over endpoints."""
+    model_key = res["model"]
+    wv = ev.wv
+    w0 = wv.cfg.workload
+    cfgs = {c["id"]: c for c in res["configs"]}
+    base = []
+    for i, p in enumerate(res["providers"]):
+        b = (p["u_star"].get(term) or {}).get(level)
+        if b is not None:
+            base.append((i, p, b))
+    if not base:
+        return {"term": term, "level": level, "assumptions": [], "providers": [],
+                "note": "no endpoint has a u* at this term and rent level"}
+    used = {b["config"] for _, _, b in base}
+
+    def limit_of(cid, **kw):
+        c = cfgs[cid]
+        r = ev.limit(model_key, c["gpu"], c["tp"], c["arm"], **kw)
+        if "pred" not in r:
+            return None
+        lim = r["pred"].predicted_limit_users * r["pred"].replicas
+        return lim if lim >= 1 else None
+
+    out_a, per_p = [], {i: {} for i, _, _ in base}
+    for a in _variants(w0, ttl_s):
+        rows = []
+        for x in a["values"]:
+            limits = {cid: cfgs[cid]["limit"] for cid in used}
+            rent_f, wv_x, ttl_x, cai = 1.0, wv, ttl_s, False
+            k = a["kind"]
+            if k == "rent":
+                rent_f = x
+            elif k == "limit":
+                limits = {cid: L * x for cid, L in limits.items()}
+            elif k == "decode":
+                limits = {cid: limit_of(cid, decode_factor=x) for cid in used}
+            elif k == "mfu":
+                limits = {cid: limit_of(cid, prefill_factor=1.0 / x) for cid in used}
+            elif k == "ttl":
+                ttl_x = x
+            elif k == "cache_as_input":
+                cai = True
+            elif k == "workload":
+                wcfg = replace(w0, **{a["field"]: x})
+                wv_x = workload_view(wcfg)
+                limits = {cid: limit_of(cid, wcfg=wcfg) for cid in used}
+            revs = None
+            if k in ("ttl", "cache_as_input", "workload"):
+                revs = provider_rows(snapshot, model_key, wv_x, ttl_x, cai)
+            dl = {}
+            for i, p, b in base:
+                c = cfgs[b["config"]]
+                C = c["cost"][term][level]["usd_per_hour"] * rent_f
+                L = limits[b["config"]]
+                R = p["usd_per_session_hour"] if revs is None else revs[i]["usd_per_session_hour"]
+                dl[i] = (None if (L is None or not R) else
+                         math.log((C / L / R) / b["u_star"]))
+            rows.append({"value": x, "limit": {cid: limits[cid] for cid in sorted(used)},
+                         "dln": dl})
+        # per endpoint: largest |ln change|, and the elasticity of a ±20% pair
+        mags, els = [], []
+        for i, _, _ in base:
+            ds = [r["dln"][i] for r in rows]
+            if any(d is None for d in ds):
+                per_p[i][a["key"]] = None
+                continue
+            mag = max(abs(d) for d in ds)
+            per_p[i][a["key"]] = mag
+            mags.append(mag)
+            if not a.get("switch") and len(ds) == 2:
+                lo, hi = a["values"]
+                ref = a["ref"]
+                els.append((ds[1] - ds[0]) / (math.log(hi / ref) - math.log(lo / ref)))
+        out_a.append({"key": a["key"], "label": a["label"], "kind": a["kind"],
+                      "reference": a["ref"], "values": a["values"],
+                      "switch": bool(a.get("switch")),
+                      "median_abs_dln": statistics.median(mags) if mags else None,
+                      "median_elasticity": statistics.median(els) if els else None,
+                      "limit_by_value": [r["limit"] for r in rows],
+                      "endpoints_without_value": sum(1 for i, _, _ in base
+                                                     if per_p[i].get(a["key"]) is None)})
+    out_a.sort(key=lambda a: -(a["median_abs_dln"] or 0.0))
+    provs = []
+    for i, p, b in base:
+        vals = {k: v for k, v in per_p[i].items() if v is not None}
+        # rent and the directly scaled limit move every u* alike; the
+        # endpoint's own answer is the strongest of the others
+        own = {k: v for k, v in vals.items() if k not in ("rent", "limit")}
+        top = max(own, key=own.get) if own else None
+        provs.append({"provider": p["provider"], "tag": p.get("tag"), "source": p["source"],
+                      "config": b["config"], "u_star": b["u_star"],
+                      "most_sensitive_to": top, "abs_dln": own.get(top) if top else None,
+                      "abs_dln_by_assumption": per_p[i]})
+    return {"term": term, "level": level,
+            "held": "each endpoint's cheapest configuration at this rent level",
+            "assumptions": out_a, "providers": provs}
 
 
 # ---------------------------------------------------------------- report
@@ -711,28 +1035,47 @@ def render(res: dict) -> str:
     wv = res["workload"]
     t = res["term"]
     out = [f"{res['model_name']} ({res['model']}): GPU rent against provider prices, USD"]
+    out.append(res["caveat"])
+    if res.get("workload_note"):
+        out.append(f"WORKLOAD {res['workload_name']}: {res['workload_note']}")
     out.append("")
     out.append("assumptions")
     out += [f"  - {a}" for a in res["assumptions"]]
-    mix = wv["mix_at_miss_rate"]
+    mix, bil = wv["mix_at_miss_rate"], wv["mix_billed"]
     out.append(f"  - per live session-hour: {wv['requests_per_session_hour']:.0f} requests, "
                f"{wv['tokens_per_request']:,.0f} tokens each (prompt {wv['prompt_mean']:,.0f}, "
-               f"output {wv['output']:.0f}); mix {mix['fresh']:.1%} fresh input, "
-               f"{mix['cached']:.1%} cached input, {mix['output']:.1%} output "
-               f"at the workload's {wv['miss_rate']:.0%} miss rate")
+               f"output {wv['output']:.0f})")
+    out.append(f"  - mix, as shares of every prompt token plus the output: capacity side, at "
+               f"the model's {mix['miss']:.0%} miss rate, {mix['fresh']:.1%} fresh input, "
+               f"{mix['cached']:.1%} cached input, {mix['output']:.1%} output; billing "
+               f"side, at the assumed {bil['cache_ttl_s']:g} s lifetime, {bil['miss']:.2%} "
+               f"misses, {bil['fresh']:.1%} fresh, {bil['cached']:.1%} cached, "
+               f"{bil['output']:.1%} output")
     for s in res["snapshot"]["price_sources"]:
         out.append(f"  - prices: {s['file']} ({s['id']}, fetched {s['fetched']})")
     fx = res["snapshot"]["rental_fx"] or {}
     out.append(f"  - rent: {res['snapshot']['rental_file']}"
                + (f"; EUR listings converted at {fx.get('usd_per_eur')} USD/EUR "
                   f"(ECB {fx.get('date')})" if fx.get("usd_per_eur") else ""))
+    oth = res["rent_other_tiers"]
+
+    def band(lv):
+        if not lv["n_sellers"]:
+            return "no seller record"
+        return (f"${lv['low']:.2f} / ${lv['median']:.2f} / ${lv['high']:.2f} over "
+                f"{lv['n_sellers']} seller{'s' if lv['n_sellers'] != 1 else ''}")
+
+    out.append(f"    per GPU-hour, low / median / high: {res['rent_tiers']} offers "
+               f"(priced) | {oth['tiers']} offers (beside)")
     for g, terms in res["rent"].items():
         for term, lv in terms.items():
-            if lv["n_sellers"]:
-                out.append(f"    {g} {term}: ${lv['low']:.2f} / ${lv['median']:.2f} / "
-                           f"${lv['high']:.2f} per GPU-hour over {lv['n_sellers']} sellers")
-            else:
-                out.append(f"    {g} {term}: no seller record")
+            months = (f"; commitments of {', '.join(f'{m:g}' for m in lv['commit_months'])}"
+                      " months" if lv["commit_months"] else "")
+            extra = "".join([f"; sold out: {', '.join(lv['sold_out'])}" if lv["sold_out"] else "",
+                             f"; GB300 left out: {', '.join(lv['gb300_excluded'])}"
+                             if lv["gb300_excluded"] else ""])
+            out.append(f"    {g} {term}: {band(lv)} | {band(oth['rent'][g][term])}"
+                       + months + extra)
     if res["chars_per_token"] is None:
         out.append("  - per-character columns omitted: no chars_per_token.json for this model")
     out.append("")
@@ -754,19 +1097,25 @@ def render(res: dict) -> str:
             cells.append(f"{_usd(cm['median']['at'][k]['usd_per_mtok_mixed'])} "
                          f"[{lo:.2f}-{hi:.2f}]".rjust(18))
         e = c["error"]
-        et = ("unchecked" if e["status"] == "unchecked" else
-              f"{e['limit_low']}-{e['limit_high']}"
-              + ("" if e["binding_status"] == "checked" else "*"))
+        et = ("unchecked" if e["binding_status"] == "unchecked" else
+              f"{e['limit_low']}-{e['limit_high']}")
         out.append(f"  {c['id']:22} {c['limit']:>6} {c['binding']:10} {et:10} "
                    + " ".join(cells))
     for s in res["skipped_configs"]:
         out.append(f"  {s['id']:22} not priced: {s['why']}")
-    out.append("  error: the limit re-predicted under this model's measured errors "
-               "(docs/accuracy.md); * the binding quantity itself has no row; "
-               "unchecked: no row for this model")
+    out.append("  error: the limit re-predicted under this model's measured errors on the "
+               "binding quantity (docs/accuracy.md); unchecked: no measurement of the "
+               "binding quantity for this model (capacity unchecked)")
     out.append("")
-    out.append(f"providers: price per live session-hour and per million mixed tokens; "
-               f"u* at low / median / high rent, {t}, cheapest configuration")
+    out.append(f"providers: {res['n_rows']} endpoint/tier rows from {res['n_providers']} "
+               "provider names (regions, speed tiers, list and current prices of one "
+               "provider are separate rows, not independent sellers)"
+               + ("; a single provider" if res["n_providers"] == 1 else ""))
+    if res.get("model_note"):
+        out.append(f"  note: {res['model_note']}")
+    out.append(f"  price per live session-hour and per million mixed tokens; u* at low / "
+               f"median / high rent, {t}, cheapest configuration; err: u* at the "
+               "measured-error limits, or capacity unchecked")
     head = (f"  {'provider':26} {'in':>6} {'out':>6} {'cache':>6} {'$/s-h':>7} {'$/Mmix':>7} "
             f"{'u* low':>7} {'median':>7} {'high':>7} {'err':>11} {'ctx':>6} {'maxout':>7} {'quant':>8}")
     out.append(head)
@@ -774,9 +1123,9 @@ def render(res: dict) -> str:
         b = p["u_star"][t]
         us = [(b.get(lv) or {}).get("u_star") for lv in LEVELS]
         me = b.get("model_error") or {}
-        err = ("unchecked" if me.get("status") == "unchecked" else
-               f"{me['u_star_at_limit_high']:.2f}-{me['u_star_at_limit_low']:.2f}"
-               if me else "—")
+        err = (f"{me['u_star_at_limit_high']:.2f}-{me['u_star_at_limit_low']:.2f}"
+               if me.get("status") == "checked" else
+               "unchecked" if me else "—")
         f = p["fidelity"]
         name = f"{p['provider']} ({p['tag']})" if p.get("tag") else p["provider"]
         out.append(f"  {name[:26]:26} {_usd(p['usd_per_mtok_input']):>6} "
@@ -795,6 +1144,9 @@ def render(res: dict) -> str:
                          f"{p['share_requests_over_context']:.2%} of requests longer")
         if p["cache_assumption"].startswith("no cache"):
             notes.append(p["cache_assumption"])
+        lw = (p.get("u_star_listed_window") or {}).get(t)
+        if lw and lw.get("median") is not None:
+            notes.append(f"u* at the listed window's price {lw['median']:.2f} (median rent)")
         out.append(f"  {'':26} {'; '.join(notes)}")
     ch = res["chars_per_token"]
     if ch is not None:
@@ -819,6 +1171,37 @@ def render(res: dict) -> str:
     return "\n".join(out)
 
 
+def render_sensitivity(sens: dict) -> str:
+    out = [f"sensitivity of u* ({sens['term']}, {sens['level']} rent; {sens['held']} held)",
+           "  ranked by the median over endpoints of the largest |ln change in u*|; "
+           "elasticity = d ln u* / d ln x over ±20%"]
+    if not sens["assumptions"]:
+        return "\n".join(out + [f"  {sens.get('note', '')}"])
+    out.append(f"  {'assumption':42} {'variants':>16} {'|ln Δu*|':>9} {'elasticity':>10}")
+    for a in sens["assumptions"]:
+        vals = "/".join(f"{v:g}" if not isinstance(v, bool) else "on" for v in a["values"])
+        ref = a["reference"]
+        if a["kind"] in ("rent", "limit", "decode", "mfu"):
+            vals = "x" + "/".join(f"{v:g}" for v in a["values"])
+        el = "switch" if a["switch"] else (
+            "—" if a["median_elasticity"] is None else f"{a['median_elasticity']:+.2f}")
+        mag = "—" if a["median_abs_dln"] is None else f"{a['median_abs_dln']:.3f}"
+        lbl = a["label"] + ("" if isinstance(ref, bool) or a["kind"] in
+                            ("rent", "limit", "decode", "mfu") else f" ({ref:g})")
+        extra = (f"  [{a['endpoints_without_value']} endpoints: limit below 1]"
+                 if a["endpoints_without_value"] else "")
+        out.append(f"  {lbl[:42]:42} {vals:>16} {mag:>9} {el:>10}{extra}")
+    out.append("")
+    out.append("  per endpoint, the assumption its u* moves most with (rent and the "
+               "limit itself left aside)")
+    for p in sorted(sens["providers"], key=lambda p: p["u_star"]):
+        name = f"{p['provider']} ({p['tag']})" if p.get("tag") else p["provider"]
+        top = p["most_sensitive_to"] or "—"
+        mag = "" if p["abs_dln"] is None else f" |ln Δu*| {p['abs_dln']:.2f}"
+        out.append(f"  {name[:34]:34} u* {p['u_star']:.2f}  {top}{mag}")
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------- CLI
 def cmd_market(args) -> int:
     snap = load_snapshot(args.snapshot)
@@ -829,13 +1212,45 @@ def cmd_market(args) -> int:
         for u in utils:
             if not 0 < u <= 1:
                 raise SystemExit(f"--utilisation {u}: must be in (0, 1]")
+    if args.sensitivity and args.workload != "default":
+        raise SystemExit("--sensitivity ranks the assumptions of the default workload only")
+    ev = evaluator_for(args.workload, args.n_iter)
     res = compare(args.model, snap, term=args.term, gpus=gpus, utilisations=utils,
-                  ttl_s=args.cache_ttl, n_iter=args.n_iter)
+                  ttl_s=args.cache_ttl, evaluator=ev, rent_tiers=args.rent_tiers,
+                  workload_name=args.workload)
+    if args.sensitivity:
+        res["sensitivity"] = sensitivity(res, snap, ev, term=args.term, ttl_s=args.cache_ttl)
     if args.json:
         print(json.dumps(res, indent=1, allow_nan=False, default=_json_default))
     else:
         print(render(res))
+        if args.sensitivity:
+            print()
+            print(render_sensitivity(res["sensitivity"]))
     return 0
+
+
+WORKLOAD_NAMES = ("default", "no-cache")
+
+
+def evaluator_for(name: str, n_iter: int = 400) -> Evaluator:
+    """The evaluator of a named workload: the default, or the no-cache
+    contrast (every request a miss, an explicit scheduler cap)."""
+    if name == "default":
+        return Evaluator(default_workload(), n_iter)
+    if name == "no-cache":
+        return Evaluator(workload_view(no_cache_workload()), n_iter, explicit_cap=True)
+    raise ValueError(f"workload must be one of {WORKLOAD_NAMES}, got {name!r}")
+
+
+def contrast_summary(res: dict) -> dict:
+    """The compact no-cache contrast a page reads beside the default."""
+    return {"workload_note": res["workload_note"], "workload": res["workload"],
+            "configs": [{k: c[k] for k in ("id", "gpu", "tp", "arm", "n_gpu", "limit",
+                                           "binding")} for c in res["configs"]],
+            "providers": [{k: p.get(k) for k in ("provider", "tag", "source",
+                                                 "usd_per_session_hour", "usd_per_mtok_mixed",
+                                                 "u_star")} for p in res["providers"]]}
 
 
 def _json_default(x):
@@ -856,9 +1271,18 @@ def add_subparser(sub) -> None:
     p.add_argument("--json", action="store_true")
     p.add_argument("--utilisation", nargs="*", help="extra utilisations to price, in (0, 1]")
     p.add_argument("--gpu", choices=sorted(M.GPUS), help="one GPU only")
-    p.add_argument("--term", choices=TERMS, default="on-demand")
+    p.add_argument("--term", choices=TERMS, default="on-demand",
+                   help="committed-short: under 3 months; committed-long: 12 months and more")
     p.add_argument("--cache-ttl", type=float, default=CACHE_TTL_DEFAULT,
                    help=f"provider prompt-cache TTL in seconds (default {CACHE_TTL_DEFAULT:g}; "
                         "none is published)")
     p.add_argument("--n-iter", type=int, default=400, help="Monte-Carlo iterations per prediction")
+    p.add_argument("--workload", choices=WORKLOAD_NAMES, default="default",
+                   help="no-cache: every prompt computed fresh and billed at input, a rough "
+                        "contrast (docs/market.md)")
+    p.add_argument("--rent-tiers", choices=tuple(RENT_TIERS), default="managed",
+                   help="offers the priced rent band counts (default managed; the other "
+                        "band is printed beside)")
+    p.add_argument("--sensitivity", action="store_true",
+                   help="also rank the assumptions by how far each moves u*")
     p.set_defaults(fn=cmd_market)
