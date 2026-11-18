@@ -256,3 +256,22 @@ def test_no_cache_contrast_bills_every_prompt_token_at_input(snap):
     c = res["configs"][0]
     cfg = ev.limit("GLM52", c["gpu"], c["tp"], c["arm"])["cfg"]
     assert cfg.deployment.max_num_seqs > 1
+
+
+def test_no_cache_bills_writes_at_input_not_the_cache_write_price():
+    # Alibaba-like sheet: a cache write dearer than input. With nothing
+    # reused, the prompt is billed at input; the default keeps the write price.
+    ep = {"usd_per_mtok_input": 0.15, "usd_per_mtok_output": 0.47,
+          "usd_per_mtok_cache_read": 0.03, "usd_per_mtok_cache_write": 0.20}
+    default, _ = MK._offer(ep, "x", 300.0)
+    fresh, note = MK._offer(ep, "x", 300.0, no_cache=True)
+    assert default.bands[0].cache[0].write == 0.20
+    assert fresh.bands[0].cache[0].write == 0.15
+    assert note.startswith("no cache")
+
+
+def test_empty_sensitivity_renders_its_note():
+    text = MK.render_sensitivity({"term": "committed-short", "level": "median",
+                                  "assumptions": [], "providers": [],
+                                  "note": "no endpoint has a u* here"})
+    assert "no endpoint has a u* here" in text

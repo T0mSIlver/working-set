@@ -500,10 +500,12 @@ def _arms_for(model_key: str, declared: str | None) -> tuple[list[str], str]:
     return priced, f"declared {q}: every priced arm ({', '.join(priced)})"
 
 
-def _offer(ep: dict, where: str, ttl_s: float,
-           cache_as_input: bool = False) -> tuple[A.ApiOffer | None, str]:
+def _offer(ep: dict, where: str, ttl_s: float, cache_as_input: bool = False,
+           no_cache: bool = False) -> tuple[A.ApiOffer | None, str]:
     """An api_cost offer from one endpoint's price sheet, or None with why.
-    `cache_as_input` bills cached tokens at the input price (no discount)."""
+    `cache_as_input` bills cached tokens at the input price (no discount).
+    `no_cache` (every request a miss): nothing is reused, so no cache write is
+    worth paying for and every prompt token is billed at the input price."""
     inp = _need(ep, "usd_per_mtok_input", where)
     outp = _need(ep, "usd_per_mtok_output", where)
     cr = _need(ep, "usd_per_mtok_cache_read", where)
@@ -511,10 +513,12 @@ def _offer(ep: dict, where: str, ttl_s: float,
     if inp is None or outp is None:
         return None, "input or output price not published"
     read = inp if (cr is None or cache_as_input) else cr
-    write = inp if cw is None else cw
+    write = inp if (cw is None or no_cache) else cw
     note = ("cached tokens at the published cache-read price" if cr is not None
             else "no cache-read price: cached tokens billed as input")
-    if cw is not None:
+    if no_cache:
+        note = "no cache: every prompt token billed at the input price"
+    elif cw is not None:
         note += "; cache writes at the published write price"
     band = A.PriceBand(0.0, float(inp), float(outp), (A.CacheOption(ttl_s, float(read),
                                                                      float(write)),))
@@ -541,6 +545,7 @@ def _flags(ep: dict) -> list[str]:
 def provider_rows(snapshot: dict, model_key: str, wv: WorkloadView,
                   ttl_s: float, cache_as_input: bool = False) -> list[dict]:
     rows = []
+    no_cache = wv.wl.invalidation >= 1.0
     for src in snapshot["prices"]:
         for mrow in src["models"]:
             if _need(mrow, "ws_model", src["file"]) != model_key:
@@ -553,11 +558,11 @@ def provider_rows(snapshot: dict, model_key: str, wv: WorkloadView,
                     for k in ("usd_per_mtok_input", "usd_per_mtok_output",
                               "usd_per_mtok_cache_read"):
                         _need(tw, k, f"{where} time_weighted")
-                    listed_offer, _ = _offer(ep, where, ttl_s, cache_as_input)
+                    listed_offer, _ = _offer(ep, where, ttl_s, cache_as_input, no_cache)
                     ep = {**ep, **{k: tw[k] for k in ("usd_per_mtok_input",
                                                        "usd_per_mtok_output",
                                                        "usd_per_mtok_cache_read")}}
-                offer, cache_note = _offer(ep, where, ttl_s, cache_as_input)
+                offer, cache_note = _offer(ep, where, ttl_s, cache_as_input, no_cache)
                 row = {"source": src["source"].get("id", src["file"]), "file": src["file"],
                        "provider": _need(ep, "provider", where), "tag": ep.get("tag"),
                        "usd_per_mtok_input": ep["usd_per_mtok_input"],
@@ -1172,7 +1177,8 @@ def render(res: dict) -> str:
 
 
 def render_sensitivity(sens: dict) -> str:
-    out = [f"sensitivity of u* ({sens['term']}, {sens['level']} rent; {sens['held']} held)",
+    held = sens.get("held", "nothing")
+    out = [f"sensitivity of u* ({sens['term']}, {sens['level']} rent; {held} held)",
            "  ranked by the median over endpoints of the largest |ln change in u*|; "
            "elasticity = d ln u* / d ln x over ±20%"]
     if not sens["assumptions"]:
