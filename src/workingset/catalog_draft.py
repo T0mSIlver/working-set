@@ -325,10 +325,23 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
 
     lt = t.get("layer_types")
     sliding = sum(x in WINDOW_TYPES for x in lt) if isinstance(lt, list) else 0
+    window = None if unused_window else t.get("sliding_window")
+    # Llama-3.2-Vision: cross-attention layers attend the image tokens, so a
+    # text token adds nothing to their cache; their image K/V is per session
+    cross = t.get("cross_attention_layers")
+    cross = len(cross) if isinstance(cross, list) else 0
+    if cross and not layout:
+        attn -= cross
 
     # ---- attention cache ----------------------------------------------------
     if layout:
         d.need("attn_layers", f"{layout}: count the attention layers by hand")
+    elif window and not sliding and not compressed:
+        # no layer_types: the window covers every layer (Mistral-7B-v0.1) or a
+        # pattern in other keys (Gemma 3's sliding_window_pattern)
+        d.need("attn_layers", f"sliding_window {window} with no layer_types to say "
+               f"which of the {n} layers it covers: which ones the prefill "
+               f"quadratic term prices", NOTES["window"])
     elif sliding:
         d.need("attn_layers", f"{attn} full-attention and {sliding} sliding-window "
                f"layers (sliding_window {t.get('sliding_window')!r}): which ones the "
@@ -338,7 +351,8 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
                "prefill quadratic term prices", NOTES["compressed"])
     else:
         d.set("attn_layers", attn, "attention layers"
-              + (f" of {n} ({rec} recurrent)" if rec else ""))
+              + (f" of {n} ({rec} recurrent)" if rec else "")
+              + (f" of {n} ({cross} cross-attention to image tokens)" if cross else ""))
 
     if mla or compressed:
         d.set("kv_heads", 1, "one latent per token: vLLM's MLA path has 1 KV head "
@@ -378,7 +392,6 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
               or any(p.startswith("mtp_dspark") for p, *_ in ck.census))
 
     # ---- recurrent state ----------------------------------------------------
-    window = None if unused_window else t.get("sliding_window")
     if layout:
         d.need("rec_layers", f"{layout}: count the recurrent layers (state-space, "
                f"short-conv, linear-attention) by hand", NOTES["deltanet"])
@@ -393,10 +406,12 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
                "x dtype + conv)", NOTES[kind])
     else:
         d.set("rec_layers", 0, "no linear-attention layers in the config")
-        if window or sliding or compressed or dspark:
+        if window or sliding or compressed or dspark or cross:
             d.need("deltanet_state", "fixed per-session window state"
                    + (f" (sliding_window {window})" if window else "")
-                   + (" (a DSpark drafter keeps latent windows)" if dspark else ""),
+                   + (" (a DSpark drafter keeps latent windows)" if dspark else "")
+                   + (f" ({cross} cross-attention layers keep the image tokens' K/V)"
+                      if cross else ""),
                    NOTES["draft_dspark"] if dspark and not window else NOTES["window"])
         else:
             d.set("deltanet_state", 0.0, "no recurrent layers, no window")

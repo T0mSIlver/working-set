@@ -357,6 +357,26 @@ def test_typed_sliding_layers_stay_windowed_at_any_length():
     assert not {"attn_layers", "kv_bpt", "deltanet_state"} & set(d.fields)
 
 
+def test_cross_attention_layers_hold_no_per_token_cache():
+    """Llama-3.2-11B-Vision: 8 of 40 layers cross-attend the image tokens;
+    the draft counted them in kv_bpt (81,920 for 65,536)."""
+    d = draft(_ck({"cross_attention_layers": [1]}))
+    assert d.fields["attn_layers"][0] == 3 and d.fields["kv_bpt"][0] == 3 * 2 * 16 * 2
+    assert "deltanet_state" not in d.fields
+
+
+@pytest.mark.parametrize("extra", [
+    {"sliding_window": 1024},                                 # Mistral-7B-v0.1
+    {"sliding_window": 1024, "sliding_window_pattern": 6},    # Gemma 3
+])
+def test_a_window_without_layer_types_leaves_the_attention_layers_open(extra):
+    """Gemma-3-12B was drafted attn_layers = 48 though 40 of its layers are
+    sliding-window."""
+    d = draft(_ck(extra))
+    assert not {"attn_layers", "kv_bpt", "deltanet_state"} & set(d.fields)
+    assert "no layer_types to say which" in render(d)
+
+
 def test_cross_layer_attention_gets_no_kv_bpt():
     """Hunyuan's use_cla shares one cache between cla_share_factor layers;
     use_cla false (Hunyuan-1.8B) is plain K/V."""
