@@ -213,7 +213,10 @@ def main() -> None:
         if not eps:
             sys.exit(f"error: {orid} lists no endpoints")
         endpoints = [endpoint_record(e, f"{orid} endpoint {i}", nulls) for i, e in enumerate(eps)]
-        endpoints.sort(key=lambda r: (r["usd_per_mtok_output"], r["usd_per_mtok_input"]))
+        # an endpoint with a null price keeps its null and sorts last
+        endpoints.sort(key=lambda r: tuple(
+            (v is None, v if v is not None else 0.0)
+            for v in (r["usd_per_mtok_output"], r["usd_per_mtok_input"])))
         variants = []
         for vid, vm in sorted(by_id.items()):
             if vid.split(":")[0] == orid and vid != orid:

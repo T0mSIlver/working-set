@@ -112,6 +112,8 @@ to its on-demand rate; their `note` says so.
 | H200, low / median / high | $3.59 / $5.58 / $10.60 (14) | $3.40 / $5.23 / $7.90 (8) | $2.29 / $2.62 / $3.45 (5) |
 | B300, low / median / high | $6.94 / $10.47 / $15.00 (10) | $5.87 / $9.74 / $16.15 (8) | $4.48 / $5.75 / $6.40 (5) |
 
+These count every offer, so a seller with several offers counts several times. `ws market` takes one figure per seller, its cheapest offer: the on-demand medians are then $5.58 (H200) and $10.82 (B300).
+
 The B300 rows count HGX B300 offers only: records whose `instance` names
 GB300 are Grace-Blackwell racks and stay out. Nebius's preemptible "from
 $0.79" and "from $0.99" are floors of a market price and stay out of spot.
