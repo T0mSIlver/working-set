@@ -16,7 +16,7 @@ current median beside the recorded one instead.
 
     uv run scripts/market_gpu_rental.py [data/market/gpu_rental-<date>.json]
 
-Pages are cached under /tmp/claude-1000/ws-market-cache/pages-check/ for the day.
+Pages are cached under ~/.cache/workingset/market/pages-check/ for the day.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-CACHE = Path("/tmp/claude-1000/ws-market-cache/pages-check")
+CACHE = Path.home() / ".cache" / "workingset" / "market" / "pages-check"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 
 # Pages whose prices only a browser shows; listed so a run says what it skipped.

@@ -28,7 +28,7 @@ uv run scripts/market_openrouter.py            # re-uses the cache
 uv run scripts/market_openrouter.py --refresh  # fetches again
 ```
 
-Raw responses are cached in `/tmp/claude-1000/ws-market-cache/openrouter/`
+Raw responses are cached in `~/.cache/workingset/market/openrouter/`
 (`--cache DIR` to change). The file is dated by the fetch of the models list.
 
 `provider_prices.json` holds what providers publish on their own price pages,
@@ -69,7 +69,7 @@ uv run scripts/market_tokenizers.py --hf-cache /models/hub   # reads a local HF 
 uv run scripts/market_tokenizers.py --offline                # fails when a file is missing
 ```
 
-Downloads go to `/tmp/claude-1000/ws-market-cache/tokenizers/<repo>/`
+Downloads go to `~/.cache/workingset/market/tokenizers/<repo>/`
 (`--cache DIR` to change).
 
 Characters per token, 2026-11-18:
