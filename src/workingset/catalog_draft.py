@@ -352,6 +352,7 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     lt = t.get("layer_types")
     sliding = sum(x in WINDOW_TYPES for x in lt) if isinstance(lt, list) else 0
     window = None if unused_window else t.get("sliding_window")
+    chunk = t.get("attention_chunk_size")
     # Llama-3.2-Vision: cross-attention layers attend the image tokens, so a
     # text token adds nothing to their cache; their image K/V is per session
     cross = t.get("cross_attention_layers")
@@ -368,6 +369,13 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
         d.need("attn_layers", f"sliding_window {window} with no layer_types to say "
                f"which of the {n} layers it covers: which ones the prefill "
                f"quadratic term prices", NOTES["window"])
+    elif chunk and not compressed:
+        # Llama 4: the RoPE layers attend within chunks of attention_chunk_size,
+        # the NoPE layers (no_rope_layers 0) globally (vLLM models/llama4.py:251)
+        d.need("attn_layers", f"attention_chunk_size {chunk}: chunked local "
+               f"attention on some of the {n} layers (no_rope_layers says which "
+               f"in Llama 4): which ones the prefill quadratic term prices",
+               NOTES["window"])
     elif sliding:
         d.need("attn_layers", f"{attn} full-attention and {sliding} sliding-window "
                f"layers (sliding_window {t.get('sliding_window')!r}): which ones the "
@@ -434,9 +442,10 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
                "x dtype + conv)", NOTES[kind])
     else:
         d.set("rec_layers", 0, "no linear-attention layers in the config")
-        if window or sliding or compressed or dspark or cross:
+        if window or sliding or chunk or compressed or dspark or cross:
             d.need("deltanet_state", "fixed per-session window state"
                    + (f" (sliding_window {window})" if window else "")
+                   + (f" (attention_chunk_size {chunk})" if chunk else "")
                    + (" (a DSpark drafter keeps latent windows)" if dspark else "")
                    + (f" ({cross} cross-attention layers keep the image tokens' K/V)"
                       if cross else ""),
