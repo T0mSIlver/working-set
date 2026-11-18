@@ -43,6 +43,7 @@ class Row:
     source: str
     date: str
     note: str = ""
+    model: str = ""       # catalogue key, where the row is one model's
 
     @property
     def error(self) -> float:
@@ -113,7 +114,7 @@ def check_rows() -> list[Row]:
         M.MEASURED_POOL_TOKENS_27B_TP2_FP16,
         M.kv_pool_tokens(m27_16, M.TOPOLOGIES["2xH200-TP2"]), "tokens",
         "vLLM startup log, `GPU KV cache size` (docs/scenarios.md, Measured cross-check)",
-        "2026-07-22"))
+        "2026-07-22", model="27B"))
 
     # Weight bytes: the catalogue's config-derived NVFP4 ledger for the
     # 35B-A3B against the per-shard safetensors bytes (research/nvfp4.md 6.1)
@@ -124,7 +125,7 @@ def check_rows() -> list[Row]:
             ("one token's routed experts", 566_238_720, m35.w_route_pertok),
             ("all routed experts", 18_119_639_040, m35.w_route_total)):
         rows.append(Row("Weight bytes", f"Qwen3.6-35B-A3B NVFP4, {what}",
-                        measured, predicted, "bytes", src, "2026-07-27"))
+                        measured, predicted, "bytes", src, "2026-07-27", model="35BA3B"))
 
     # Decode on Blackwell Ultra: the Mistral-Large-4 vLLM recipe on 8×GB300
     # (same HBM size and bandwidth as B300), DSpark on, 8k input
@@ -141,7 +142,7 @@ def check_rows() -> list[Row]:
             f"{n} user{'s' if n > 1 else ''}, 8k context"
             + ("" if n > 1 else " (stated for the 8-user row only)"),
             measured, tok_s_per_user(arm("ML4", "B300", weights), tp8, n, 8_000),
-            "tok/s", src, "2026-10-30", note))
+            "tok/s", src, "2026-10-30", note, model="ML4"))
 
     # Prefill on B300: one 340k-token prompt on Kimi-K3.1-Pro, 8×B300 TP8
     # (research/model_kimi_k31pro.md § 8)
@@ -152,7 +153,7 @@ def check_rows() -> list[Row]:
         15.0, M.idle_cold_ttft(k31, M.topology_grid(1, 8, "B300"), 340_000, M.CHUNK_DEFAULT),
         "s", "vLLM recipe `Kimi-K3.1-Pro.yaml`, pre-release checkpoint, \"~15 s\" "
         "(research/model_kimi_k31pro.md § 8)", "2026-11-05",
-        "the recipe's chunk size is not stated"))
+        "the recipe's chunk size is not stated", model="K31P"))
     return rows
 
 
@@ -250,6 +251,50 @@ def inferencex_curve_rows(recs: list[X.Record]) -> list[Row]:
             tok_s_per_user(m, topo, n, AGENTX_CONTEXT), "tok/s",
             f"InferenceX `{r.id}`", r.published or r.read.isoformat(), note))
     return rows
+
+
+# ------------------------------------------- outside evidence (market)
+
+PROVIDER_PRICES = ROOT / "data" / "market" / "provider_prices.json"
+
+
+def outside_evidence() -> list[str]:
+    """Tokens per second a provider publishes for an endpoint, beside the
+    model's per-user decode range over the configurations the endpoint's
+    declared weights map to (one sequence alone, and at the predicted
+    limit). The provider's hardware, engine and load are unknown, so these
+    never enter the statistics. Only data/market/provider_prices.json is
+    read: the OpenRouter snapshot does not ship."""
+    from workingset import market as MK
+    head = ["## Outside evidence, hardware unknown: not in the statistics", ""]
+    if not PROVIDER_PRICES.exists():
+        return head + [f"`{PROVIDER_PRICES.relative_to(ROOT)}` is not in this checkout.", ""]
+    import json
+    rows = [r for r in json.loads(PROVIDER_PRICES.read_text())["rows"]
+            if r.get("throughput_tok_s")]
+    if not rows:
+        return head + ["No provider price page read on "
+                       f"{json.loads(PROVIDER_PRICES.read_text())['source'].get('read')} "
+                       "publishes a decode speed.", ""]
+    ev = MK.Evaluator(MK.default_workload(), n_iter=200)
+    out = []
+    for r in sorted(rows, key=lambda r: (r["ws_model"], r["provider"])):
+        arms, _ = MK._arms_for(r["ws_model"], r.get("quantization"))
+        speeds = []
+        for c in MK.candidate_configs(r["ws_model"]):
+            if c["arm"] not in arms:
+                continue
+            e = ev.limit(r["ws_model"], c["gpu"], c["tp"], c["arm"])
+            if "pred" not in e or e["pred"].predicted_limit_users < 1:
+                continue
+            d = ev.decode_speeds(e)
+            speeds += [d["n1_tok_s"]] + ([d["at_limit_tok_s"]] if d["at_limit_tok_s"] else [])
+        rng = f"{min(speeds):.0f}–{max(speeds):.0f}" if speeds else "no priced configuration"
+        out.append([f"{_short(r['ws_model'])}, {r['provider']}", f"{r['throughput_tok_s']:.0f}",
+                    rng, r.get("throughput_meaning") or "not stated",
+                    f"{r.get('url', '')} ({r.get('read', '')})"])
+    return head + [table(["endpoint", "published tok/s", "model per-user tok/s",
+                          "what the figure is", "source"], out), ""]
 
 
 # ------------------------------------------------- inputs not taken
@@ -471,6 +516,7 @@ def render() -> str:
         "--vllm-log` reads the reserve, or its three terms, from the start-up log; "
         "the default does not.",
         "",
+        *outside_evidence(),
         "## Excluded",
         "",
         table(["what", "records", "why"], [

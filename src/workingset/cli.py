@@ -569,7 +569,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .calibrate import add_subparser as _add_calibrate
     _add_calibrate(sub)
     from .api_cost import add_subparser as _add_api
+    from .market import add_subparser as _add_market
     _add_api(sub)
+    _add_market(sub)
     from .catalog_draft import add_subparser as _add_catalog
     _add_catalog(sub)
     return ap
