@@ -271,6 +271,11 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     compressed = bool(t.get("compress_ratios"))
     kda = isinstance(t.get("linear_attn_config"), dict)
     heads = t.get("num_attention_heads")
+    if not isinstance(heads, int) or isinstance(heads, bool) or heads <= 0:
+        # SmolVLM2's text_config leaves it to LlamaConfig's default
+        raise ValueError(f"config.json{' text_config' if t is not cfg else ''}: "
+                         f"num_attention_heads is {heads!r}; a model type's "
+                         f"default is not read in its place")
     kvh, kv_how = (None, None) if mla or compressed else kv_heads_of(t)
     hybrid = sorted(k for k, v in t.items() if _HYBRID_KEY.match(k)
                     and v not in (None, False, 0, [], {}))
