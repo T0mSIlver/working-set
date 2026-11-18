@@ -47,7 +47,21 @@ _VISION = re.compile(r"(^|\.)(visual|vision_tower|vision_encoder|vision_model|"
                      r"multi_modal_projector|mm_projector|vision_language_adapter|"
                      r"patch_merger|pre_mm_projector_norm|aligner|"
                      # MiniCPM-V's SigLIP (vpm) and resampler, xgen-mm's perceiver
-                     r"vpm|resampler|vision_tokenizer)\.")
+                     r"vpm|resampler|vision_tokenizer|"
+                     # Molmo's backbone; Gemma 3n/4's and Muse's vision embedders
+                     r"vision_backbone|embed_vision|vision_projection|vision_adapter|"
+                     # Gemma-4-12B's embedder, HyperCLOVAX-Omni's discrete tokenizer
+                     r"vision_embedder|discrete_vision_model)\.")
+# audio and speech towers, and an audio decoder (LFM3-Omni's depth decoder):
+# resident, never in a text decode read
+_AUDIO = re.compile(r"(^|\.)(audio_tower|audio_encoder|audio_model|audio_projector|"
+                    r"embed_audio|speech_embeddings|depth_decoder|codebook_embedding|"
+                    # MiniCPM-o's Whisper (apm) and TTS; HyperCLOVAX-Omni's
+                    r"apm|tts|audio_projection_layer|discrete_audio_model|"
+                    r"video_audio_compressor)\.")
+# config keys that say a checkpoint carries a vision or audio tower
+_TOWER_KEY = re.compile(r"^(vision_config|vision_encoder_config|audio_config|"
+                        r"audio_encoder_config)$")
 _IMAGE_TOKENS = re.compile(r"^image_(start|end|newline|pad)$")
 _DRAFT = re.compile(r"(^|\.)(mtp|mtp_dspark|dspark)(\.|_)")
 # the hashed lookup tables themselves (DeepSeek-V4.1-Flash's Engram embed,
@@ -386,9 +400,12 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
         d.facts.append(f"the index's metadata.total_size {ck.index_total_size:,} B "
                        f"differs from the header sum by {total - ck.index_total_size:+,} B")
     vision = ck.bytes_matching(_VISION.pattern) + ck.bytes_matching(_IMAGE_TOKENS.pattern)
+    audio = ck.bytes_matching(_AUDIO.pattern)
+    towers = sorted(k for k, v in {**cfg, **t}.items() if _TOWER_KEY.match(k) and v)
     draft_b = ck.bytes_matching(_DRAFT.pattern)
     engram = ck.bytes_matching(_ENGRAM.pattern)
-    d.measured.update(total=total, vision=vision, draft=draft_b, engram=engram)
+    d.measured.update(total=total, vision=vision, audio=audio, draft=draft_b,
+                      engram=engram)
     if engram:
         d.need("w_resident", f"the Engram / n-gram tables hold {engram:,} B; vLLM keeps "
                f"them in host memory by default, which leaves {total - engram:,} B "
@@ -397,12 +414,23 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
         d.need("w_engram", f"the offloaded table bytes ({engram:,} B by tensor name)",
                NOTES["engram"])
     else:
-        incl = [f"vision {_gb(vision)}"] * bool(vision) + [f"draft {_gb(draft_b)}"] * bool(draft_b)
+        incl = ([f"vision {_gb(vision)}"] * bool(vision) + [f"audio {_gb(audio)}"] * bool(audio)
+                + [f"draft {_gb(draft_b)}"] * bool(draft_b))
         d.set("w_resident", total, "safetensors header total, every tensor"
               + (f" (incl. {', '.join(incl)})" if incl else ""))
     if vision:
         d.facts.append(f"vision tower and projector: {vision:,} B, resident but never "
                        f"in a text decode read ({NOTES['vision']})")
+    if audio:
+        d.facts.append(f"audio tower and projector: {audio:,} B, resident but never "
+                       f"in a text decode read")
+    # a tower the config names whose tensors no pattern matched: its bytes
+    # are in the total but unmeasured, so no subtraction below is quoted
+    unread = [k for k in towers if (k.startswith("vision") and not vision)
+              or (k.startswith("audio") and not audio)]
+    if unread:
+        d.facts.append(f"the config names {unread} but no tensor name matched a "
+                       f"tower: its bytes are inside the total, unmeasured")
 
     n_exp = next((t[k] for k in _EXPERT_COUNT if t.get(k)), None)
     k_exp = next((t[k] for k in _EXPERT_TOPK if t.get(k)), None)
@@ -431,9 +459,12 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     else:
         d.set("w_route_pertok", 0.0, "dense: no routed experts")
         d.set("w_route_total", 0.0)
-        d.need("w_decode_shared", "dense: the bytes every step reads (all but vision, "
-               f"draft and embedding tables: header total less {vision + draft_b:,} B "
-               f"of vision and draft is {total - vision - draft_b:,})", NOTES["moe"])
+        side = vision + audio + draft_b
+        d.need("w_decode_shared", "dense: the bytes every step reads (all but towers, "
+               "draft and embedding tables"
+               + (f": the tower bytes are unmeasured ({unread})" if unread else
+                  f": header total less {side:,} B of vision, audio and draft is "
+                  f"{total - side:,}") + ")", NOTES["moe"])
         d.need("params_prefill", "decoder-layer params excluding embeddings and lm_head",
                NOTES["prefill"])
 

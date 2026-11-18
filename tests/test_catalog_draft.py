@@ -284,6 +284,25 @@ def test_an_unmodelled_config_is_named(cfg, match):
         draft(ck)
 
 
+def test_audio_towers_and_molmo_vision_are_measured():
+    """Gemma-4-E2B's audio tower and Molmo's vision_backbone were left in
+    the "dense: header total less 0 B of vision" sum."""
+    d = draft(_ck({"vision_config": {"x": 1}, "audio_config": {"x": 1}},
+                  census=[_proj("q_proj", 128),
+                          ("model.audio_tower.layers.#.w.weight", "BF16", [8, 8], 2),
+                          ("model.vision_backbone.image_projector.w", "BF16", [8, 8], 1)]))
+    assert d.measured["audio"] == 2 * 64 * 2 and d.measured["vision"] == 64 * 2
+    assert "unmeasured" not in render(d)
+
+
+def test_a_tower_the_config_names_but_no_tensor_matches_is_said():
+    d = draft(_ck({"vision_config": {"x": 1}},
+                  census=[_proj("q_proj", 128), ("model.eyes.w", "BF16", [8, 8], 1)]))
+    out = render(d)
+    assert "the config names ['vision_config'] but no tensor name matched" in out
+    assert "less 0 B" not in out
+
+
 def test_minicpm_v_towers_count_as_vision():
     d = draft(_ck(census=[_proj("q_proj", 128),
                           ("vpm.encoder.layers.#.mlp.fc1.weight", "F16", [8, 8], 2),
