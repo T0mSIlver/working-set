@@ -384,6 +384,16 @@ export function minTpFor(m, gpuKey){
   return Math.floor(hbmWeights(m) / (gpu.vram - (ACT_RESERVE + (gpu.reserve_extra || 0)))) + 1;
 }
 
+// Why vLLM refuses this TP width for the model, or null (mirrors
+// vllm_tp_refused in model.py). The width is still priced, as an
+// extrapolation; the Split control marks it. research/kv_tp_sharding.md #6.
+export function vllmTpRefused(m, tp){
+  const ok = m.vllm_tp || [];
+  if (!ok.length) return `TP sizes vLLM accepts are not recorded for ${m.name}`;
+  return ok.includes(tp) ? null
+    : `vLLM refuses TP${tp} for ${m.name} (it accepts ${ok.join(', ')}): priced as an extrapolation`;
+}
+
 // topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
 // in scenario_model.py): TP = one engine, weights sharded, one shared cache,
 // 0.90 bandwidth haircut per GPU-count doubling inside the node, then a steeper

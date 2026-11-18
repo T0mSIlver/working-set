@@ -114,6 +114,7 @@ details.assump .body b{color:var(--text); font-weight:600}
    tiles can explain the threshold, but visibly marked as non-viable */
 .seg button.nofit{opacity:.45; text-decoration:line-through solid 1px}
 .seg button.nofit[aria-pressed="true"]{opacity:.8; text-decoration:none}
+.seg button.vllm-refused{text-decoration:underline dotted 1px; text-underline-offset:3px}
 
 /* sliders */
 input[type=range]{
@@ -511,7 +512,7 @@ details.more .more-body{padding:0 0 16px}
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="split-tip" data-tip="TP shards one copy of the weights across a group, so the freed memory becomes one shared cache. DP copies whole groups: throughput scales with the copies, but the cache splits and a returning user is warm only on their own group (sticky routing). Dimmed splits cannot hold the weights.">Split (DP × TP)</span></label>
+          <label class="flabel"><span class="tip" id="split-tip" data-tip="TP shards one copy of the weights across a group, so the freed memory becomes one shared cache. DP copies whole groups: throughput scales with the copies, but the cache splits and a returning user is warm only on their own group (sticky routing). Dimmed splits cannot hold the weights. Underlined ones are TP widths vLLM refuses for this model, priced as an extrapolation.">Split (DP × TP)</span></label>
           <div class="seg" id="seg-split"></div>
         </div>
         <div class="field">

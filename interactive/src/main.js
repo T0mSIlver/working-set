@@ -27,7 +27,7 @@
    nothing but state.js reads another module at evaluation time), but a module
    that state.js depends on must never depend on state.js.
    ========================================================================== */
-import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, tokensPerStep, unionKink } from './config.js';
+import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, tokensPerStep, unionKink, vllmTpRefused } from './config.js';
 import { TTFT_PCTS, requestRate, steadyResident } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
@@ -94,10 +94,13 @@ function renderSplitControl(){
                   : `DP${dp}×TP${tp}`;
     b.setAttribute('aria-pressed', tp === state.tp ? 'true' : 'false');
     const fits = tp >= need;
+    const refused = vllmTpRefused(activeModel(), tp);
     if (!fits) b.classList.add('nofit');
-    b.title = fits
-      ? `${dp} replica group${dp>1?'s':''} × ${tp} GPU${tp>1?'s':''} — one KV cache per group`
-      : `weights need TP ≥ ${need} on ${state.gpu}; a ${tp}-GPU group holds no cache`;
+    else if (refused) b.classList.add('vllm-refused');
+    b.title = !fits
+      ? `weights need TP ≥ ${need} on ${state.gpu}; a ${tp}-GPU group holds no cache`
+      : `${dp} replica group${dp>1?'s':''} × ${tp} GPU${tp>1?'s':''} — one KV cache per group`
+        + (refused ? `. ${refused}` : '');
     b.addEventListener('click', ()=>{
       state.tp = tp;
       enforceConstraints(); syncLabels(); computeAndRender(false);

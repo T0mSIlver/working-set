@@ -65,6 +65,9 @@ def cmd_predict(args) -> int:
     if line:
         print(line, file=sys.stderr if args.json else sys.stdout)
     p = predict(cfg, closed=args.closed, n_iter=args.n_iter, seed=args.seed)
+    refused = M.vllm_tp_refused(cfg.to_model(), cfg.deployment.tensor_parallel)
+    if refused:
+        print(f"warning: {refused}", file=sys.stderr if args.json else sys.stdout)
     if args.json:
         out = {"config": cfg.to_dict(), "predictions": p.to_dict(),
                "system": p.system(), "mode": "closed" if args.closed else "open",

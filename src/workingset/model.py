@@ -377,6 +377,13 @@ class Model:
     # heads, 32-64 of them); the DeepSeek Flash models' windows are the single
     # latent and replicate with the cache (1).
     state_heads: int | None = None
+    # The --tensor-parallel-size values vLLM 0.33 accepts for this model, up
+    # to 16 (its head, KV-head, MLP, expert, vocabulary and linear-attention
+    # widths divide by them; workingset.vllm_tp, research/kv_tp_sharding.md
+    # #6). `ws catalog` prints them; tests check them against each repo's
+    # config.json. Other widths are priced as an extrapolation and flagged
+    # by vllm_tp_refused(). Empty: not recorded.
+    vllm_tp: tuple = ()
     # Largest max_seq_len the study allows for this model (tokens). The
     # workload cap (Workload.cap) may not exceed it — warm_capacity and
     # decode_curves raise otherwise. Owner decision 2026-07: 1,048,576 for
@@ -450,7 +457,7 @@ class Model:
 
 # The constants themselves live in data/catalog.toml, shared with the
 # explorer (scripts/catalog.py writes interactive/src/catalog.js from it).
-_CATALOG_TUPLES = ("nvfp4_w", "kv_hopper_fp8")
+_CATALOG_TUPLES = ("nvfp4_w", "kv_hopper_fp8", "vllm_tp")
 
 
 def _model_from_catalog(key: str, row: dict) -> Model:
@@ -909,6 +916,20 @@ def tp_efficiency(tp: int, nvlink_domain: int = 8) -> float:
     if tp > nvlink_domain:
         eff *= CROSS_DOMAIN_EFFICIENCY ** np.log2(tp / nvlink_domain)
     return float(eff)
+
+
+def vllm_tp_refused(model: Model, tp: int) -> str | None:
+    """Why the topology's TP width is not one vLLM accepts for `model`, or
+    None when it is. The study still prices such a width (an extrapolation);
+    callers print this so a reader knows no vLLM deployment matches it."""
+    if not model.vllm_tp:
+        return (f"{model.name}: the TP sizes vLLM accepts are not recorded "
+                f"(catalog vllm_tp); TP{tp} not checked")
+    if tp in model.vllm_tp:
+        return None
+    sizes = ", ".join(map(str, model.vllm_tp))
+    return (f"vLLM refuses TP{tp} for {model.name} (it accepts {sizes}): "
+            f"priced as an extrapolation")
 
 
 def min_tp_for(model: Model, gpu: str = "H200") -> int:

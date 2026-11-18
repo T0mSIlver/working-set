@@ -2,7 +2,7 @@ import { CONFIG, tokensPerStep } from './config.js';
 import { prefillChunk } from './prefill.js';
 import { p_sub } from './workload.js';
 import { currentTopo, ramPerCache, state } from './state.js';
-import { dcpSize, kvReplication } from './config.js';
+import { dcpSize, kvReplication, vllmTpRefused } from './config.js';
 import { esc, fmt } from './svg.js';
 import { activeModel, fitHintFor, lastSteady, lastStress, lastWarmCur } from './render.js';
 import { PLANNER_LABEL } from './planner.js';
@@ -82,11 +82,10 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   // default) or keep a full copy each (plain TP, the "Replicated" arm)
   const dcp = dcpSize(m0, topo), [rKv] = kvReplication(m0, topo);
   if (dcp > 1) lines.splice(2, 0, `  --decode-context-parallel-size ${dcp}`);
-  // a width the KV heads neither divide nor are divided by is one vLLM
-  // refuses outright (TP6 on 4 heads); the page prices it as sharded, an
+  // a width vLLM refuses for this model (heads, KV heads, MLP, expert or
+  // vocabulary widths that do not divide; catalogue vllm_tp) is priced as an
   // extrapolation this recipe cannot realize
-  const heads = m0.kv_heads || 1;
-  const illegalTp = topo.tp > 1 && (topo.tp % heads !== 0) && (heads % topo.tp !== 0);
+  const tpRefused = vllmTpRefused(m0, topo.tp);
   // speculative decoding under DCP was still in development in vLLM at the
   // cited date (2026-08-07): never emit the two flags together — except on a
   // model whose recipe validates the pair (spec_with_dcp)
@@ -106,7 +105,7 @@ export function renderDeployCard(op, model, topo, wl, mo, decodeUsers){
   if (specOn && !specBlocked) cmts.push(`# speculative decoding modelled at ${tps} tokens per step (${specDrafts} drafts at acceptance ${state.acc.toFixed(3)}${dspark?', DSpark':''})`);
   for (const r of rules) if (r.note && r.after_spec) cmts.push(`# ${r.note}`);
   if (specBlocked) cmts.push(`# NOT EMITTED: --speculative-config — the page prices ${specDrafts} draft tokens, but vLLM's DCP path had no speculative-decoding support as of 2026-08; set Draft tokens to 0 for a recipe that matches, or choose Replicated`);
-  if (illegalTp) cmts.push(`# TP${topo.tp} is not a width vLLM accepts for ${heads} KV heads (tp must divide the heads or the heads divide tp): the page prices this as if the cache sharded — an extrapolation no command realizes`);
+  if (tpRefused) cmts.push(`# ${tpRefused}; no command realizes this width`);
   if (eagle) cmts.push(`# the modelled ${tps} tokens per step assume an EXTERNAL EAGLE-style draft (no MTP module; its bytes are unpriced)`);
   if (state.ram>0) cmts.push(`# --kv-offloading-size is GiB per group${dp>1?` (${fmt(state.ram,0)} GiB total across ${dp} groups)`:''}; a storage tier — restore latency unpriced`);
   deployCmdText = lines.join(' \\\n') + (cmts.length ? '\n'+cmts.join('\n') : '');

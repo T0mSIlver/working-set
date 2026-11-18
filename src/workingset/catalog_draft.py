@@ -280,6 +280,7 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16) -> Draft:
     d.tp_ok = accepted_tps(facts, tp_max)
     d.tp_refused = {tp: tp_refusals(facts, tp) for tp in range(1, tp_max + 1)
                     if tp not in d.tp_ok}
+    d.set("vllm_tp", tuple(d.tp_ok), f"TP sizes vLLM {VLLM_VERSION} accepts, of 1..{tp_max}")
     padded = pad_vocab(facts.vocab)
     d.facts.append(f"vocabulary {facts.vocab:,}"
                    + (f" (vLLM pads it to {padded:,})" if padded != facts.vocab else ""))
@@ -289,6 +290,8 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16) -> Draft:
 
 
 def _val(v) -> str:
+    if isinstance(v, tuple):
+        return "[" + ", ".join(map(str, v)) + "]"
     if isinstance(v, str):
         return f'"{v}"'
     if isinstance(v, float):
@@ -306,10 +309,8 @@ def render(d: Draft) -> str:
         out.append(f"{line:<32} # {c}" if c else line)
     for line in d.facts:
         out.append(f"# {line}")
-    ok = ", ".join(map(str, d.tp_ok))
-    out.append(f"# vLLM {VLLM_VERSION} accepts --tensor-parallel-size {ok}")
     if d.tp_refused:
-        out.append("#   refuses " + ", ".join(map(str, d.tp_refused)))
+        out.append(f"# vLLM {VLLM_VERSION} refuses " + ", ".join(map(str, d.tp_refused)))
     for tp, why in d.tp_refused.items():
         if tp <= 8:   # one node: the widths a deployment of this study can pick
             out.append(f"#   {tp}: {'; '.join(why)}")

@@ -150,10 +150,12 @@ indexers, vision towers). An accepted size is necessary, not sufficient.
 
 **Result on the catalogue (2026-11-18):** within one 8-GPU node vLLM
 accepts TP 1, 2, 4 and 8 for all eleven models and refuses 3, 5, 6 and 7 for
-every one of them (`tests/test_catalog_draft.py`). The explorer offers the
-odd widths (any divisor of 1–8 GPUs) and prices them as an extrapolation;
-§ 3 already says vLLM refuses them. The study's DCP layout
-(`dcp_size`) passes vLLM's DCP rules at every accepted width.
+every one of them (`tests/test_catalog_draft.py`). The catalogue records
+the accepted sizes as `vllm_tp`. The explorer's Split control still offers
+the odd widths (any divisor of 1–8 GPUs) and prices them as an
+extrapolation, as § 3 says; it underlines them, the deploy recipe says vLLM
+refuses them, and `ws predict` warns. The study's DCP layout (`dcp_size`)
+passes vLLM's DCP rules at every accepted width.
 
 ## Sources
 
