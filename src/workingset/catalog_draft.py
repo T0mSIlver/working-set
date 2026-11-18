@@ -22,7 +22,7 @@ from datetime import date
 
 from .hf import Checkpoint, HFError, load_fixture, read_repo, save_fixture
 from .provenance import MODEL_QUANTITIES
-from .vllm_tp import (VLLM_VERSION, accepted_tps, pad_vocab, text_config,
+from .vllm_tp import (VLLM_VERSION, accepted_tps, kv_heads_of, pad_vocab, text_config,
                       tp_facts, tp_refusals)
 
 # layer_types values: attention layers (each keeps a per-token cache) and
@@ -40,7 +40,9 @@ _CACHE_KEY = re.compile(
 
 _VISION = re.compile(r"(^|\.)(visual|vision_tower|vision_encoder|vision_model|"
                      r"multi_modal_projector|mm_projector|vision_language_adapter|"
-                     r"patch_merger|pre_mm_projector_norm|aligner)\.")
+                     r"patch_merger|pre_mm_projector_norm|aligner|"
+                     # MiniCPM-V's SigLIP (vpm) and resampler, xgen-mm's perceiver
+                     r"vpm|resampler|vision_tokenizer)\.")
 _IMAGE_TOKENS = re.compile(r"^image_(start|end|newline|pad)$")
 _DRAFT = re.compile(r"(^|\.)(mtp|mtp_dspark|dspark)(\.|_)")
 # the hashed lookup tables themselves (DeepSeek-V4.1-Flash's Engram embed,
@@ -142,6 +144,100 @@ def _layer_counts(t: dict) -> tuple:
     return n, 0, []
 
 
+# per-layer attention projections in the shard headers: separate query and
+# key, or one packed q/k/v matrix (Phi-3 qkv_proj, Falcon query_key_value,
+# MPT / Phi-1 Wqkv, GPT-2 c_attn, which is a Conv1D stored [in, out])
+_Q_PROJ = re.compile(r"\.(q_proj|query)\.weight$")
+_K_PROJ = re.compile(r"\.(k_proj|key)\.weight$")
+_QKV_PROJ = re.compile(r"\.(qkv_proj|query_key_value|Wqkv|c_attn)\.weight$")
+# keys that name a layer count where num_hidden_layers is absent
+_LAYER_KEYS = ("num_hidden_layers", "n_layers", "n_layer", "num_layers",
+               "num_transformer_layers", "num_decoder_layers", "n_layers_decoder")
+# keys and model types of a state-space or RNN model with no attention heads
+_SSM = re.compile(r"(mamba|rwkv|ssm|xlstm|hyena|retnet)", re.I)
+
+
+def _refuse_unmodelled(cfg: dict, t: dict) -> None:
+    """Stop, naming the architecture, on a model this command has no terms for."""
+    mt = t.get("model_type") or cfg.get("model_type")
+    if cfg.get("is_encoder_decoder") or t.get("is_encoder_decoder"):
+        raise ValueError(f"config.json: an encoder-decoder model (model_type {mt!r}, "
+                         f"is_encoder_decoder): `ws catalog` models decoder-only "
+                         f"checkpoints")
+    if not t.get("num_attention_heads") and (
+            _SSM.search(str(mt)) or any(_SSM.match(k) for k in t)):
+        keys = sorted(k for k in t if _SSM.match(k))[:4]
+        raise ValueError(f"config.json: a state-space model with no attention heads "
+                         f"(model_type {mt!r}, keys {keys}): `ws catalog` has no "
+                         f"terms for its state; fill the table by hand")
+
+
+def _no_layer_count(cfg: dict, t: dict) -> str:
+    where = "config.json text_config" if t is not cfg else "config.json"
+    found = {k: t[k] for k in _LAYER_KEYS if k in t}
+    if found:
+        return (f"{where}: no num_hidden_layers; it has {found}, a layer count "
+                f"under a name this command does not read")
+    nested = sorted(k for k, v in cfg.items() if isinstance(v, dict) and
+                    any(x in v for x in _LAYER_KEYS))
+    return (f"{where}: no layer count (tried {list(_LAYER_KEYS)})"
+            + (f"; nested configs {nested} have one" if nested else "")
+            + (f"; text_config holds only {sorted(t)[:8]}" if t is not cfg else ""))
+
+
+def _proj_rows(ck: Checkpoint, rx: re.Pattern, layers: int) -> set:
+    """Output widths of the matching decoder projections (vision, draft
+    excluded). When they differ, the width found once per attention layer is
+    the decoder's: another tower's projections come in other counts."""
+    rows: dict = {}
+    for pat, _dt, shape, n in ck.census:
+        if rx.search(pat) and len(shape) == 2 and not (
+                _VISION.search(pat) or _DRAFT.search(pat)):
+            w = shape[1] if pat.endswith("c_attn.weight") else shape[0]
+            rows[w] = rows.get(w, 0) + n
+    if len(rows) > 1:
+        per_layer = {w for w, n in rows.items() if n == layers}
+        if len(per_layer) == 1:
+            return per_layer
+    return set(rows)
+
+
+def _head_dim(t: dict, ck: Checkpoint, heads: int, kvh: int, attn: int) -> tuple:
+    """(head size, how it was read) or (None, why not).
+
+    The key projection is kvh x head size rows; a packed q/k/v matrix is
+    (heads + 2 kvh) x head size. A config head_dim is checked against them;
+    without one the head size is measured from them, never assumed to be
+    hidden_size / heads."""
+    cfg_hd = t.get("head_dim")
+    q, k, qkv = (_proj_rows(ck, _Q_PROJ, attn), _proj_rows(ck, _K_PROJ, attn),
+                 _proj_rows(ck, _QKV_PROJ, attn))
+    for name, r in (("query", q), ("key", k), ("packed qkv", qkv)):
+        if len(r) > 1:
+            return None, f"the {name} projections have several widths {sorted(r)}"
+    if k:
+        (rk,) = k
+        meas, how = rk / kvh, f"key projection {rk} rows / {kvh} KV heads"
+        if not cfg_hd and q and q != {heads * meas}:
+            return None, (f"{how} = {meas:g} but the query projection has "
+                          f"{min(q)} rows for {heads} heads")
+    elif qkv:
+        (r,) = qkv
+        meas, how = r / (heads + 2 * kvh), f"packed qkv {r} rows / ({heads} + 2 x {kvh}) heads"
+    else:
+        meas = how = None
+    if meas is not None and meas != int(meas):
+        return None, f"{how} is not a whole number"
+    if isinstance(cfg_hd, int) and cfg_hd > 0:
+        if meas is not None and meas != cfg_hd:
+            return None, f"config head_dim {cfg_hd} but {how} = {meas:g}"
+        return cfg_hd, "head_dim"
+    if meas is None:
+        return None, (f"head_dim is {cfg_hd!r} and no q/k or packed qkv projection "
+                      f"in the shard headers to measure it")
+    return int(meas), f"measured: {how} (no head_dim in config)"
+
+
 def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
           read_on: str | None = None) -> Draft:
     cfg = ck.config
@@ -149,9 +245,10 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     d = Draft(ck.repo, ck.revision, key, read_on=read_on or date.today().isoformat())
     d.set("name", ck.repo.split("/")[-1], "the repo name: write the catalogue's display form")
 
+    _refuse_unmodelled(cfg, t)
     n = t.get("num_hidden_layers")
     if not isinstance(n, int) or n <= 0:
-        raise ValueError(f"config.json: num_hidden_layers is {n!r}")
+        raise ValueError(_no_layer_count(cfg, t))
     d.set("layers", n, "num_hidden_layers")
     attn, rec, unknown = _layer_counts(t)
 
@@ -166,8 +263,8 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     mla = t.get("kv_lora_rank") is not None
     compressed = bool(t.get("compress_ratios"))
     kda = isinstance(t.get("linear_attn_config"), dict)
-    heads, kvh, hd = (t.get("num_attention_heads"), t.get("num_key_value_heads"),
-                      t.get("head_dim"))
+    heads = t.get("num_attention_heads")
+    kvh, kv_how = (None, None) if mla or compressed else kv_heads_of(t)
     hybrid = sorted(k for k, v in t.items() if _HYBRID_KEY.match(k)
                     and v not in (None, False, 0, [], {}))
     # what stops the layer census: unknown layer types, or a hybrid layout in
@@ -192,20 +289,21 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     if mla or compressed:
         d.set("kv_heads", 1, "one latent per token: vLLM's MLA path has 1 KV head "
               "(config/model.py:1673), replicated under plain TP")
-    elif isinstance(kvh, int):
-        d.set("kv_heads", kvh, f"GQA {heads}/{kvh}" if kvh != heads else "MHA")
     else:
-        d.need("kv_heads", f"num_key_value_heads is {kvh!r}")
+        d.set("kv_heads", kvh, (f"GQA {heads}/{kvh}" if kvh != heads else "MHA")
+              + ("" if kv_how == "num_key_value_heads" else f": {kv_how}"))
 
     standard = not (layout or cache_keys or mla or compressed)
-    if standard and isinstance(hd, int) and hd > 0 and isinstance(kvh, int):
+    hd, hd_how = _head_dim(t, ck, heads, kvh, attn) if standard else (None, None)
+    if standard and hd:
         d.set("attn_d", heads * hd, f"= {heads} * {hd}")
         d.set("kv_bpt", attn * kvh * hd * 2,
-              f"{attn} attn layers x {kvh} KV heads x {hd} x 2(K,V) x 1B (fp8 KV)")
+              f"{attn} attn layers x {kvh} KV heads x {hd} x 2(K,V) x 1B (fp8 KV)"
+              + (f"; head size {hd_how}" if hd_how != "head_dim" else ""))
     else:
         why = (layout if layout
                else f"cache fields {cache_keys}" if cache_keys
-               else f"head_dim is {hd!r}" if standard
+               else hd_how if standard
                else "MLA latent cache")
         note = (NOTES["compressed"] if compressed else NOTES["mla"] if mla
                 else NOTES["kv_tp"])

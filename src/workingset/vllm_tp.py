@@ -42,6 +42,32 @@ class TPFacts:
     linear_heads: dict            # name -> linear-attention head count
 
 
+def kv_heads_of(t: dict) -> tuple:
+    """(KV head count, the config fact it comes from) of a non-MLA text config.
+
+    Falcon names it num_kv_heads under new_decoder_architecture and has one
+    with multi_query (vLLM models/falcon.py:116-121). An absent or null
+    num_key_value_heads is one per query head: transformers' configs set it
+    so (configuration_llama.py:89, configuration_phi.py:85 in 5.20.2), and
+    vLLM reads that config."""
+    heads = t.get("num_attention_heads")
+    if t.get("model_type") == "falcon":
+        if t.get("new_decoder_architecture"):
+            kv, how = t.get("num_kv_heads"), "num_kv_heads (Falcon new_decoder_architecture)"
+        elif t.get("multi_query", True):
+            kv, how = 1, "Falcon multi_query: one KV head"
+        else:
+            kv, how = heads, "Falcon without multi_query: one KV head per query head"
+    elif t.get("num_key_value_heads") is None:
+        kv, how = heads, ("num_key_value_heads is " + ("null" if "num_key_value_heads" in t
+                          else "absent") + ": one per query head (MHA)")
+    else:
+        kv, how = t["num_key_value_heads"], "num_key_value_heads"
+    if not isinstance(kv, int) or isinstance(kv, bool) or kv <= 0:
+        raise ValueError(f"config.json: the KV head count ({how}) is {kv!r}")
+    return kv, how
+
+
 def tp_facts(config: dict) -> TPFacts:
     t = text_config(config)
     for k in ("num_attention_heads", "vocab_size"):
@@ -55,12 +81,7 @@ def tp_facts(config: dict) -> TPFacts:
     # alone is used here: a type missing from 0.33's list (a model shipped in
     # its own image) is served by that image's MLA path.
     mla = t.get("kv_lora_rank") is not None or bool(t.get("compress_ratios"))
-    if mla:
-        kv = None
-    else:
-        kv = t.get("num_key_value_heads", t["num_attention_heads"])
-        if not isinstance(kv, int) or kv <= 0:
-            raise ValueError(f"config.json: num_key_value_heads is {kv!r}")
+    kv = None if mla else kv_heads_of(t)[0]
     ffn = {k: t[k] for k in ("intermediate_size", "moe_intermediate_size",
                              "shared_expert_intermediate_size")
            if isinstance(t.get(k), int) and t[k] > 0}

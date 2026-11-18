@@ -199,6 +199,86 @@ def test_an_unused_sliding_window_does_not_withhold_the_cache():
     assert "kv_bpt" not in d.fields and "deltanet_state" not in d.fields
 
 
+def _proj(name, rows, cols=128, n=4):
+    return (f"model.layers.#.self_attn.{name}.weight", "BF16", [rows, cols], n)
+
+
+@pytest.mark.parametrize("extra, census, kv_heads, hd", [
+    # Llama-style separate projections, no head_dim (Mistral-7B, Yi, SmolLM2)
+    ({}, [_proj("q_proj", 128), _proj("k_proj", 32)], 2, 16),
+    # Phi-3: packed qkv_proj, no num_key_value_heads (MHA)
+    ({"num_key_value_heads": None}, [_proj("qkv_proj", (8 + 16) * 16)], 8, 16),
+    # Falcon-7B: multi_query, packed query_key_value
+    ({"model_type": "falcon", "multi_query": True, "num_key_value_heads": None},
+     [("transformer.h.#.self_attention.query_key_value.weight", "BF16", [160, 128], 4)],
+     1, 16),
+    # Falcon-40B: new_decoder_architecture names num_kv_heads
+    ({"model_type": "falcon", "new_decoder_architecture": True, "num_kv_heads": 2,
+      "num_key_value_heads": None},
+     [("transformer.h.#.self_attention.query_key_value.weight", "BF16", [192, 128], 4)],
+     2, 16),
+    # GPT-2 Conv1D c_attn stored [in, out]
+    ({"num_key_value_heads": None},
+     [("transformer.h.#.attn.c_attn.weight", "BF16", [128, 3 * 128], 4)], 8, 16),
+    # another tower's projections, other width and count: the decoder's are
+    # the ones found once per layer (MiniCPM-V's SigLIP before vpm was named)
+    ({}, [_proj("q_proj", 128), _proj("k_proj", 32),
+          ("tower.layers.#.self_attn.q_proj.weight", "BF16", [72, 72], 3),
+          ("tower.layers.#.self_attn.k_proj.weight", "BF16", [72, 72], 3)], 2, 16),
+])
+def test_head_size_is_measured_from_the_projections(extra, census, kv_heads, hd):
+    """No head_dim in config.json (most 2023-2024 models): the head size
+    comes from the key or packed qkv projection rows in the shard headers,
+    and the KV heads from the config's own convention."""
+    d = draft(_ck({"head_dim": None, **extra}, census))
+    assert d.fields["kv_heads"][0] == kv_heads
+    assert d.fields["kv_bpt"][0] == 4 * kv_heads * hd * 2
+    assert "measured" in d.fields["kv_bpt"][1]
+
+
+def test_a_head_dim_the_projections_contradict_gets_no_kv_bpt():
+    d = draft(_ck({"head_dim": 32}, [_proj("q_proj", 128), _proj("k_proj", 32)]))
+    assert "kv_bpt" not in d.fields
+    assert "config head_dim 32 but key projection 32 rows / 2 KV heads = 16" in render(d)
+
+
+def test_no_head_dim_and_no_projection_gets_no_kv_bpt():
+    d = draft(_ck({"head_dim": None}))
+    assert "kv_bpt" not in d.fields and "no q/k or packed qkv projection" in render(d)
+
+
+def test_a_null_kv_head_count_is_one_per_query_head():
+    """phi-1_5 ships num_key_value_heads: null; transformers reads it as MHA."""
+    d = draft(_ck({"num_key_value_heads": None}))
+    assert d.fields["kv_heads"][0] == 8 and d.fields["kv_bpt"][0] == 4 * 8 * 16 * 2
+
+
+@pytest.mark.parametrize("cfg, match", [
+    # Mamba-Codestral-7B: no attention heads
+    ({"model_type": "mamba2", "num_hidden_layers": 64, "state_size": 128,
+      "vocab_size": 128}, "a state-space model"),
+    # aya-101 (T5)
+    ({**_BASE, "model_type": "t5", "is_encoder_decoder": True}, "an encoder-decoder"),
+    # OLMo-7B, DCLM-7B: n_layers; OpenELM: num_transformer_layers
+    ({**{k: v for k, v in _BASE.items() if k != "num_hidden_layers"}, "n_layers": 32},
+     r"no num_hidden_layers; it has \{'n_layers': 32\}"),
+    # xgen-mm: a text_config stub without sizes
+    ({"text_config": {"model_type": "phi3", "sliding_window": 2047},
+      "vision_encoder_config": {}}, "config.json text_config: no layer count"),
+])
+def test_an_unmodelled_config_is_named(cfg, match):
+    ck = hf.Checkpoint("org/m", "0" * 40, cfg, [], 1, None)
+    with pytest.raises(ValueError, match=match):
+        draft(ck)
+
+
+def test_minicpm_v_towers_count_as_vision():
+    d = draft(_ck(census=[_proj("q_proj", 128),
+                          ("vpm.encoder.layers.#.mlp.fc1.weight", "F16", [8, 8], 2),
+                          ("resampler.kv_proj.weight", "F16", [8, 8], 1)]))
+    assert d.measured["vision"] == 3 * 64 * 2
+
+
 def test_missing_layer_count_stops():
     ck = _mm35()
     del ck.config["text_config"]["num_hidden_layers"]
