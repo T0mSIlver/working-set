@@ -122,12 +122,12 @@ By default the model sizes the pool from the whole HBM less a fixed reserve. The
 
 | conditions | measured | predicted | error | source | date |
 |---|---|---|---|---|---|
-| Mistral-Large-4 FP8, 8×B300 TP8 | 2.380M | 2.690M | +13.0% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
-| Mistral-Large-4 NVFP4, 8×B300 TP8 | 3.600M | 3.884M | +7.9% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
-| Mistral-Large-4 FP8, 8×B300 DCP8 | 18.880M | 21.516M | +14.0% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
-| Mistral-Large-4 NVFP4, 8×B300 DCP8 | 28.760M | 31.074M | +8.0% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
-| Kimi-K3.1-Pro, 8×B300 TP8 | 2.600M | 3.196M | +22.9% | vLLM recipe, no drafter, memory cap not stated, "about" (research/model_kimi_k31pro.md § 8) | 2026-11-05 |
-| Kimi-K3.1-Pro, 8×B300 DCP8 | 18.500M | 25.571M | +38.2% | vLLM recipe, no drafter, memory cap not stated, "about" (research/model_kimi_k31pro.md § 8) | 2026-11-05 |
+| Mistral-Large-4 FP8, 8×B300 TP8 | 2.380M | 2.450M | +2.9% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
+| Mistral-Large-4 NVFP4, 8×B300 TP8 | 3.600M | 3.644M | +1.2% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
+| Mistral-Large-4 FP8, 8×B300 DCP8 | 18.880M | 19.596M | +3.8% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
+| Mistral-Large-4 NVFP4, 8×B300 DCP8 | 28.760M | 29.154M | +1.4% | vLLM recipe, 8×GB300 at `--gpu-memory-utilization 0.85`, no drafter (research/model_mistral_large4.md § 2) | 2026-10-30 |
+| Kimi-K3.1-Pro, 8×B300 TP8 | 2.600M | 2.627M | +1.0% | vLLM recipe, no drafter, memory cap not stated, "about" (research/model_kimi_k31pro.md § 8) | 2026-11-05 |
+| Kimi-K3.1-Pro, 8×B300 DCP8 | 18.500M | 21.017M | +13.6% | vLLM recipe, no drafter, memory cap not stated, "about" (research/model_kimi_k31pro.md § 8) | 2026-11-05 |
 
 ### Engine
 
@@ -167,6 +167,6 @@ The 27B TP2 FP16 log reports 2 × 110.59 GiB of KV memory; its 3,233,564 tokens 
 
 ## Pinned to
 
-- workingset 0.4.3, catalogue `catalog.toml` sha256 `71841f398843`.
+- workingset 0.4.3, catalogue `catalog.toml` sha256 `e551f00c65bf`.
 - The model takes no engine version. Measured rows name their engine: the 27B rows ran vLLM on H200; the recipe rows are vLLM recipes dated as shown; InferenceX rows carry their image tag in `data/external/inferencex.json`.
 - Outside records: calculators 6, deployments 13, inferencex 278, mlperf-inference-v6.0 75, read 2026-11-04.

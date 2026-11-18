@@ -81,8 +81,8 @@ export const CATALOG = {
      "kind": "derived",
      "basis": "measurement",
      "on": "H200",
-     "note": "the H200-solved reserve, plus the H200's measured hidden HBM margin (9.75e9 B) added back",
-     "ref": "research/gpu_b300.md"
+     "note": "the H200-solved reserve, plus the difference in vram - 0.92 x CUDA total between this part and the H200 (21.06e9 B): the H200's hidden HBM margin and vLLM's larger utilisation holdback",
+     "ref": "research/reserve_terms.md"
     },
     "decode": {
      "kind": "measured",
