@@ -430,6 +430,18 @@ def test_chatglm2_reads_its_own_names():
     assert d.fields["layers"] == (4, "num_layers")
 
 
+def test_minimax_attn_type_list_of_all_softmax_is_plain_attention():
+    """MiniMax-M2.5 marks all 62 layers 1 (softmax) in attn_type_list; 0
+    would be lightning attention. It names its 3 MTP modules with
+    use_mtp / num_mtp_modules but ships no draft tensors."""
+    d = draft(_ck({"attn_type_list": [1] * 4, "use_mtp": True, "num_mtp_modules": 3},
+                  [_proj("q_proj", 128), _proj("k_proj", 32)]))
+    assert d.fields["kv_bpt"][0] == 4 * 2 * 16 * 2
+    assert "the config states 3 predict layers" in render(d)
+    d = draft(_ck({"attn_type_list": [0, 1, 0, 1]}))
+    assert "attn_layers" not in d.fields and "attn_type_list" in render(d)
+
+
 def test_missing_layer_count_stops():
     ck = _mm35()
     del ck.config["text_config"]["num_hidden_layers"]

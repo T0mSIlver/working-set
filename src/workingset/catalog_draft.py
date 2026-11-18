@@ -333,7 +333,12 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
                          f"default is not read in its place")
     kvh, kv_how = (None, None) if mla or compressed else kv_heads_of(t)
     hybrid = sorted(k for k, v in t.items() if _HYBRID_KEY.match(k)
-                    and v not in (None, False, 0, [], {}))
+                    and v not in (None, False, 0, [], {})
+                    # MiniMax's attn_type_list: 1 is softmax attention, 0
+                    # lightning (linear) attention; all 1 (M2, M2.5) is plain
+                    and not (k == "attn_type_list" and isinstance(v, list)
+                             and len(v) == t.get("num_hidden_layers")
+                             and set(v) == {1}))
     # what stops the layer census: unknown layer types, or a hybrid layout in
     # keys _layer_counts does not read (then every layer would count as attention)
     layout = (f"layer_types {unknown} are not ones this command knows "
@@ -408,7 +413,9 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
                    "what a decode step reads of the cache (indexer scan, top-k rows)",
                    NOTES["compressed"] if compressed else NOTES["mla"])
 
-    nextn = t.get("num_nextn_predict_layers") or t.get("mtp_num_hidden_layers") or 0
+    nextn = (t.get("num_nextn_predict_layers") or t.get("mtp_num_hidden_layers")
+             # MiniMax-M2: use_mtp with num_mtp_modules
+             or (t.get("num_mtp_modules") if t.get("use_mtp") else 0) or 0)
     dspark = (any(k.startswith("dspark_") for k in t)
               or any(p.startswith("mtp_dspark") for p, *_ in ck.census))
 
