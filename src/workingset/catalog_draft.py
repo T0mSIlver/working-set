@@ -193,8 +193,9 @@ def _refuse_unmodelled(cfg: dict, t: dict) -> None:
             _SSM.search(str(mt)) or any(_SSM.match(k) for k in t)):
         keys = sorted(k for k in t if _SSM.match(k))[:4]
         raise ValueError(f"config.json: a state-space model with no attention heads "
-                         f"(model_type {mt!r}, keys {keys}): `ws catalog` has no "
-                         f"terms for its state; fill the table by hand")
+                         f"(model_type {mt!r}" + (f", keys {keys}" if keys else "")
+                         + "): `ws catalog` has no terms for its state; fill the "
+                         "table by hand")
 
 
 def _no_layer_count(cfg: dict, t: dict) -> str:
