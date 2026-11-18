@@ -569,6 +569,78 @@ def test_a_server_that_counts_no_prompt_tokens_needs_the_template_flag(
     assert rec["plan"]["template_tokens"] is None
 
 
+@pytest.mark.parametrize("stop, rc", [(KeyboardInterrupt, 130),
+                                      (ValueError, 3)])
+def test_a_stopped_run_leaves_the_steps_it_judged(
+        tmp_path, monkeypatch, capsys, stop, rc):
+    real = B.next_sessions
+    calls = []
+
+    def next_sessions(*a, **k):
+        calls.append(1)
+        if len(calls) == 2:             # the first step is judged
+            raise stop("the connection dropped")
+        return real(*a, **k)
+    monkeypatch.setattr(B, "next_sessions", next_sessions)
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "8",
+               rc=rc)
+    assert rec["complete"] is False
+    assert [s["sessions"] for s in rec["steps"]] == [1]
+    assert rec["steps"][0]["rows"] and rec["calibration"]
+    assert not list(tmp_path.glob("run.json.*"))         # no temp file left
+    err = capsys.readouterr().err
+    assert f"the record at {tmp_path / 'run.json'} holds 1 judged step " in err
+    # ws report says it is unfinished, and gives no answer
+    assert main(["report", str(tmp_path / "run.json")]) == 0
+    out = capsys.readouterr().out
+    assert "UNFINISHED" in out and "not an answer" in out
+    assert "serves at least" not in out
+
+
+def test_a_run_stopped_before_its_first_step_keeps_the_calibration(
+        tmp_path, monkeypatch, capsys):
+    def next_sessions(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(B, "next_sessions", next_sessions)
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "8",
+               rc=130)
+    assert rec["complete"] is False and rec["steps"] == []
+    assert rec["speed"]["n"] > 0
+    assert "holds 0 judged steps" in capsys.readouterr().err
+    assert main(["report", str(tmp_path / "run.json")]) == 0
+    assert "UNFINISHED" in capsys.readouterr().out
+
+
+def test_a_finished_run_is_marked_complete_and_reports_its_answer(
+        tmp_path, monkeypatch, capsys):
+    written = []
+    real = B.write_record
+    monkeypatch.setattr(B, "write_record",
+                        lambda path, rec: (written.append(
+                            (rec["complete"], len(rec["steps"]))),
+                            real(path, rec)))
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "2")
+    # after the calibration, after each judged step, then the final write
+    assert written == [(False, 0), (False, 1), (False, 2), (True, 2)]
+    assert rec["complete"] is True and len(rec["steps"]) == 2
+    capsys.readouterr()
+    assert main(["report", str(tmp_path / "run.json")]) == 0
+    out = capsys.readouterr().out
+    assert "UNFINISHED" not in out and "serves at least 2 sessions" in out
+
+
+def test_a_record_from_before_the_mark_reports_as_finished(
+        tmp_path, monkeypatch, capsys):
+    rec = _run(tmp_path, monkeypatch, _endpoint_fake(), "--max-sessions", "1")
+    del rec["complete"]
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(rec))
+    capsys.readouterr()
+    assert main(["report", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "UNFINISHED" not in out and "serves at least 1 session" in out
+
+
 def test_a_server_that_forgets_the_prefix_fails_on_evictions(
         tmp_path, monkeypatch, capsys):
     rec = _run(tmp_path, monkeypatch, _endpoint_fake(evict=True),
