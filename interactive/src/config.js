@@ -384,6 +384,16 @@ export function minTpFor(m, gpuKey){
   return Math.floor(hbmWeights(m) / (gpu.vram - (ACT_RESERVE + (gpu.reserve_extra || 0)))) + 1;
 }
 
+// Why vLLM refuses this TP width for the model, or null (mirrors
+// vllm_tp_refused in model.py). The Split control does not offer such a
+// width. research/kv_tp_sharding.md #6.
+export function vllmTpRefused(m, tp){
+  const ok = m.vllm_tp || [];
+  if (!ok.length) return `the TP sizes vLLM accepts are not recorded for ${m.name}`;
+  return ok.includes(tp) ? null
+    : `vLLM refuses TP${tp} for ${m.name}; it accepts ${ok.join(', ')}`;
+}
+
 // topology for arbitrary N GPUs of a part (mirrors topology()/tp_efficiency()
 // in scenario_model.py): TP = one engine, weights sharded, one shared cache,
 // 0.90 bandwidth haircut per GPU-count doubling inside the node, then a steeper
@@ -433,8 +443,9 @@ export function divisors(n){ const d=[]; for (let i=1;i<=n;i++) if (n%i===0) d.p
 // Snap a TP width to a legal one for `ngpu`: the largest divisor <= tp, so
 // shrinking the GPU count keeps as much TP as still divides evenly rather than
 // resetting the user to pure TP or pure DP. Always returns a divisor of ngpu.
-export function clampTp(tp, ngpu){
-  const ds = divisors(ngpu);
+// accepted: the model's vllm_tp, when given; widths outside it are dropped
+export function clampTp(tp, ngpu, accepted){
+  const ds = divisors(ngpu).filter(d => !accepted || accepted.includes(d));
   return ds.includes(tp) ? tp : (ds.filter(d => d <= tp).pop() ?? 1);
 }
 // Bandwidth seen by ONE replica group. DP adds groups, it never widens one.

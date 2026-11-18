@@ -134,6 +134,7 @@ params_prefill = 24.5e9
 attn_layers = 16
 attn_d = 6144                    # = 24 * 256
 kv_heads = 4                     # GQA 24/4 on the 16 full-attention layers
+vllm_tp = [1, 2, 4, 8]         # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 
 [models.27B.quality]  # xhigh effort (the index run); 3.6 was 162/267, no 4.0 run
 tb21 = [213, 267]
@@ -188,6 +189,7 @@ params_prefill = 2.44e9
 attn_layers = 10
 attn_d = 4096                    # = 16 * 256
 kv_heads = 2                     # GQA 16/2 on the 10 full-attention layers
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 
 [models.35BA3B.quality]  # 0/198 is a MEASURED zero, not a missing run
 tb21 = [120, 267]
@@ -242,6 +244,7 @@ params_prefill = 121.8e9
 attn_layers = 88
 attn_d = 12288                   # = 96 * 128
 kv_heads = 8                     # GQA 96/8 — shards on every TP the study prices
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 
 [models.MM35.quality]  # 0/198 is a MEASURED zero, not a missing run
 tb21 = [135, 267]
@@ -320,6 +323,7 @@ params_prefill = 37.4e9
 attn_layers = 78
 attn_d = 16384                   # = 64 * 256
 kv_heads = 1                     # MLA: one latent per token, replicated under plain TP
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 
 [models.GLM52.quality]  # max effort (the index run); 5.2 was 208/267, no 4.0 run
 tb21 = [224, 267]
@@ -404,6 +408,7 @@ params_prefill = 12.70e9
 attn_layers = 41
 attn_d = 649.3658536585366       # = 26_624 / 41
 kv_heads = 1
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 state_heads = 1                  # MQA latent caches AND the latent windows replicate under plain TP
 
 [models.DSV4F.quality]  # 0731, max effort
@@ -462,6 +467,7 @@ params_prefill = 12.70e9
 attn_layers = 41
 attn_d = 649.3658536585366       # = 26_624 / 41: = DSV4F, text prefill
 kv_heads = 1
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 state_heads = 1                  # MQA latent caches AND the latent windows replicate under plain TP
 
 [models.DSV4FV.quality]  # max effort, read 2026-10-02
@@ -561,6 +567,7 @@ params_prefill = 7.90e9
 attn_layers = 3
 attn_d = 1_024
 kv_heads = 1
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 state_heads = 1                  # MQA latent caches AND the latent windows replicate under plain TP
 
 [models.DSV41F.quality]  # max effort; 4.0 read 2026-11-04
@@ -635,6 +642,7 @@ params_prefill = 6.04e9
 attn_layers = 12
 attn_d = 6144                    # = 24 * 256
 kv_heads = 2                     # GQA 24/2 on the 12 QSA layers; the DeltaNet state shards (48 v-heads)
+vllm_tp = [1, 2, 4, 8]         # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 
 [models.Q38FN.quality]
 tb21 = [230, 267]
@@ -718,6 +726,7 @@ params_prefill = 16.11e9
 attn_layers = 11
 attn_d = 16384                   # = 64 * 256
 kv_heads = 1                     # NoPE sparse-MLA: one latent per token; the KDA state shards (64 heads)
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 
 [models.GLM53F.quality]
 tb21 = [225, 267]
@@ -806,6 +815,7 @@ params_prefill = 49.82e9
 attn_layers = 72
 attn_d = 8192                    # = 64 * 128
 kv_heads = 1
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 state_heads = 1                  # MLA latents AND the drafter's latent windows replicate
                                  # under plain TP
 
@@ -896,6 +906,7 @@ params_prefill = 103.19e9
 attn_layers = 24
 attn_d = 15360                   # = 96 * (192 + 128) / 2
 kv_heads = 1                     # MLA: one latent per token; the KDA state shards (96 heads)
+vllm_tp = [1, 2, 4, 8, 16]     # TP sizes vLLM 0.33 accepts (ws catalog; research/kv_tp_sharding.md #6)
 
 [models.K31P.quality]  # AA's default variant (unlabelled), read 2026-11-05; no 2.1 run
 tb40 = [133, 198]

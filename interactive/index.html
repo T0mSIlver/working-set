@@ -511,7 +511,7 @@ details.more .more-body{padding:0 0 16px}
           <input type="range" id="s-ngpu" min="1" max="8" step="1" value="1">
         </div>
         <div class="field">
-          <label class="flabel"><span class="tip" id="split-tip" data-tip="TP shards one copy of the weights across a group, so the freed memory becomes one shared cache. DP copies whole groups: throughput scales with the copies, but the cache splits and a returning user is warm only on their own group (sticky routing). Dimmed splits cannot hold the weights.">Split (DP × TP)</span></label>
+          <label class="flabel"><span class="tip" id="split-tip" data-tip="TP shards one copy of the weights across a group, so the freed memory becomes one shared cache. DP copies whole groups: throughput scales with the copies, but the cache splits and a returning user is warm only on their own group (sticky routing). Dimmed splits cannot hold the weights. TP widths vLLM refuses for this model (3, 5, 6 and 7 for every model here) are not offered.">Split (DP × TP)</span></label>
           <div class="seg" id="seg-split"></div>
         </div>
         <div class="field">

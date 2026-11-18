@@ -94,9 +94,9 @@ MIRROR_CTX_N = 20_000
 
 GPU_KEYS = ("H200", "B300")
 # every GPU count the explorer's slider reaches (min 1, max 8, step 1) — NOT
-# just the powers of two. The odd counts are where tp_efficiency's
-# 0.90^log2(tp) is evaluated off a power of two and where the DP/TP grid has
-# splits that no power-of-two count produces (DP3xTP2 on six GPUs).
+# just the powers of two. The odd counts are where the DP/TP grid has splits
+# that no power-of-two count produces (DP3xTP2 on six GPUs). TP itself stays
+# a width vLLM accepts (catalogue vllm_tp), as the Split control offers.
 NGPUS = tuple(range(1, 9))
 CHUNKS = (2048, 4096, 8192, 16384, 32768, 65536)
 
@@ -609,7 +609,7 @@ def legal_deployments():
                     need = M.min_tp_for(m, gpu)
                     for ngpu in NGPUS:
                         for tp in divisors(ngpu):
-                            if tp < need:
+                            if tp < need or M.vllm_tp_refused(m, tp):
                                 continue
                             topo = M.topology_grid(ngpu // tp, tp, gpu)
                             if M.kv_pool_tokens(m, topo) <= 0:
@@ -715,8 +715,8 @@ SPREAD_PROBE = [
     # Dense single-GPU sweep state with a one-request burst.
     dict(model='27B', gpu='H200', wdt='fp8', kv='fp8', ngpu=1, tp=1,
          burst=1),
-    # H200 MoE deployment with DP2, TP3, and added RAM.
-    dict(model='35BA3B', gpu='H200', wdt='fp8', kv='fp8', ngpu=6, tp=3,
+    # H200 MoE deployment with DP3, TP2, and added RAM.
+    dict(model='35BA3B', gpu='H200', wdt='fp8', kv='fp8', ngpu=6, tp=2,
          ram=256, mfu=0.55, sub_ratio=0.4, inval=0.5, users=16, think=45,
          turn=1000, burst=200, out=900, decode_floor=60),
     # B300 NVFP4 MoE deployment with DP4 and high subagent share.
@@ -736,14 +736,14 @@ SPREAD_PROBE = [
          ram=256, cap=64, mfu=0.35, chunk='4096', user_median=12, user_sigma=0.5,
          sub_ratio=0.0, sys=30, inval=3.0, think=45, sla=5, burst=200, out=200,
          decode_floor=60),
-    # B300 NVFP4 dense deployment on odd TP5.
-    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=5, tp=5,
+    # B300 NVFP4 dense deployment on odd DP5.
+    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=5, tp=1,
          mfu=0.55, chunk='16384', user_median=12, sub_ratio=0.4, sys=30,
          inval=10.0, users=128, think=45, decode_floor=60),
     # B300 dense reference deployment on TP2.
     dict(model='27B', gpu='B300', wdt='fp8', kv='fp8', ngpu=2, tp=2),
-    # B300 large-MoE reference deployment on odd TP7.
-    dict(model='GLM53F', gpu='B300', wdt='fp8', kv='fp8', ngpu=7, tp=7),
+    # B300 large-MoE reference deployment on DP3xTP2.
+    dict(model='GLM53F', gpu='B300', wdt='fp8', kv='fp8', ngpu=6, tp=2),
     # Dense single-GPU sweep state with a short subagent median.
     dict(model='27B', gpu='H200', wdt='fp8', kv='fp8', ngpu=1, tp=1,
          sub_median=2),
@@ -754,8 +754,8 @@ SPREAD_PROBE = [
     # H200 MoE sweep state at full memory-bandwidth utilization (eta = 1).
     dict(model='35BA3B', gpu='H200', wdt='fp8', kv='fp8', ngpu=2, tp=2,
          eta=1.0),
-    # H200 FP16-KV MoE deployment on odd TP3.
-    dict(model='MM35', gpu='H200', wdt='fp8', kv='fp16', ngpu=3, tp=3,
+    # H200 FP16-KV MoE deployment on DP3xTP2.
+    dict(model='MM35', gpu='H200', wdt='fp8', kv='fp16', ngpu=6, tp=2,
          ram=256, eta=0.3, mfu=0.55, chunk='4096', user_median=60, user_sigma=1.1,
          sub_ratio=0.0, sys=3, inval=0.5, users=32, think=45, sla=5, turn=1000),
     # H200 huge-MoE sweep state with an 8K chunk.
@@ -778,17 +778,17 @@ SPREAD_PROBE = [
          cap=64, eta=0.15, mfu=0.35, chunk='8192', user_sigma=1.1, sub_ratio=0.4,
          sys=30, inval=0.5, users=128, think=15, turn=1000, out=200,
          decode_floor=60),
-    # B300 NVFP4 MoE deployment on TP6 with high request load.
-    dict(model='Q38FN', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=6, tp=6,
+    # B300 NVFP4 MoE deployment on DP3xTP2 with high request load.
+    dict(model='Q38FN', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=6, tp=2,
          ram=256, eta=0.3, chunk='2048', sub_ratio=0.4, sys=3, users=400, sla=20,
          burst=8, out=200, decode_floor=60),
-    # B300 NVFP4 large-MoE deployment on odd TP3 with a 64K chunk.
-    dict(model='GLM53F', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=3, tp=3,
+    # B300 NVFP4 large-MoE deployment on odd DP3 with a 64K chunk.
+    dict(model='GLM53F', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=3, tp=1,
          ram=256, eta=0.3, mfu=0.35, chunk='65536', user_median=60, user_sigma=0.5,
          sub_ratio=0.4, inval=35.0, users=128, think=15, turn=1000, burst=8,
          out=900, decode_floor=60),
-    # B300 NVFP4 dense deployment on TP6 with a low decode floor.
-    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=6, tp=6,
+    # B300 NVFP4 dense deployment on DP3xTP2 with a low decode floor.
+    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp8', ngpu=6, tp=2,
          cap=262, user_sigma=0.5, sys=30, inval=0.5, users=16, think=45, sla=5,
          burst=8, out=900, decode_floor=10),
     # B300 NVFP4 dense deployment on TP2 under high load.
@@ -796,8 +796,8 @@ SPREAD_PROBE = [
          cap=262, mfu=0.55, chunk='65536', user_sigma=1.1, sub_ratio=0.0, sys=3,
          inval=35.0, users=400, think=15, sla=20, burst=8, out=200,
          decode_floor=60),
-    # B300 NVFP4 FP16-KV dense deployment on TP6.
-    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp16', ngpu=6, tp=6,
+    # B300 NVFP4 FP16-KV dense deployment on DP6.
+    dict(model='27B', gpu='B300', wdt='nvfp4', kv='fp16', ngpu=6, tp=1,
          ram=256, cap=64, eta=0.15, mfu=0.35, user_median=12, user_sigma=0.5,
          inval=10.0, users=128, think=90, sla=5, turn=6000, burst=8, out=900,
          decode_floor=60),
