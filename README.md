@@ -81,7 +81,9 @@ resident bytes, the native context, and the tensor-parallel sizes vLLM 0.33
 accepts. Each field that depends on the architecture (latent or compressed
 caches, recurrent state, the MoE split, draft modules, Engram tables) is a
 `# TODO` line naming what to determine and the research note of the closest
-catalogue model. Gated repos read `HF_TOKEN`; `--save DIR` also writes the
+catalogue model. Its `[models.KEY.provenance]` table labels the fields read
+from the repo and leaves a TODO for every other quantity. Gated repos read
+`HF_TOKEN`; `--save DIR` also writes the
 test fixture.
 
 `ws test` puts the predictions to a live endpoint, one falsifiable hypothesis

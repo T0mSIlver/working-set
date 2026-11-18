@@ -13,11 +13,15 @@ falls back to a default.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from dataclasses import dataclass, field
 
+from datetime import date
+
 from .hf import Checkpoint, HFError, load_fixture, read_repo, save_fixture
+from .provenance import MODEL_QUANTITIES
 from .vllm_tp import (VLLM_VERSION, accepted_tps, pad_vocab, text_config,
                       tp_facts, tp_refusals)
 
@@ -72,6 +76,8 @@ class Draft:
     tp_ok: list = field(default_factory=list)
     tp_refused: dict = field(default_factory=dict)
     measured: dict = field(default_factory=dict)     # byte sums the TODOs quote
+    provenance: dict = field(default_factory=dict)   # quantity -> inline table
+    read_on: str = ""                                # the date the repo was read
 
     def set(self, name, value, comment=""):
         self.fields[name] = (value, comment)
@@ -118,10 +124,11 @@ def _layer_counts(t: dict) -> tuple:
     return n, 0, []
 
 
-def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16) -> Draft:
+def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
+          read_on: str | None = None) -> Draft:
     cfg = ck.config
     t = text_config(cfg)
-    d = Draft(ck.repo, ck.revision, key)
+    d = Draft(ck.repo, ck.revision, key, read_on=read_on or date.today().isoformat())
     d.set("name", ck.repo.split("/")[-1], "the repo name: write the catalogue's display form")
 
     n = t.get("num_hidden_layers")
@@ -286,6 +293,16 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16) -> Draft:
                    + (f" (vLLM pads it to {padded:,})" if padded != facts.vocab else ""))
     d.need("nvfp4_w", "run this command on the NVFP4 checkpoint and take its totals",
            NOTES["nvfp4"])
+
+    # provenance (workingset.provenance) for what this command read itself;
+    # every other quantity stays a TODO for whoever fills its fields
+    ref = f"https://huggingface.co/{ck.repo}/tree/{ck.revision[:12]}, read {d.read_on}"
+    if "w_resident" in d.fields:
+        d.provenance["weights"] = {"kind": "measured", "note": f"safetensors total, "
+                                   f"every shard header ({ck.shards} shards)", "ref": ref}
+    if "kv_bpt" in d.fields:
+        _, how = d.fields["kv_bpt"]
+        d.provenance["kv"] = {"kind": "derived", "basis": "config", "note": how, "ref": ref}
     return d
 
 
@@ -318,7 +335,20 @@ def render(d: Draft) -> str:
         out.append(f"# TODO {name}: {what}" + (f" (see {note})" if note else ""))
     out.append(f"# TODO [models.{d.key}.quality] and [models.{d.key}.explorer]: "
                "Terminal-Bench scores, short name, tooltip")
+    out += ["", f"[models.{d.key}.provenance]"]
+    for q, row in d.provenance.items():
+        out.append(f"{q} = {_inline(row)}")
+    for q in MODEL_QUANTITIES:
+        if q not in d.provenance:
+            when = " (once nvfp4_w is set)" if q == "weights_nvfp4" else ""
+            out.append(f"# TODO {q}{when} = {{ kind = measured|vendor|derived|guess, "
+                       f"note = how, ref = where }}: see src/workingset/provenance.py")
     return "\n".join(out) + "\n"
+
+
+def _inline(row: dict) -> str:
+    return "{ " + ", ".join(f"{k} = {json.dumps(v, ensure_ascii=False)}"
+                            for k, v in row.items()) + " }"
 
 
 def cmd_catalog(args) -> int:

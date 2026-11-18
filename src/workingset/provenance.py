@@ -98,10 +98,23 @@ def _parse(row: dict, where: str) -> Provenance:
     return Provenance(**row)
 
 
-def required_model_quantities(key: str) -> tuple[str, ...]:
-    row = CATALOG["models"][key]
+def required_model_quantities(key: str, row: dict | None = None) -> tuple[str, ...]:
+    row = CATALOG["models"][key] if row is None else row
     return tuple(q for q in MODEL_QUANTITIES
                  if q != "weights_nvfp4" or row.get("nvfp4_w") is not None)
+
+
+def check_model_row(key: str, row: dict) -> dict:
+    """Parse the provenance of a model table that is not (yet) in the
+    catalogue, such as a `ws catalog` draft. Raises naming every quantity
+    that is missing; returns {quantity: Provenance}."""
+    rows = row.get("provenance") or {}
+    missing = [q for q in required_model_quantities(key, row) if q not in rows]
+    if missing:
+        raise ProvenanceError(f"[models.{key}.provenance]: missing {', '.join(missing)}; "
+                              f"every quantity that feeds a verdict needs a kind and a note")
+    return {q: _parse(rows[q], f"[models.{key}.provenance] {q}")
+            for q in required_model_quantities(key, row)}
 
 
 def required_gpu_quantities(key: str) -> tuple[str, ...]:

@@ -286,3 +286,30 @@ def test_a_config_at_a_refused_width_stops(capsys):
     assert main(["init", "--model", "27B", "--gpu", "H200", "--tp", "3", "-o", "-"]) == 2
     assert "vLLM refuses tensor_parallel 3 for Qwen3.8-27B" in capsys.readouterr().err
     assert main(["init", "--model", "27B", "--gpu", "H200", "--tp", "4", "-o", "-"]) == 0
+
+
+def test_drafted_provenance_names_what_is_missing_then_passes():
+    """The draft labels what it read itself (weights measured off the shard
+    headers, kv derived from the config, dated, with the repo as ref) and
+    leaves the rest as TODOs: the completeness check names exactly those,
+    and passes once they are filled."""
+    import tomllib
+    from workingset.provenance import ProvenanceError, check_model_row
+    d = draft(_mm35(), "MM35X", read_on="2026-11-18")
+    row = tomllib.loads(render(d))["models"]["MM35X"]
+    prov = row["provenance"]
+    assert prov["weights"]["kind"] == "measured" and prov["kv"]["basis"] == "config"
+    assert "read 2026-11-18" in prov["kv"]["ref"]
+    with pytest.raises(ProvenanceError,
+                       match="missing decode, draft, acceptance, prefill, quality"):
+        check_model_row("MM35X", row)
+    for q in ("decode", "draft", "acceptance", "prefill", "quality"):
+        prov[q] = {"kind": "guess", "note": "filled by hand"}
+    assert set(check_model_row("MM35X", row)) == set(prov)
+
+
+def test_draft_never_labels_what_it_left_to_a_person():
+    """GLM-5.3-Flash: no kv_bpt drafted (latent cache), so no kv provenance."""
+    d = _draft("GLM53F")
+    assert "kv_bpt" not in d.fields and "kv" not in d.provenance
+    assert d.provenance["weights"]["kind"] == "measured"
