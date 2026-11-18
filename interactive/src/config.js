@@ -7,11 +7,12 @@ export const KIB = 1024, MIB = 1024**2, GIB = 1024**3;
 
 // The catalogue rows with the Python dataclass defaults filled in, so every
 // field reads as it does in workingset.model (None stays absent). The model
-// row keeps its explorer table under `explorer`; its scores go to QUALITY.
+// row keeps its explorer table under `explorer`; its scores go to QUALITY and
+// both rows' provenance tables to provenance.js.
 const CATALOG_GPUS = Object.fromEntries(Object.entries(CATALOG.gpus)
-  .map(([k, g]) => [k, { ...CATALOG.defaults.gpu, ...g }]));
+  .map(([k, { provenance, ...g }]) => [k, { ...CATALOG.defaults.gpu, ...g }]));
 const CATALOG_MODELS = Object.fromEntries(Object.entries(CATALOG.models)
-  .map(([k, { quality, ...m }]) => [k, { ...CATALOG.defaults.model, explorer: {}, ...m }]));
+  .map(([k, { quality, provenance, ...m }]) => [k, { ...CATALOG.defaults.model, explorer: {}, ...m }]));
 // a score is [passed, runs] (an exact AA run count) or a vendor fraction; a
 // benchmark the catalogue leaves out is null (no run)
 const CATALOG_QUALITY = Object.fromEntries(Object.entries(CATALOG.models)

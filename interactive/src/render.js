@@ -858,6 +858,6 @@ export function paintTiles(id, tiles, colMap){
     const vc = t.cls? `style="color:${colMap[t.cls]}"`:'';
     const badge = t.cls? `<span class="badge" style="color:${colMap[t.cls]};border-color:${colMap[t.cls]}">${CLS_WORD[t.cls]}</span>`:'';
     const kk = t.tip? `<span class="tip" tabindex="0" data-tip="${esc(t.tip)}">${esc(t.k)}</span>` : esc(t.k);
-    return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}${t.full?' full':''}"><div class="k">${kk}${badge}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div></div>`;
+    return `<div class="tile${t.hero?' hero':''}${t.wide?' wide':''}${t.full?' full':''}"><div class="k">${kk}${badge}</div><div class="v tnum" ${vc}>${esc(t.v)}<span class="u">${esc(t.u)}</span></div><div class="sub2 tnum">${esc(t.sub)}</div>${t.prov||''}</div>`;
   }).join('');
 }

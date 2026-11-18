@@ -40,6 +40,7 @@ import { chartCGeom, chartDGeom, clearChartGeomCD, drawCross, interpAt, lastChar
 import { activeModel, computeAndRender, frontierDecodeDeferred, lastCS, lastDC,
          lastSteady, lastStress, lastWarmAll, lastWarmCur, renderTiles } from './render.js';
 import { PLANNER_LABEL } from './planner.js';
+import { GPU_INPUTS, MODEL_INPUTS, provenanceGroups, provenanceText } from './provenance.js';
 import { lastFlipAxes, renderFlipPanel } from './sensitivity.js';
 import { deployCmdText, lastDeploy, renderDeployCard } from './deploy.js';
 import { SAME_MODEL_TIE, frontierChartGeom, frontierRowName, frontierScore, lastFrontierCurKey, lastFrontierRows, renderFrontierChart, renderFrontierTable, wireFrontierTable } from './frontier.js';
@@ -190,7 +191,14 @@ function enforceConstraints(){
   document.getElementById('wover-tip').setAttribute('data-tip', woverOk
     ? "Slack between a checkpoint's stated bytes and the server's real resident footprint. This model's figure is raw/on-disk — an under-estimate by an unknown margin; +15% is the one calibrated data point (the 27B's as-deployed 28.8 GiB vs its raw params), transferred here as an extrapolation."
     : "The 27B's 28.8 GiB is already the measured AS-DEPLOYED footprint — the +15% was derived from it, so applying it here would double-count. Its NVFP4 figure is a measured checkpoint total under the same convention, so the knob stays disabled on this model.");
-  document.getElementById('model-tip').setAttribute('data-tip', m.explorer.tip);
+  // where the numbers come from, for the GPU on screen
+  const gpuName = CONFIG.GPUS[state.gpu].name;
+  document.getElementById('model-tip').setAttribute('data-tip', `${m.explorer.tip} Where its numbers come from on ${gpuName}: `
+    + provenanceText(provenanceGroups(state.model, state.gpu, state.wdt, MODEL_INPUTS)) + '.');
+  const gpuTip = document.getElementById('gpu-tip');
+  gpuTip.dataset.base ??= gpuTip.getAttribute('data-tip');
+  gpuTip.setAttribute('data-tip', `${gpuTip.dataset.base} Where the ${gpuName}'s numbers come from: `
+    + provenanceText(provenanceGroups(state.model, state.gpu, state.wdt, GPU_INPUTS)) + '.');
   document.getElementById('v-gpuname').textContent = CONFIG.GPUS[state.gpu].name;
   // per-model ranges: max_seq_len cap (mirrors check_cap_allowed) and the
   // prompt-median sliders both scale with the model's context window — the
@@ -438,9 +446,8 @@ function syncLabels(){
   }
   document.getElementById('v-mfu').textContent=state.mfu.toFixed(2);
   const m0 = CONFIG.MODELS[state.model];
-  const ownAcc = m0.acceptance_measured
-    ? `${m0.acceptance} is measured on this model's draft head.`
-    : `${m0.acceptance} is Qwen3.6-27B's measured value, carried here unmeasured: no public figure exists for this draft head.`;
+  const accProv = provenanceGroups(state.model, state.gpu, state.wdt, [['model', 'acceptance']])[0];
+  const ownAcc = `Its ${m0.acceptance} is ${accProv.label}: ${accProv.items[0].note}.`;
   document.getElementById('acc-tip').setAttribute('data-tip',
     `Share of draft tokens the target model accepts, each one given the previous were (accept until the first rejection). With k draft tokens a sequence advances 1 + α + α² + … + α^k tokens per step: ${tokensPerStep(state.acc, state.dspec).toFixed(2)} at α ${state.acc.toFixed(3)}, k ${state.dspec}. ${ownAcc} Switching model resets both to its own. Mirrors [calibration] acceptance; \`ws calibrate\` reads it from vLLM's /metrics.`);
   document.getElementById('eta-tip').setAttribute('data-tip',

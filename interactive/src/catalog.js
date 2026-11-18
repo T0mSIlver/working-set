@@ -14,7 +14,41 @@ export const CATALOG = {
    "p_prefill_w": 630.0,
    "host_w": 575.0,
    "eur_gpu_h": 3.8,
-   "eur_capex_gpu": 36418.0
+   "eur_capex_gpu": 36418.0,
+   "provenance": {
+    "memory": {
+     "kind": "vendor",
+     "note": "NVIDIA's 141 GB; the part delivers ~150.75e9 B, and the solved reserve absorbs the difference",
+     "ref": "research/gpu_b300.md"
+    },
+    "reserve": {
+     "kind": "measured",
+     "on": "H200",
+     "note": "solved so the 27B fills its one-H200 anchor pool; a TP2 FP16 pool read from a vLLM startup log agrees within 1%",
+     "ref": "docs/scenarios.md"
+    },
+    "decode": {
+     "kind": "measured",
+     "on": "H200",
+     "note": "eta and tau_rec fitted to a held-batch decode sweep (27B, 4×H200 TP4); tau_0 and tau_ar are priors inside its measured intercept; bandwidth is NVIDIA's 4.8 TB/s",
+     "ref": "research/decode-model.md"
+    },
+    "prefill": {
+     "kind": "guess",
+     "note": "MFU 0.45 (bracket 0.30-0.55) rests on measurements not published here; peak is NVIDIA's dense FP8 figure",
+     "ref": "research/prefill.md"
+    },
+    "power": {
+     "kind": "measured",
+     "on": "H100",
+     "note": "idle is a measured H100 +10%; decode and prefill are Hopper's measured fractions of the 700 W plate; the host adder is the DGX H200 spec",
+     "ref": "research/power.md"
+    },
+    "price": {
+     "kind": "vendor",
+     "note": "rent: getdeploying.com's cross-provider median (2026-09); purchase: the Supermicro store (2026-11-04)"
+    }
+   }
   },
   "B300": {
    "name": "B300",
@@ -29,7 +63,42 @@ export const CATALOG = {
    "p_prefill_w": 1260.0,
    "host_w": 500.0,
    "eur_gpu_h": 6.8,
-   "eur_capex_gpu": 73538.0
+   "eur_capex_gpu": 73538.0,
+   "provenance": {
+    "memory": {
+     "kind": "measured",
+     "on": "B300",
+     "note": "an nvidia-smi dump of an OCI BM.GPU.B300.8 reads 288.4e9 B per GPU",
+     "ref": "research/gpu_b300.md"
+    },
+    "reserve": {
+     "kind": "measured",
+     "on": "H200",
+     "note": "the H200-solved reserve, plus the H200's measured hidden HBM margin (9.75e9 B) added back",
+     "ref": "research/gpu_b300.md"
+    },
+    "decode": {
+     "kind": "measured",
+     "on": "H200",
+     "note": "eta and the three taus fitted on H200, unchanged; bandwidth is NVIDIA's 8 TB/s",
+     "ref": "research/decode-model.md"
+    },
+    "prefill": {
+     "kind": "guess",
+     "note": "the Hopper MFU bracket, carried over; peak 4.5 PFLOPS dense is the DGX B300 sparse figure halved, never measured here",
+     "ref": "research/prefill.md"
+    },
+    "power": {
+     "kind": "measured",
+     "on": "H100",
+     "note": "extrapolated: Hopper's measured fractions of TDP on the 1,400 W plate; no Blackwell Ultra power measurement exists",
+     "ref": "research/power.md"
+    },
+    "price": {
+     "kind": "vendor",
+     "note": "rent: getdeploying.com's cross-provider median (2026-09); purchase: Supermicro's listing (2026-09-21)"
+    }
+   }
   }
  },
  "models": {
@@ -77,6 +146,47 @@ export const CATALOG = {
      198
     ],
     "aa": "qwen3-8-27b"
+   },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "the baseline's as-deployed FP8 footprint; Qwen/Qwen3.6-27B-FP8, tensor-for-tensor the same, reads 30.87e9 B",
+     "ref": "docs/writeup.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "RedHatAI/Qwen3.8-27B-NVFP4, every shard header",
+     "ref": "research/nvfp4_2026-09.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "16 full-attention layers × 4 KV heads × 256, FP8; the DeltaNet state from 48 layers"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "dense: every step reads the resident weights"
+    },
+    "draft": {
+     "kind": "guess",
+     "note": "the MTP layer and the lm_head taken as FP8; no ledger itemises them"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "model": "Qwen3.6-27B",
+     "note": "per-draft acceptance measured at k = 2; 3.8 has the same draft head"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "27B less embeddings and lm_head; 16 full-attention layers",
+     "ref": "research/prefill.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
    },
    "explorer": {
     "short": "Qwen3.8-27B",
@@ -127,6 +237,52 @@ export const CATALOG = {
     ],
     "aa": "qwen3-6-35b-a3b"
    },
+   "provenance": {
+    "weights": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "~35.5e9 parameters × 1 B FP8, from the published config",
+     "ref": "research/model_35ba3b.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "RedHatAI/Qwen3.6-35B-A3B-NVFP4, every shard header",
+     "ref": "research/nvfp4.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "10 full-attention layers × 2 KV heads × 256, FP8; the DeltaNet state from 30 layers",
+     "ref": "research/model_35ba3b.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "component ledger from the published config",
+     "ref": "research/model_35ba3b.md"
+    },
+    "draft": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "MTP layer and lm_head from the component ledger",
+     "ref": "research/model_35ba3b.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "model": "27B",
+     "note": "Qwen3.8-27B's 0.971, carried to its Qwen MTP-head sibling; unmeasured on this model"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "active parameters from the component ledger",
+     "ref": "research/model_35ba3b.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
+   },
    "explorer": {
     "short": "35B-A3B",
     "tip": "Qwen3.6-35B-A3B — MoE, ~3B active: 40 layers (30 DeltaNet + 10 full-attn) → 10 KiB/token KV; 256 experts / 8 routed (expert-union kink at n = 32). 262k native context, 1M via YaRN."
@@ -175,6 +331,48 @@ export const CATALOG = {
      198
     ],
     "aa": "mistral-medium-3-5"
+   },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "the FP8 checkpoint's index total_size",
+     "ref": "research/model_mistral_medium35.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "nvidia/Mistral-Medium-3.5-128B-NVFP4, safetensors total",
+     "ref": "research/model_mistral_medium35.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "88 layers × 8 KV heads × 128, FP8",
+     "ref": "research/model_mistral_medium35.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "88 FP8 layers and the BF16 lm_head from the shard ledger",
+     "ref": "research/model_mistral_medium35.md"
+    },
+    "draft": {
+     "kind": "guess",
+     "note": "no draft model ships; the explorer's EAGLE slider prices no draft bytes"
+    },
+    "acceptance": {
+     "kind": "guess",
+     "note": "no draft model; the acceptance slider is the reader's"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "decoder-layer parameters from the shard ledger",
+     "ref": "research/model_mistral_medium35.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
    },
    "explorer": {
     "short": "Mistral-Med-3.5",
@@ -233,6 +431,51 @@ export const CATALOG = {
      198
     ],
     "aa": "glm-5-3"
+   },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "the FP8 checkpoint's total_size, read on GLM-5.2's, which GLM-5.3's matches tensor for tensor",
+     "ref": "research/model_glm53.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "nvidia/GLM-5.3-NVFP4, every shard header",
+     "ref": "research/nvfp4_2026-10.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "79 MLA latents + 22 indexer keys; the row size per GPU from vLLM's cache layouts",
+     "ref": "research/model_glm52.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "always-active ledger and routed experts from the shard headers",
+     "ref": "research/model_glm52.md"
+    },
+    "draft": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "MTP layer and lm_head from the shard headers",
+     "ref": "research/nvfp4_2026-10.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "note": "InferenceX's accepted length 2.94 at 3 drafts on GLM-5.3 NVFP4",
+     "ref": "research/sources/inferencex.md"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "active parameters from the ledger; attention priced dense, an upper bound",
+     "ref": "research/model_glm52.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
    },
    "explorer": {
     "short": "GLM-5.3",
@@ -297,6 +540,50 @@ export const CATALOG = {
     ],
     "aa": "deepseek-v4-flash"
    },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "safetensors total",
+     "ref": "research/model_dsv4flash.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "nvidia/DeepSeek-V4-Flash-0731-NVFP4, every shard header",
+     "ref": "research/nvfp4_2026-09.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "compressed caches per layer class, fp8 latents and fp4 indexer keys",
+     "ref": "research/model_dsv4flash.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "always-active ledger and FP4 experts from the shard headers",
+     "ref": "research/model_dsv4flash.md"
+    },
+    "draft": {
+     "kind": "guess",
+     "note": "the DSpark stages' split between always-active and expert bytes is assumed",
+     "ref": "research/model_dsv4flash.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "model": "ML4",
+     "note": "Mistral-Large-4's DSpark acceptance, carried to another DSpark drafter; unmeasured on this model"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "active GEMM parameters from the ledger",
+     "ref": "research/model_dsv4flash.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
+   },
    "explorer": {
     "short": "DSv4-Flash",
     "tip": "DeepSeek-V4-Flash-0731 — 284B-A13B, compressed sparse attention (21 CSA ratio-4 + 20 HCA ratio-128 + 2 SWA layers): only 3.4 KiB/token stored — ~10× below V3-class MLA — plus a fixed 14.9 MiB/session. The study's lightest big-MoE fit: from 2×H200 / 1×B300 (native FP4 experts; NVFP4 exists but is 5% heavier: the experts are already 4-bit natively and NVIDIA's repack only adds denser scales). A different architecture from V4.1-Flash (no encoder-decoder split, no Engram tables), kept alongside it. 1M native context.",
@@ -350,6 +637,45 @@ export const CATALOG = {
      198
     ],
     "aa": "deepseek-v4-flash-vision"
+   },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "safetensors total, header-verified on all 48 shards",
+     "ref": "research/model_dsv4flash_vision.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "DeepSeek-V4-Flash-0731's caches: the text config is byte-identical",
+     "ref": "research/model_dsv4flash_vision.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "DeepSeek-V4-Flash-0731's ledger; the vision tower is never read in decode",
+     "ref": "research/model_dsv4flash_vision.md"
+    },
+    "draft": {
+     "kind": "guess",
+     "note": "the DSpark stages' split between always-active and expert bytes is assumed",
+     "ref": "research/model_dsv4flash.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "model": "ML4",
+     "note": "Mistral-Large-4's DSpark acceptance, carried to another DSpark drafter; unmeasured on this model"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "DeepSeek-V4-Flash-0731's text prefill",
+     "ref": "research/model_dsv4flash_vision.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
    },
    "explorer": {
     "short": "DSv4-Flash-Vision",
@@ -418,6 +744,51 @@ export const CATALOG = {
      "tb21": "vendor card (DeepSeek Harness Minimal mode, max reasoning effort, 1M context) — Artificial Analysis has no 2.1 run (read 2026-11-04)"
     }
    },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "safetensors total, header-verified, less the Engram tables",
+     "ref": "research/model_dsv41flash.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "nvidia/DeepSeek-V4.1-Flash-NVFP4, every shard header",
+     "ref": "research/nvfp4_2026-10.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "four shared compressed caches under vLLM's fp8 cache; within 0.3% of a vLLM startup log's pool",
+     "ref": "research/model_dsv41flash.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "exact always-active ledger and MXFP4 experts from the shard headers",
+     "ref": "research/model_dsv41flash.md"
+    },
+    "draft": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "DSpark stages and lm_head from the shard headers",
+     "ref": "research/model_dsv41flash.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "model": "ML4",
+     "note": "Mistral-Large-4's DSpark acceptance, carried to another DSpark drafter; unmeasured on this model"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "encoder-layer active parameters from the ledger",
+     "ref": "research/model_dsv41flash.md"
+    },
+    "quality": {
+     "kind": "vendor",
+     "note": "Terminal-Bench 2.1 from DeepSeek's model card; 4.0 from Artificial Analysis"
+    }
+   },
    "explorer": {
     "short": "DSv4.1-Flash",
     "tip": "DeepSeek-V4.1-Flash — 552B backbone + 196B Engram tables, 8B active in prefill / 16B in decode (Causal Encoder-Decoder: prefill runs the 20 encoder layers only). CSA2 shares four compressed caches across the 40 layers: 1,460 B/token stored under vLLM's fp8 cache (890 B in the model's own FP4 layout) — 2.4× below V4-Flash-0731, ~27× below V3-class MLA — plus a fixed 2.8 MiB/session. The study's KV-lightest model by far. vLLM keeps the 203 GB Engram tables in host memory, so 307.5 GB stays on the GPUs — 4×H200 (3 by arithmetic) / 2×B300; with the tables in GPU memory, 510 GB — 8×H200 (5 by arithmetic). Native MXFP4 experts (384, 6 routed: kink n = 64); NVIDIA's NVFP4 repack is 3% heavier. 1M native context. Terminal-Bench 4.0: 26.8% (AA, max effort, read 2026-11-04), below the card's own 31.2. Terminal-Bench 2.1: 90.6% is the vendor card's run (DeepSeek Harness Minimal, max effort) — the only non-Artificial-Analysis score on the frontier, because AA has no 2.1 run of this model. Expect AA to land lower, as it does for every other card on 2.1.",
@@ -473,6 +844,51 @@ export const CATALOG = {
      198
     ],
     "aa": "qwen3-8-flash-next"
+   },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "the FP8 checkpoint's total_size, shard-header-verified, less the n-gram table",
+     "ref": "research/model_qwen38flashnext.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "nvidia/Qwen3.8-Flash-Next-NVFP4, every shard header",
+     "ref": "research/nvfp4_2026-09.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "13 attention layers × 2 KV heads × 256 plus the indexer, FP8",
+     "ref": "research/model_qwen38flashnext.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "exact per-tensor ledger from the shard headers",
+     "ref": "research/model_qwen38flashnext.md"
+    },
+    "draft": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "MTP layer and lm_head from the shard headers",
+     "ref": "research/model_qwen38flashnext.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "model": "27B",
+     "note": "Qwen3.8-27B's 0.971, carried to its Qwen MTP-head sibling; unmeasured on this model"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "active GEMM parameters from the shard-header ledger; attention priced dense, an upper bound",
+     "ref": "research/model_qwen38flashnext.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
    },
    "explorer": {
     "short": "Q3.8-Flash",
@@ -554,6 +970,51 @@ export const CATALOG = {
     ],
     "aa": "glm-5-3-flash"
    },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "the FP8 checkpoint's total_size, shard-header-verified",
+     "ref": "research/model_glm53flash.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "RedHatAI/GLM-5.3-Flash-NVFP4, every shard header",
+     "ref": "research/nvfp4_2026-09.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "12 NoPE MLA latents + compressed indexer keys",
+     "ref": "research/model_glm53flash.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "exact ledger from the shard headers",
+     "ref": "research/model_glm53flash.md"
+    },
+    "draft": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "MTP layer and lm_head from the shard headers",
+     "ref": "research/model_glm53flash.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "model": "GLM52",
+     "note": "GLM-5.3's 0.797, carried to its GLM sibling; unmeasured on this model"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "active GEMM parameters from the ledger; attention priced dense, an upper bound",
+     "ref": "research/model_glm53flash.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
+   },
    "explorer": {
     "short": "G5.3-Flash",
     "tip": "GLM-5.3-Flash — MoE 320B-A18B hybrid (34 KDA linear + 11 NoPE sparse-MLA layers, +1 MTP DSA layer whose cache is charged): 6.4 KiB/token stored — 7.4× below GLM-5.2 — plus a 74.4 MiB bf16 KDA state per session; decode reads top-2048 latents + a kpool-4 compressed indexer scan. 288 experts / 8 routed (kink n = 36). Fits from 3×H200 / 2×B300 (pool arithmetic; no recipe floor published). fp8 KV is Blackwell-only, so on H200 the KV toggle locks to BF16. NVFP4: RedHatAI checkpoint (2026-08-27, the vLLM recipe's) — 42 decode layers' experts ×0.5625, the rest upcast to BF16, so the fixed per-step read grows 14.0 → 16.7 GB while the resident drops to 197.8 GB. 1M native context.",
@@ -623,6 +1084,51 @@ export const CATALOG = {
     ],
     "aa": "mistral-large-4"
    },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "the FP8 checkpoint's total_size, shard-header-verified",
+     "ref": "research/model_mistral_large4.md"
+    },
+    "weights_nvfp4": {
+     "kind": "measured",
+     "note": "mistralai/Mistral-Large-4-1T-A52B-NVFP4, every shard header",
+     "ref": "research/model_mistral_large4.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "63 fp8_ds_mla latents + 44 indexer keys, after KV and index sharing",
+     "ref": "research/model_mistral_large4.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "exact ledger from the shard headers",
+     "ref": "research/model_mistral_large4.md"
+    },
+    "draft": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "the DSpark drafter's checkpoint and the lm_head",
+     "ref": "research/model_mistral_large4.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "note": "the vLLM recipe's DSpark accepted lengths at 8k to 60k input on GB300",
+     "ref": "research/model_mistral_large4.md"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "active GEMM parameters from the ledger; attention priced dense, an upper bound",
+     "ref": "research/model_mistral_large4.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
+   },
    "explorer": {
     "short": "Mistral-Large-4",
     "tip": "Mistral-Large-4 — 1.05T-A49B MoE (52B active with embeddings and lm_head), 72 layers of MLA + DSA as GLM-5.3, plus two cache savings: 9 late NoPE layers attend to layer 35's latents and store none, and 28 layers reuse the top-k of the indexer before them. 46.0 KiB/token stored in vLLM's 656-B fp8_ds_mla rows, 3% below GLM-5.3 on B300, plus 3.8 MiB/session for the DSpark drafter's windows; decode reads top-2048 latents on all 72 layers and 44 indexer scans. 128 experts / 4 routed (kink n = 32), 32.2 GB of routed experts per token, the study's heaviest. The largest model here: 1,060.5 GB in FP8, so no 8×H200 node holds it (the vLLM recipe runs it on 2×8 H200, which this page does not price); 8×B300 in FP8, from 4×B300 with the official NVFP4 checkpoint (610.0 GB). Terminal-Bench 24.7% on 4.0 (AA, high effort); AA has no 2.1 run. 1M native context, 262k validated by the recipe. License: Mistral Ecosystem Open-Weight (MIT, plus a separate commercial licence for Model-as-a-Service operators).",
@@ -690,6 +1196,46 @@ export const CATALOG = {
     ],
     "aa": "kimi-k3-1-pro"
    },
+   "provenance": {
+    "weights": {
+     "kind": "measured",
+     "note": "the checkpoint's total_size, shard-header-verified, plus the DSpark drafter's",
+     "ref": "research/model_kimi_k31pro.md"
+    },
+    "kv": {
+     "kind": "derived",
+     "basis": "config",
+     "note": "24 MLA latents + 24 indexer keys + the drafter's 5 latents; the row size per GPU from vLLM's cache layouts",
+     "ref": "research/model_kimi_k31pro.md"
+    },
+    "decode": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "exact ledger from the shard headers",
+     "ref": "research/model_kimi_k31pro.md"
+    },
+    "draft": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "the DSpark drafter's checkpoint and the shared lm_head",
+     "ref": "research/model_kimi_k31pro.md"
+    },
+    "acceptance": {
+     "kind": "measured",
+     "note": "InferenceX's accepted length 3.08 at 5 drafts on B300",
+     "ref": "research/model_kimi_k31pro.md"
+    },
+    "prefill": {
+     "kind": "derived",
+     "basis": "checkpoint",
+     "note": "active GEMM parameters from the ledger; attention priced dense, an upper bound",
+     "ref": "research/model_kimi_k31pro.md"
+    },
+    "quality": {
+     "kind": "measured",
+     "note": "Artificial Analysis's Terminal-Bench runs"
+    }
+   },
    "explorer": {
     "short": "Kimi-K3.1-Pro",
     "weights": "MXFP4",
@@ -754,6 +1300,268 @@ export const CATALOG = {
    "params_prefill": 0.0,
    "attn_layers": 0,
    "attn_d": 0.0
+  }
+ },
+ "provenance_labels": {
+  "H200": {
+   "gpu": {
+    "memory": "vendor figure",
+    "reserve": "measured on this GPU",
+    "decode": "measured on this GPU",
+    "prefill": "guess",
+    "power": "fitted on H100 and transferred",
+    "price": "vendor figure"
+   },
+   "models": {
+    "27B": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "fitted on Qwen3.6-27B and transferred",
+     "prefill": "derived from the config",
+     "quality": "measured"
+    },
+    "35BA3B": {
+     "weights": "derived from the config",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the config",
+     "draft": "derived from the config",
+     "acceptance": "fitted on Qwen3.8-27B and transferred",
+     "prefill": "derived from the config",
+     "quality": "measured"
+    },
+    "MM35": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "guess",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "GLM52": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "measured",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "DSV4F": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "fitted on Mistral-Large-4 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "DSV4FV": {
+     "weights": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "fitted on Mistral-Large-4 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "DSV41F": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "fitted on Mistral-Large-4 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "vendor figure"
+    },
+    "Q38FN": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "fitted on Qwen3.8-27B and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "GLM53F": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "fitted on GLM-5.3 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "ML4": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "measured",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "K31P": {
+     "weights": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "measured",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    }
+   }
+  },
+  "B300": {
+   "gpu": {
+    "memory": "measured on this GPU",
+    "reserve": "fitted on H200 and transferred",
+    "decode": "fitted on H200 and transferred",
+    "prefill": "guess",
+    "power": "fitted on H100 and transferred",
+    "price": "vendor figure"
+   },
+   "models": {
+    "27B": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "fitted on Qwen3.6-27B and transferred",
+     "prefill": "derived from the config",
+     "quality": "measured"
+    },
+    "35BA3B": {
+     "weights": "derived from the config",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the config",
+     "draft": "derived from the config",
+     "acceptance": "fitted on Qwen3.8-27B and transferred",
+     "prefill": "derived from the config",
+     "quality": "measured"
+    },
+    "MM35": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "guess",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "GLM52": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "measured",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "DSV4F": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "fitted on Mistral-Large-4 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "DSV4FV": {
+     "weights": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "guess",
+     "acceptance": "fitted on Mistral-Large-4 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "DSV41F": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "fitted on Mistral-Large-4 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "vendor figure"
+    },
+    "Q38FN": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "fitted on Qwen3.8-27B and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "GLM53F": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "fitted on GLM-5.3 and transferred",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "ML4": {
+     "weights": "measured",
+     "weights_nvfp4": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "measured",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    },
+    "K31P": {
+     "weights": "measured",
+     "kv": "derived from the config",
+     "decode": "derived from the checkpoint",
+     "draft": "derived from the checkpoint",
+     "acceptance": "measured",
+     "prefill": "derived from the checkpoint",
+     "quality": "measured"
+    }
+   }
+  }
+ },
+ "provenance_words": {
+  "model": {
+   "weights": "weights",
+   "weights_nvfp4": "NVFP4 weights",
+   "kv": "KV bytes per token",
+   "decode": "decode bytes",
+   "draft": "draft pass",
+   "acceptance": "draft acceptance",
+   "prefill": "prefill FLOPs",
+   "quality": "quality score"
+  },
+  "gpu": {
+   "memory": "GPU memory",
+   "reserve": "pool reserve",
+   "decode": "decode constants",
+   "prefill": "prefill constants",
+   "power": "power",
+   "price": "price"
   }
  }
 };
