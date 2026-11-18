@@ -442,6 +442,14 @@ def test_minimax_attn_type_list_of_all_softmax_is_plain_attention():
     assert "attn_layers" not in d.fields and "attn_type_list" in render(d)
 
 
+def test_chunked_attention_is_not_global_attention_without_state():
+    """Llama-4-Scout: 36 of 48 layers attend within 8,192-token chunks; the
+    draft printed attn_layers = 48 and deltanet_state = 0.0."""
+    d = draft(_ck({"attention_chunk_size": 8192, "no_rope_layers": [1, 1, 1, 0]}))
+    assert not {"attn_layers", "kv_bpt", "deltanet_state"} & set(d.fields)
+    assert "attention_chunk_size 8192" in render(d)
+
+
 def test_missing_layer_count_stops():
     ck = _mm35()
     del ck.config["text_config"]["num_hidden_layers"]
