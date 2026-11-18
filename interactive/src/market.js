@@ -397,7 +397,7 @@ function sources() {
   h += `<h3>Token prices</h3><ul>`;
   for (const [p, url, read] of M.price_pages) h += `<li><a href="${esc(url)}" target="_blank" rel="noopener">${esc(p)}</a>, read ${esc(read)}</li>`;
   if (M.openrouter) h += `<li><a href="${esc(M.openrouter.url)}" target="_blank" rel="noopener">OpenRouter API</a> endpoint listing, read ${esc(M.openrouter.read)}</li>`;
-  h += `</ul><p>Published discounts and time-of-day prices are flagged and not applied.</p>`;
+  h += `</ul><p>Listed prices are already after any published promotion, which is flagged. Time-of-day prices are plotted at their 24-hour time-weighted average.</p>`;
   h += `<h3>How far the model has been checked</h3><p>Against independent measurements (docs/accuracy.md), the model predicts decode speed per user 10.5% too fast on average and 23.4% too fast at worst, over 3 rows. On the one prefill row it predicts a cold prompt 14.4% too fast. Most models have no independent row, and their bands are marked unchecked.</p>`;
   $('srcbody').innerHTML = h;
 }
