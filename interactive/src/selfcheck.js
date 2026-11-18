@@ -322,7 +322,10 @@ export function unitChecks(){
   // and the explorer's display copy is DSV4F's
   const ds4v = CONFIG.MODELS["DSV4FV"],
         SAME_V = ["name", "w_resident", "nvfp4_w", "spec_tokens", "explorer"];
-  console.assert(Object.keys(ds4).every(k => SAME_V.includes(k) || ds4v[k] === ds4[k])
+  // by value: catalogue arrays and tables (vllm_tp, acceptance tuples) are
+  // separate objects on each model, never ===
+  const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  console.assert(Object.keys(ds4).every(k => SAME_V.includes(k) || sameValue(ds4v[k], ds4[k]))
                  && Object.keys(ds4v).every(k => k in ds4),
     "DSV4FV = DSV4F but for the name, the resident bytes, the NVFP4 arm, the draft depth and the display copy");
   console.assert(ds4v.w_resident === 166878536440 + (823685120 + 109068288 + 32768 + 46*256*4 + 3*256*4),
