@@ -22,6 +22,11 @@ request (compaction, branch, model change):
 
 `lost` split by the idle gap before the request tells the two causes apart:
 eviction grows with the gap, a replica switch does not.
+
+A server reports cached tokens only when it runs with vLLM's
+--enable-prompt-tokens-details. A session where a model never reported any is
+left out of that model's cache figures (it would read as all lost), and the
+count of requests left out is printed.
 """
 import argparse
 import collections
@@ -99,9 +104,16 @@ def main():
         if mine >= 0.9 * len(reqs):
             keep.append(f)
         prev = None
+        reported = {r[0] for r in reqs if r[2] > 0}
         for model, prompt, cached, gap, reset in reqs:
             s = stats[model]
             s["requests"] += 1
+            if model not in reported:
+                # this session never got a cached count from this model: the
+                # server was not reporting them, nothing to judge
+                s["requests_unreported"] += 1
+                prev = prompt
+                continue
             s["prompt_tokens"] += prompt
             s["cached_tokens"] += cached
             if prev is not None and not reset and prev > 0:
@@ -120,18 +132,23 @@ def main():
     print(f"\ncache, per model (requests judged against the previous one):")
     for m, s in sorted(stats.items(), key=lambda kv: -kv[1]["requests"]):
         j = s["hit"] + s["tail"] + s["lost"]
-        if not j:
-            continue
-        share = s["cached_tokens"] / max(s["prompt_tokens"], 1)
+        off = s["requests_unreported"]
         if s["cached_tokens"] == 0:
             print(f"  {m}: {s['requests']} requests, the server reported no "
                   "cached tokens, so the cache can't be judged (vLLM's "
                   "--enable-prompt-tokens-details is off)")
             continue
-        line = (f"  {m}: {s['requests']} requests, {share:.1%} of prompt "
-                f"tokens cached; hit {s['hit'] / j:.1%}, tail "
+        if not j:
+            continue
+        share = s["cached_tokens"] / max(s["prompt_tokens"], 1)
+        line = (f"  {m}: {s['requests'] - off} requests in sessions where "
+                f"the server reported cached tokens, {share:.1%} of their "
+                f"prompt tokens cached; hit {s['hit'] / j:.1%}, tail "
                 f"{s['tail'] / j:.1%}, lost {s['lost'] / j:.1%}")
         print(line)
+        if off:
+            print(f"      {off} more requests left out: their sessions got "
+                  "no cached count from this model")
         for _, n in GAPS:
             if s["judged " + n]:
                 print(f"      lost after a {n:9s} gap: "
