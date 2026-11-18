@@ -615,6 +615,26 @@ def test_http_error_is_recorded_not_raised():
     asyncio.run(go())
 
 
+def test_a_stream_cut_mid_reply_says_how_far_it_got():
+    def handler(_request):
+        async def gen():
+            for word in ("a", "b", "c"):
+                yield _sse({"choices": [{"delta": {"content": word}}]})
+            raise httpx.RemoteProtocolError("peer closed connection")
+
+        return httpx.Response(200, content=gen(),
+                              headers={"content-type": "text/event-stream"})
+
+    async def go():
+        async with client_for(handler) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m")
+            tr = RequestTrace(uid=1, kind="hit")
+            txt = await send_request(c, ep, small_opts(), "p", tr, 4)
+        assert txt == "" and tr.error.startswith("RemoteProtocolError")
+        assert "(3 text chunks received, the last 0.0 s before" in tr.error
+    asyncio.run(go())
+
+
 def test_chat_route_sends_messages_and_reads_delta_content():
     seen: list = []
     async def go():
