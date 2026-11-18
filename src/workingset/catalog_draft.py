@@ -202,8 +202,13 @@ def _no_layer_count(cfg: dict, t: dict) -> str:
     if found:
         return (f"{where}: no num_hidden_layers; it has {found}, a layer count "
                 f"under a name this command does not read")
-    nested = sorted(k for k, v in cfg.items() if isinstance(v, dict) and
-                    any(x in v for x in _LAYER_KEYS))
+    # where a layer count sits in a nested config, two levels down
+    # (InternVL's llm_config, Qwen2.5-Omni's thinker_config.text_config)
+    nested = sorted(f"{k}.{k2}" if k2 else k
+                    for k, v in cfg.items() if isinstance(v, dict)
+                    for k2, v2 in [(None, v)] + [(a, b) for a, b in v.items()
+                                                 if isinstance(b, dict)]
+                    if any(x in v2 for x in _LAYER_KEYS))
     return (f"{where}: no layer count (tried {list(_LAYER_KEYS)})"
             + (f"; nested configs {nested} have one" if nested else "")
             + (f"; text_config holds only {sorted(t)[:8]}" if t is not cfg else ""))

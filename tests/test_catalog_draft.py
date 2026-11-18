@@ -282,6 +282,9 @@ def test_a_null_kv_head_count_is_one_per_query_head():
     # SmolVLM2: text_config leaves the head count to LlamaConfig's default
     ({"text_config": {k: v for k, v in _BASE.items() if k != "num_attention_heads"}},
      "config.json text_config: num_attention_heads is None"),
+    # Qwen2.5-Omni: the language model is thinker_config.text_config
+    ({"thinker_config": {"text_config": dict(_BASE)}, "talker_config": dict(_BASE)},
+     r"nested configs \['talker_config', 'thinker_config.text_config'\]"),
     # xgen-mm: a text_config stub without sizes
     ({"text_config": {"model_type": "phi3", "sliding_window": 2047},
       "vision_encoder_config": {}}, "config.json text_config: no layer count"),
