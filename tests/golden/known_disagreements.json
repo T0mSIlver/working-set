@@ -945,23 +945,6 @@
    "observed_rel": 0.0323,
    "max_rel": 0.034,
    "hypothesis": "Monte-Carlo noise at the band's edge: 3.23% on one inside-the-knee state whose vector is unchanged since 2026-11-04, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 3.3% to 3.2% (2026-11-05)."
-  },
-  {
-   "quantity": "power_d_d",
-   "where": {
-    "model": "Q38FN",
-    "gpu": "B300",
-    "ngpu": 6,
-    "tp": 1,
-    "kv": "fp16",
-    "ram": 256,
-    "users": 16,
-    "inval": 35.0,
-    "eta": 0.2
-   },
-   "observed_rel": 0.049,
-   "max_rel": 0.06,
-   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states, and Q38FN's on-GPU weights moved when its n-gram table went to host memory (w_engram, 2026-11-16), so this 16-user DP6 state's decode-duty power sits just past the narrower band (4.9% against 4.6%)."
   }
  ]
 }

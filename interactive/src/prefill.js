@@ -495,7 +495,9 @@ export function decodeSlotMean(mns, q){
   return lo;
 }
 // The max_num_seqs working-set recommends, per group: the largest batch whose
-// per-user p50 meets the floor, within the GPU-resident warm p5. Mirrors
+// per-user p50 meets the floor, within the p5 of the decode population HBM
+// holds (warmCapacity's `res`: the warm sessions, or the cold ones where they
+// outnumber them). Mirrors
 // model.recommended_max_num_seqs.
 export function recommendedMns(bandwidth, resident){
   return Math.max(1, Math.floor(Math.min(bandwidth, resident)));

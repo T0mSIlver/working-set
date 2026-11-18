@@ -156,12 +156,14 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     draw = int(4000 + M.kv_pool_tokens(m, t) / 8000)
     p5_all, _, _ = M.warm_capacity(m, t, wl, ram_gib=ram, n_iter=n_iter,
                                    draw=draw, seed=seed, which="all")
-    # the most sessions HBM ever holds at once: the decode batch cannot
-    # outgrow it, so the steady point stops there (offload is storage, not
-    # a place to decode from — hence ram_gib=0)
+    # the most sessions HBM ever holds at once (the warm ones, or the cold
+    # ones where those outnumber them: a cold request holds its prompt while
+    # it is served): the decode batch cannot outgrow it, so the steady point
+    # and the recommended cap stop there
+    # (offload is storage, not a place to decode from — hence ram_gib=0)
     resident5, _, resident95 = M.warm_capacity(m, t, wl, ram_gib=0,
                                                n_iter=n_iter, draw=draw,
-                                               seed=seed, which="gpu")
+                                               seed=seed, which="resident")
 
     # The scheduler's cap on concurrent sequences: the configured one, else
     # the one working-set recommends. It limits the batch that decodes at
@@ -173,7 +175,7 @@ def predict(cfg: RunConfig, closed: bool = False, n_iter: int = 400,
     mns = (dep.max_num_seqs if dep.max_num_seqs is not None
            else M.recommended_max_num_seqs(bw, resident5))
     # a censored crossing is a lower bound, and so is the cap recommended off
-    # it -- unless the GPU-resident warm p5 is what set the cap
+    # it -- unless the GPU-resident p5 is what set the cap
     decode_censored = bool(op["decode_censored"])
     mns_lower_bound = (decode_censored and dep.max_num_seqs is None
                        and bw <= resident5)

@@ -24588,8 +24588,8 @@
     "warm_p5_all": 33.95,
     "max_users_decode": 221.0,
     "max_users_decode_censored": false,
-    "max_num_seqs": 33.0,
-    "decode_ceiling": 75.9799238722,
+    "max_num_seqs": 57.0,
+    "decode_ceiling": 137.852483841,
     "decode_capped": true,
     "decode_p50_n1": 236.867754391,
     "decode_p50_n8": 64.8448938932,
@@ -24619,8 +24619,8 @@
     "ctx_cv2": 0.735428018913,
     "wait_margin": 2.79579193187,
     "stretch_chunk_edge": 0.130599715253,
-    "steady_cap": 58.05,
-    "steady_cap_ratio": 0.34225069141
+    "steady_cap": 82.05,
+    "steady_cap_ratio": 0.249449072125
    }
   },
   {
@@ -37329,8 +37329,8 @@
     "warm_p5_all": 39.0,
     "max_users_decode": 59.0,
     "max_users_decode_censored": false,
-    "max_num_seqs": 27.0,
-    "decode_ceiling": 46.7958344588,
+    "max_num_seqs": 28.0,
+    "decode_ceiling": 48.9264517181,
     "decode_capped": true,
     "decode_p50_n1": 257.255179958,
     "decode_p50_n8": 82.9945772096,
@@ -37339,9 +37339,9 @@
     "steady_per_user_tok_s": 257.255179958,
     "steady_saturated": false,
     "power_d_p": 0.0280029645158,
-    "power_d_d": 0.0420063954424,
-    "power_per_gpu_w": 207.127255787,
-    "power_kw": 6.36414530208,
+    "power_d_d": 0.0409444429201,
+    "power_per_gpu_w": 206.468845223,
+    "power_kw": 6.35821960701,
     "energy_eur_month": 0.0,
     "energy_hw_month": 8568.0,
     "energy_total_month": 8568.0,
@@ -54186,8 +54186,8 @@
     "decode_p50_n1": 20.8887593287,
     "decode_p50_n8": 14.958607478,
     "decode_p50_n64": 4.56855703843,
-    "steady_n": 12.0,
-    "steady_per_user_tok_s": 12.7981374788,
+    "steady_n": 15.0,
+    "steady_per_user_tok_s": 11.4044787453,
     "steady_saturated": true,
     "power_d_p": 1.0,
     "power_d_d": 0.0,
@@ -54211,8 +54211,8 @@
     "ctx_cv2": 0.735428018913,
     "wait_margin": 5.05802839611,
     "stretch_chunk_edge": 0.130599715253,
-    "steady_cap": 12.0,
-    "steady_cap_ratio": 1.51236353618
+    "steady_cap": 15.05,
+    "steady_cap_ratio": 1.34556511559
    }
   },
   {
@@ -58975,8 +58975,8 @@
     "warm_p5_all": 191.9,
     "max_users_decode": 326.0,
     "max_users_decode_censored": false,
-    "max_num_seqs": 191.0,
-    "decode_ceiling": 743.310822592,
+    "max_num_seqs": 299.0,
+    "decode_ceiling": 849.609764191,
     "decode_capped": true,
     "decode_p50_n1": 895.793302231,
     "decode_p50_n8": 299.382122916,
@@ -58985,9 +58985,9 @@
     "steady_per_user_tok_s": 851.298287778,
     "steady_saturated": false,
     "power_d_p": 0.386920103378,
-    "power_d_d": 0.0817044542286,
-    "power_per_gpu_w": 317.725915398,
-    "power_kw": 2.67817774619,
+    "power_d_d": 0.0730649406398,
+    "power_per_gpu_w": 315.090863753,
+    "power_kw": 2.67027259126,
     "energy_eur_month": 0.0,
     "energy_hw_month": 1596.0,
     "energy_total_month": 1596.0,
@@ -59006,8 +59006,8 @@
     "ctx_cv2": 0.735428018913,
     "wait_margin": 0.336920103378,
     "stretch_chunk_edge": 0.130599715253,
-    "steady_cap": 243.0,
-    "steady_cap_ratio": 0.0762259830197
+    "steady_cap": 347.0,
+    "steady_cap_ratio": 0.0711321552689
    }
   },
   {
@@ -69798,8 +69798,8 @@
     "warm_p5_all": 21.0,
     "max_users_decode": 53.0,
     "max_users_decode_censored": false,
-    "max_num_seqs": 21.0,
-    "decode_ceiling": 75.5645620116,
+    "max_num_seqs": 36.0,
+    "decode_ceiling": 106.925456083,
     "decode_capped": true,
     "decode_p50_n1": 136.806811215,
     "decode_p50_n8": 103.844898776,
@@ -69829,8 +69829,8 @@
     "ctx_cv2": 0.735428018913,
     "wait_margin": 4.72334007847,
     "stretch_chunk_edge": 0.130599715253,
-    "steady_cap": 40.05,
-    "steady_cap_ratio": 0.481026562279
+    "steady_cap": 54.0,
+    "steady_cap_ratio": 0.442525889177
    }
   },
   {
@@ -72949,8 +72949,8 @@
     "warm_p5_all": 42.95,
     "max_users_decode": 20.0,
     "max_users_decode_censored": false,
-    "max_num_seqs": 10.0,
-    "decode_ceiling": 4.6831547339,
+    "max_num_seqs": 11.0,
+    "decode_ceiling": 5.02593830303,
     "decode_capped": true,
     "decode_p50_n1": 23.2361622845,
     "decode_p50_n8": 15.9070420487,
