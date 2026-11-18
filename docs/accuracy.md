@@ -167,6 +167,6 @@ The 27B TP2 FP16 log reports 2 × 110.59 GiB of KV memory; its 3,233,564 tokens 
 
 ## Pinned to
 
-- workingset 0.4.3, catalogue `catalog.toml` sha256 `3fd2db1f8ade`.
+- workingset 0.4.3, catalogue `catalog.toml` sha256 `71841f398843`.
 - The model takes no engine version. Measured rows name their engine: the 27B rows ran vLLM on H200; the recipe rows are vLLM recipes dated as shown; InferenceX rows carry their image tag in `data/external/inferencex.json`.
 - Outside records: calculators 6, deployments 13, inferencex 278, mlperf-inference-v6.0 75, read 2026-11-04.

@@ -9,6 +9,7 @@ import { hasHeadcount, peopleFromSessions, sessionsFromHeadcount, state } from '
 import { cssv, esc, fmt, linScale, logScale, logTicks, niceTicks, svgEl } from './svg.js';
 import { renderNoFit } from './charts.js';
 import { paintTiles, pendingLoadTiles } from './render.js';
+import { CEILING_INPUTS, provenanceGroups, provenanceHtml } from './provenance.js';
 
 /* ============================================================================
    THE PLANNER PANEL — spike tiles, charts F & G, the frontier table
@@ -164,6 +165,7 @@ export function renderSpikeTiles(op, sp, model, topo, wl, cs, noFit, fitHint){
         : `${PLANNER_LABEL[bind]} is over its limit even for one user — unachievable at any load`
           + ` · next: ${others}`,
      cls: op.headroom>=1?'crit':(op.headroom>=0.8?'warn':'good'),
+     prov: provenanceHtml(provenanceGroups(state.model, state.gpu, state.wdt, CEILING_INPUTS[bind])),
      tip:hasHeadcount()
        ? `All four ceilings are concurrent sessions, with people equivalents from the population inputs. The smallest binds. decode = where per-session p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%. The cache is not a ceiling: past the warm p5 population the sessions it cannot keep warm miss, and those cold requests count in the other three.`
        : `All four ceilings in ONE unit — max concurrent users — so the binding one is simply the smallest. decode = where per-user p50 hits the ${fmt(decodeFloor(),0)} tok/s floor; cold wait = where the ${waitStat} of a cold request's wait hits ${fmt(state.cold_wait,0)} s; slowed generation = where the share of generation time slowed by a cold prefill hits ${fmt(state.slowed_pct,0)}%; saturation = where prefill duty hits 100%. The cache is not a ceiling: past the warm p5 population the users it cannot keep warm miss (the hit rate falls as warm ÷ users, it does not fall off), and those cold requests count in the other three. The conversion rests on the Concurrent-users assumptions; chart G shows where the binding constraint changes hands.`},

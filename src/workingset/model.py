@@ -49,7 +49,7 @@ def load_catalog() -> dict:
 
 CATALOG = load_catalog()
 # catalog keys that are not Model fields (tables only the explorer reads)
-CATALOG_EXTRA_KEYS = frozenset({"explorer", "quality"})
+CATALOG_EXTRA_KEYS = frozenset({"explorer", "quality", "provenance"})
 
 # ============================================================================
 # HARDWARE
@@ -144,7 +144,9 @@ class GPU:
     eur_capex_gpu: float = 0.0
 
 
-GPUS = {k: GPU(**row) for k, row in CATALOG["gpus"].items()}
+# a GPU row's provenance table is workingset.provenance's, not a GPU field
+GPUS = {k: GPU(**{f: v for f, v in row.items() if f != "provenance"})
+        for k, row in CATALOG["gpus"].items()}
 
 VRAM_PER_GPU   = GPUS["H200"].vram    # calibration anchor GPU (baseline study)
 HBM_BW         = GPUS["H200"].hbm_bw
