@@ -204,7 +204,7 @@ def test_an_unused_sliding_window_does_not_withhold_the_cache():
             "sliding_window": 131072, "max_window_layers": 28}
     d = draft(_ck(qwen))
     assert d.fields["kv_bpt"][0] == 256 and d.fields["deltanet_state"][0] == 0.0
-    d = draft(_ck({**qwen, "use_sliding_window": True}))
+    d = draft(_ck({**qwen, "use_sliding_window": True, "sliding_window": 1024}))
     assert "kv_bpt" not in d.fields and "deltanet_state" not in d.fields
 
 
@@ -301,6 +301,29 @@ def test_sliding_window_layers_are_attention_with_a_window_not_recurrence(window
     assert d.fields["rec_layers"][0] == 0
     assert not {"attn_layers", "kv_bpt", "deltanet_state"} & set(d.fields)
     assert "2 full-attention and 2 sliding-window layers" in render(d)
+
+
+@pytest.mark.parametrize("extra, attn", [
+    # Phi-4-mini: sliding_window 262144 over max_position_embeddings 131072
+    ({"sliding_window": 262144, "max_position_embeddings": 131072}, 4),
+    # Ministral-8B-2410: sliding layers whose window is the whole context
+    ({"layer_types": ["full_attention", "sliding_attention"] * 2,
+      "sliding_window": 4096}, 4),
+])
+def test_a_window_as_long_as_the_context_is_plain_kv(extra, attn):
+    d = draft(_ck(extra))
+    assert d.fields["attn_layers"][0] == attn
+    assert d.fields["kv_bpt"][0] == attn * 2 * 16 * 2
+    assert d.fields["deltanet_state"][0] == 0.0
+    assert "never binds" in d.fields["kv_bpt"][1]
+
+
+def test_cross_layer_attention_gets_no_kv_bpt():
+    """Hunyuan's use_cla shares one cache between cla_share_factor layers;
+    use_cla false (Hunyuan-1.8B) is plain K/V."""
+    assert "kv_bpt" in draft(_ck({"use_cla": False, "cla_share_factor": 2})).fields
+    d = draft(_ck({"use_cla": True, "cla_share_factor": 2}))
+    assert "kv_bpt" not in d.fields and "use_cla" in render(d)
 
 
 def test_missing_layer_count_stops():

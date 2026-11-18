@@ -39,7 +39,9 @@ WINDOW_TYPES = {"sliding_attention"}
 _CACHE_KEY = re.compile(
     r"^(kv_lora_rank|compress_|index_|indexer_|kv_source|kv_shar|num_kv_shared|"
     r"cross_layer|attention_chunk|sliding_window|use_sliding_window|swa_|"
-    r"engram_|ngram|linear_attn_config|dsa_|no_rope_layer|mla_|candidate_)")
+    r"engram_|ngram|linear_attn_config|dsa_|no_rope_layer|mla_|candidate_|"
+    # Hunyuan's cross-layer attention shares one cache between cla_share_factor layers
+    r"use_cla)")
 
 _VISION = re.compile(r"(^|\.)(visual|vision_tower|vision_encoder|vision_model|"
                      r"multi_modal_projector|mm_projector|vision_language_adapter|"
@@ -262,8 +264,14 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     # transformers sets sliding_window to None for these model types when
     # use_sliding_window is false (configuration_qwen2.py:84 in 5.20.2), and
     # vLLM reads that config: Qwen2.5 ships sliding_window 131072 unused
-    unused_window = (t.get("use_sliding_window") is False
-                     and (t.get("model_type") or cfg.get("model_type")) in _WINDOW_FLAG_TYPES)
+    # A window at least as long as max_position_embeddings never drops a token
+    # within the context this table prices (max_ctx): Phi-3-128k and
+    # Phi-4-mini ship sliding_window 262144 over 131072, Ministral-8B 32768 over 32768
+    sw, ctx0 = t.get("sliding_window"), t.get("max_position_embeddings")
+    long_window = (isinstance(sw, int) and isinstance(ctx0, int) and 0 < ctx0 <= sw)
+    unused_window = long_window or (
+        t.get("use_sliding_window") is False
+        and (t.get("model_type") or cfg.get("model_type")) in _WINDOW_FLAG_TYPES)
     unused = {"sliding_window", "max_window_layers"} if unused_window else set()
     cache_keys = sorted(k for k, v in t.items() if _CACHE_KEY.match(k) and v not in
                         (None, False, 0, [], {}) and k not in unused)
@@ -291,6 +299,8 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
 
     lt = t.get("layer_types")
     sliding = sum(x in WINDOW_TYPES for x in lt) if isinstance(lt, list) else 0
+    if long_window and sliding:
+        attn, sliding = attn + sliding, 0
 
     # ---- attention cache ----------------------------------------------------
     if layout:
@@ -319,6 +329,8 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
         d.set("attn_d", heads * hd, f"= {heads} * {hd}")
         d.set("kv_bpt", attn * kvh * hd * 2,
               f"{attn} attn layers x {kvh} KV heads x {hd} x 2(K,V) x 1B (fp8 KV)"
+              + (f"; sliding_window {sw} >= max_position_embeddings {ctx0}: "
+                 f"never binds" if long_window else "")
               + (f"; head size {hd_how}" if hd_how != "head_dim" else ""))
     else:
         why = (layout if layout
