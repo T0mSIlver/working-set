@@ -55,9 +55,15 @@ price = { kind = "vendor", note = "rent: getdeploying.com's cross-provider media
 # vram: MEASURED — a real BM.GPU.B300.8 nvidia-smi dump (Oracle OCI
 # quickstart, driver 590.48.01) shows 275,040 MiB = 288.4e9 B per GPU:
 # the B300 delivers nominal decimal bytes with NO Hopper-style ~7%
-# over-provision. reserve_extra: the measured H200 hidden margin that the
-# transferred reserve must therefore add back (research/gpu_b300.md #3 —
-# formerly a flagged sensitivity, now the measured central case).
+# over-provision. reserve_extra: what the H200-solved reserve must gain
+# to hold on this part (research/reserve_terms.md, "The B300 reserve_extra
+# patch"). vLLM holds back (1 - u) x the CUDA total, so the GPU-dependent
+# part of the reserve is vram - u x total: 141e9 B - 0.92 x 139.80 GiB on
+# the H200, 288.4e9 B - 0.92 x 267.69 GiB here (CUDA totals from vLLM
+# start-up logs, u = 0.92 as our deployments run). Their difference is
+# 21.06e9 B: 10.08e9 of HBM the H200 delivers beyond its 141e9 (formerly
+# the 9.75e9 patch, from nvidia-smi) plus 10.99e9 of extra holdback on a
+# GPU with ~137e9 B more memory.
 # peak_flops_fp8: 4.5 PFLOPS dense. The DGX B300 datasheet quotes
 # "72 PFLOPS FP8" for 8 GPUs WITH 2:4 sparsity -> 9 PFLOPS sparse/GPU ->
 # 4.5 dense (corroborated by third-party spec tables listing HGX B300
@@ -70,7 +76,7 @@ name = "B300"
 vram = 288.4e9
 hbm_bw = 8.0e12
 supports_nvfp4 = true
-reserve_extra = 9.75e9
+reserve_extra = 21.06e9
 peak_flops_fp8 = 4.5e15
 # power: ENTIRELY EXTRAPOLATED — no Blackwell Ultra power-state
 # measurement exists. Rule (power.md #3): transfer Hopper's

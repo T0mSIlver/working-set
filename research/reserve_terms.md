@@ -9,12 +9,13 @@ with each, and what start-up logs show. `ws calibrate
 --vllm-log` reads the terms (`docs/decode-sweep.md`); `[calibration]` can
 carry them.
 
-Verdict: keep the current defaults. The logs confirm vLLM's arithmetic to the
-rounding of its log lines, and they point at one likely error (the B300
-transfer leaves out about 10 GiB per GPU of utilisation holdback). How the
-terms move with TP is unmeasured, and the single reserve also absorbs two
-things the terms do not describe (below). The logs that would settle it are
-listed at the end.
+Verdict: the logs confirm vLLM's arithmetic to the rounding of its log
+lines and show one error, the B300 transfer leaving out about 11e9 B per GPU
+of utilisation holdback; the B300's `reserve_extra` is raised to 20.76e9 B
+for it (Tom's pick on 2026-11-18). The rest of the default reserve stays:
+how the terms move with TP is unmeasured, and the single reserve also
+absorbs two things the terms do not describe (below). The logs that would
+settle it are listed at the end.
 
 ## The three terms
 
@@ -147,8 +148,9 @@ the terms only with `--reserve terms`.
 
 ## The B300 `reserve_extra` patch
 
-The B300 reserve is the H200's 18.0 GiB plus `reserve_extra = 9.75e9` B
-(9.1 GiB), the H200's hidden over-provision added back. The terms show what
+Until 2026-11-18 the B300 reserve was the H200's 18.0 GiB plus
+`reserve_extra = 9.75e9` B (9.1 GiB), the H200's hidden over-provision added
+back. The terms show what
 that transfer leaves out: the part of the reserve that depends on the GPU is
 `vram - u x gpu_total`. With the nvidia-smi totals above and u = 0.92 (an
 assumption: the model has no utilisation input; vLLM's default is 0.90):
@@ -162,6 +164,12 @@ assumption), the B300 reserve is about 11e9 B per GPU short, because the
 holdback is a share of a memory twice the size. `research/gpu_b300.md` §3
 item 1 assumes the reserve "scales mostly with model and batch, not VRAM";
 the holdback is the part that does not. A B300 log points the same way.
+
+`reserve_extra` is now that difference, 20.76e9 B per GPU: the old patch's
+9.75e9 of H200 over-provision plus 11.01e9 of extra holdback,
+`0.08 x (288.4e9 - 150.75e9)`. Every B300 pool loses 11.01e9 B per GPU
+against the old patch. A deployment run at another utilisation sets its own
+reserve with `ws calibrate --vllm-log --reserve terms`.
 
 ## TP8
 
@@ -178,8 +186,8 @@ log would show.
 
 ## Recommendation
 
-- Keep `ACT_RESERVE` and `reserve_extra` as they are until the logs below
-  exist; the published numbers do not move.
+- Keep `ACT_RESERVE` as it is until the logs below exist; the B300's
+  `reserve_extra` carries the holdback at 0.92 from 2026-11-18.
 - Use `ws calibrate --vllm-log` on every new deployment: it prints the three
   terms, the reserve they sum to and the default, the weights gap and the
   bytes per token, and `--reserve terms` stores the terms for that

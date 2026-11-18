@@ -172,7 +172,7 @@ models added in 2026-07 is every cell below except one:
 | min TP to fit FP8 weights | H200 | B300 |
 | --- | --- | --- |
 | Mistral-Medium-3.5-128B (133.6 GB) | **2** | 1 — *fits a single B300* |
-| GLM-5.2 (755.5 GB) | **7** | **3** |
+| GLM-5.2 (755.5 GB) | **7** | **4** (3 until 2026-11-18, before the B300 reserve carried vLLM's utilisation holdback) |
 
 In every bolded cell, `topology("dp", n)` — *n* independent **single** GPUs — is
 not a deployment that exists: no number of single GPUs ever holds the weights,
@@ -1602,7 +1602,11 @@ Observations:
     35B-A3B on 1×B300, −11.7% for GLM-5.2 FP8 on 4×B300 vs the uncorrected
     transfer — `tables.py` prints both). What remains an assumption is the
     activation/workspace reserve itself transferring across generations —
-    one B300 vLLM startup log would close it.
+    one B300 vLLM startup log would close it. Since 2026-11-18
+    `reserve_extra` is 21.06e9 B: it also adds vLLM's utilisation holdback,
+    `(1 - 0.92) x` the part's CUDA total, which grows with the part's memory
+    (`research/reserve_terms.md`), so every B300 pool is 11.31e9 B per GPU
+    smaller than with the 9.75e9 patch.
 17. **NVFP4 constants inherit checkpoint-recipe choices.** Which layers stay
     BF16 differs per quantizer (all recipes now read from the literal quant
     configs: RedHatAI keeps the 35B-A3B's DeltaNet blocks + MTP module BF16;

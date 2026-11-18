@@ -61,7 +61,7 @@ export const CATALOG = {
    "vram": 288400000000.0,
    "hbm_bw": 8000000000000.0,
    "supports_nvfp4": true,
-   "reserve_extra": 9750000000.0,
+   "reserve_extra": 21060000000.0,
    "peak_flops_fp8": 4500000000000000.0,
    "tdp_w": 1400.0,
    "idle_w": 150.0,

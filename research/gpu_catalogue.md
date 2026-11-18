@@ -172,12 +172,11 @@ bandwidth, dense FP8, `supports_nvfp4`, TDP and price. Two fields need a rule
 rather than a datasheet number:
 
 - **`vram` and `reserve_extra`.** The reserve is solved on the H200, whose
-  "141 GB" delivers ~150.75e9 B. A part's `reserve_extra` is the H200's hidden
-  9.75e9 minus the part's own over-provision, so each new part needs its
-  nvidia-smi total. Blackwell delivers nominal decimal bytes (measured on
-  B300; DGX B200's 180 GiB = 193e9 B says the same), so B200 takes
-  `reserve_extra=9.75e9` like the B300. Hopper parts need their nvidia-smi
-  MiB before they get a row.
+  "141 GB" delivers 139.80 GiB as CUDA reports it. A part's `reserve_extra`
+  is `(vram - 0.92 x total)` on the part less the same on the H200, with
+  `total` the CUDA total a vLLM start-up log prints ("Free memory on device
+  (free/total GiB)"); the B300's is 21.06e9 B (`research/reserve_terms.md`).
+  Each new part needs that total before it gets a row.
 - **Power.** Only Hopper fractions are measured (`research/power.md`).
   Transfer the same fractions of TDP (idle ~10.5%, decode 0.55, prefill 0.90)
   and take `host_w` from system power: DGX B200 (14.3 kW - 8 x 1,000 W) / 8 =
