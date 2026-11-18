@@ -158,7 +158,7 @@ def test_cli_prints_a_draft(capsys):
                  "--key", "Q27"]) == 0
     out = capsys.readouterr().out
     assert "[models.Q27]" in out and "kv_bpt = 32_768" in out
-    assert "accepts --tensor-parallel-size 1, 2, 4, 8\n" in out
+    assert "vllm_tp = [1, 2, 4, 8] " in out
 
 
 # ---- the reader --------------------------------------------------------------
@@ -253,3 +253,36 @@ def test_the_study_dcp_layout_is_one_vllm_accepts(key):
     for tp in accepted_tps(f, 8):
         topo = M.topology_grid(1, tp, "B300")
         assert dcp_refusals(f, tp, M.dcp_size(m, topo)) == [], (key, tp)
+
+
+ARMS = [(k, g, w) for k in REPOS for g in M.GPUS for w in ("fp8", "nvfp4")
+        if w == "fp8" or (M.MODELS[k].nvfp4_w and M.GPUS[g].supports_nvfp4)]
+
+
+def _arm(key, gpu, wdt):
+    m = M.with_gpu(M.MODELS[key], gpu)
+    if wdt == "nvfp4":
+        m = M.with_weight_dtype(m, "nvfp4")
+    if m.kv_fp8_blackwell_only and gpu == "H200":
+        m = M.with_kv_dtype(m, "fp16")
+    return m
+
+
+@pytest.mark.parametrize("key, gpu, wdt", ARMS)
+def test_every_offered_topology_is_one_vllm_accepts(key, gpu, wdt):
+    """node_splits offers only widths vLLM accepts, and so does the
+    explorer's Split control, which drops the rest: TP 3, 5, 6 and 7 for
+    every catalogue model."""
+    m = _arm(key, gpu, wdt)
+    for t in M.node_splits(m, gpu, node=8):
+        assert t.tp in m.vllm_tp and M.vllm_tp_refused(m, t.tp) is None, (key, t.tp)
+    need = M.min_tp_for(m, gpu)
+    reachable = {tp for n in range(1, 9) for tp in range(1, n + 1)
+                 if n % tp == 0 and tp >= need}
+    assert {tp for tp in reachable if M.vllm_tp_refused(m, tp)} == reachable & {3, 5, 6, 7}
+
+
+def test_a_config_at_a_refused_width_stops(capsys):
+    assert main(["init", "--model", "27B", "--gpu", "H200", "--tp", "3", "-o", "-"]) == 2
+    assert "vLLM refuses tensor_parallel 3 for Qwen3.8-27B" in capsys.readouterr().err
+    assert main(["init", "--model", "27B", "--gpu", "H200", "--tp", "4", "-o", "-"]) == 0

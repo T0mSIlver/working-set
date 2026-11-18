@@ -61,6 +61,12 @@ export const CATALOG = {
    "attn_layers": 16,
    "attn_d": 6144,
    "kv_heads": 4,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8
+   ],
    "quality": {
     "tb21": [
      213,
@@ -103,6 +109,13 @@ export const CATALOG = {
    "attn_layers": 10,
    "attn_d": 4096,
    "kv_heads": 2,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "quality": {
     "tb21": [
      120,
@@ -145,6 +158,13 @@ export const CATALOG = {
    "attn_layers": 88,
    "attn_d": 12288,
    "kv_heads": 8,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "quality": {
     "tb21": [
      135,
@@ -196,6 +216,13 @@ export const CATALOG = {
    "attn_layers": 78,
    "attn_d": 16384,
    "kv_heads": 1,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "quality": {
     "tb21": [
      224,
@@ -251,6 +278,13 @@ export const CATALOG = {
    "attn_layers": 41,
    "attn_d": 649.3658536585366,
    "kv_heads": 1,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "state_heads": 1,
    "quality": {
     "tb21": [
@@ -298,6 +332,13 @@ export const CATALOG = {
    "attn_layers": 41,
    "attn_d": 649.3658536585366,
    "kv_heads": 1,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "state_heads": 1,
    "quality": {
     "tb21": [
@@ -358,6 +399,13 @@ export const CATALOG = {
    "attn_layers": 3,
    "attn_d": 1024,
    "kv_heads": 1,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "state_heads": 1,
    "quality": {
     "tb21": 0.906,
@@ -409,6 +457,12 @@ export const CATALOG = {
    "attn_layers": 12,
    "attn_d": 6144,
    "kv_heads": 2,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8
+   ],
    "quality": {
     "tb21": [
      230,
@@ -482,6 +536,13 @@ export const CATALOG = {
    "attn_layers": 11,
    "attn_d": 16384,
    "kv_heads": 1,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "quality": {
     "tb21": [
      225,
@@ -547,6 +608,13 @@ export const CATALOG = {
    "attn_layers": 72,
    "attn_d": 8192,
    "kv_heads": 1,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "state_heads": 1,
    "quality": {
     "tb40": [
@@ -608,6 +676,13 @@ export const CATALOG = {
    "attn_layers": 24,
    "attn_d": 15360,
    "kv_heads": 1,
+   "vllm_tp": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
    "quality": {
     "tb40": [
      133,
@@ -674,6 +749,7 @@ export const CATALOG = {
    "state_fp32_ok": true,
    "kv_heads": 1,
    "kv_index_bpt": 0.0,
+   "vllm_tp": [],
    "max_ctx": 262144,
    "params_prefill": 0.0,
    "attn_layers": 0,

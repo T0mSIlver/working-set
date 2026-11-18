@@ -27,7 +27,7 @@
    nothing but state.js reads another module at evaluation time), but a module
    that state.js depends on must never depend on state.js.
    ========================================================================== */
-import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, tokensPerStep, unionKink } from './config.js';
+import { CONFIG, MIB, clampTp, divisors, is_moe, kv_pool_tokens, minTpFor, tokensPerStep, unionKink, vllmTpRefused } from './config.js';
 import { TTFT_PCTS, requestRate, steadyResident } from './prefill.js';
 import { prefillSampledChecks, steadyChecks, unitChecks } from './selfcheck.js';
 import { clip } from './mathlib.js';
@@ -76,7 +76,8 @@ function onInput(){
 }
 
 // Rebuild the DP×TP split control for the current GPU count. The valid TP
-// widths are exactly the divisors of ngpu, so the button set changes whenever
+// widths are the divisors of ngpu that vLLM accepts for the model
+// (catalogue vllm_tp), so the button set changes whenever
 // the slider moves — this is where the hybrid grid becomes reachable from the
 // UI at all (pure TP and pure DP are just its two ends).
 function renderSplitControl(){
@@ -85,6 +86,7 @@ function renderSplitControl(){
   const need = minTpFor(activeModel(), state.gpu);
   seg.innerHTML = '';
   for (const tp of divisors(state.ngpu)){
+    if (vllmTpRefused(activeModel(), tp)) continue;
     const dp = state.ngpu / tp;
     const b = document.createElement('button');
     b.dataset.v = String(tp);
@@ -117,7 +119,7 @@ function renderSplitControl(){
 // control (whose dimmed buttons depend on the active model and GPU part).
 function enforceConstraints(){
   const m = CONFIG.MODELS[state.model];
-  state.tp = clampTp(state.tp, state.ngpu);
+  state.tp = clampTp(state.tp, state.ngpu, m.vllm_tp);
   renderSplitControl();
   // NVFP4 needs BOTH a capable GPU and an existing checkpoint (every model
   // but DSv4-Flash-Vision has one as of 2026-10-02 — research/nvfp4_2026-10.md,
