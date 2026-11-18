@@ -170,10 +170,11 @@ def _layer_counts(t: dict) -> tuple:
 
 # per-layer attention projections in the shard headers: separate query and
 # key, or one packed q/k/v matrix (Phi-3 qkv_proj, Falcon query_key_value,
-# MPT / Phi-1 Wqkv, GPT-2 c_attn, which is a Conv1D stored [in, out])
+# MPT / Phi-1 Wqkv, Baichuan W_pack, OLMo / Molmo att_proj, GPT-2 c_attn,
+# which is a Conv1D stored [in, out])
 _Q_PROJ = re.compile(r"\.(q_proj|query)\.weight$")
 _K_PROJ = re.compile(r"\.(k_proj|key)\.weight$")
-_QKV_PROJ = re.compile(r"\.(qkv_proj|query_key_value|Wqkv|c_attn)\.weight$")
+_QKV_PROJ = re.compile(r"\.(qkv_proj|query_key_value|Wqkv|W_pack|att_proj|c_attn)\.weight$")
 # keys that name a layer count where num_hidden_layers is absent
 _LAYER_KEYS = ("num_hidden_layers", "n_layers", "n_layer", "num_layers",
                "num_transformer_layers", "num_decoder_layers", "n_layers_decoder")

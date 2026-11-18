@@ -230,6 +230,10 @@ def _proj(name, rows, cols=128, n=4):
       "num_key_value_heads": None},
      [("transformer.h.#.self_attention.query_key_value.weight", "BF16", [192, 128], 4)],
      2, 16),
+    # Baichuan's W_pack, Molmo's att_proj (MHA, no num_key_value_heads)
+    ({"num_key_value_heads": None}, [_proj("W_pack", 3 * 128)], 8, 16),
+    ({}, [("model.transformer.blocks.#.att_proj.weight", "F32", [(8 + 4) * 16, 128], 4)],
+     2, 16),
     # GPT-2 Conv1D c_attn stored [in, out]
     ({"num_key_value_heads": None},
      [("transformer.h.#.attn.c_attn.weight", "BF16", [128, 3 * 128], 4)], 8, 16),
@@ -285,6 +289,10 @@ def test_a_null_kv_head_count_is_one_per_query_head():
     # Qwen2.5-Omni: the language model is thinker_config.text_config
     ({"thinker_config": {"text_config": dict(_BASE)}, "talker_config": dict(_BASE)},
      r"nested configs \['talker_config', 'thinker_config.text_config'\]"),
+    # Llama-3.3-Nemotron-Super-49B: per-layer attention in block_configs
+    ({**_BASE, "num_key_value_heads": None,
+      "block_configs": [{"attention": {"n_heads_in_group": 8, "no_op": False}}]},
+     "block_configs sets attention per layer"),
     # xgen-mm: a text_config stub without sizes
     ({"text_config": {"model_type": "phi3", "sliding_window": 2047},
       "vision_encoder_config": {}}, "config.json text_config: no layer count"),

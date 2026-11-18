@@ -51,6 +51,13 @@ def kv_heads_of(t: dict) -> tuple:
     so (configuration_llama.py:89, configuration_phi.py:85 in 5.20.2), and
     vLLM reads that config."""
     heads = t.get("num_attention_heads")
+    if isinstance(t.get("block_configs"), list):
+        # Nemotron-NAS (DeciLM): each layer's attention has its own
+        # n_heads_in_group, and some layers have none (no_op)
+        raise ValueError("config.json: block_configs sets attention per layer "
+                         "(n_heads_in_group, no_op): the KV heads and the "
+                         "attention layers differ by layer, which `ws catalog` "
+                         "and the TP check do not model")
     if t.get("model_type") == "falcon":
         if t.get("new_decoder_architecture"):
             kv, how = t.get("num_kv_heads"), "num_kv_heads (Falcon new_decoder_architecture)"
