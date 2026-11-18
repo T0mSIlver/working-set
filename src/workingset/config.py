@@ -402,6 +402,10 @@ class RunConfig:
                 f"{M.MODELS[d.model].name}: recurrent_state_dtype 'fp32' does "
                 "nothing here — the model carries no bf16 recurrent state to "
                 "widen (deltanet_state 0, or a fixed mixed-precision buffer)")
+        if d.model in M.MODELS:
+            refused = M.vllm_tp_refused(M.MODELS[d.model], d.tensor_parallel)
+            if refused:
+                raise ValueError(f"deployment.tensor_parallel: {refused}")
         if d.engram not in M.ENGRAM_PLACES:
             raise ValueError(f"deployment.engram must be one of "
                              f"{M.ENGRAM_PLACES}, got {d.engram!r}")

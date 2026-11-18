@@ -203,17 +203,6 @@
    "hypothesis": "ILL-CONDITIONED AT THE ZERO TEST, which both sides now run the same way: is the WHOLE mean TTFT at f = 0 - the all-warm queue wait plus the miss's own prefill - already past the budget? All 20 states sit in the first quarter of this entry's window: their _sla10_headroom, which the fixture records per vector, reads 0.007-0.013. A hair of sampling difference in the moments decides which side of the cliff they land: Python reads 0 and the mirror 6e-4, agreeing in meaning and not in value. The window is bounded on BOTH sides so a state arbitrarily past its budget is not admitted."
   },
   {
-   "quantity": "sla_miss_rate_sla10",
-   "where": {
-    "_sla10_headroom": {
-     "lt": 0.35
-    }
-   },
-   "observed_rel": 0.415,
-   "max_rel": 0.6,
-   "hypothesis": "the same 1/k amplification max_users_latency has: f* solves a linear equation whose coefficient is k = 2(SLA - E[S|miss]), so a couple of percent of sampling difference in the miss cost becomes tens of percent in f* once the miss eats most of the budget. Four states, headroom 0.10-0.30; above 0.35 headroom this quantity is inside its band everywhere."
-  },
-  {
    "quantity": "moments_miss_sq",
    "where": {
     "_ctx_cv2": {
@@ -779,69 +768,6 @@
    "hypothesis": "the steady batch sits at the GPU-resident cap's edge (steady_cap_ratio near 1): Python's integer bisection and the explorer's interpolated aggregate land on either side; JS draws reseeded when samplingSig took the decode knobs (WS-10)"
   },
   {
-   "quantity": "moments_miss_sq",
-   "where": {
-    "model": "GLM53F",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "kv": "fp8",
-    "ngpu": 7,
-    "tp": 7,
-    "users": 128,
-    "inval": 10.0,
-    "chunk": "8192",
-    "_duty": {
-     "gte": 0.1504,
-     "lt": 0.1598
-    }
-   },
-   "observed_rel": 0.0973,
-   "max_rel": 0.117,
-   "hypothesis": "second moment of the miss service time is tail-dominated; the JS context draw was reseeded when samplingSig took the decode knobs (WS-10) and lands just outside the band"
-  },
-  {
-   "quantity": "queue_wait_seconds",
-   "where": {
-    "model": "GLM53F",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "kv": "fp8",
-    "ngpu": 7,
-    "tp": 7,
-    "users": 128,
-    "inval": 10.0,
-    "chunk": "8192",
-    "_duty": {
-     "gte": 0.1504,
-     "lt": 0.1598
-    }
-   },
-   "observed_rel": 0.0897,
-   "max_rel": 0.108,
-   "hypothesis": "follows moments_miss_sq on the same state (the queue reads the second moment); JS draws reseeded (WS-10)"
-  },
-  {
-   "quantity": "cold_wait_seconds",
-   "where": {
-    "model": "GLM53F",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "kv": "fp8",
-    "ngpu": 7,
-    "tp": 7,
-    "users": 128,
-    "inval": 10.0,
-    "chunk": "8192",
-    "_duty": {
-     "gte": 0.1504,
-     "lt": 0.1598
-    }
-   },
-   "observed_rel": 0.0895,
-   "max_rel": 0.108,
-   "hypothesis": "follows moments_miss_sq or the queue's onset on the same state; JS draws reseeded (WS-10)"
-  },
-  {
    "quantity": "cold_wait_seconds",
    "where": {
     "model": "GLM53F",
@@ -1019,22 +945,6 @@
    "observed_rel": 0.0323,
    "max_rel": 0.034,
    "hypothesis": "Monte-Carlo noise at the band's edge: 3.23% on one inside-the-knee state whose vector is unchanged since 2026-11-04, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 3.3% to 3.2% (2026-11-05)."
-  },
-  {
-   "quantity": "ttft_hit_fcfs",
-   "where": {
-    "model": "GLM52",
-    "gpu": "H200",
-    "wdt": "fp8",
-    "kv": "fp16",
-    "ngpu": 7,
-    "tp": 7,
-    "chunk": "2048",
-    "eta": 0.4
-   },
-   "observed_rel": 0.0594,
-   "max_rel": 0.062,
-   "hypothesis": "Monte-Carlo noise at the band's edge: 5.94% on one state whose vector is unchanged, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 6.1% to 5.9% (2026-11-05)."
   },
   {
    "quantity": "power_d_d",

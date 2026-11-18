@@ -381,8 +381,8 @@ class Model:
     # to 16 (its head, KV-head, MLP, expert, vocabulary and linear-attention
     # widths divide by them; workingset.vllm_tp, research/kv_tp_sharding.md
     # #6). `ws catalog` prints them; tests check them against each repo's
-    # config.json. Other widths are priced as an extrapolation and flagged
-    # by vllm_tp_refused(). Empty: not recorded.
+    # config.json. A config at any other width is refused (vllm_tp_refused);
+    # the model's arithmetic itself still takes any width. Empty: not recorded.
     vllm_tp: tuple = ()
     # Largest max_seq_len the study allows for this model (tokens). The
     # workload cap (Workload.cap) may not exceed it — warm_capacity and
@@ -919,17 +919,17 @@ def tp_efficiency(tp: int, nvlink_domain: int = 8) -> float:
 
 
 def vllm_tp_refused(model: Model, tp: int) -> str | None:
-    """Why the topology's TP width is not one vLLM accepts for `model`, or
-    None when it is. The study still prices such a width (an extrapolation);
-    callers print this so a reader knows no vLLM deployment matches it."""
+    """Why vLLM refuses TP width `tp` for `model`, or None when it accepts
+    it. Configs refuse such a width (RunConfig.validate) and the explorer does
+    not offer it: no vLLM deployment matches it."""
     if not model.vllm_tp:
-        return (f"{model.name}: the TP sizes vLLM accepts are not recorded "
-                f"(catalog vllm_tp); TP{tp} not checked")
+        return (f"{model.name}: the TP sizes vLLM accepts are not recorded: "
+                f"set vllm_tp in catalog.toml (`ws catalog REPO` prints it)")
     if tp in model.vllm_tp:
         return None
     sizes = ", ".join(map(str, model.vllm_tp))
-    return (f"vLLM refuses TP{tp} for {model.name} (it accepts {sizes}): "
-            f"priced as an extrapolation")
+    return (f"vLLM refuses tensor_parallel {tp} for {model.name}; it accepts "
+            f"{sizes} (research/kv_tp_sharding.md #6)")
 
 
 def min_tp_for(model: Model, gpu: str = "H200") -> int:

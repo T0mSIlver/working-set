@@ -76,7 +76,8 @@ function onInput(){
 }
 
 // Rebuild the DP×TP split control for the current GPU count. The valid TP
-// widths are exactly the divisors of ngpu, so the button set changes whenever
+// widths are the divisors of ngpu that vLLM accepts for the model
+// (catalogue vllm_tp), so the button set changes whenever
 // the slider moves — this is where the hybrid grid becomes reachable from the
 // UI at all (pure TP and pure DP are just its two ends).
 function renderSplitControl(){
@@ -85,6 +86,7 @@ function renderSplitControl(){
   const need = minTpFor(activeModel(), state.gpu);
   seg.innerHTML = '';
   for (const tp of divisors(state.ngpu)){
+    if (vllmTpRefused(activeModel(), tp)) continue;
     const dp = state.ngpu / tp;
     const b = document.createElement('button');
     b.dataset.v = String(tp);
@@ -94,13 +96,10 @@ function renderSplitControl(){
                   : `DP${dp}×TP${tp}`;
     b.setAttribute('aria-pressed', tp === state.tp ? 'true' : 'false');
     const fits = tp >= need;
-    const refused = vllmTpRefused(activeModel(), tp);
     if (!fits) b.classList.add('nofit');
-    else if (refused) b.classList.add('vllm-refused');
-    b.title = !fits
-      ? `weights need TP ≥ ${need} on ${state.gpu}; a ${tp}-GPU group holds no cache`
-      : `${dp} replica group${dp>1?'s':''} × ${tp} GPU${tp>1?'s':''} — one KV cache per group`
-        + (refused ? `. ${refused}` : '');
+    b.title = fits
+      ? `${dp} replica group${dp>1?'s':''} × ${tp} GPU${tp>1?'s':''} — one KV cache per group`
+      : `weights need TP ≥ ${need} on ${state.gpu}; a ${tp}-GPU group holds no cache`;
     b.addEventListener('click', ()=>{
       state.tp = tp;
       enforceConstraints(); syncLabels(); computeAndRender(false);
@@ -120,7 +119,7 @@ function renderSplitControl(){
 // control (whose dimmed buttons depend on the active model and GPU part).
 function enforceConstraints(){
   const m = CONFIG.MODELS[state.model];
-  state.tp = clampTp(state.tp, state.ngpu);
+  state.tp = clampTp(state.tp, state.ngpu, m.vllm_tp);
   renderSplitControl();
   // NVFP4 needs BOTH a capable GPU and an existing checkpoint (every model
   // but DSv4-Flash-Vision has one as of 2026-10-02 — research/nvfp4_2026-10.md,

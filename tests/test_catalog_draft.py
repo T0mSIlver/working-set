@@ -269,16 +269,20 @@ def _arm(key, gpu, wdt):
 
 
 @pytest.mark.parametrize("key, gpu, wdt", ARMS)
-def test_every_offered_topology_vllm_accepts_or_is_flagged(key, gpu, wdt):
-    """node_splits (Python's menu) offers only widths vLLM accepts. The
-    explorer's Split control also reaches TP 3, 5, 6 and 7 (3 to 7 GPUs);
-    vLLM refuses each of those for every catalogue model, and
-    vllm_tp_refused says so."""
+def test_every_offered_topology_is_one_vllm_accepts(key, gpu, wdt):
+    """node_splits offers only widths vLLM accepts, and so does the
+    explorer's Split control, which drops the rest: TP 3, 5, 6 and 7 for
+    every catalogue model."""
     m = _arm(key, gpu, wdt)
     for t in M.node_splits(m, gpu, node=8):
         assert t.tp in m.vllm_tp and M.vllm_tp_refused(m, t.tp) is None, (key, t.tp)
     need = M.min_tp_for(m, gpu)
     reachable = {tp for n in range(1, 9) for tp in range(1, n + 1)
                  if n % tp == 0 and tp >= need}
-    refused = {tp for tp in reachable if M.vllm_tp_refused(m, tp)}
-    assert refused == reachable & {3, 5, 6, 7}
+    assert {tp for tp in reachable if M.vllm_tp_refused(m, tp)} == reachable & {3, 5, 6, 7}
+
+
+def test_a_config_at_a_refused_width_stops(capsys):
+    assert main(["init", "--model", "27B", "--gpu", "H200", "--tp", "3", "-o", "-"]) == 2
+    assert "vLLM refuses tensor_parallel 3 for Qwen3.8-27B" in capsys.readouterr().err
+    assert main(["init", "--model", "27B", "--gpu", "H200", "--tp", "4", "-o", "-"]) == 0
