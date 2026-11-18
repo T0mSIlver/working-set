@@ -280,9 +280,14 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     # vLLM reads that config: Qwen2.5 ships sliding_window 131072 unused
     # A window at least as long as max_position_embeddings never drops a token
     # within the context this table prices (max_ctx): Phi-3-128k and
-    # Phi-4-mini ship sliding_window 262144 over 131072, Ministral-8B 32768 over 32768
+    # Phi-4-mini ship sliding_window 262144 over 131072. Layers the config
+    # types "sliding_attention" stay windowed: Ministral-8B-2410 states 32768
+    # over 32768 yet is served at 128k, where its window binds.
     sw, ctx0 = t.get("sliding_window"), t.get("max_position_embeddings")
-    long_window = (isinstance(sw, int) and isinstance(ctx0, int) and 0 < ctx0 <= sw)
+    typed_window = isinstance(t.get("layer_types"), list) and any(
+        x in WINDOW_TYPES for x in t["layer_types"])
+    long_window = (isinstance(sw, int) and isinstance(ctx0, int) and 0 < ctx0 <= sw
+                   and not typed_window)
     unused_window = long_window or (
         t.get("use_sliding_window") is False
         and (t.get("model_type") or cfg.get("model_type")) in _WINDOW_FLAG_TYPES)
@@ -313,8 +318,6 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
 
     lt = t.get("layer_types")
     sliding = sum(x in WINDOW_TYPES for x in lt) if isinstance(lt, list) else 0
-    if long_window and sliding:
-        attn, sliding = attn + sliding, 0
 
     # ---- attention cache ----------------------------------------------------
     if layout:

@@ -322,19 +322,20 @@ def test_sliding_window_layers_are_attention_with_a_window_not_recurrence(window
     assert "2 full-attention and 2 sliding-window layers" in render(d)
 
 
-@pytest.mark.parametrize("extra, attn", [
-    # Phi-4-mini: sliding_window 262144 over max_position_embeddings 131072
-    ({"sliding_window": 262144, "max_position_embeddings": 131072}, 4),
-    # Ministral-8B-2410: sliding layers whose window is the whole context
-    ({"layer_types": ["full_attention", "sliding_attention"] * 2,
-      "sliding_window": 4096}, 4),
-])
-def test_a_window_as_long_as_the_context_is_plain_kv(extra, attn):
-    d = draft(_ck(extra))
-    assert d.fields["attn_layers"][0] == attn
-    assert d.fields["kv_bpt"][0] == attn * 2 * 16 * 2
+def test_a_window_as_long_as_the_context_is_plain_kv():
+    """Phi-4-mini: sliding_window 262144 over max_position_embeddings 131072."""
+    d = draft(_ck({"sliding_window": 262144, "max_position_embeddings": 131072}))
+    assert d.fields["kv_bpt"][0] == 4 * 2 * 16 * 2
     assert d.fields["deltanet_state"][0] == 0.0
     assert "never binds" in d.fields["kv_bpt"][1]
+
+
+def test_typed_sliding_layers_stay_windowed_at_any_length():
+    """Ministral-8B-2410 types its sliding layers with a window equal to
+    max_position_embeddings (32768) but is served at 128k."""
+    d = draft(_ck({"layer_types": ["full_attention", "sliding_attention"] * 2,
+                   "sliding_window": 4096}))
+    assert not {"attn_layers", "kv_bpt", "deltanet_state"} & set(d.fields)
 
 
 def test_cross_layer_attention_gets_no_kv_bpt():
