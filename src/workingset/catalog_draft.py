@@ -29,6 +29,9 @@ from .vllm_tp import (VLLM_VERSION, accepted_tps, kv_heads_of, pad_vocab, text_c
 # recurrent ones (a fixed per-session state). Anything else is unrecognised.
 ATTENTION_TYPES = {"full_attention", "deepseek_sparse_attention", "indexed_attention"}
 RECURRENT_TYPES = {"linear_attention"}
+# attention over a sliding window (Gemma 2/3, gpt-oss, Mistral 3): a fixed
+# window state, not a per-token cache, and not counted in attn_layers
+WINDOW_TYPES = {"sliding_attention"}
 
 # config keys that change what a token's cache holds beyond plain K/V heads
 # (latents, compressed or indexed caches, windows, shared layers, tables).
@@ -118,7 +121,7 @@ def _layer_counts(t: dict) -> tuple:
         if len(lt) != n:
             raise ValueError(f"config.json: layer_types has {len(lt)} entries for "
                              f"num_hidden_layers {n}")
-        unknown = sorted(set(lt) - ATTENTION_TYPES - RECURRENT_TYPES)
+        unknown = sorted(set(lt) - ATTENTION_TYPES - RECURRENT_TYPES - WINDOW_TYPES)
         attn = sum(x in ATTENTION_TYPES for x in lt)
         rec = sum(x in RECURRENT_TYPES for x in lt)
         iv = t.get("full_attention_interval")
@@ -270,15 +273,22 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     # what stops the layer census: unknown layer types, or a hybrid layout in
     # keys _layer_counts does not read (then every layer would count as attention)
     layout = (f"layer_types {unknown} are not ones this command knows "
-              f"({sorted(ATTENTION_TYPES | RECURRENT_TYPES)})" if unknown
+              f"({sorted(ATTENTION_TYPES | RECURRENT_TYPES | WINDOW_TYPES)})" if unknown
               else f"the config lays out non-attention layers with {hybrid}, which "
               f"this command does not read"
               if hybrid and not isinstance(t.get("layer_types"), list) and not kda
               else None)
 
+    lt = t.get("layer_types")
+    sliding = sum(x in WINDOW_TYPES for x in lt) if isinstance(lt, list) else 0
+
     # ---- attention cache ----------------------------------------------------
     if layout:
         d.need("attn_layers", f"{layout}: count the attention layers by hand")
+    elif sliding:
+        d.need("attn_layers", f"{attn} full-attention and {sliding} sliding-window "
+               f"layers (sliding_window {t.get('sliding_window')!r}): which ones the "
+               f"prefill quadratic term prices", NOTES["window"])
     elif compressed:
         d.need("attn_layers", "compressed caches (compress_ratios): which layers the "
                "prefill quadratic term prices", NOTES["compressed"])
@@ -293,7 +303,7 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
         d.set("kv_heads", kvh, (f"GQA {heads}/{kvh}" if kvh != heads else "MHA")
               + ("" if kv_how == "num_key_value_heads" else f": {kv_how}"))
 
-    standard = not (layout or cache_keys or mla or compressed)
+    standard = not (layout or sliding or cache_keys or mla or compressed)
     hd, hd_how = _head_dim(t, ck, heads, kvh, attn) if standard else (None, None)
     if standard and hd:
         d.set("attn_d", heads * hd, f"= {heads} * {hd}")
@@ -302,6 +312,7 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
               + (f"; head size {hd_how}" if hd_how != "head_dim" else ""))
     else:
         why = (layout if layout
+               else f"{sliding} sliding-window layers" if sliding
                else f"cache fields {cache_keys}" if cache_keys
                else hd_how if standard
                else "MLA latent cache")
@@ -336,7 +347,7 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
                "x dtype + conv)", NOTES[kind])
     else:
         d.set("rec_layers", 0, "no linear-attention layers in the config")
-        if window or compressed or dspark:
+        if window or sliding or compressed or dspark:
             d.need("deltanet_state", "fixed per-session window state"
                    + (f" (sliding_window {window})" if window else "")
                    + (" (a DSpark drafter keeps latent windows)" if dspark else ""),

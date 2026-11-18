@@ -279,6 +279,18 @@ def test_minicpm_v_towers_count_as_vision():
     assert d.measured["vision"] == 3 * 64 * 2
 
 
+@pytest.mark.parametrize("window", [128, None])
+def test_sliding_window_layers_are_attention_with_a_window_not_recurrence(window):
+    """gpt-oss-120b and Gemma 3 mark layers "sliding_attention": the draft
+    asked for recurrent layers to be counted by hand. They are attention with
+    a fixed window: no recurrence, a window state, no plain per-token cache."""
+    d = draft(_ck({"layer_types": ["sliding_attention", "full_attention"] * 2,
+                   "sliding_window": window}))
+    assert d.fields["rec_layers"][0] == 0
+    assert not {"attn_layers", "kv_bpt", "deltanet_state"} & set(d.fields)
+    assert "2 full-attention and 2 sliding-window layers" in render(d)
+
+
 def test_missing_layer_count_stops():
     ck = _mm35()
     del ck.config["text_config"]["num_hidden_layers"]
