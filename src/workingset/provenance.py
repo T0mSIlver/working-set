@@ -21,6 +21,11 @@ Every quantity that feeds a verdict carries a provenance in
 A group of constants (the decode fixed costs, the power rows) takes the kind of
 its weakest member; the note names the stronger ones.
 
+Fields that decide which configurations exist rather than price one carry no
+provenance: `vllm_tp` (the TP widths vLLM accepts, derived from each model's
+config.json by `ws catalog` and checked against it by tests), `max_ctx` and the
+KV dtype flags. A configuration they refuse has no verdict to label.
+
 `label` turns one provenance into the words the explorer shows for the GPU
 on screen: a value measured on another GPU or another model reads "fitted on
 X and transferred". A quantity without a provenance is an error.
