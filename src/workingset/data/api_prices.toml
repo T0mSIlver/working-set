@@ -892,7 +892,7 @@ url = "https://artificialanalysis.ai/models/qwen3-6-35b-a3b"
 id = "qwen/qwen3.6-35b-a3b"
 url = "https://openrouter.ai/api/v1/models/qwen/qwen3.6-35b-a3b/endpoints"
 read = "2026-11-04"
-note = "no endpoint run by Alibaba on OpenRouter; resellers only: n, o, n, e,  , l, i, s, t, e, d"
+note = "no endpoint run by Alibaba on OpenRouter; resellers only"
 
 [[apis]]
 key = "qwen3.8-max"
