@@ -305,3 +305,24 @@ def test_fidelity_edges_and_unestablished_release():
     # every catalogue model has an entry, with its source or why there is none
     assert set(MK.RELEASED_DTYPE) == set(MK.M.MODELS)
     assert all(src for _, src in MK.RELEASED_DTYPE.values())
+
+
+def test_fidelity_doc_table_is_current():
+    """docs/market.md's Provider fidelity table is what
+    scripts/market_fidelity_doc.py writes from provider_prices.json."""
+    import importlib.util
+    import sys
+    path = Path(__file__).resolve().parents[1] / "scripts" / "market_fidelity_doc.py"
+    spec = importlib.util.spec_from_file_location("_market_fidelity_doc", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    assert mod.main(["--check"]) == 0, "run uv run scripts/market_fidelity_doc.py"
+
+
+def test_context_share_uses_the_native_context(snap):
+    rows = MK.provider_rows(snap, "GLM52", MK.default_workload(), 300.0)
+    assert MK.fidelity_summary("GLM52", rows)["context_label"] == "1,048,576"
+    n, label = MK.native_context("Q38FN")
+    assert n == 262_144 and label == "262,144 native, 1,048,576 with YaRN"
+    assert MK._ctx_bucket(262_144, n) == "100%"

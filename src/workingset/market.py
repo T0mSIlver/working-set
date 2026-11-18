@@ -701,8 +701,11 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
         p["arms"], p["arm_note"] = arms, note
         p["fidelity"] = {
             "context_offered": p["context_length"],
-            "context_ratio": (p["context_length"] / m.max_ctx) if p["context_length"] else None,
+            # the share of the model's native context (NATIVE_CTX)
+            "context_ratio": ((p["context_length"] / native_context(model_key)[0])
+                              if p["context_length"] else None),
             "model_max_context": m.max_ctx,
+            "model_native_context": native_context(model_key)[0],
             "max_output": p["max_completion_tokens"],
             "quantization_declared": p["quantization"],
             "arms_priced": [ARM_LABEL[a] for a in (["fp8"] + (["nvfp4"] if m.nvfp4_w else []))]}
@@ -913,6 +916,28 @@ RELEASED_DTYPE = {
     "K31P": ("fp4", "research/model_kimi_k31pro.md:40: \"MXFP4 weights ... on the routed "
                     "experts only; everything else BF16\""),
 }
+# The native context of a model whose catalogue max_ctx is reached only
+# with YaRN rope scaling, as the catalogue's own comment on max_ctx records
+# it (catalog.toml has no field for it). Every other model's max_ctx is its
+# native context, so it is the denominator of the context share.
+NATIVE_CTX = {
+    "27B": (262_144, "catalog.toml [models.27B] max_ctx: \"262,144 native; 1M via YaRN\""),
+    "35BA3B": (262_144, "catalog.toml [models.35BA3B] max_ctx: \"262,144 native; 1M via YaRN\"; "
+                        "research/model_35ba3b.md:41"),
+    "Q38FN": (262_144, "catalog.toml [models.Q38FN] max_ctx: \"262,144 native; 1M via YaRN\"; "
+                       "research/model_qwen38flashnext.md:31"),
+}
+
+
+def native_context(model_key: str) -> tuple[float, str]:
+    """(native context, how it reads in the output)."""
+    m = M.MODELS[model_key]
+    if model_key in NATIVE_CTX:
+        n = NATIVE_CTX[model_key][0]
+        return n, f"{n:,.0f} native, {m.max_ctx:,.0f} with YaRN"
+    return m.max_ctx, f"{m.max_ctx:,.0f}"
+
+
 # bits per weight of each declared quantization; a value outside it is an error
 PRECISION_BITS = {"fp32": 32, "bf16": 16, "fp16": 16, "fp8": 8, "int8": 8,
                   "fp6": 6, "fp4": 4, "mxfp4": 4, "nvfp4": 4, "int4": 4}
@@ -958,8 +983,9 @@ def fidelity_summary(model_key: str, providers: list[dict]) -> dict:
     m = M.MODELS[model_key]
     axes = {"context": CTX_BUCKETS, "max_output": OUT_BUCKETS, "quantization": QUANT_BUCKETS}
     out = {ax: {b: {"rows": 0, "providers": set()} for b in bs} for ax, bs in axes.items()}
+    native, ctx_label = native_context(model_key)
     for p in providers:
-        for ax, b in (("context", _ctx_bucket(p["context_length"], m.max_ctx)),
+        for ax, b in (("context", _ctx_bucket(p["context_length"], native)),
                       ("max_output", _out_bucket(p["max_completion_tokens"])),
                       ("quantization", _quant_bucket(p["quantization"], released))):
             out[ax][b]["rows"] += 1
@@ -968,6 +994,7 @@ def fidelity_summary(model_key: str, providers: list[dict]) -> dict:
         for b in out[ax]:
             out[ax][b]["providers"] = len(out[ax][b]["providers"])
     return {"model": model_key, "model_max_context": m.max_ctx,
+            "model_native_context": native, "context_label": ctx_label,
             "released_dtype": released, "released_source": source,
             "rows": len(providers), "providers": len({p["provider"] for p in providers}),
             "sources": sorted({p["source"] for p in providers}), **out}
@@ -975,12 +1002,13 @@ def fidelity_summary(model_key: str, providers: list[dict]) -> dict:
 
 def fidelity_table(summaries: list[dict]) -> str:
     """One markdown row per model: rows / providers in every bucket."""
-    head = (["model", "rows / providers", "released"]
+    head = (["model", "rows / providers", "released", "native context"]
             + [f"context {b}" for b in CTX_BUCKETS] + [f"max output {b}" for b in OUT_BUCKETS]
             + [f"quant. {b}" for b in QUANT_BUCKETS])
     lines = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
     for f in summaries:
-        cells = [f["model"], f"{f['rows']} / {f['providers']}", f["released_dtype"] or "not established"]
+        cells = [f["model"], f"{f['rows']} / {f['providers']}", f["released_dtype"] or "not established",
+                 f["context_label"]]
         for ax, bs in (("context", CTX_BUCKETS), ("max_output", OUT_BUCKETS),
                        ("quantization", QUANT_BUCKETS)):
             cells += [f"{f[ax][b]['rows']} / {f[ax][b]['providers']}" for b in bs]
@@ -994,7 +1022,7 @@ def render_fidelity(f: dict) -> str:
            f"{f['rows']} endpoint/tier rows from {f['providers']} provider names "
            f"({', '.join(f['sources'])}); rows / providers",
            f"  released weights: {rel} ({f['released_source']})",
-           f"  context offered as a share of the catalogue's {f['model_max_context']:,.0f} tokens:"]
+           f"  context offered as a share of the model's native context ({f['context_label']}):"]
     for ax, label in (("context", None), ("max_output", "max output:"),
                       ("quantization", "declared quantization against the released dtype:")):
         if label:
