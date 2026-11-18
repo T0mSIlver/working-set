@@ -139,6 +139,66 @@ def test_unrecognised_cache_field_gets_no_kv_bpt():
     assert "num_kv_shared_layers" in render(d)
 
 
+# ---- minimal configs from the atlas sweep (open-weights-atlas, 2026-11-18) ----
+
+_BASE = {"num_hidden_layers": 4, "num_attention_heads": 8, "num_key_value_heads": 2,
+         "head_dim": 16, "vocab_size": 128, "max_position_embeddings": 4096}
+
+
+def _ck(extra=None, census=(("model.layers.#.mlp.up_proj.weight", "BF16", [64, 16], 4),)):
+    return hf.Checkpoint("org/m", "0" * 40, {**_BASE, **(extra or {})},
+                         [list(r) for r in census], 1, None)
+
+
+def test_a_plain_config_drafts_its_cache():
+    d = draft(_ck())
+    assert d.fields["kv_bpt"][0] == 4 * 2 * 16 * 2
+    assert d.fields["w_route_pertok"][0] == 0.0 and d.fields["deltanet_state"][0] == 0.0
+
+
+@pytest.mark.parametrize("extra, named", [
+    # LFM2-1.2B: attention layers listed by index, the rest short convolutions
+    ({"full_attn_idxs": [1, 3], "conv_L_cache": 3}, "full_attn_idxs"),
+    # Granite-4.0-H: Mamba2 and attention layer types
+    ({"layer_types": ["mamba", "attention", "mamba", "mamba"], "mamba_d_state": 128},
+     "mamba"),
+])
+def test_a_hybrid_layout_it_cannot_read_is_not_all_attention(extra, named):
+    """Granite-4.0-H-Small and LFM2-1.2B drafted every layer as attention or
+    printed rec_layers = 0 and deltanet_state = 0.0 for Mamba / conv layers."""
+    d = draft(_ck(extra))
+    assert not {"attn_layers", "rec_layers", "deltanet_state", "kv_bpt"} & set(d.fields)
+    assert named in render(d)
+
+
+@pytest.mark.parametrize("extra, census", [
+    # Mixtral, gpt-oss, Granite-MoE name the count num_local_experts
+    ({"num_local_experts": 8, "num_experts_per_tok": 2}, None),
+    # gpt-oss also says experts_per_token
+    ({"num_local_experts": 128, "experts_per_token": 4}, None),
+    # a top-k without a count, and expert tensors without either
+    ({"num_experts_per_tok": 2}, None),
+    ({}, (("model.layers.#.block_sparse_moe.input_linear.weight", "BF16", [8, 16], 4),)),
+])
+def test_a_mixture_of_experts_is_never_drafted_dense(extra, census):
+    """gpt-oss-120b and Granite-4.0-H-Small were drafted w_route_pertok = 0.0
+    "dense: no routed experts"."""
+    d = draft(_ck(extra, census) if census else _ck(extra))
+    assert not {"w_route_pertok", "w_route_total"} & set(d.fields)
+    assert "w_route_pertok" in {n for n, *_ in d.todo}
+
+
+def test_an_unused_sliding_window_does_not_withhold_the_cache():
+    """Qwen2.5 ships sliding_window 131072 with use_sliding_window false;
+    transformers drops the window, so the cache is plain K/V."""
+    qwen = {"model_type": "qwen2", "use_sliding_window": False,
+            "sliding_window": 131072, "max_window_layers": 28}
+    d = draft(_ck(qwen))
+    assert d.fields["kv_bpt"][0] == 256 and d.fields["deltanet_state"][0] == 0.0
+    d = draft(_ck({**qwen, "use_sliding_window": True}))
+    assert "kv_bpt" not in d.fields and "deltanet_state" not in d.fields
+
+
 def test_missing_layer_count_stops():
     ck = _mm35()
     del ck.config["text_config"]["num_hidden_layers"]
@@ -200,6 +260,18 @@ def test_gated_repo_names_the_token(monkeypatch, status):
     _mock(monkeypatch, lambda req: httpx.Response(status))
     monkeypatch.delenv("HF_TOKEN", raising=False)
     with pytest.raises(hf.HFError, match="HF_TOKEN"):
+        hf.read_repo("org/gated")
+
+
+def test_a_bare_401_says_the_repo_may_not_exist(monkeypatch):
+    """mosaicml/mpt-7b: a bare anonymous 401 (no GatedRepo code) was reported
+    as gated; Hugging Face answers a missing repo the same way."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    _mock(monkeypatch, lambda req: httpx.Response(401))
+    with pytest.raises(hf.HFError, match="does not exist, is private, or is gated"):
+        hf.read_repo("org/gone")
+    _mock(monkeypatch, lambda req: httpx.Response(401, headers={"X-Error-Code": "GatedRepo"}))
+    with pytest.raises(hf.HFError, match="The repo is gated: set HF_TOKEN"):
         hf.read_repo("org/gated")
 
 

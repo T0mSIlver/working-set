@@ -47,6 +47,24 @@ _DRAFT = re.compile(r"(^|\.)(mtp|mtp_dspark|dspark)(\.|_)")
 # Qwen3.8-Flash-Next's n-gram embedding), not the projections around them
 _ENGRAM = re.compile(r"(^|\.)(engram\.embed|ngram_embedding)\.")
 _ROUTED = re.compile(r"(^|\.)experts\.#\.")
+# routed-expert counts as configs name them (DeepSeek, Qwen, Mixtral / gpt-oss /
+# Granite, DBRX-style)
+_EXPERT_COUNT = ("n_routed_experts", "num_experts", "num_local_experts", "moe_num_experts")
+_EXPERT_TOPK = ("num_experts_per_tok", "num_experts_per_token", "experts_per_token",
+                "moe_top_k")
+# a tensor name a mixture of experts leaves even when the config names no count
+_MOE_TENSOR = re.compile(r"(^|\.)(experts?|block_sparse_moe|moe|router)(\.|_)")
+# config keys that lay out non-attention layers in a form _layer_counts does
+# not read (LFM2's full_attn_idxs, Jamba's attn_layer_period, Nemotron-H's
+# hybrid_override_pattern, Zamba's layers_block_type, Mamba / SSM state sizes)
+_HYBRID_KEY = re.compile(
+    r"^(full_attn_idxs|attn_layer_|attn_type_list|hybrid_override_pattern|"
+    r"layers_block_type|layer_block_types|block_types|mamba_|ssm_|state_size|"
+    r"conv_L_cache|conv_kernel|rwkv_|time_step)")
+# model types whose transformers config drops sliding_window when
+# use_sliding_window is false (transformers 5.20.2, `if self.use_sliding_window else None`)
+_WINDOW_FLAG_TYPES = {"qwen2", "qwen3", "qwen3_moe", "qwen2_vl", "qwen2_5_vl",
+                      "qwen2_5_omni"}
 
 NOTES = {
     "mla": "research/model_glm52.md (MLA + indexer) and research/model_mistral_large4.md",
@@ -137,19 +155,33 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     d.set("layers", n, "num_hidden_layers")
     attn, rec, unknown = _layer_counts(t)
 
+    # transformers sets sliding_window to None for these model types when
+    # use_sliding_window is false (configuration_qwen2.py:84 in 5.20.2), and
+    # vLLM reads that config: Qwen2.5 ships sliding_window 131072 unused
+    unused_window = (t.get("use_sliding_window") is False
+                     and (t.get("model_type") or cfg.get("model_type")) in _WINDOW_FLAG_TYPES)
+    unused = {"sliding_window", "max_window_layers"} if unused_window else set()
     cache_keys = sorted(k for k, v in t.items() if _CACHE_KEY.match(k) and v not in
-                        (None, False, 0, [], {}))
+                        (None, False, 0, [], {}) and k not in unused)
     mla = t.get("kv_lora_rank") is not None
     compressed = bool(t.get("compress_ratios"))
     kda = isinstance(t.get("linear_attn_config"), dict)
     heads, kvh, hd = (t.get("num_attention_heads"), t.get("num_key_value_heads"),
                       t.get("head_dim"))
+    hybrid = sorted(k for k, v in t.items() if _HYBRID_KEY.match(k)
+                    and v not in (None, False, 0, [], {}))
+    # what stops the layer census: unknown layer types, or a hybrid layout in
+    # keys _layer_counts does not read (then every layer would count as attention)
+    layout = (f"layer_types {unknown} are not ones this command knows "
+              f"({sorted(ATTENTION_TYPES | RECURRENT_TYPES)})" if unknown
+              else f"the config lays out non-attention layers with {hybrid}, which "
+              f"this command does not read"
+              if hybrid and not isinstance(t.get("layer_types"), list) and not kda
+              else None)
 
     # ---- attention cache ----------------------------------------------------
-    if unknown:
-        d.need("attn_layers", f"layer_types {unknown} are not ones this command knows "
-               f"({sorted(ATTENTION_TYPES | RECURRENT_TYPES)}): count the attention "
-               f"layers by hand")
+    if layout:
+        d.need("attn_layers", f"{layout}: count the attention layers by hand")
     elif compressed:
         d.need("attn_layers", "compressed caches (compress_ratios): which layers the "
                "prefill quadratic term prices", NOTES["compressed"])
@@ -165,13 +197,13 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
     else:
         d.need("kv_heads", f"num_key_value_heads is {kvh!r}")
 
-    standard = not (unknown or cache_keys or mla or compressed)
+    standard = not (layout or cache_keys or mla or compressed)
     if standard and isinstance(hd, int) and hd > 0 and isinstance(kvh, int):
         d.set("attn_d", heads * hd, f"= {heads} * {hd}")
         d.set("kv_bpt", attn * kvh * hd * 2,
               f"{attn} attn layers x {kvh} KV heads x {hd} x 2(K,V) x 1B (fp8 KV)")
     else:
-        why = (f"layer_types {unknown}" if unknown
+        why = (layout if layout
                else f"cache fields {cache_keys}" if cache_keys
                else f"head_dim is {hd!r}" if standard
                else "MLA latent cache")
@@ -191,8 +223,14 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
               or any(p.startswith("mtp_dspark") for p, *_ in ck.census))
 
     # ---- recurrent state ----------------------------------------------------
-    window = t.get("sliding_window")
-    if rec:
+    window = None if unused_window else t.get("sliding_window")
+    if layout:
+        d.need("rec_layers", f"{layout}: count the recurrent layers (state-space, "
+               f"short-conv, linear-attention) by hand", NOTES["deltanet"])
+        d.need("deltanet_state", "per-session state of those layers"
+               + (f" and of the sliding_window {window} layers" if window else ""),
+               NOTES["deltanet"])
+    elif rec:
         kind = "kda" if kda else "deltanet"
         d.need("rec_layers", f"the config lists {rec} linear-attention layers: "
                f"confirm the recurrent kind", NOTES[kind])
@@ -235,9 +273,21 @@ def draft(ck: Checkpoint, key: str = "NEW", tp_max: int = 16,
         d.facts.append(f"vision tower and projector: {vision:,} B, resident but never "
                        f"in a text decode read ({NOTES['vision']})")
 
-    n_exp = t.get("n_routed_experts") or t.get("num_experts")
-    k_exp = t.get("num_experts_per_tok") or t.get("num_experts_per_token")
-    if n_exp:
+    n_exp = next((t[k] for k in _EXPERT_COUNT if t.get(k)), None)
+    k_exp = next((t[k] for k in _EXPERT_TOPK if t.get(k)), None)
+    moe_tensors = sorted({p for p, *_ in ck.census if _MOE_TENSOR.search(p)})
+    if not n_exp and (k_exp or moe_tensors):
+        # a mixture of experts whose count this command cannot read: never "dense"
+        seen = (f"{k_exp} experts per token" if k_exp else
+                f"tensors like {moe_tensors[0]}")
+        for f_, what in (("w_decode_shared", "always-active bytes one decode step reads"),
+                         ("w_route_pertok", "routed experts' bytes per token x MoE layers"),
+                         ("w_route_total", "all routed experts' bytes x MoE layers")):
+            d.need(f_, f"{what}: the config shows a mixture of experts ({seen}) but "
+                   f"names no expert count in {list(_EXPERT_COUNT)}", NOTES["moe"])
+        d.need("params_prefill", "active GEMM params excluding embeddings and lm_head",
+               NOTES["prefill"])
+    elif n_exp:
         routed = ck.bytes_matching(_ROUTED.pattern)
         d.facts.append(f"MoE: {n_exp} routed experts, {k_exp} per token; tensors under "
                        f"experts.#. hold {routed:,} B (main and draft layers)")

@@ -104,6 +104,20 @@ def _client() -> httpx.Client:
     return httpx.Client(follow_redirects=True, timeout=120, headers=headers)
 
 
+def _denied(url: str, r: httpx.Response) -> str:
+    """The message for a 401/403. Hugging Face sends X-Error-Code GatedRepo
+    for a gated repo; to an anonymous read it answers a missing or private
+    repo with the same bare 401, so without that code the repo may not exist."""
+    have = "is set" if os.environ.get(TOKEN_ENV) else "is not set"
+    if r.headers.get("x-error-code") == "GatedRepo":
+        return (f"{url}: HTTP {r.status_code}. The repo is gated: set {TOKEN_ENV} "
+                f"to a token with access ({TOKEN_ENV} {have})")
+    return (f"{url}: HTTP {r.status_code}. The repo does not exist, is private, "
+            f"or is gated (Hugging Face answers all three alike without a token): "
+            f"check the repo id, or set {TOKEN_ENV} to a token with access "
+            f"({TOKEN_ENV} {have})")
+
+
 def _get(client: httpx.Client, repo: str, rev: str, path: str,
          byte_range: tuple | None = None) -> httpx.Response:
     url = f"{HF}/{repo}/resolve/{rev}/{path}"
@@ -113,9 +127,7 @@ def _get(client: httpx.Client, repo: str, rev: str, path: str,
     except httpx.HTTPError as e:
         raise HFError(f"{url}: {e}") from e
     if r.status_code in (401, 403):
-        have = "is set" if os.environ.get(TOKEN_ENV) else "is not set"
-        raise HFError(f"{url}: HTTP {r.status_code}. The repo is gated or private: "
-                      f"set {TOKEN_ENV} to a token with access ({TOKEN_ENV} {have})")
+        raise HFError(_denied(url, r))
     if r.status_code == 404:
         raise HFError(f"{url}: not found (HTTP 404)")
     if r.status_code >= 400:
@@ -150,8 +162,7 @@ def _repo_files(client: httpx.Client, repo: str, rev: str) -> tuple:
     except httpx.HTTPError as e:
         raise HFError(f"{url}: {e}") from e
     if r.status_code in (401, 403):
-        raise HFError(f"{url}: HTTP {r.status_code}. The repo is gated or private: "
-                      f"set {TOKEN_ENV} to a token with access")
+        raise HFError(_denied(url, r))
     if r.status_code >= 400:
         raise HFError(f"{url}: HTTP {r.status_code}")
     d = r.json()
