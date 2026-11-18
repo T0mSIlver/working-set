@@ -598,118 +598,6 @@
    "hypothesis": "past the knee the hit rate is W/U, so it carries max_users_cache's own difference one for one, and max_users_cache owns the same tail under the same gate: one session either way is 33% of three. 1 state, W = 2"
   },
   {
-   "quantity": "ttft_*",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    },
-    "_miss_share_swing": {
-     "gt": 0,
-     "lt": 0.5
-    }
-   },
-   "observed_rel": 0.299,
-   "max_rel": 0.4,
-   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
-  },
-  {
-   "quantity": "queue_wait_seconds",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    },
-    "_miss_share_swing": {
-     "gt": 0,
-     "lt": 0.5
-    }
-   },
-   "observed_rel": 0.307,
-   "max_rel": 0.4,
-   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
-  },
-  {
-   "quantity": "cold_wait_seconds",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    },
-    "_miss_share_swing": {
-     "gt": 0,
-     "lt": 0.5
-    }
-   },
-   "observed_rel": 0.278,
-   "max_rel": 0.4,
-   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
-  },
-  {
-   "quantity": "spike_tolerance*",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    },
-    "_miss_share_swing": {
-     "gt": 0,
-     "lt": 0.5
-    }
-   },
-   "observed_rel": 0.221,
-   "max_rel": 0.3,
-   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
-  },
-  {
-   "quantity": "burst_drain_seconds_b32",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    },
-    "_miss_share_swing": {
-     "gt": 0,
-     "lt": 0.5
-    }
-   },
-   "observed_rel": 0.221,
-   "max_rel": 0.3,
-   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
-  },
-  {
-   "quantity": "slowed_share",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    },
-    "_miss_share_swing": {
-     "gt": 0,
-     "lt": 0.5
-    }
-   },
-   "observed_rel": 0.127,
-   "max_rel": 0.2,
-   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
-  },
-  {
-   "quantity": "power_*",
-   "where": {
-    "_duty": {
-     "gte": 0.7,
-     "lt": 0.85
-    },
-    "_miss_share_swing": {
-     "gt": 0,
-     "lt": 0.5
-    }
-   },
-   "observed_rel": 0.225,
-   "max_rel": 0.3,
-   "hypothesis": "BOTH KNOWN AMPLIFIERS AT ONCE: the state sits just past the cache knee (the at-load miss share is 1 - W/U on each side's own W, issue #117) AND at duty 0.70-0.85, where every queue figure carries 1/(1 - rho). The duty's own difference (6%, power_d_p) reaches the waits multiplied by 1/(1 - 0.82) = 5.6. One state, GLM-5.3 NVFP4 FP16-KV on 2xB300 (duty 0.82, swing 0.15, 29 warm sessions), first priced 2026-11-04 when the FP16 arm became servable."
-  },
-  {
    "quantity": "ttft_hit_ps",
    "where": {
     "_ctx_cv2": {
@@ -732,42 +620,6 @@
    "hypothesis": "the miss rate that meets the 10 s budget solves a linear equation in the P-K wait, which carries 1/(1 - rho) = 43 at duty 0.98, so the samplers' 0.1% duty difference reaches it at 10%. GLM-5.3 NVFP4 FP16-KV, DP3xTP2 on 6xB300, 2026-11-04."
   },
   {
-   "quantity": "decode_ceiling",
-   "where": {
-    "model": "GLM52",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "kv": "fp8",
-    "ngpu": 2,
-    "tp": 2,
-    "_steady_cap_ratio": {
-     "gte": 1.019,
-     "lt": 1.079
-    }
-   },
-   "observed_rel": 0.1344,
-   "max_rel": 0.162,
-   "hypothesis": "same state as the steady_saturated edge: the capped ceiling reads the slot count off a batch at the cap; JS draws reseeded (WS-10)"
-  },
-  {
-   "quantity": "steady_saturated",
-   "where": {
-    "model": "GLM52",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "kv": "fp8",
-    "ngpu": 2,
-    "tp": 2,
-    "_steady_cap_ratio": {
-     "gte": 1.019,
-     "lt": 1.079
-    }
-   },
-   "observed_rel": 1.0,
-   "max_rel": 1.0,
-   "hypothesis": "the steady batch sits at the GPU-resident cap's edge (steady_cap_ratio near 1): Python's integer bisection and the explorer's interpolated aggregate land on either side; JS draws reseeded when samplingSig took the decode knobs (WS-10)"
-  },
-  {
    "quantity": "cold_wait_seconds",
    "where": {
     "model": "GLM53F",
@@ -784,24 +636,6 @@
    "observed_rel": 1.0,
    "max_rel": 1.0,
    "hypothesis": "follows moments_miss_sq or the queue's onset on the same state; JS draws reseeded (WS-10)"
-  },
-  {
-   "quantity": "steady_saturated",
-   "where": {
-    "model": "MM35",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "kv": "fp16",
-    "ngpu": 6,
-    "tp": 2,
-    "_steady_cap_ratio": {
-     "gte": 0.945,
-     "lt": 1.005
-    }
-   },
-   "observed_rel": 1.0,
-   "max_rel": 1.0,
-   "hypothesis": "the steady batch sits at the GPU-resident cap's edge (steady_cap_ratio near 1): Python's integer bisection and the explorer's interpolated aggregate land on either side; JS draws reseeded when samplingSig took the decode knobs (WS-10)"
   },
   {
    "quantity": "moments_miss_sq",
@@ -867,69 +701,6 @@
    "hypothesis": "past the knee at prefill duty > 1 on Mistral-Medium's small warm pool, the capacity-aware fixed point moves in whole sessions; JS draws reseeded (WS-10)"
   },
   {
-   "quantity": "max_users_saturation",
-   "where": {
-    "model": "MM35",
-    "gpu": "B300",
-    "wdt": "fp8",
-    "kv": "fp8",
-    "ngpu": 4,
-    "tp": 1,
-    "users": 64,
-    "inval": 3.0,
-    "chunk": "65536",
-    "_duty": {
-     "gte": 5.3182,
-     "lt": 5.6472
-    }
-   },
-   "observed_rel": 0.1765,
-   "max_rel": 0.212,
-   "hypothesis": "Mistral-Medium on 1xB300 replicas holds 7 warm sessions: the fixed point moves in whole sessions at duty 5.5; JS draws reseeded (WS-10)"
-  },
-  {
-   "quantity": "max_users_slowed",
-   "where": {
-    "model": "MM35",
-    "gpu": "B300",
-    "wdt": "fp8",
-    "kv": "fp8",
-    "ngpu": 4,
-    "tp": 1,
-    "users": 64,
-    "inval": 3.0,
-    "chunk": "65536",
-    "_duty": {
-     "gte": 5.3182,
-     "lt": 5.6472
-    }
-   },
-   "observed_rel": 0.213,
-   "max_rel": 0.256,
-   "hypothesis": "Mistral-Medium on 1xB300 replicas holds 7 warm sessions: the fixed point moves in whole sessions at duty 5.5; JS draws reseeded (WS-10)"
-  },
-  {
-   "quantity": "max_users_cold_wait",
-   "where": {
-    "model": "MM35",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "kv": "fp8",
-    "ngpu": 6,
-    "tp": 1,
-    "users": 400,
-    "inval": 35.0,
-    "chunk": "4096",
-    "_duty": {
-     "gte": 25.5259,
-     "lt": 27.1048
-    }
-   },
-   "observed_rel": 0.0684,
-   "max_rel": 0.083,
-   "hypothesis": "past the knee at prefill duty > 1 on Mistral-Medium's small warm pool, the capacity-aware fixed point moves in whole sessions; JS draws reseeded (WS-10)"
-  },
-  {
    "quantity": "ttft_hit_ps",
    "where": {
     "model": "ML4",
@@ -962,6 +733,49 @@
    "observed_rel": 0.049,
    "max_rel": 0.06,
    "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states, and Q38FN's on-GPU weights moved when its n-gram table went to host memory (w_engram, 2026-11-16), so this 16-user DP6 state's decode-duty power sits just past the narrower band (4.9% against 4.6%)."
+  },
+  {
+   "quantity": "decode_ceiling",
+   "where": {
+    "model": "GLM52",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "tp": 2,
+    "ngpu": [
+     2,
+     4
+    ]
+   },
+   "observed_rel": 0.4704,
+   "max_rel": 0.56,
+   "hypothesis": "GLM-5.2 NVFP4 at TP2 on B300 holds 17 sessions on the GPUs since the B300 reserve gained vLLM's utilisation holdback (2026-11-18): the recommended cap is floor(min(max_users_decode, GPU-resident warm p5)), a count of a few sessions each side draws with its own sampler, and the capped decode ceiling reads its slot count off it, so one slot either way is 20-33%."
+  },
+  {
+   "quantity": "max_num_seqs",
+   "where": {
+    "model": "GLM52",
+    "gpu": "B300",
+    "wdt": "nvfp4",
+    "tp": 2,
+    "ngpu": [
+     2,
+     4
+    ]
+   },
+   "observed_rel": 0.3333,
+   "max_rel": 0.4,
+   "hypothesis": "GLM-5.2 NVFP4 at TP2 on B300 holds 17 sessions on the GPUs since the B300 reserve gained vLLM's utilisation holdback (2026-11-18): the recommended cap is floor(min(max_users_decode, GPU-resident warm p5)), a count of a few sessions each side draws with its own sampler, and the capped decode ceiling reads its slot count off it, so one slot either way is 20-33%."
+  },
+  {
+   "quantity": "max_users_cold_wait",
+   "where": {
+    "_warm_p5": {
+     "lt": 10
+    }
+   },
+   "observed_rel": 0.1143,
+   "max_rel": 0.2,
+   "hypothesis": "past the knee the cold-wait ceiling is the fixed point U = ceiling(1 - W/U), which lands a few users from W, so it carries W's own difference: with under 10 warm sessions one session either way is 10-20%. Two Mistral-Medium-3.5 FP16-KV states on H200 DP groups (5 and 9 warm sessions); their vectors are unchanged, but the band narrowed when the probe states it is measured on moved with the B300 reserve (2026-11-18)."
   }
  ]
 }
