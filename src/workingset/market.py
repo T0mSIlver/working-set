@@ -802,6 +802,7 @@ def compare(model_key: str, snapshot: dict, *, term: str = "on-demand",
                      for a in sorted({c["arm"] for c in configs})} for t in TERMS},
         "providers": providers,
         "chars_per_token": chars,
+        "fidelity_summary": fidelity_summary(model_key, providers),
     }
 
 
@@ -879,6 +880,128 @@ def assumptions(wv: WorkloadView, term: str, ttl_s: float, rent_tiers: str = "ma
         "Model error is shown apart from the rent band, never multiplied into it; "
         "'capacity unchecked' where the binding quantity has no measurement for this model.",
     ]
+
+
+# ---------------------------------------------------------------- fidelity
+# The weights each model was released in, read from the research note that
+# cites the checkpoint. A mixed checkpoint is compared at its routed experts'
+# dtype, the bulk of its bytes. None: the note does not state the released
+# repo's dtype (it reads an FP8 serving repo beside a base repo whose dtype
+# it does not record), so the comparison is not made.
+RELEASED_DTYPE = {
+    "27B": (None, "not established: research/model_qwen38_27b.md reads Qwen/Qwen3.8-27B-FP8; "
+                  "the base repo's dtype is not recorded"),
+    "35BA3B": (None, "not established: research/model_35ba3b.md reads Qwen/Qwen3.6-35B-A3B-FP8; "
+                     "the base repo's dtype is not recorded"),
+    "MM35": ("fp8", "research/model_mistral_medium35.md:47: \"base repo ships FP8 natively "
+                    "(per-tensor E4M3)\""),
+    "GLM52": ("fp8", "research/model_glm53.md:13-20: zai-org/GLM-5.3, quantization \"fp8 e4m3, "
+                     "dynamic, block 128×128\""),
+    "DSV4F": ("fp4", "research/model_dsv4flash.md:57: \"native mixed: routed experts FP4 ..., "
+                     "attention/shared-expert FP8\""),
+    "DSV4FV": ("fp4", "research/model_dsv4flash_vision.md:36-37: dtype histogram as 0731's "
+                      "(FP8, I8 packed FP4 experts) plus BF16 vision"),
+    "DSV41F": ("fp4", "research/model_dsv41flash.md:59: \"native mixed: routed experts MXFP4 ..., "
+                      "all other projections FP8\""),
+    "Q38FN": (None, "not established: research/model_qwen38flashnext.md reads the base repo's "
+                    "config.json and the Qwen/Qwen3.8-Flash-Next-FP8 shards; the base repo's "
+                    "dtype is not recorded"),
+    "GLM53F": ("fp8", "research/model_glm53flash.md:108: \"Native FP8 checkpoint "
+                      "(zai-org/GLM-5.3-Flash)\""),
+    "ML4": ("fp8", "research/model_mistral_large4.md:101: \"FP8, as shipped\" "
+                   "(mistralai/Mistral-Large-4-1T-A52B)"),
+    "K31P": ("fp4", "research/model_kimi_k31pro.md:40: \"MXFP4 weights ... on the routed "
+                    "experts only; everything else BF16\""),
+}
+# bits per weight of each declared quantization; a value outside it is an error
+PRECISION_BITS = {"fp32": 32, "bf16": 16, "fp16": 16, "fp8": 8, "int8": 8,
+                  "fp6": 6, "fp4": 4, "mxfp4": 4, "nvfp4": 4, "int4": 4}
+CTX_BUCKETS = ("100%", "50-99%", "25-49%", "under 25%", "not published")
+OUT_BUCKETS = ("none", "under 32k", "32k-128k", "over 128k")
+QUANT_BUCKETS = ("same as released", "lower precision", "higher precision",
+                 "not declared", "released dtype not established")
+
+
+def _ctx_bucket(ctx, model_ctx: float) -> str:
+    if not ctx:
+        return "not published"
+    r = ctx / model_ctx
+    return ("100%" if r >= 1.0 else "50-99%" if r >= 0.5 else
+            "25-49%" if r >= 0.25 else "under 25%")
+
+
+def _out_bucket(out) -> str:
+    if not out:
+        return "none"
+    return ("under 32k" if out < 32_768 else "32k-128k" if out <= 131_072 else
+            "over 128k")
+
+
+def _quant_bucket(declared, released) -> str:
+    q = (declared or "unknown").lower()
+    if q == "unknown":
+        return "not declared"
+    if q not in PRECISION_BITS:
+        raise MarketDataError(f"quantization {declared!r} has no precision in "
+                              f"PRECISION_BITS ({', '.join(PRECISION_BITS)})")
+    if released is None:
+        return "released dtype not established"
+    a, b = PRECISION_BITS[q], PRECISION_BITS[released]
+    return "same as released" if a == b else "lower precision" if a < b else "higher precision"
+
+
+def fidelity_summary(model_key: str, providers: list[dict]) -> dict:
+    """Endpoint/tier rows and distinct provider names per bucket: context
+    offered as a share of the catalogue's max_ctx, max output, and declared
+    quantization against the released checkpoint's dtype."""
+    released, source = RELEASED_DTYPE[model_key]
+    m = M.MODELS[model_key]
+    axes = {"context": CTX_BUCKETS, "max_output": OUT_BUCKETS, "quantization": QUANT_BUCKETS}
+    out = {ax: {b: {"rows": 0, "providers": set()} for b in bs} for ax, bs in axes.items()}
+    for p in providers:
+        for ax, b in (("context", _ctx_bucket(p["context_length"], m.max_ctx)),
+                      ("max_output", _out_bucket(p["max_completion_tokens"])),
+                      ("quantization", _quant_bucket(p["quantization"], released))):
+            out[ax][b]["rows"] += 1
+            out[ax][b]["providers"].add(p["provider"])
+    for ax in out:
+        for b in out[ax]:
+            out[ax][b]["providers"] = len(out[ax][b]["providers"])
+    return {"model": model_key, "model_max_context": m.max_ctx,
+            "released_dtype": released, "released_source": source,
+            "rows": len(providers), "providers": len({p["provider"] for p in providers}),
+            "sources": sorted({p["source"] for p in providers}), **out}
+
+
+def fidelity_table(summaries: list[dict]) -> str:
+    """One markdown row per model: rows / providers in every bucket."""
+    head = (["model", "rows / providers", "released"]
+            + [f"context {b}" for b in CTX_BUCKETS] + [f"max output {b}" for b in OUT_BUCKETS]
+            + [f"quant. {b}" for b in QUANT_BUCKETS])
+    lines = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
+    for f in summaries:
+        cells = [f["model"], f"{f['rows']} / {f['providers']}", f["released_dtype"] or "not established"]
+        for ax, bs in (("context", CTX_BUCKETS), ("max_output", OUT_BUCKETS),
+                       ("quantization", QUANT_BUCKETS)):
+            cells += [f"{f[ax][b]['rows']} / {f[ax][b]['providers']}" for b in bs]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def render_fidelity(f: dict) -> str:
+    rel = f["released_dtype"] or "not established"
+    out = [f"{M.MODELS[f['model']].name} ({f['model']}): provider fidelity, "
+           f"{f['rows']} endpoint/tier rows from {f['providers']} provider names "
+           f"({', '.join(f['sources'])}); rows / providers",
+           f"  released weights: {rel} ({f['released_source']})",
+           f"  context offered as a share of the catalogue's {f['model_max_context']:,.0f} tokens:"]
+    for ax, label in (("context", None), ("max_output", "max output:"),
+                      ("quantization", "declared quantization against the released dtype:")):
+        if label:
+            out.append(f"  {label}")
+        out.append("    " + "; ".join(f"{b} {v['rows']} / {v['providers']}"
+                                       for b, v in f[ax].items()))
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- sensitivity
@@ -1218,6 +1341,13 @@ def cmd_market(args) -> int:
         for u in utils:
             if not 0 < u <= 1:
                 raise SystemExit(f"--utilisation {u}: must be in (0, 1]")
+    if args.fidelity:
+        rows = provider_rows(snap, args.model, default_workload(), args.cache_ttl)
+        if args.price_source:
+            rows = [r for r in rows if r["source"] == args.price_source]
+        f = fidelity_summary(args.model, rows)
+        print(json.dumps(f, indent=1) if args.json else render_fidelity(f))
+        return 0
     if args.sensitivity and args.workload != "default":
         raise SystemExit("--sensitivity ranks the assumptions of the default workload only")
     ev = evaluator_for(args.workload, args.n_iter)
@@ -1289,6 +1419,12 @@ def add_subparser(sub) -> None:
     p.add_argument("--rent-tiers", choices=tuple(RENT_TIERS), default="managed",
                    help="offers the priced rent band counts (default managed; the other "
                         "band is printed beside)")
+    p.add_argument("--fidelity", action="store_true",
+                   help="only the provider fidelity counts: context, max output and declared "
+                        "quantization against the released weights (no capacity run)")
+    p.add_argument("--price-source", default=None,
+                   help="with --fidelity: count only rows from this price source id "
+                        "(provider_prices, openrouter)")
     p.add_argument("--sensitivity", action="store_true",
                    help="also rank the assumptions by how far each moves u*")
     p.set_defaults(fn=cmd_market)

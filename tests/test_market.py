@@ -275,3 +275,33 @@ def test_empty_sensitivity_renders_its_note():
                                   "assumptions": [], "providers": [],
                                   "note": "no endpoint has a u* here"})
     assert "no endpoint has a u* here" in text
+
+
+def test_fidelity_buckets(snap):
+    rows = MK.provider_rows(snap, "GLM52", MK.default_workload(), 300.0)
+    f = MK.fidelity_summary("GLM52", rows)
+    assert (f["rows"], f["providers"], f["released_dtype"]) == (3, 3, "fp8")
+    # fixture-a and -c offer the whole 1,048,576 tokens; fixture-b 131,072 = 12.5%
+    assert f["context"]["100%"] == {"rows": 2, "providers": 2}
+    assert f["context"]["under 25%"] == {"rows": 1, "providers": 1}
+    # 131,072 and 32,768 are inside 32k-128k; fixture-c publishes none
+    assert f["max_output"]["32k-128k"]["rows"] == 2
+    assert f["max_output"]["none"]["rows"] == 1
+    # fp8 against an fp8 release, fp4 below it, unknown not declared
+    q = f["quantization"]
+    assert (q["same as released"]["rows"], q["lower precision"]["rows"],
+            q["not declared"]["rows"], q["higher precision"]["rows"]) == (1, 1, 1, 0)
+
+
+def test_fidelity_edges_and_unestablished_release():
+    assert MK._ctx_bucket(524_288, 1_048_576) == "50-99%"
+    assert MK._ctx_bucket(262_144, 1_048_576) == "25-49%"
+    assert MK._ctx_bucket(None, 1_048_576) == "not published"
+    assert MK._out_bucket(32_767) == "under 32k" and MK._out_bucket(131_073) == "over 128k"
+    assert MK._quant_bucket("bf16", "fp8") == "higher precision"
+    assert MK._quant_bucket("fp8", None) == "released dtype not established"
+    with pytest.raises(MK.MarketDataError, match="'fp5'"):
+        MK._quant_bucket("fp5", "fp8")
+    # every catalogue model has an entry, with its source or why there is none
+    assert set(MK.RELEASED_DTYPE) == set(MK.M.MODELS)
+    assert all(src for _, src in MK.RELEASED_DTYPE.values())
