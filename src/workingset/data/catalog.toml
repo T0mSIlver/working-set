@@ -57,13 +57,12 @@ price = { kind = "vendor", note = "rent: getdeploying.com's cross-provider media
 # the B300 delivers nominal decimal bytes with NO Hopper-style ~7%
 # over-provision. reserve_extra: what the H200-solved reserve must gain
 # to hold on this part (research/reserve_terms.md, "The B300 reserve_extra
-# patch"). vLLM holds back (1 - u) x the CUDA total, so the GPU-dependent
-# part of the reserve is vram - u x total: 141e9 B - 0.92 x 139.80 GiB on
-# the H200, 288.4e9 B - 0.92 x 267.69 GiB here (CUDA totals from vLLM
-# start-up logs, u = 0.92 as our deployments run). Their difference is
-# 21.06e9 B: 10.08e9 of HBM the H200 delivers beyond its 141e9 (formerly
-# the 9.75e9 patch, from nvidia-smi) plus 10.99e9 of extra holdback on a
-# GPU with ~137e9 B more memory.
+# patch"). vLLM holds back (1 - u) x the GPU's total, so the GPU-dependent
+# part of the reserve is vram - u x total: 141e9 - 0.92 x 150.75e9 B on
+# the H200 (its delivered total, thundergolfer.com), 288.4e9 x (1 - 0.92)
+# here, at an assumed u = 0.92 (vLLM's default is 0.90). Their difference
+# is 20.76e9 B: the 9.75e9 the H200 delivers beyond its 141e9 plus
+# 11.01e9 of extra holdback on a GPU with 137.65e9 B more memory.
 # peak_flops_fp8: 4.5 PFLOPS dense. The DGX B300 datasheet quotes
 # "72 PFLOPS FP8" for 8 GPUs WITH 2:4 sparsity -> 9 PFLOPS sparse/GPU ->
 # 4.5 dense (corroborated by third-party spec tables listing HGX B300
@@ -76,7 +75,7 @@ name = "B300"
 vram = 288.4e9
 hbm_bw = 8.0e12
 supports_nvfp4 = true
-reserve_extra = 21.06e9
+reserve_extra = 20.76e9
 peak_flops_fp8 = 4.5e15
 # power: ENTIRELY EXTRAPOLATED — no Blackwell Ultra power-state
 # measurement exists. Rule (power.md #3): transfer Hopper's
@@ -99,7 +98,7 @@ eur_capex_gpu = 73538.0
 # (workingset.provenance; kinds as in data/external/README.md).
 [gpus.B300.provenance]
 memory = { kind = "measured", on = "B300", note = "an nvidia-smi dump of an OCI BM.GPU.B300.8 reads 288.4e9 B per GPU", ref = "research/gpu_b300.md" }
-reserve = { kind = "derived", basis = "measurement", on = "H200", note = "the H200-solved reserve, plus the difference in vram - 0.92 x CUDA total between this part and the H200 (21.06e9 B): the H200's hidden HBM margin and vLLM's larger utilisation holdback", ref = "research/reserve_terms.md" }
+reserve = { kind = "derived", basis = "measurement", on = "H200", note = "the H200-solved reserve, plus the difference in vram - 0.92 x total between this part and the H200 (20.76e9 B): the H200's hidden HBM margin and vLLM's larger utilisation holdback at an assumed 0.92", ref = "research/reserve_terms.md" }
 decode = { kind = "measured", on = "H200", note = "eta read off the H200 held-batch sweep, unchanged; bandwidth is NVIDIA's 8 TB/s", ref = "research/decode-model.md" }
 decode_fixed = { kind = "guess", note = "the H200 priors and the tau_rec solved from the H200 intercept, unchanged", ref = "research/decode-model.md" }
 prefill = { kind = "guess", note = "the Hopper MFU bracket, carried over; peak 4.5 PFLOPS dense is the DGX B300 sparse figure halved, never measured here", ref = "research/prefill.md" }

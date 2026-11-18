@@ -61,7 +61,7 @@ export const CATALOG = {
    "vram": 288400000000.0,
    "hbm_bw": 8000000000000.0,
    "supports_nvfp4": true,
-   "reserve_extra": 21060000000.0,
+   "reserve_extra": 20760000000.0,
    "peak_flops_fp8": 4500000000000000.0,
    "tdp_w": 1400.0,
    "idle_w": 150.0,
@@ -81,7 +81,7 @@ export const CATALOG = {
      "kind": "derived",
      "basis": "measurement",
      "on": "H200",
-     "note": "the H200-solved reserve, plus the difference in vram - 0.92 x CUDA total between this part and the H200 (21.06e9 B): the H200's hidden HBM margin and vLLM's larger utilisation holdback",
+     "note": "the H200-solved reserve, plus the difference in vram - 0.92 x total between this part and the H200 (20.76e9 B): the H200's hidden HBM margin and vLLM's larger utilisation holdback at an assumed 0.92",
      "ref": "research/reserve_terms.md"
     },
     "decode": {

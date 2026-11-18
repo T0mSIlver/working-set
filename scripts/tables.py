@@ -469,7 +469,7 @@ def main():
     print("  B300 nvidia-smi dump (Oracle OCI, 275,040 MiB) shows 288.4e9 — nominal,")
     print("  no Hopper over-provision. GPU('B300').reserve_extra adds the hidden")
     print("  H200 margin back and, since 2026-11-18, vLLM's larger utilisation")
-    print("  holdback on the bigger part (21.06e9 in all; research/reserve_terms.md);")
+    print("  holdback on the bigger part (20.76e9 in all; research/reserve_terms.md);")
     print("  the rows below show central (corrected) pools vs what the former")
     print("  uncorrected transfer would have reported:")
     for mk, n in [("35BA3B", 1), ("GLM52", 4)]:

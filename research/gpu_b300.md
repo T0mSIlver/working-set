@@ -39,7 +39,7 @@ Model constants adopted:
 
 ```python
 GPUS["B300"] = GPU("B300", vram=288.4e9, hbm_bw=8.0e12, supports_nvfp4=True,
-                   reserve_extra=21.06e9)   # 9.75e9 until 2026-11-18
+                   reserve_extra=20.76e9)   # 9.75e9 until 2026-11-18
 # vram: measured usable bytes (Oracle nvidia-smi dump). reserve_extra: the
 # H200's measured hidden HBM margin (150.75e9 actual vs the 141e9 the
 # calibration uses) — the solved reserve silently absorbs it on the H200, so
@@ -70,7 +70,7 @@ domain at 8 the way single-node H200 systems do.
    for 2×H200 TP2) would still be a welcome end-to-end check. *2026-11-18:*
    vLLM's utilisation holdback, `(1 - u) x total`, is the part of the reserve
    that does scale with VRAM, and the transfer leaves about 10 GiB per GPU of
-   it out at u = 0.92, so `reserve_extra` is 21.06e9 B from then
+   it out at an assumed u = 0.92, so `reserve_extra` is 20.76e9 B from then
    (`research/reserve_terms.md`).
 2. **Unit-convention mismatch across generations — RESOLVED BY MEASUREMENT
    (2026-07-27), promoted from sensitivity to central.** Both sides are now
@@ -83,9 +83,9 @@ domain at 8 the way single-node H200 systems do.
    phantom margin does not transfer. Effect vs the uncorrected model:
    −9.35e9 B of pool per B300 (−4% for the 35B-A3B on 1×B300, −12% for
    GLM-5.2 FP8 on 4×B300); `tables.py` prints central vs uncorrected.
-   *2026-11-18:* `reserve_extra` is 21.06e9 B: the over-provision measured
-   as CUDA reports it (10.08e9) plus the extra `(1 - 0.92) x total`
-   holdback of a part with ~137e9 B more memory (10.99e9);
+   *2026-11-18:* `reserve_extra` is 20.76e9 B: this over-provision
+   (9.75e9) plus the extra `(1 - 0.92) x total` holdback of a part with
+   137.65e9 B more memory (11.01e9), at an assumed u = 0.92;
    `research/reserve_terms.md`.
 3. **B300 FLOPS are not modelled** ~~at all~~ — *partially retired
    2026-08-01*: `research/prefill.md` now models the **FP8** rate for the

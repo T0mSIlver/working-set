@@ -718,64 +718,69 @@
    "hypothesis": "Monte-Carlo noise at the band's edge: 3.23% on one inside-the-knee state whose vector is unchanged since 2026-11-04, now just past the band the Kimi-K3.1-Pro probe entry narrowed from 3.3% to 3.2% (2026-11-05)."
   },
   {
-   "quantity": "power_d_d",
-   "where": {
-    "model": "Q38FN",
-    "gpu": "B300",
-    "ngpu": 6,
-    "tp": 1,
-    "kv": "fp16",
-    "ram": 256,
-    "users": 16,
-    "inval": 35.0,
-    "eta": 0.2
-   },
-   "observed_rel": 0.049,
-   "max_rel": 0.06,
-   "hypothesis": "Monte-Carlo noise past the band's edge: the bands are re-measured on the probe states, and Q38FN's on-GPU weights moved when its n-gram table went to host memory (w_engram, 2026-11-16), so this 16-user DP6 state's decode-duty power sits just past the narrower band (4.9% against 4.6%)."
-  },
-  {
-   "quantity": "decode_ceiling",
-   "where": {
-    "model": "GLM52",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "tp": 2,
-    "ngpu": [
-     2,
-     4
-    ]
-   },
-   "observed_rel": 0.4704,
-   "max_rel": 0.56,
-   "hypothesis": "GLM-5.2 NVFP4 at TP2 on B300 holds 17 sessions on the GPUs since the B300 reserve gained vLLM's utilisation holdback (2026-11-18): the recommended cap is floor(min(max_users_decode, GPU-resident warm p5)), a count of a few sessions each side draws with its own sampler, and the capped decode ceiling reads its slot count off it, so one slot either way is 20-33%."
-  },
-  {
-   "quantity": "max_num_seqs",
-   "where": {
-    "model": "GLM52",
-    "gpu": "B300",
-    "wdt": "nvfp4",
-    "tp": 2,
-    "ngpu": [
-     2,
-     4
-    ]
-   },
-   "observed_rel": 0.3333,
-   "max_rel": 0.4,
-   "hypothesis": "GLM-5.2 NVFP4 at TP2 on B300 holds 17 sessions on the GPUs since the B300 reserve gained vLLM's utilisation holdback (2026-11-18): the recommended cap is floor(min(max_users_decode, GPU-resident warm p5)), a count of a few sessions each side draws with its own sampler, and the capped decode ceiling reads its slot count off it, so one slot either way is 20-33%."
-  },
-  {
    "quantity": "max_users_cold_wait",
    "where": {
     "_warm_p5": {
-     "lt": 10
+     "lt": 20
     }
    },
-   "observed_rel": 0.1143,
+   "observed_rel": 0.1533,
+   "max_rel": 0.25,
+   "hypothesis": "past the knee each capacity-aware ceiling is a fixed point U = ceiling(1 - W/U), which lands a few users from W, so it carries W's own difference; with under 20 warm sessions one session either way is 5-20%. The same cause as max_users_latency's entry under the same gate; the B300 states moved here when the B300 reserve gained vLLM's utilisation holdback (2026-11-18)."
+  },
+  {
+   "quantity": "max_users_saturation",
+   "where": {
+    "_warm_p5": {
+     "lt": 20
+    }
+   },
+   "observed_rel": 0.1225,
    "max_rel": 0.2,
-   "hypothesis": "past the knee the cold-wait ceiling is the fixed point U = ceiling(1 - W/U), which lands a few users from W, so it carries W's own difference: with under 10 warm sessions one session either way is 10-20%. Two Mistral-Medium-3.5 FP16-KV states on H200 DP groups (5 and 9 warm sessions); their vectors are unchanged, but the band narrowed when the probe states it is measured on moved with the B300 reserve (2026-11-18)."
+   "hypothesis": "past the knee each capacity-aware ceiling is a fixed point U = ceiling(1 - W/U), which lands a few users from W, so it carries W's own difference; with under 20 warm sessions one session either way is 5-20%. The same cause as max_users_latency's entry under the same gate; the B300 states moved here when the B300 reserve gained vLLM's utilisation holdback (2026-11-18)."
+  },
+  {
+   "quantity": "max_users_slowed",
+   "where": {
+    "_warm_p5": {
+     "lt": 20
+    }
+   },
+   "observed_rel": 0.184,
+   "max_rel": 0.25,
+   "hypothesis": "past the knee each capacity-aware ceiling is a fixed point U = ceiling(1 - W/U), which lands a few users from W, so it carries W's own difference; with under 20 warm sessions one session either way is 5-20%. The same cause as max_users_latency's entry under the same gate; the B300 states moved here when the B300 reserve gained vLLM's utilisation holdback (2026-11-18)."
+  },
+  {
+   "quantity": "max_users_cache",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "ngpu": 1,
+    "users": 64,
+    "_warm_p5": {
+     "gte": 14.5,
+     "lt": 15.5
+    }
+   },
+   "observed_rel": 0.1558,
+   "max_rel": 0.2,
+   "hypothesis": "one state, Mistral-Medium-3.5 on 1xB300 at 64 users, holds 15 warm sessions since the B300 reserve gained vLLM's utilisation holdback (2026-11-18): just past the _warm_p5 < 12 entries, where one session is 7%, and the hit rate W/U carries the count one for one."
+  },
+  {
+   "quantity": "cache_hit_rate",
+   "where": {
+    "model": "MM35",
+    "gpu": "B300",
+    "ngpu": 1,
+    "users": 64,
+    "_warm_p5": {
+     "gte": 14.5,
+     "lt": 15.5
+    }
+   },
+   "observed_rel": 0.1558,
+   "max_rel": 0.2,
+   "hypothesis": "one state, Mistral-Medium-3.5 on 1xB300 at 64 users, holds 15 warm sessions since the B300 reserve gained vLLM's utilisation holdback (2026-11-18): just past the _warm_p5 < 12 entries, where one session is 7%, and the hit rate W/U carries the count one for one."
   }
  ]
 }

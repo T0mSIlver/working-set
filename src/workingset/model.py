@@ -71,13 +71,14 @@ class GPU:
     hbm_bw: float          # HBM bandwidth, bytes/s
     supports_nvfp4: bool   # native FP4 tensor cores (Blackwell+)
     # Extra per-GPU reserve applied when the H200-SOLVED reserve transfers to
-    # this part. Two things do not transfer: Hopper over-provisions HBM (CUDA
-    # reports ~150.1e9 B on the H200 against the 141e9 vendor figure the
-    # calibration uses; the anchor absorbs the hidden ~10e9 into the solved
-    # reserve), and vLLM holds back (1 - gpu_memory_utilization) x the CUDA
-    # total, a share of a part's memory. reserve_extra is the difference in
-    # vram - u x total between this part and the H200 at u = 0.92
-    # (catalog.toml; research/reserve_terms.md).
+    # this part. Two things do not transfer: Hopper over-provisions HBM (the
+    # H200 delivers ~150.75e9 B against the 141e9 vendor figure the
+    # calibration uses, thundergolfer.com; the anchor absorbs the hidden
+    # 9.75e9 into the solved reserve), and vLLM holds back
+    # (1 - gpu_memory_utilization) x the GPU's total, a share of a part's
+    # memory. reserve_extra is the difference in vram - u x total between
+    # this part and the H200, at an assumed u = 0.92 (catalog.toml;
+    # research/reserve_terms.md).
     reserve_extra: float = 0.0
     # GPUs reachable over NVLink/NVSwitch without leaving the node. TP
     # all-reduces fire twice per layer and are latency-critical, so a TP group
@@ -704,7 +705,7 @@ class ReserveTerms:
 
     gpu_total is the device's total memory as vLLM reads it
     (torch.cuda.mem_get_info), not GPU.vram: the H200's catalogue vram is
-    the vendor's 141e9, its CUDA total about 150e9. All four in bytes,
+    the vendor's 141e9, while the part delivers about 150.75e9. All four in bytes,
     except the utilisation.
     """
     gpu_memory_utilization: float
@@ -3741,7 +3742,7 @@ def _selfcheck():
     assert min_tp_for(MODELS["DSV4FV"], "H200") == 2
     assert min_tp_for(MODELS["DSV4FV"], "B300") == 1
     # DSv4.1-Flash: 307.5 GB on the GPUs (vLLM offloads the 203 GB Engram
-    # tables to host memory) — 3 x 121.7 GB usable H200, 2 x 248.0 GB usable
+    # tables to host memory) — 3 x 121.7 GB usable H200, 2 x 248.3 GB usable
     # B300; with the tables in HBM, 510.3 GB: 5 H200, 3 B300
     assert min_tp_for(MODELS["DSV41F"], "H200") == 3
     assert min_tp_for(MODELS["DSV41F"], "B300") == 2

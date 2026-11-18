@@ -1603,10 +1603,10 @@ Observations:
     transfer — `tables.py` prints both). What remains an assumption is the
     activation/workspace reserve itself transferring across generations —
     one B300 vLLM startup log would close it. Since 2026-11-18
-    `reserve_extra` is 21.06e9 B: it also adds vLLM's utilisation holdback,
-    `(1 - 0.92) x` the part's CUDA total, which grows with the part's memory
-    (`research/reserve_terms.md`), so every B300 pool is 11.31e9 B per GPU
-    smaller than with the 9.75e9 patch.
+    `reserve_extra` is 20.76e9 B: it also adds vLLM's utilisation holdback,
+    `(1 - 0.92) x` the part's total at an assumed 0.92, which grows with the
+    part's memory (`research/reserve_terms.md`), so every B300 pool is
+    11.01e9 B per GPU smaller than with the 9.75e9 patch.
 17. **NVFP4 constants inherit checkpoint-recipe choices.** Which layers stay
     BF16 differs per quantizer (all recipes now read from the literal quant
     configs: RedHatAI keeps the 35B-A3B's DeltaNet blocks + MTP module BF16;

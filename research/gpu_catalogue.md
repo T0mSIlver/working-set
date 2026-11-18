@@ -172,10 +172,10 @@ bandwidth, dense FP8, `supports_nvfp4`, TDP and price. Two fields need a rule
 rather than a datasheet number:
 
 - **`vram` and `reserve_extra`.** The reserve is solved on the H200, whose
-  "141 GB" delivers 139.80 GiB as CUDA reports it. A part's `reserve_extra`
+  "141 GB" delivers ~150.75e9 B. A part's `reserve_extra`
   is `(vram - 0.92 x total)` on the part less the same on the H200, with
-  `total` the CUDA total a vLLM start-up log prints ("Free memory on device
-  (free/total GiB)"); the B300's is 21.06e9 B (`research/reserve_terms.md`).
+  `total` the part's delivered memory (its nvidia-smi total) and u = 0.92
+  assumed; the B300's is 20.76e9 B (`research/reserve_terms.md`).
   Each new part needs that total before it gets a row.
 - **Power.** Only Hopper fractions are measured (`research/power.md`).
   Transfer the same fractions of TDP (idle ~10.5%, decode 0.55, prefill 0.90)
