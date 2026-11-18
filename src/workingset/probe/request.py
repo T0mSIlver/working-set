@@ -529,6 +529,13 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
         raise
     except Exception as e:  # connection, HTTP status, timeout, bad JSON
         trace.error = f"{type(e).__name__}: {e}"[:200]
+        if t_last is not None:
+            # where the stream stood when it broke: a cut that follows a long
+            # silence points at an idle timeout on the way, not at the server
+            trace.error += (
+                f" ({n_chunks} text chunks received, the last "
+                f"{time.monotonic() - t_last:.1f} s before the failure, "
+                f"{time.monotonic() - t0:.1f} s after the request was sent)")
         return ""
 
     if usage:
