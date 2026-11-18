@@ -84,7 +84,7 @@ export function unitChecks(){
   console.assert(minTpFor(CONFIG.MODELS["MM35"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["MM35"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["GLM52"],"H200")===7 &&
-                 minTpFor(CONFIG.MODELS["GLM52"],"B300")===3 &&
+                 minTpFor(CONFIG.MODELS["GLM52"],"B300")===4 &&
                  minTpFor(CONFIG.MODELS["DSV4F"],"H200")===2 &&
                  minTpFor(CONFIG.MODELS["DSV4F"],"B300")===1 &&
                  minTpFor(CONFIG.MODELS["DSV4FV"],"H200")===2 &&
@@ -242,8 +242,8 @@ export function unitChecks(){
                  kv_pool_tokens(CONFIG.MODELS["DSV41F"], makeTopo("tp",2,"B300")) > 0,
     "DSv4.1-Flash (307.5 GB, Engram in host memory) must fit from 4xH200 (3 by arithmetic) and 2xB300");
   console.assert(minTpFor({ ...CONFIG.MODELS["DSV41F"], engram_in_hbm: true }, "H200") === 5 &&
-                 minTpFor({ ...CONFIG.MODELS["DSV41F"], engram_in_hbm: true }, "B300") === 2,
-    "DSv4.1-Flash with the Engram tables in HBM (510 GB) fits from 5xH200 by arithmetic and 2xB300");
+                 minTpFor({ ...CONFIG.MODELS["DSV41F"], engram_in_hbm: true }, "B300") === 3,
+    "DSv4.1-Flash with the Engram tables in HBM (510 GB) fits from 5xH200 by arithmetic and 3xB300");
   console.assert(kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"H200")) === 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",2,"H200")) > 0 &&
                  kv_pool_tokens(CONFIG.MODELS["DSV4F"], makeTopo("tp",1,"B300")) > 0,

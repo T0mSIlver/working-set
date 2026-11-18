@@ -71,12 +71,14 @@ class GPU:
     hbm_bw: float          # HBM bandwidth, bytes/s
     supports_nvfp4: bool   # native FP4 tensor cores (Blackwell+)
     # Extra per-GPU reserve applied when the H200-SOLVED reserve transfers to
-    # this part. Hopper over-provisions HBM: the H200 actually delivers
-    # ~150.75e9 usable bytes against the 141e9 vendor figure the calibration
-    # uses (thundergolfer.com, confirmed 2026-07-27). The anchor absorbs that
-    # hidden ~9.75e9 into the solved reserve implicitly, so H200 results are
-    # exact by construction — but a part WITHOUT the over-provision must add
-    # it back explicitly or its pools inherit ~9.75e9/GPU of phantom HBM.
+    # this part. Two things do not transfer: Hopper over-provisions HBM (the
+    # H200 delivers ~150.75e9 B against the 141e9 vendor figure the
+    # calibration uses, thundergolfer.com; the anchor absorbs the hidden
+    # 9.75e9 into the solved reserve), and vLLM holds back
+    # (1 - gpu_memory_utilization) x the GPU's total, a share of a part's
+    # memory. reserve_extra is the difference in vram - u x total between
+    # this part and the H200, at an assumed u = 0.92 (catalog.toml;
+    # research/reserve_terms.md).
     reserve_extra: float = 0.0
     # GPUs reachable over NVLink/NVSwitch without leaving the node. TP
     # all-reduces fire twice per layer and are latency-critical, so a TP group
@@ -671,7 +673,7 @@ def check_dtype_supported(model: Model, topo: Topology) -> None:
 #
 #     min TP to fit FP8 weights      H200    B300
 #       Mistral-Medium-3.5-128B         2       1     <- fits a single B300
-#       GLM-5.3 (744B-A40B)             7       3
+#       GLM-5.3 (744B-A40B)             7       4
 #
 # In every cell above where min TP > 1, `topology("dp", n)` — n INDEPENDENT
 # SINGLE GPUs — is not a deployment that exists: no count of single GPUs ever
@@ -703,7 +705,7 @@ class ReserveTerms:
 
     gpu_total is the device's total memory as vLLM reads it
     (torch.cuda.mem_get_info), not GPU.vram: the H200's catalogue vram is
-    the vendor's 141e9, its CUDA total about 150e9. All four in bytes,
+    the vendor's 141e9, while the part delivers about 150.75e9. All four in bytes,
     except the utilisation.
     """
     gpu_memory_utilization: float
@@ -3736,20 +3738,20 @@ def _selfcheck():
     assert min_tp_for(MODELS["MM35"], "H200") == 2
     assert min_tp_for(MODELS["MM35"], "B300") == 1
     assert min_tp_for(MODELS["GLM52"], "H200") == 7
-    assert min_tp_for(MODELS["GLM52"], "B300") == 3
+    assert min_tp_for(MODELS["GLM52"], "B300") == 4    # 3 until the B300 holdback
     assert min_tp_for(MODELS["DSV4F"], "H200") == 2
     assert min_tp_for(MODELS["DSV4F"], "B300") == 1
     # the vision tower's 0.93 GB moves neither boundary
     assert min_tp_for(MODELS["DSV4FV"], "H200") == 2
     assert min_tp_for(MODELS["DSV4FV"], "B300") == 1
     # DSv4.1-Flash: 307.5 GB on the GPUs (vLLM offloads the 203 GB Engram
-    # tables to host memory) — 3 x 121.7 GB usable H200, 2 x 259.3 GB usable
-    # B300; with the tables in HBM, 510.3 GB: 5 H200, still 2 B300
+    # tables to host memory) — 3 x 121.7 GB usable H200, 2 x 248.3 GB usable
+    # B300; with the tables in HBM, 510.3 GB: 5 H200, 3 B300
     assert min_tp_for(MODELS["DSV41F"], "H200") == 3
     assert min_tp_for(MODELS["DSV41F"], "B300") == 2
     dsf_hbm = with_engram(MODELS["DSV41F"], "gpu")
     assert hbm_weights(dsf_hbm) == 510_286_023_000
-    assert min_tp_for(dsf_hbm, "H200") == 5 and min_tp_for(dsf_hbm, "B300") == 2
+    assert min_tp_for(dsf_hbm, "H200") == 5 and min_tp_for(dsf_hbm, "B300") == 3
     assert hbm_weights(with_engram(MODELS["Q38FN"], "gpu")) == 185_502_232_570
     for k in MODELS:
         if not MODELS[k].w_engram:

@@ -467,9 +467,11 @@ def main():
     print("  Measured 2026-07-27: the H200 delivers ~150.75e9 usable bytes against")
     print("  its 141e9 vendor figure (thundergolfer.com, confirmed), while a real")
     print("  B300 nvidia-smi dump (Oracle OCI, 275,040 MiB) shows 288.4e9 — nominal,")
-    print("  no Hopper over-provision. GPU('B300').reserve_extra=9.75e9 adds the")
-    print("  hidden H200 margin back; the rows below show central (corrected) pools")
-    print("  vs what the former uncorrected transfer would have reported:")
+    print("  no Hopper over-provision. GPU('B300').reserve_extra adds the hidden")
+    print("  H200 margin back and, since 2026-11-18, vLLM's larger utilisation")
+    print("  holdback on the bigger part (20.76e9 in all; research/reserve_terms.md);")
+    print("  the rows below show central (corrected) pools vs what the former")
+    print("  uncorrected transfer would have reported:")
     for mk, n in [("35BA3B", 1), ("GLM52", 4)]:
         t = M.topology("tp", n, "B300")
         mdl = MODELS[mk]
