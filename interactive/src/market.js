@@ -98,8 +98,8 @@ function covered(u) {
 function countSentence() {
   const [k, n, np] = covered(S.u), [k1] = covered(1);
   const up = Math.round(S.u * 100);
-  let s = `${S.fresh ? 'With every prompt computed fresh (rough sensitivity): a' : 'A'}t <b>${up}%</b> utilisation and median ${termName(S.term)} rent, <b>${k}</b> of ${n} listed prices (endpoint and tier rows from ${np} providers) cover the GPU rent the model predicts.`;
-  if (up < 100) s += ` At 100%, <b>${k1}</b> do.`;
+  let s = `${S.fresh ? 'With every prompt computed fresh (rough sensitivity): a' : 'A'}t <b>${up}%</b> utilisation and median ${termName(S.term)} rent, <b>${k}</b> of ${n} listed prices, pooled over the ${M.models.length} models (endpoint and tier rows from ${np} providers), are at or above the modelled GPU rent per token.`;
+  if (up < 100) s += ` At 100%, <b>${k1}</b> are.`;
   $('count').innerHTML = s;
 }
 
@@ -259,12 +259,13 @@ function bandTip({ r }) {
   const { m, c } = r, d = div(m);
   const rr = M.rent[c.gpu][S.term];
   const unitWord = S.unit === 'tok' ? 'M tokens' : `M chars`;
-  let h = `<h4>${esc(shortName(m))}</h4><div class="sub">${c.n}×${esc(c.gpu)}, TP${c.tp}, ${esc(c.arm)} weights: the cheapest viable configuration</div><dl>`;
-  h += `<dt>Limit</dt><dd>${c.limit.toLocaleString('en-US')} live sessions</dd><dt>Binds</dt><dd>${esc(BIND[c.bind] ?? c.bind)}</dd>`;
-  h += `<dt>${esc(c.gpu)} rent</dt><dd>${LEVELS.map((l) => usd(rr[l])).join(' / ')} per GPU-hour<br><span class="muted">low / median / high of ${rr.n} ${esc(termName(S.term))} sellers</span></dd>`;
+  let h = `<h4>${esc(shortName(m))}</h4><div class="sub">${c.n}×${esc(c.gpu)}, TP${c.tp}, ${esc(c.arm)} weights: the lowest rent per session at median rent</div><dl>`;
+  h += `<dt>Limit</dt><dd>${c.limit.toLocaleString('en-US')} live sessions within the latency limits</dd><dt>Binds</dt><dd>${esc(BIND[c.bind] ?? c.bind)}</dd>`;
+  h += `<dt>${esc(c.gpu)} rent</dt><dd>${LEVELS.map((l) => usd(rr[l])).join(' / ')} per GPU-hour<br><span class="muted">${rr.n === 1 ? `one ${esc(termName(S.term))} seller, so no spread` : `low / median / high of ${rr.n} ${esc(termName(S.term))} sellers`}</span></dd>`;
   h += `<dt>At ${Math.round(S.u * 100)}%</dt><dd>${LEVELS.map((l) => usd(costTok(c, S.term, l, S.u) / d)).join(' / ')} per ${unitWord}</dd>`;
   h += `<dt>At 100%</dt><dd>${LEVELS.map((l) => usd(costTok(c, S.term, l, 1) / d)).join(' / ')}</dd>`;
   h += `<dt>Model error</dt><dd>${c.err ? errText(c.err) : 'capacity unchecked: rough sensitivity'}</dd></dl>`;
+  h += `<p>The limit is the most live sessions that meet the explorer’s default latency limits: decode at least 40 tok/s per user, p95 wait for a cold prompt at most 5 s, generation slowed by other sessions’ prefill at most 15% of the time. It is not a throughput capacity.</p>`;
   if (m.sens && !S.fresh) h += `<p>Most sensitive to: ${esc(m.sens.words)}.</p>`;
   if (S.fresh && m.nc.note) h += `<p>${esc(m.nc.note)}.</p>`;
   if (m.note && m.prov.some((p) => p.src === 'openrouter')) h += `<p>${esc(m.note)}</p>`;
@@ -338,7 +339,7 @@ function renderPin() {
   });
   let h = `<h2>${esc(shortName(m))}: ${m.prov.length} listed price${m.prov.length === 1 ? '' : 's'}</h2>`;
   if (m.note && m.prov.some((p) => p.src === 'openrouter')) h += `<div class="muted">${esc(m.note)}</div>`;
-  h += `<div class="muted">USD per million tokens. u* is the utilisation at which the price covers the ${esc(termName(S.term))} rent at low / median / high seller prices.</div>`;
+  h += `<div class="muted">In, Out and Cached are USD per million tokens; $/session-h is USD per live session-hour of the workload; Context is a share of the model’s own. u* is the utilisation at which the price covers the ${esc(termName(S.term))} rent at low / median / high seller prices.</div>`;
   if (!m.prov.length) { box.innerHTML = h + '<p class="muted">No listed price in this data set.</p>'; box.hidden = false; return; }
   h += '<div class="tablewrap"><table><thead><tr>';
   for (const [k, label] of COLS) h += `<th${k === 'p' || k === 'src' || k === 'q' ? ' class="l"' : ''}><button type="button" id="sort-${k}" data-sort="${k}" data-active="${k === sk}">${esc(label)}${k === sk ? (dir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`;
@@ -376,10 +377,10 @@ function sources() {
     <li>Cost per million tokens = C ÷ (L × u) ÷ tokens per session-hour × 10⁶, on the configuration with the lowest C ÷ L.</li>
     <li>An endpoint’s price for the mix applies its listed input, cached-input and output prices to the same session, assuming cache entries live 300 s.</li>
     <li>Break-even u* = cost per session-hour at full load ÷ the endpoint’s price per session-hour. Above 100%, the price does not cover the rent at the predicted limit even fully loaded, under these assumptions.</li></ol>
-    <p>Per million characters divides both by the model’s characters per token, measured with its own tokenizer on fixed public text (code, English, French, tool-call JSON). The provider’s hardware, engine, contract rents and traffic are unknown.</p>`;
+    <p>Per million characters divides the band and the listed prices by the model’s characters per token, measured with its own tokenizer on fixed public sample text of the chosen kind (code, English, French, tool-call JSON). The workload’s own text is not measured. The provider’s hardware, engine, contract rents and traffic are unknown.</p>`;
   if (HAS_NC) h += `<h3>Every prompt fresh</h3><p>Rough sensitivity: limits re-predicted with an explicit max_num_seqs, every prompt computed fresh and billed at the input price. It moves both the bands and the dots.</p>`;
   h += `<h3>GPU rent, USD per GPU-hour</h3>`;
-  if (M.rent_tiers) h += `<p>The band counts ${esc(M.rent_tiers)} offers only${M.rent_other ? `; rows marked “not counted” are ${esc(M.rent_other.tiers)}-tier offers left out of it` : ''}. Aggregators and GB300 instances are left out.</p>`;
+  if (M.rent_tiers) h += `<p>The band counts ${esc(M.rent_tiers)} offers only${M.rent_other ? `; rows marked “not counted” are community-cloud and marketplace offers left out of it` : ''}. Aggregators and GB300 instances are left out. Offers shown as sold out still count, and no offer’s availability was checked. Commitments of 3 to 11 months are left out.</p>`;
   for (const gpu of Object.keys(M.rent)) for (const term of M.terms) {
     const r = M.rent[gpu][term];
     const seen = new Set(r.sellers.map((x) => x[0] + '|' + x[1]));
@@ -398,7 +399,7 @@ function sources() {
   for (const [p, url, read] of M.price_pages) h += `<li><a href="${esc(url)}" target="_blank" rel="noopener">${esc(p)}</a>, read ${esc(read)}</li>`;
   if (M.openrouter) h += `<li><a href="${esc(M.openrouter.url)}" target="_blank" rel="noopener">OpenRouter API</a> endpoint listing, read ${esc(M.openrouter.read)}</li>`;
   h += `</ul><p>Listed prices are already after any published promotion, which is flagged. Time-of-day prices are plotted at their 24-hour time-weighted average.</p>`;
-  h += `<h3>How far the model has been checked</h3><p>Against independent measurements (docs/accuracy.md), the model predicts decode speed per user 10.5% too fast on average and 23.4% too fast at worst, over 3 rows. On the one prefill row it predicts a cold prompt 14.4% too fast. Most models have no independent row, and their bands are marked unchecked.</p>`;
+  h += `<h3>How far the model has been checked</h3><p>Against independent measurements (docs/accuracy.md), the model predicts decode speed per user 10.5% too fast on average and 23.4% too fast at worst, over 3 rows. On the one prefill row it predicts a cold prompt 14.4% too fast. Too-fast decode means the real limit is lower, so the band sits too low. The 23.4% row is Mistral-Large-4 on GB300 priced as B300, and the prefill row compares with a recipe’s “about 15 s” on a pre-release checkpoint. Seven of the 11 models have no independent row; their bands are marked unchecked.</p>`;
   $('srcbody').innerHTML = h;
 }
 
@@ -417,7 +418,7 @@ $('kind').addEventListener('change', (e) => { S.kind = e.target.value; hideTip()
 const mix = M.mix;
 const bill = M.billing;
 const p1 = (x) => (x * 100).toFixed(1) + '%';
-$('lede').textContent = `An agentic coding session re-reads its history on every request: at the model’s ${p1(M.workload.miss_rate)} cache-miss rate, ${p1(mix.cached)} of all prompt-plus-output tokens are cache reads, ${p1(mix.fresh)} fresh input and ${p1(mix.output)} output. `
+$('lede').textContent = `Every request of an agentic coding session re-sends its whole history. At the explorer’s default ${p1(M.workload.miss_rate)} prefix-cache miss rate, ${p1(mix.cached)} of all prompt-plus-output tokens are cache reads, ${p1(mix.fresh)} fresh input (mostly each request’s new turn) and ${p1(mix.output)} output. `
   + `Listed prices are applied with an assumed ${bill.ttl_s} s cache lifetime, which gives ${p1(bill.miss)} misses and ${p1(bill.cached)} cached tokens.`;
 S.u = +$('u').value / 100;
 $('uOut').textContent = $('u').value + '%';
