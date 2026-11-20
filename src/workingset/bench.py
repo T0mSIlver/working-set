@@ -1003,7 +1003,10 @@ def next_sessions(results: dict, max_sessions: int,
     `start`, doubles while every step passes (or shows no evidence: too few
     requests, nothing failed or queued), then halves the bracket between the
     largest pass and the smallest fail until it is within RESOLUTION of the
-    pass. A result is True (pass), False (fail) or None (no evidence)."""
+    pass. A result is True (pass), False (fail) or None (no evidence). When
+    the midpoint already ran and showed no evidence, the untested point of
+    the bracket nearest to it runs next (the larger of two: more sessions
+    give more turns to judge)."""
     if not results:
         return max(1, min(start, max_sessions))
     passes = [n for n, ok in results.items() if ok is True]
@@ -1017,7 +1020,8 @@ def next_sessions(results: dict, max_sessions: int,
     if lo == 0 or hi - lo <= max(1, math.floor(RESOLUTION * lo)):
         return None
     mid = (lo + hi) // 2
-    return None if mid in results else mid
+    untested = [n for n in range(lo + 1, hi) if n not in results]
+    return min(untested, key=lambda n: (abs(n - mid), -n), default=None)
 
 
 def answer(results: dict, max_sessions: int) -> dict:

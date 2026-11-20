@@ -91,6 +91,7 @@ class ReplaySession:
         self.n_new_images = 0
         self._text = ""
         self._prev: tuple[int, int] | None = None   # (prompt, output) sent
+        self._recorded: int | None = None   # recorded prompt of that request
         self._fresh = True                            # next turn starts over
         # a random request of a random recording: weighted by requests, so a
         # long session is entered more often, as it is more often running
@@ -123,7 +124,11 @@ class ReplaySession:
         prompt = r.prompt_tokens + self._extra
         want = min(prompt, self.room())
         prev = self._prev
-        if self._fresh or prev is None or want < prev[0] or \
+        # with scaled replies the prompt sent holds extra tokens, so a
+        # recorded reset (compaction, branch) is read from the recorded sizes
+        shrank = (self._extra != 0 and self._recorded is not None
+                  and r.prompt_tokens < self._recorded)
+        if self._fresh or prev is None or want < prev[0] or shrank or \
                 prompt > self.room():
             if not (self._fresh or prev is None):
                 # a reset (compaction, branch): the recorded prompt is the
@@ -155,13 +160,14 @@ class ReplaySession:
         out = self.out_tokens()
         self._text += reply
         self._prev = (r.prompt_tokens + self._extra, out)
+        self._recorded = r.prompt_tokens
         self._extra += out - r.output_tokens
         self.n_turn += 1
         self._pos += 1
         if self._pos >= len(self.trace.sessions[self._s]):
             self._s = self.roots[self.rng.randrange(len(self.roots))]
             self._pos, self._prev, self._fresh = 0, None, True
-            self._extra = 0
+            self._extra, self._recorded = 0, None
 
     def think_s(self, wl) -> float:
         gap = replay_gap(self._req, self.gap_policy, self.max_gap_s,

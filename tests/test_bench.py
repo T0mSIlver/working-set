@@ -91,6 +91,14 @@ def test_the_cap_is_reported_as_a_floor():
     assert a == {"serves": 12, "fails_at": None, "capped": True}
 
 
+def test_a_midpoint_without_evidence_does_not_end_the_search():
+    results = {1: True, 2: True, 4: True, 8: False, 6: None}
+    assert B.next_sessions(results, 256) == 7
+    assert B.next_sessions({**results, 7: True}, 256) is None
+    assert B.next_sessions({**results, 7: None}, 256) == 5
+    assert B.next_sessions({**results, 7: None, 5: None}, 256) is None
+
+
 # ============================================================================
 # the verdict
 # ============================================================================

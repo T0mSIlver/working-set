@@ -354,6 +354,18 @@ def test_output_scale_multiplies_replies_and_the_context_they_add():
                          (2_000, 300, "hit"), (500, 300, "miss")]
 
 
+def test_a_recorded_reset_smaller_than_the_scaled_context_is_still_a_reset():
+    tr = AgentTrace("pi", ((TraceRequest(1_000, 1_000, None, "start"),
+                            TraceRequest(900, 100, 0.0, "think")),))
+    s = _scaled(tr, 3.0)
+    s.next_turn()
+    s.commit("")
+    # 2,000 extra reply tokens are in the context: 900 + 2,000 is not under
+    # the 1,000 sent before, but the recording did shrink
+    _, kind = s.next_turn()
+    assert (s.want, kind) == (900, "miss")
+
+
 def test_output_scale_leaves_the_default_replay_byte_identical():
     tr = AgentTrace("pi", ((TraceRequest(1_000, 20, None, "start"),
                             TraceRequest(1_400, 20, 0.0, "tool")),))
