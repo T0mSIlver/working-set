@@ -152,6 +152,10 @@ The 27B TP2 FP16 log reports 2 × 110.59 GiB of KV memory; its 3,233,564 tokens 
 - The decode step jump past n ≈ 64 (issue #74).
 - Per-deployment reserves (CUDA graphs, a lowered memory cap): `ws calibrate --vllm-log` reads the reserve, or its three terms, from the start-up log; the default does not.
 
+## Outside evidence, hardware unknown: not in the statistics
+
+No provider price page read on 2026-11-18 publishes a decode speed.
+
 ## Excluded
 
 | what | records | why |

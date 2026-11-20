@@ -1,0 +1,347 @@
+{
+  "source": {
+    "read": "2026-11-18",
+    "script": "scripts/market_tokenizers.py",
+    "method": "Each corpus file is read as UTF-8 and encoded on its own with the model's own tokenizer as plain text: no special tokens (add_special_tokens=False, bos/eos off, tiktoken encode_ordinary), no chat template. A kind's tokens and characters are summed over its files. Characters are Unicode code points, bytes are UTF-8 bytes. tokenizer.json is loaded with tokenizers.Tokenizer.from_file; tekken.json with mistral-common's Tekkenizer; Kimi's tiktoken.model with tiktoken and the split pattern from the repo's tokenization_kimi.py (read as text, not run). vocab_size counts added/special tokens.",
+    "libraries": {
+      "tokenizers": "0.23.3",
+      "mistral-common": "1.13.1",
+      "tiktoken": "0.14.0"
+    }
+  },
+  "corpus": {
+    "code": {
+      "files": [
+        "data/market/corpus/code/charts.js",
+        "data/market/corpus/code/shared.py"
+      ],
+      "chars": 55854,
+      "bytes": 55934,
+      "sha256": "820b9d98c7ecdc72ac196825a3928ec4352c86a0072be5863e6c996a1056621b"
+    },
+    "english": {
+      "files": [
+        "data/market/corpus/english/verne_around_the_world_ch1-4.txt"
+      ],
+      "chars": 32575,
+      "bytes": 33261,
+      "sha256": "3e55fb853ce4ef8571fdcdaf721b44a52d465cc11bdc47869a0c93d293e17bdb"
+    },
+    "french": {
+      "files": [
+        "data/market/corpus/french/verne_tour_du_monde_ch1-4.txt"
+      ],
+      "chars": 37710,
+      "bytes": 38672,
+      "sha256": "f0841a5356dfa1e06a82acb3e11c2e6ad977f944dc47c7bcc54c6f489d4e2b65"
+    },
+    "json_tool_calls": {
+      "files": [
+        "data/market/corpus/json_tool_calls/chat_completions_request.json"
+      ],
+      "chars": 32277,
+      "bytes": 32311,
+      "sha256": "413d6bbdcb5fa451bf88c0dc61a7f14b94f1080a87c3cfd9faefe094416835ac"
+    }
+  },
+  "models": {
+    "27B": {
+      "tokenizer_repo": "Qwen/Qwen3.8-27B",
+      "revision": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "vocab_size": 248077,
+      "tokens": {
+        "code": 16964,
+        "english": 8162,
+        "french": 10771,
+        "json_tool_calls": 11526
+      },
+      "chars_per_token": {
+        "code": 3.2925,
+        "english": 3.9911,
+        "french": 3.5011,
+        "json_tool_calls": 2.8004
+      },
+      "bytes_per_token": {
+        "code": 3.2972,
+        "english": 4.0751,
+        "french": 3.5904,
+        "json_tool_calls": 2.8033
+      }
+    },
+    "35BA3B": {
+      "tokenizer_repo": "Qwen/Qwen3.6-35B-A3B",
+      "revision": "345d467b117d1fd5eda9b879a5988de9ae5f47a7",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "vocab_size": 248070,
+      "tokens": {
+        "code": 16964,
+        "english": 8162,
+        "french": 10771,
+        "json_tool_calls": 11526
+      },
+      "chars_per_token": {
+        "code": 3.2925,
+        "english": 3.9911,
+        "french": 3.5011,
+        "json_tool_calls": 2.8004
+      },
+      "bytes_per_token": {
+        "code": 3.2972,
+        "english": 4.0751,
+        "french": 3.5904,
+        "json_tool_calls": 2.8033
+      }
+    },
+    "MM35": {
+      "tokenizer_repo": "mistralai/Mistral-Medium-3.5-128B",
+      "revision": "22b2b868a15677cfa6061277ed2f653d1349a9ab",
+      "tokenizer_files": [
+        "tekken.json"
+      ],
+      "tokenizer_sha256": "b1272b956bd6edd2d2c674c76896c7661308c9e723997b0afb55ecb429cb5dc7",
+      "vocab_size": 131072,
+      "tokens": {
+        "code": 16964,
+        "english": 8167,
+        "french": 10173,
+        "json_tool_calls": 12015
+      },
+      "chars_per_token": {
+        "code": 3.2925,
+        "english": 3.9886,
+        "french": 3.7069,
+        "json_tool_calls": 2.6864
+      },
+      "bytes_per_token": {
+        "code": 3.2972,
+        "english": 4.0726,
+        "french": 3.8014,
+        "json_tool_calls": 2.6892
+      }
+    },
+    "GLM52": {
+      "tokenizer_repo": "zai-org/GLM-5.3",
+      "revision": "ba32f8c19c8738e2c57c71798c601d477a7bf844",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d",
+      "vocab_size": 154856,
+      "tokens": {
+        "code": 15948,
+        "english": 7996,
+        "french": 11086,
+        "json_tool_calls": 10725
+      },
+      "chars_per_token": {
+        "code": 3.5023,
+        "english": 4.0739,
+        "french": 3.4016,
+        "json_tool_calls": 3.0095
+      },
+      "bytes_per_token": {
+        "code": 3.5073,
+        "english": 4.1597,
+        "french": 3.4884,
+        "json_tool_calls": 3.0127
+      }
+    },
+    "DSV4F": {
+      "tokenizer_repo": "deepseek-ai/DeepSeek-V4-Flash-0731",
+      "revision": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "8f9f37ca37fdc4f5fd36d5cf4d3b0e8392edb4e894fd10cc0d70b4957c8633cf",
+      "vocab_size": 129280,
+      "tokens": {
+        "code": 16867,
+        "english": 8107,
+        "french": 11314,
+        "json_tool_calls": 10611
+      },
+      "chars_per_token": {
+        "code": 3.3114,
+        "english": 4.0181,
+        "french": 3.333,
+        "json_tool_calls": 3.0418
+      },
+      "bytes_per_token": {
+        "code": 3.3162,
+        "english": 4.1028,
+        "french": 3.4181,
+        "json_tool_calls": 3.045
+      }
+    },
+    "DSV4FV": {
+      "tokenizer_repo": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+      "revision": "6821d6ad3681a4b137b066b76094fa82ebd0a380",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "c90dfa01249db1be4245780a052ede752e1361c612ac6d08e2bdada7d599476b",
+      "vocab_size": 129280,
+      "tokens": {
+        "code": 16867,
+        "english": 8107,
+        "french": 11314,
+        "json_tool_calls": 10611
+      },
+      "chars_per_token": {
+        "code": 3.3114,
+        "english": 4.0181,
+        "french": 3.333,
+        "json_tool_calls": 3.0418
+      },
+      "bytes_per_token": {
+        "code": 3.3162,
+        "english": 4.1028,
+        "french": 3.4181,
+        "json_tool_calls": 3.045
+      }
+    },
+    "DSV41F": {
+      "tokenizer_repo": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "revision": "314113f8a7dadb388215396ba5fbee2c610a04d6",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "c90dfa01249db1be4245780a052ede752e1361c612ac6d08e2bdada7d599476b",
+      "vocab_size": 129280,
+      "tokens": {
+        "code": 16867,
+        "english": 8107,
+        "french": 11314,
+        "json_tool_calls": 10611
+      },
+      "chars_per_token": {
+        "code": 3.3114,
+        "english": 4.0181,
+        "french": 3.333,
+        "json_tool_calls": 3.0418
+      },
+      "bytes_per_token": {
+        "code": 3.3162,
+        "english": 4.1028,
+        "french": 3.4181,
+        "json_tool_calls": 3.045
+      }
+    },
+    "Q38FN": {
+      "tokenizer_repo": "Qwen/Qwen3.8-Flash-Next",
+      "revision": "812d96e10a0dd82b69d749e68693698cf6c36daa",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "vocab_size": 248077,
+      "tokens": {
+        "code": 16964,
+        "english": 8162,
+        "french": 10771,
+        "json_tool_calls": 11526
+      },
+      "chars_per_token": {
+        "code": 3.2925,
+        "english": 3.9911,
+        "french": 3.5011,
+        "json_tool_calls": 2.8004
+      },
+      "bytes_per_token": {
+        "code": 3.2972,
+        "english": 4.0751,
+        "french": 3.5904,
+        "json_tool_calls": 2.8033
+      }
+    },
+    "GLM53F": {
+      "tokenizer_repo": "zai-org/GLM-5.3-Flash",
+      "revision": "46a050bec13002ad29ee795c16e61cf4fa3c4a9c",
+      "tokenizer_files": [
+        "tokenizer.json"
+      ],
+      "tokenizer_sha256": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d",
+      "vocab_size": 154856,
+      "tokens": {
+        "code": 15948,
+        "english": 7996,
+        "french": 11086,
+        "json_tool_calls": 10725
+      },
+      "chars_per_token": {
+        "code": 3.5023,
+        "english": 4.0739,
+        "french": 3.4016,
+        "json_tool_calls": 3.0095
+      },
+      "bytes_per_token": {
+        "code": 3.5073,
+        "english": 4.1597,
+        "french": 3.4884,
+        "json_tool_calls": 3.0127
+      }
+    },
+    "ML4": {
+      "tokenizer_repo": "mistralai/Mistral-Large-4-1T-A52B",
+      "revision": "af26e7869af601441d5cdf75a1272469ddc3d059",
+      "tokenizer_files": [
+        "tekken.json"
+      ],
+      "tokenizer_sha256": "cc05cc0f7d8ef11e61151df069ffa99499b040e29309006f7bac5a470b8ddb67",
+      "vocab_size": 204800,
+      "tokens": {
+        "code": 16380,
+        "english": 8263,
+        "french": 10173,
+        "json_tool_calls": 10572
+      },
+      "chars_per_token": {
+        "code": 3.4099,
+        "english": 3.9423,
+        "french": 3.7069,
+        "json_tool_calls": 3.0531
+      },
+      "bytes_per_token": {
+        "code": 3.4148,
+        "english": 4.0253,
+        "french": 3.8014,
+        "json_tool_calls": 3.0563
+      }
+    },
+    "K31P": {
+      "tokenizer_repo": "moonshotai/Kimi-K3.1-Pro",
+      "revision": "d9e99b0792a5e93b78ea9bea62a68167e36ddd9e",
+      "tokenizer_files": [
+        "tiktoken.model",
+        "tokenization_kimi.py"
+      ],
+      "tokenizer_sha256": "b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103",
+      "vocab_size": 163840,
+      "tokens": {
+        "code": 16053,
+        "english": 8123,
+        "french": 12430,
+        "json_tool_calls": 10342
+      },
+      "chars_per_token": {
+        "code": 3.4793,
+        "english": 4.0102,
+        "french": 3.0338,
+        "json_tool_calls": 3.121
+      },
+      "bytes_per_token": {
+        "code": 3.4843,
+        "english": 4.0947,
+        "french": 3.1112,
+        "json_tool_calls": 3.1243
+      }
+    }
+  }
+}
