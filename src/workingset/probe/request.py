@@ -480,6 +480,18 @@ def _delta_text(obj: dict) -> str:
             or d.get("reasoning") or "")
 
 
+# Response headers that name the component that answered (the server, a
+# gateway, a proxy) or its request id: kept on a failed request, so a 500 or a
+# cut stream can be traced to its hop.
+ANSWERED_HEADERS = ("server", "via", "x-request-id", "x-correlation-id",
+                    "x-envoy-upstream-service-time", "retry-after")
+
+
+def _who_answered(headers) -> str:
+    got = [f"{h}={headers[h][:60]}" for h in ANSWERED_HEADERS if h in headers]
+    return f" [response headers: {'; '.join(got)}]" if got else ""
+
+
 async def send_request(client, ep: EndpointSpec, opts, prompt: str,
                        trace: RequestTrace, max_tokens: int,
                        metrics=None, _retries_left: int = 1,
@@ -499,10 +511,12 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
     t_first = t_last = None
     n_chunks, text, usage = 0, [], None
     gaps: list[float] = []
+    answered = ""
     try:
         async with client.stream("POST", url, json=payload, headers=headers,
                                  timeout=opts.request_timeout_s) as r:
             trace.status = r.status_code
+            answered = _who_answered(r.headers)
             if r.status_code != 200:
                 body = (await r.aread()).decode("utf-8", "replace")
                 # measure_mfu.py's fallback: the endpoint rejects the usage
@@ -519,7 +533,7 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
                     return await send_request(client, ep, opts, prompt, trace,
                                               max_tokens, metrics,
                                               _retries_left - 1, images)
-                trace.error = f"HTTP {r.status_code}: {body[:180]}"
+                trace.error = f"HTTP {r.status_code}: {body[:180]}" + answered
                 return ""
             async for data in _sse_events(r):
                 if data == "[DONE]":
@@ -548,6 +562,7 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
                 f" ({n_chunks} text chunks received, the last "
                 f"{time.monotonic() - t_last:.1f} s before the failure, "
                 f"{time.monotonic() - t0:.1f} s after the request was sent)")
+        trace.error += answered
         return ""
 
     if usage:

@@ -615,6 +615,30 @@ def test_http_error_is_recorded_not_raised():
     asyncio.run(go())
 
 
+def test_a_failed_request_keeps_the_headers_that_name_who_answered():
+    def refused(_request):
+        return httpx.Response(500, json={"error": "upstream"}, headers={
+            "server": "a-gateway", "x-request-id": "r-1", "set-cookie": "s=1"})
+
+    def cut(_request):
+        async def gen():
+            yield _sse({"choices": [{"delta": {"content": "a"}}]})
+            raise httpx.RemoteProtocolError("peer closed connection")
+        return httpx.Response(200, content=gen(), headers={
+            "content-type": "text/event-stream", "via": "1.1 a-proxy"})
+
+    async def go(handler):
+        async with client_for(handler) as c:
+            ep = EndpointSpec(base_url="http://x/v1", model="m", api="chat")
+            tr = RequestTrace(uid=1, kind="hit")
+            await send_request(c, ep, small_opts(), "p", tr, 4)
+        return tr.error
+    err = asyncio.run(go(refused))
+    assert err.endswith("[response headers: server=a-gateway; x-request-id=r-1]")
+    assert "cookie" not in err
+    assert asyncio.run(go(cut)).endswith("[response headers: via=1.1 a-proxy]")
+
+
 def test_a_stream_cut_mid_reply_says_how_far_it_got():
     def handler(_request):
         async def gen():
