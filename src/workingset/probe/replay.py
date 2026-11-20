@@ -125,8 +125,10 @@ class ReplaySession:
         want = min(prompt, self.room())
         prev = self._prev
         # with scaled replies the prompt sent holds extra tokens, so a
-        # recorded reset (compaction, branch) is read from the recorded sizes
-        shrank = (self._extra != 0 and self._recorded is not None
+        # recorded reset (compaction, branch) is read from the recorded sizes.
+        # Only under --output-scale: at scale 1 a recorded empty reply still
+        # leaves one extra token, and the default replay must not change
+        shrank = (self.output_scale != 1.0 and self._recorded is not None
                   and r.prompt_tokens < self._recorded)
         if self._fresh or prev is None or want < prev[0] or shrank or \
                 prompt > self.room():

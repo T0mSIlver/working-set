@@ -2033,7 +2033,9 @@ class TokenRefresher:
     def __init__(self, cmd: str, refresh_s: float, eps, metrics=()):
         import threading
         self.cmd, self.refresh_s = cmd, refresh_s
-        self.eps, self.metrics = list(eps), [m for m in metrics or () if m]
+        # `is not None`: a sampler that has not scraped yet has length 0
+        self.eps = list(eps)
+        self.metrics = [m for m in metrics or () if m is not None]
         self.refreshes = self.failures = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)

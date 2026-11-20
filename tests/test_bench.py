@@ -416,6 +416,17 @@ def test_a_token_command_is_run_again_during_the_replay(tmp_path, monkeypatch,
     assert "--api-key-cmd ran again" in capsys.readouterr().out
 
 
+def test_a_new_token_reaches_a_metrics_reader_that_has_not_scraped_yet():
+    from workingset.metrics import MetricsSampler
+    m = MetricsSampler("http://fake/metrics",
+                       headers={"Authorization": "Bearer old"})
+    assert len(m) == 0                     # falsy until its first scrape
+    ep = B.EndpointSpec(base_url="http://fake/v1", model="m", api_key="old")
+    B.TokenRefresher("unused", 240, [ep], [m, None]).apply("new")
+    assert m.headers == {"Authorization": "Bearer new"}
+    assert ep.bearer == "new"
+
+
 def test_a_token_command_that_cannot_give_a_token_stops_the_replay(
         tmp_path, monkeypatch, capsys):
     path = tmp_path / "trace.json"

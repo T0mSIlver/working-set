@@ -366,6 +366,18 @@ def test_a_recorded_reset_smaller_than_the_scaled_context_is_still_a_reset():
     assert (s.want, kind) == (900, "miss")
 
 
+def test_at_the_default_scale_an_empty_recorded_reply_changes_no_request():
+    # the reply is sent as 1 token, which leaves one extra token of context:
+    # the next prompt, 1 token shorter in the recording, is still a hit
+    tr = AgentTrace("pi", ((TraceRequest(1_000, 0, None, "start"),
+                            TraceRequest(999, 10, 0.0, "tool")),))
+    s = _scaled(tr, 1.0)
+    s.next_turn()
+    s.commit("")
+    _, kind = s.next_turn()
+    assert (s.want, kind) == (1_000, "hit")
+
+
 def test_output_scale_leaves_the_default_replay_byte_identical():
     tr = AgentTrace("pi", ((TraceRequest(1_000, 20, None, "start"),
                             TraceRequest(1_400, 20, 0.0, "tool")),))
