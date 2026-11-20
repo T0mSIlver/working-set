@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import httpx
 import pytest
@@ -375,3 +376,50 @@ def test_the_request_timeout_reaches_the_requests(tmp_path, monkeypatch):
                "--max-sessions", "1", "--request-timeout-s", "7")
     assert rec["plan"]["request_timeout_s"] == 7
     assert B.Plan("t", request_timeout_s=7).options().request_timeout_s == 7
+
+
+def _token_cmd(tmp_path, body: str) -> str:
+    script = tmp_path / f"token{len(list(tmp_path.glob('token*.py')))}.py"
+    script.write_text(body)
+    return f'"{sys.executable}" "{script}"'
+
+
+def test_a_token_command_is_run_again_during_the_replay(tmp_path, monkeypatch,
+                                                        capsys):
+    count = tmp_path / "count"
+    cmd = _token_cmd(tmp_path, (
+        "import pathlib\n"
+        f"p = pathlib.Path({str(count)!r})\n"
+        "n = int(p.read_text()) + 1 if p.exists() else 1\n"
+        "p.write_text(str(n))\n"
+        "print(f'secret-{n}')\n"))
+    seen = []
+    inner = _endpoint(free=10_000)
+
+    def handler(request):
+        seen.append(request.headers.get("authorization"))
+        return inner(request)
+    rec = _run(tmp_path, monkeypatch, handler, "--max-sessions", "1",
+               "--api-key-cmd", cmd, "--api-key-refresh-s", "0.1")
+    assert seen[0] == "Bearer secret-1" and len(set(seen)) > 1
+    assert rec["auth"]["refreshes"] >= 1 and rec["auth"]["failures"] == 0
+    assert rec["endpoint"]["api_key"] == "<set>"
+    assert "secret-" not in (tmp_path / "run.json").read_text()
+    assert "--api-key-cmd ran again" in capsys.readouterr().out
+
+
+def test_a_token_command_that_cannot_give_a_token_stops_the_replay(
+        tmp_path, monkeypatch, capsys):
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(_trace(n=30).to_dict()))
+    load_trace.cache_clear()
+    base = ["replay", str(path), "--base-url", "http://fake/v1"]
+    for cmd, flags, said in (
+            (_token_cmd(tmp_path, "raise SystemExit(3)\n"),
+             ["--api-key-refresh-s", "240"], "exited with status 3"),
+            (_token_cmd(tmp_path, "print('two words')\n"),
+             ["--api-key-refresh-s", "240"], "must print one token"),
+            (_token_cmd(tmp_path, "print('t')\n"), [],
+             "needs --api-key-refresh-s")):
+        assert main([*base, "--api-key-cmd", cmd, *flags]) == 2
+        assert said in capsys.readouterr().err

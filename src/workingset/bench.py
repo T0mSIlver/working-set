@@ -84,6 +84,8 @@ TURN_KINDS = frozenset({"start", "think", "ask", "abort", "branch", "resume",
                         "idle"})
 
 PERCENTILE = 90
+# how long --api-key-cmd may take before the run stops
+TOKEN_CMD_TIMEOUT_S = 60.0
 MAX_ERROR_SHARE = 0.01
 MAX_EVICTION_SHARE = 0.01
 MAX_WARM_TTFT_S = 3.0
@@ -1840,6 +1842,12 @@ def print_report(rec: dict, out=None) -> None:
     if not rec.get("complete", True):
         w(f"UNFINISHED RUN: it stopped after {len(rec['steps'])} judged "
           "step(s); what follows is the part that ran")
+    au = rec.get("auth")
+    if au:
+        w(f"token: --api-key-cmd ran again {au['refreshes']} time(s), every "
+          f"{au['refresh_s']:g} s"
+          + (f"; it FAILED {au['failures']} time(s), and requests kept the "
+             "previous token" if au["failures"] else ""))
     sp = Speed.from_dict(rec["speed"])
     pl = rec["plan"]
     w(f"alone ({sp.n} requests): "
@@ -1988,6 +1996,75 @@ def _prediction(config: str, trace_path: str) -> dict:
             "binding": p.binding_constraint}
 
 
+def token_from_cmd(cmd: str) -> str:
+    """Run `--api-key-cmd` and return the token it prints. ValueError when
+    the command fails or prints anything but one token: a run must not start,
+    or go on, with a guess."""
+    import subprocess
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                           timeout=TOKEN_CMD_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"--api-key-cmd did not finish in "
+                         f"{TOKEN_CMD_TIMEOUT_S:g} s") from None
+    if r.returncode != 0:
+        # stderr may quote a secret the command was given: say only how it
+        # ended
+        raise ValueError(f"--api-key-cmd exited with status {r.returncode}")
+    token = r.stdout.strip()
+    if not token or len(token.split()) != 1:
+        raise ValueError("--api-key-cmd must print one token and nothing "
+                         f"else on stdout; it printed {len(token.split())} "
+                         "words")
+    return token
+
+
+class TokenRefresher:
+    """Runs `--api-key-cmd` every `refresh_s` seconds on a thread and hands
+    the new token to the endpoints, and to the /metrics readers that send
+    one. A failed run of the command is printed and counted; requests keep
+    the previous token, so what the gateway then answers (401s) is in the
+    record."""
+
+    def __init__(self, cmd: str, refresh_s: float, eps, metrics=()):
+        import threading
+        self.cmd, self.refresh_s = cmd, refresh_s
+        self.eps, self.metrics = list(eps), [m for m in metrics or () if m]
+        self.refreshes = self.failures = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def apply(self, token: str) -> None:
+        for ep in self.eps:
+            ep.set_bearer(token)
+        for m in self.metrics:
+            h = getattr(m, "headers", None)
+            if isinstance(h, dict) and any(k.lower() == "authorization"
+                                           for k in h):
+                for k in [k for k in h if k.lower() == "authorization"]:
+                    h[k] = f"Bearer {token}"
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.refresh_s):
+            try:
+                self.apply(token_from_cmd(self.cmd))
+                self.refreshes += 1
+            except ValueError as e:
+                self.failures += 1
+                print(f"ws replay: {e}: requests keep the previous token",
+                      file=sys.stderr)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def to_dict(self) -> dict:
+        return {"source": "command", "refresh_s": self.refresh_s,
+                "refreshes": self.refreshes, "failures": self.failures}
+
+
 def metrics_headers(given: list[str], key: str, base_url: str,
                     metrics_url: str) -> dict[str, str]:
     """Headers for /metrics: each `--metrics-header 'Name: value'`, else the
@@ -2025,6 +2102,22 @@ def cmd_replay(args) -> int:
         print(f"ws replay: {args.trace} holds no session", file=sys.stderr)
         return 2
     key = os.environ.get(args.api_key_env, "") if args.api_key_env else ""
+    if args.api_key_refresh_s is not None and not args.api_key_cmd:
+        print("ws replay: --api-key-refresh-s goes with --api-key-cmd",
+              file=sys.stderr)
+        return 2
+    if args.api_key_cmd:
+        if args.api_key_refresh_s is None or args.api_key_refresh_s <= 0:
+            print("ws replay: --api-key-cmd needs --api-key-refresh-s, the "
+                  "seconds between two runs of the command: under the "
+                  "token's lifetime (240 for a token valid 5 minutes)",
+                  file=sys.stderr)
+            return 2
+        try:
+            key = token_from_cmd(args.api_key_cmd)
+        except ValueError as e:
+            print(f"ws replay: {e}", file=sys.stderr)
+            return 2
     bases = [b.rstrip("/") for b in (args.base_url or [DEFAULT_BASE_URL])]
     base = bases[0]
     murls = list(args.metrics_url or [])
@@ -2214,8 +2307,13 @@ def cmd_replay(args) -> int:
                                     bases[i] if len(bases) > 1 else base, u))
                    for i, u in enumerate(murls)]
 
+    refresher = (TokenRefresher(args.api_key_cmd, args.api_key_refresh_s,
+                                eps, metrics)
+                 if args.api_key_cmd else None)
+
     def record(res: dict, complete: bool) -> dict:
-        return {"format": FORMAT, "version": VERSION,
+        return {**({"auth": refresher.to_dict()} if refresher else {}),
+                "format": FORMAT, "version": VERSION,
                 "complete": complete, "workingset": __version__,
                 "trace": {"path": args.trace, "sessions": len(trace.sessions),
                           "requests": trace.n_requests},
@@ -2251,9 +2349,13 @@ def cmd_replay(args) -> int:
         from .test_cmd import _maybe
         for m in metrics or ():
             await _maybe(m, "start", "open")
+        if refresher:
+            refresher.start()
         try:
             return await run(eps, plan, metrics, on_progress=checkpoint)
         finally:
+            if refresher:
+                refresher.stop()
             for m in metrics or ():
                 await _maybe(m, "stop", "aclose", "close")
 
@@ -2344,6 +2446,15 @@ def add_subparser(sub) -> None:
                                    "/models lists)")
     p.add_argument("--api-key-env", default="VLLM_API_KEY",
                    help="environment variable holding the API key")
+    p.add_argument("--api-key-cmd", metavar="COMMAND",
+                   help="a command that prints a bearer token on stdout, "
+                        "for an endpoint whose tokens expire: run before "
+                        "the run, then every --api-key-refresh-s seconds. "
+                        "Used in place of --api-key-env")
+    p.add_argument("--api-key-refresh-s", type=float, default=None,
+                   help="seconds between two runs of --api-key-cmd: under "
+                        "the token's lifetime (240 for a token valid 5 "
+                        "minutes)")
     p.add_argument("--api", choices=("completions", "chat"),
                    default="completions")
     g = p.add_argument_group(

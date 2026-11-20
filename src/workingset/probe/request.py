@@ -64,10 +64,22 @@ class EndpointSpec:
         and decide their own retry from it — see `send_request`."""
         self._flags["stream_options"] = False
 
+    @property
+    def bearer(self) -> str:
+        """The token requests send now: `api_key`, or the one a token command
+        last returned (`set_bearer`)."""
+        return self._flags.get("bearer", self.api_key)
+
+    def set_bearer(self, token: str) -> None:
+        """Replace the token for every FUTURE request: a gateway's tokens
+        expire during a run. Like `stream_options`, it is not part of the
+        spec's identity."""
+        self._flags["bearer"] = token
+
     def identity(self) -> tuple:
         """What makes this a different endpoint. The API key is included by
         presence only; it never reaches a cache key or a record."""
-        return (self.base_url, self.model, self.api, bool(self.api_key))
+        return (self.base_url, self.model, self.api, bool(self.bearer))
 
     @classmethod
     def from_config(cls, ep, api: str = "completions",
@@ -81,7 +93,7 @@ class EndpointSpec:
 
     def redacted(self) -> dict:
         d = {k: v for k, v in asdict(self).items() if k != "_flags"}
-        d["api_key"] = "<set>" if self.api_key else ""
+        d["api_key"] = "<set>" if self.bearer else ""
         d["use_stream_options"] = self.use_stream_options
         return d
 
@@ -476,7 +488,7 @@ async def send_request(client, ep: EndpointSpec, opts, prompt: str,
     text (appended to the session so the next warm turn extends the cached
     run). `images` is `Session.turn_images`: (offset into prompt, data URI)."""
     url, payload = _payload(ep, opts, prompt, max_tokens, images)
-    headers = {"Authorization": f"Bearer {ep.api_key}"} if ep.api_key else {}
+    headers = {"Authorization": f"Bearer {ep.bearer}"} if ep.bearer else {}
 
     t0 = time.monotonic()
     trace.t_send = t0

@@ -138,6 +138,11 @@ uv run ws report run.json                 # re-print it
    (`--chars-per-token`, `--tokenizer`), the tokens its chat template adds
    (`--template-tokens`), and whether the server reports cached tokens
    (`--skip-eviction-check`).
+   The API key comes from `--api-key-env`. For an endpoint whose tokens
+   expire, `--api-key-cmd COMMAND` runs a command that prints one bearer
+   token, before the run and then every `--api-key-refresh-s` seconds; a
+   command that fails during the run is printed and counted in the record,
+   and requests keep the previous token.
 1. **Alone.** One replayed session sends 40 requests back to back, one in
    flight at a time. The endpoint's own speed is fitted from them: time to
    first token from the uncached tokens and the context, then time per output
