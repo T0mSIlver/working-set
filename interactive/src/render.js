@@ -7,7 +7,7 @@ import { breakevenMissRate, coldRequestSeconds, contextStats, decodeComfort,
          SPIKE_SLA_S, slowedShare, slowedStretch, coldWait, stretchPct, ttftMoments } from './prefill.js';
 import { samplingSig, seedFor } from './mathlib.js';
 import { p_sub } from './workload.js';
-import { decodeCurves, decodePlan, decodeState, warmCapacity } from './capacity.js';
+import { decodeCurves, decodePlan, decodeState, steadyCurve, warmCapacity } from './capacity.js';
 import { currentTopo, currentWL, ramPerCache, state } from './state.js';
 import { cssv, esc, fmt } from './svg.js';
 import { chartEData, clearChartGeomCD, interpAt, renderChartA, renderChartB,
@@ -25,7 +25,7 @@ import { renderFrontierChart, renderFrontierTable } from './frontier.js';
    ========================================================================== */
 export let lastDC=null, lastWarmCur=null, lastWarmAll=null, lastStress=null, lastCS=null;
 // the chosen load's decode point — recomputed every frame from lastDC
-export let lastSteady=null;
+export let lastSteady=null, lastDCSteady=null;
 
 // active model with the dtype, weight-overhead and MTP-speedup knobs applied.
 // FP16 doubles kv_bpt (with_kv_dtype in scenario_model.py); fp32 doubles the
@@ -130,7 +130,11 @@ export function computeAndRender(draft, deferFrontierDecode){
   seedFor('warm');
   const wc=warmCapacity(model,topo,wl,ramPerCache(topo),warmIter,q.WARM_BUDGET);
   const [p5,p50,p95]=wc.all, [g5,g50,g95]=wc.gpu, [o5,o50,o95]=wc.off;
-  lastWarmCur={p5,p50,p95, g5,g50,g95, o5,o50,o95, censored:wc.censored,
+  // r5/r95 = the decode population HBM holds (the warm sessions, or the cold
+  // ones where they outnumber them): the scheduler cap and the steady decode
+  // point stop there
+  const [r5,,r95]=wc.res;
+  lastWarmCur={p5,p50,p95, g5,g50,g95, o5,o50,o95, r5,r95, censored:wc.censored,
                system5:p5*topo.replicas, topo};
 
   // Chart B: warm p5 vs number of GPUs (TP one cache vs DP system total),
@@ -177,10 +181,13 @@ export function computeAndRender(draft, deferFrontierDecode){
   // the curves already drawn, so it costs nothing and can be recomputed on
   // every frame — including while the users / think / output sliders are being
   // dragged, which are exactly the knobs that move it.
-  lastSteady=steadyDecodePoint(dc, topo,
+  // the steady search reads samples through the decode population, which
+  // can run past chart C's warm axis when cold sessions outnumber warm ones
+  lastDCSteady=steadyCurve(dc, model, topo, wl, steadyResident(lastWarmCur.r95), draft);
+  lastSteady=steadyDecodePoint(lastDCSteady, topo,
                 serverRate(state.users, state.think, wl.sub_ratio)
                   / (topo.replicas || 1),
-                state.out, steadyResident(lastWarmCur.g95));
+                state.out, steadyResident(lastWarmCur.r95));
   // the C zone is a DECODE-concurrency span -> GPU-resident sessions only
   const noFit = kv_pool_tokens(model,topo) <= 0;
 
@@ -285,7 +292,7 @@ function renderPlanner(model, topo, wl, cs, noFit, draft, q, deferFrontierDecode
   if (!draft || !lastPlanner){
     seedFor('decodeCeil');
     decRes = maxUsersDecode(model, topo, wl, decodeFloor(), q.DECODE_ITER || 220);
-    mnsP = effectiveMns(decRes.n, lastWarmCur.g5);
+    mnsP = effectiveMns(decRes.n, lastWarmCur.r5);
     seedFor('decodeCapPower');
     capPu = p50AtCap(model, topo, wl, mnsP, q.DECODE_ITER || 220);
     seedFor('decodeSlots');
@@ -551,7 +558,7 @@ function startFrontierRebuild(wl, cs, q, wsig, dsig, msig, jobSig){
         base.push({ key: p.key, mk: p.mk, dp: p.dp, tp: p.tp,
                     label: `${m2.name} · ${t2.name}`, reps,
                     warmUsers: warmUsersNow(wc2.all[0], wl)*reps,
-                    resident5: wc2.gpu[0] });
+                    resident5: wc2.res[0] });
       }
       if (decOld[p.key]){ dec[p.key] = decOld[p.key]; }
       else {
@@ -761,7 +768,7 @@ export function renderTiles(model,topo,wl,dc,warm,stress,cs,steady){
   const offl = warm.o5;
   // ---- the STEADY-STATE decode point (act 2's honest counterpart to act 1's
   // stress test). Every quantity below is per replica GROUP, like groupRate.
-  const sd = noFit ? null : (steady || steadyDecodePoint(dc, topo, groupRate, state.out, steadyResident(warm.g95)));
+  const sd = noFit ? null : (steady || steadyDecodePoint(lastDCSteady || dc, topo, groupRate, state.out, steadyResident(warm.r95)));
   // prefill duty at this load. Above 1 the queue is unbounded, so there is no
   // steady state to be in: requests never reach the decode batch at all, and
   // quoting a decode speed for them would be the most misleading number on the
