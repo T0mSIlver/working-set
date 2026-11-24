@@ -32,7 +32,17 @@ Secondary summaries of the same talk (each is a rewrite; treat as unverified unt
 - CellCog (https://cellcog.ai/blog/revolut-self-hosted-glm/): repeats the above; adds "cache hit rate above 90% for coding traffic", which it labels as advice, not a Revolut measurement. Treat as weak.
 - LinkedIn post by krehlik (https://www.linkedin.com/posts/krehlik_how-revolut-cut-ai-coding-costs-90-with-activity-7523128876093399040-M1Oc), as relayed by a fetch tool: GPUs "rented from Together AI". Third-party, one source only.
 
-Reading: 2,000 is the rollout population, not concurrent users. The load figure that is comparable is requests/s (>7, secondary). Workday peak vs after-5-pm speeds (200 vs 800 tok/s) show the cluster is load-limited at peak. Cost claim excludes staffing and observability.
+Reading: 2,000 is the rollout population, not concurrent users. Workday peak vs after-5-pm speeds (200 vs 800 tok/s) show the cluster is load-limited at peak. Cost claim excludes staffing and observability.
+
+### The transcript (read 2026-11-24)
+
+The talk page has the full transcript: https://ai.engineer/nyc/2026/talks/revolut (video https://www.youtube.com/watch?v=akEqiXFo3GM&t=20214s). It corrects three things above.
+
+- The model is 5.3 and the cost is "blended": "to serve 2,000 engineers, we roughly need 56 B200. And that's to host GLM 5.3." / "self-hosting, GLM, or blended cost of token is 30 cents per million. And so our invoice is one-tenth of what we were spending on Anthropic and OpenAI."
+- The load figures are in the talk, April (GLM-5.1, at migration) to August on the same 56 GPUs: "request per second around 3 ... time to first token over 10 seconds", then "requests per second were over 7 ... we're around 1.6". The slide gives 14.26 s to 1.68 s.
+- TP8, P/D disaggregation, speculative decoding and the 90% cache-hit rule are advice to the audience, not stated as Revolut's setup: "even though GLM fits on TP4, you don't have enough KV cache, and so maybe a TP8 works better"; "optimize spec decoding, sequential pre-fill, PD disaggregation"; "coding test needs to be above 90% cache hit". The Register's "implementing disaggregated prefill and decode" over-reads that list.
+
+Still not given: engine, parallelism, MTP, concurrency, tokens per day, a measured hit rate, GPU price, what "blended" covers. The "Together AI" rental and "cache hits free" (sparsenotes.com, an AI-written summary) are not in the transcript.
 
 ## 2. DeepSeek V3/R1 online service (Feb 2025), the only primary day-level stats
 

@@ -26,12 +26,12 @@
     "weights": "nvfp4",
     "kv": null,
     "engine": null,
-    "parallel": "prefill/decode disaggregated; TP8 per secondary",
+    "parallel": "not stated: the talk gives TP8 over TP4 and P/D disaggregation as advice, not as Revolut's setup",
     "spec_decode": null,
     "max_ctx": 262144,
     "extra": {
      "dgx_b200_systems": 7,
-     "engine_note": "not stated in The Register or any summary found"
+     "engine_note": "not stated in the talk"
     }
    },
    "workload": {
@@ -77,7 +77,7 @@
      "name": "usd_per_mtok",
      "value": 0.3,
      "unit": "USD",
-     "at": "input/output, GLM 5.1; excludes staffing/observability per secondary"
+     "at": "'blended' cost of self-hosted GLM; whether cache reads count is not stated; excludes staffing/observability per secondary"
     },
     {
      "name": "max_ctx_tokens",
@@ -86,7 +86,7 @@
     }
    ],
    "quote": "\"Revolut initially adopted GLM-5.1 before moving to GLM-5.3, which it now serves using 56 Nvidia B200 GPUs.\" / \"sub-3 second time to first token on context windows of around 256,000 tokens, and generation speeds of around 200 tokens a second\" / \"At $0.30 per million input/output tokens, self hosting GLM 5.1 cost about a tenth of using OpenAI's Codex or Anthropic's Claude Code.\"",
-   "note": "Press account of David Abitbol's AI Engineer NYC talk (2026-10-13; video https://www.youtube.com/watch?v=Ok6QdZHCcI8, transcript not read). Register: tok/s and TTFT are what 'the sweet spot' means; percentile not stated. ws_model GLM52 = GLM-5.3 in Working Set.",
+   "note": "Press account of David Abitbol's AI Engineer NYC talk (2026-10-13); transcript read 2026-11-24 (https://ai.engineer/nyc/2026/talks/revolut). The talk names GLM 5.3 on the 56 B200 and calls the $0.30 'blended'; The Register's 'implementing disaggregated prefill and decode' over-reads a list of things to look into. ws_model GLM52 = GLM-5.3 in Working Set.",
    "inputs": [],
    "use": "context"
   },
@@ -145,7 +145,7 @@
     }
    ],
    "quote": "\"time to first token falling from over 10 seconds to 1.6 seconds even as requests per second rose from 3 to over 7\" / \"GLM needs TP8 not TP4 to fit KV cache\" / \"improved performance 88% for 76% more demand without adding GPUs\"",
-   "note": "secondary: https://www.startuphub.ai/ai-news/artificial-intelligence/2026/revolut-says-self-hosted-ai-cut-coding-costs-90 (a rewrite of the talk; also says 'GLM 4.5', contradicting The Register). Not in The Register. Verify against the talk transcript before use.",
+   "note": "secondary: StartupHub's rewrite of the talk. The req/s and TTFT figures are confirmed by the transcript read 2026-11-24 (https://ai.engineer/nyc/2026/talks/revolut): 'request per second around 3' to 'over 7', TTFT 'over 10 seconds' to 'around 1.6' (the slide: 14.26 s to 1.68 s). 'GLM 4.5' is StartupHub's error.",
    "inputs": [],
    "use": "context"
   },
