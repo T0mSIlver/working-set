@@ -1,6 +1,6 @@
 import { CONFIG, DECODE_ETA, GIB, PREFILL_MFU, decodeConstants, decodeStepSeconds, is_moe,
          kv_pool_tokens, replicated, state_traffic, tokensPerStep } from './config.js';
-import { percentiles } from './mathlib.js';
+import { percentiles, seedFor } from './mathlib.js';
 import { sampleFull, sampleReqInto } from './workload.js';
 import { state } from './state.js';
 
@@ -30,14 +30,14 @@ function warmOnce(pool, ram_gib, model, wl){
   // shared prefix at a 5k median makes every session cost only its recurrent
   // state, so a TP8 pool plus 1 TiB of offload holds >60k of them.
   const SAFETY = 60000;
-  let warm = 0, warmGpu = 0, gpu = 0, ram = 0, gpuFull = false, done = false, i = 0;
+  let warm = 0, warmGpu = 0, inHbm = 0, gpu = 0, ram = 0, gpuFull = false, done = false, i = 0;
   const r = _warmReq;                       // scratch, refilled every iteration
   for (; i<SAFETY && !done; i++){
     sampleReqInto(wl, r);
     const u = r.isCold ? r.full : Math.max(r.full - r.prefix, 0);
     if (!gpuFull){
       gpu += u + state_tok;
-      if (gpu <= gpu_budget){ if (!r.isCold){ warm++; warmGpu++; } continue; }
+      if (gpu <= gpu_budget){ inHbm++; if (!r.isCold){ warm++; warmGpu++; } continue; }
       gpuFull = true;   // this request overflows the GPU -> spills to CPU below
     }
     if (ram_gib > 0){
@@ -50,12 +50,20 @@ function warmOnce(pool, ram_gib, model, wl){
   // warm    = warm STORAGE (HBM + offloaded to host RAM)
   // warmGpu = HBM-resident only — the ONLY sessions that can decode without a
   //           PCIe restore first, so decode concurrency is computed over these
+  // resident = the larger of the warm and the cold sessions HBM holds: a
+  //           cold request holds its prompt while it is served, though none
+  //           of it is reusable. The scheduler cap and the steady decode
+  //           point stop here; equal to warmGpu wherever warm sessions
+  //           outnumber cold ones (mirrors n_resident in _warm_once, WS-48)
   // drawn   = requests sampled to fill both budgets — the cost of this fill,
   //           used to size the iteration count (see warmCapacity)
-  return { warm, warmGpu, drawn:i, censored:!done };
+  const resident = Math.max(warmGpu, inHbm - warmGpu);
+  return { warm, warmGpu, resident, drawn:i, censored:!done };
 }
 
-// Returns {all, gpu, off}, each [p5,p50,p95]. `all` counts offloaded sessions
+// Returns {all, gpu, off, res}, each [p5,p50,p95]. `res` is the decode
+// population: the larger of the warm and the cold HBM-resident sessions
+// (which="resident"). `all` counts offloaded sessions
 // as warm storage (the capacity view); `gpu` counts only HBM-resident sessions
 // (the decode view); `off` is the offloaded count taken PER DRAW (all-gpu
 // within the same fill) and then percentiled, so it is a statistic of the
@@ -67,7 +75,7 @@ export function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
   // to restore offloaded sessions into: capacity is zero REGARDLESS of the
   // CPU-offload buffer (mirrors warm_capacity in scenario_model.py).
   if (pool <= 0)
-    return { all:[0,0,0], gpu:[0,0,0], off:[0,0,0], censored:false };
+    return { all:[0,0,0], gpu:[0,0,0], off:[0,0,0], res:[0,0,0], censored:false };
   // every budget pays per stored copy — the host offload is rank-local
   // (mirrors warm_capacity)
   model = replicated(model, topo);
@@ -85,15 +93,15 @@ export function warmCapacity(model, topo, wl, ram_gib, n_iter, budget){
   const floor = first.censored ? 3 : CONFIG.WARM_ITER_MIN;
   const iters = Math.max(Math.min(n_iter, floor), Math.min(n_iter, cap));
   const all = new Float64Array(iters), gpu = new Float64Array(iters),
-        off = new Float64Array(iters);
+        off = new Float64Array(iters), res = new Float64Array(iters);
   let censored = false;
   for (let i=0;i<iters;i++){
     const r = i===0 ? first : warmOnce(pool, ram_gib, model, wl);
-    all[i] = r.warm; gpu[i] = r.warmGpu; off[i] = r.warm - r.warmGpu;
+    all[i] = r.warm; gpu[i] = r.warmGpu; off[i] = r.warm - r.warmGpu; res[i] = r.resident;
     censored = censored || r.censored;
   }
   return { all: percentiles(all, [5,50,95]), gpu: percentiles(gpu, [5,50,95]),
-           off: percentiles(off, [5,50,95]), censored };
+           off: percentiles(off, [5,50,95]), res: percentiles(res, [5,50,95]), censored };
 }
 
 /* ============================================================================
@@ -113,6 +121,19 @@ export function decodePlan(gpuP95, draft){
   const iter = Math.max(q.DECODE_ITER_MIN,
                         Math.min(q.DECODE_ITER, Math.round(q.DECODE_BUDGET / nMax)));
   return { nMax, step, iter };
+}
+
+// The curve the steady decode search reads. Chart C's plan is sized from the
+// warm band (g95); the steady search stops at the decode population
+// (resident, which counts cold sessions where they outnumber warm ones), so
+// when that runs past the chart's axis it gets its own samples through it,
+// seeded apart. Otherwise it is the chart's curve itself, no new draw.
+// steady_decode_point samples to its own stop the same way (WS-48).
+export function steadyCurve(dc, model, topo, wl, resident, draft){
+  if (!(resident > dc.ns[dc.ns.length-1])) return dc;
+  const plan = decodePlan(resident, draft);
+  seedFor('decodeSteady');
+  return decodeCurves(model, topo, wl, plan.nMax, plan.step, plan.iter);
 }
 
 // The decode constants and the prefill MFU, read through helpers so nothing

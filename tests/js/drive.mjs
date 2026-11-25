@@ -15,7 +15,7 @@ import { state, currentTopo, currentWL, ramPerCache }
   from '../../interactive/src/state.js';
 import { activeModel } from '../../interactive/src/render.js';
 import { seedFor } from '../../interactive/src/mathlib.js';
-import { decodeCurves, decodePlan, warmCapacity }
+import { decodeCurves, decodePlan, steadyCurve, warmCapacity }
   from '../../interactive/src/capacity.js';
 import { bStar, warmUsersCurve, warmUsersNow } from '../../interactive/src/planner.js';
 import { energyCost } from '../../interactive/src/cost.js';
@@ -156,7 +156,7 @@ export function driveState(v){
   o.max_users_decode = dec.n;
   o.max_users_decode_censored = dec.censored;
   // the max_num_seqs cap render.js applies to the planner and frontier
-  const mns = effectiveMns(dec.n, wc.gpu[0]);
+  const mns = effectiveMns(dec.n, wc.res[0]);
   o.max_num_seqs = mns;
   seedFor('decodeCapPower');
   const capPu = p50AtCap(m, topo, wl, mns, DECODE_ITER);
@@ -179,7 +179,10 @@ export function driveState(v){
   const plan = decodePlan(wc.gpu[2], false);
   seedFor('decode');
   const dc = decodeCurves(m, topo, wl, plan.nMax, plan.step, plan.iter);
-  const sd = steadyDecodePoint(dc, topo, rate, state.out, steadyResident(wc.gpu[2]));
+  // ...and, as render.js does, the steady search gets samples through the
+  // decode population when that runs past the warm axis (WS-48)
+  const dcS = steadyCurve(dc, m, topo, wl, steadyResident(wc.res[2]), false);
+  const sd = steadyDecodePoint(dcS, topo, rate, state.out, steadyResident(wc.res[2]));
   o.steady_n = sd.n;
   o.steady_per_user_tok_s = sd.pu;
   o.steady_saturated = sd.saturated;

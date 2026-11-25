@@ -338,18 +338,18 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
     # ---- Monte-Carlo: warm fill and decode curves -------------------------
     o["max_users_cache"] = warm
     o["warm_p5_all"] = _warm_all(m, topo, wl, ram, draw, seed, "all")
-    # the GPU-resident p95 now CAPS the steady point on both sides (it used
-    # to be a diagnostic only), so it runs at the full warm iteration count
-    warm_gpu95 = _warm_all(m, topo, wl, ram, draw, seed, "gpu", pct=2)
+    # the HBM-resident p95 (cold sessions included) CAPS the steady point on
+    # both sides, so it runs at the full warm iteration count
+    warm_gpu95 = _warm_all(m, topo, wl, ram, draw, seed, "resident", pct=2)
     dec, cens = _decode_ceiling(m, topo, wl, st, seed)
     o["max_users_decode"] = dec
     o["max_users_decode_censored"] = cens
     # the scheduler's cap, as predict() applies it: it binds where the
     # steady decode batch at the load fills it, and a cap below the
     # bandwidth ceiling lifts that ceiling (model.cap_decode_ceiling)
-    # unset = the recommended cap, off the same GPU-resident p5 the
-    # explorer's planner reads (lastWarmCur.g5)
-    warm_gpu5 = _warm_all(m, topo, wl, ram, draw, seed, "gpu", pct=0)
+    # unset = the recommended cap, off the same HBM-resident p5 the
+    # explorer's planner reads (lastWarmCur.r5)
+    warm_gpu5 = _warm_all(m, topo, wl, ram, draw, seed, "resident", pct=0)
     mns = (st["mns"] if st["mns"] is not None
            else M.recommended_max_num_seqs(dec, warm_gpu5))
     p50_cap = float(M.decode_curves(m, topo, wl, [mns], n_iter=DECODE_ITER,
@@ -369,8 +369,8 @@ def compute(st: dict, seed: int = 0) -> tuple[dict, dict]:
                             seed=seed, decode=_decode(st))
     for i, n in enumerate((1, 8, 64)):
         o[f"decode_p50_n{n}"] = float(curve[1][i])
-    # capped at the GPU-resident population, the same figure the mirror's
-    # steadyDecodePoint is handed (render.js lastWarmCur.g95), and at
+    # capped at the HBM-resident population, the same figure the mirror's
+    # steadyDecodePoint is handed (render.js lastWarmCur.r95), and at
     # max_num_seqs when set (predict's resident = min(p95, max_num_seqs))
     sd = M.steady_decode_point(m, topo, wl, rate, out_tokens=st["out"],
                                n_iter=DECODE_ITER, seed=seed, decode=_decode(st),
@@ -869,6 +869,12 @@ NAMED_STATES = [
      {"chunk": "16384", "cap": 262, "user_median": 68, "user_sigma": 0.69,
       "inval": 2.5, "think": 46, "out": 807, "decode_floor": 50, "mfu": 0.33,
       "mns": 96, "users": 48}),
+    # WS-48, from the review of PR #142: at 100% misses the decode population
+    # (cold sessions) runs far past chart C's warm axis, so the explorer's
+    # steady search needs samples of its own through it; Python bisects to
+    # it directly. Prefill duty ~47%: a real steady batch, not saturation.
+    (dict(model="35BA3B", gpu="B300", wdt="fp8", kv="fp8", ngpu=8, tp=8),
+     {"inval": 100.0, "users": 360, "think": 30, "out": 8000}),
 ]
 
 

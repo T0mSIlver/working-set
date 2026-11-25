@@ -301,3 +301,20 @@ def test_steady_decode_point_sizes_its_own_resident_draw():
     t = M.topology_grid(1, 8, "B300")
     sp = M.steady_decode_point(m, t, M.Workload(), 10.0, n_iter=100)
     assert sp["n"] > 0 and sp["per_user_tok_s"] > 0
+
+
+def test_resident_counts_cold_sessions_when_they_outnumber_warm():
+    """WS-48: at 100% misses no session is reusable, yet HBM still holds
+    contexts that decode. The decode population the cap rests on is the
+    larger of the warm and the cold sessions HBM holds, so it equals the
+    warm count on the default workload and is not 0 when every request
+    misses."""
+    from dataclasses import replace
+    m, t = M.MODELS["27B"], M.TOPOLOGIES["1xH200"]
+    wl = M.Workload()
+    kw = dict(n_iter=40, draw=M.warm_draw(m, t))
+    assert list(M.warm_capacity(m, t, wl, which="resident", **kw)) == \
+        list(M.warm_capacity(m, t, wl, which="gpu", **kw))
+    cold = replace(wl, invalidation=1.0)
+    assert M.warm_capacity(m, t, cold, which="gpu", **kw)[0] == 0
+    assert M.warm_capacity(m, t, cold, which="resident", **kw)[0] >= 1

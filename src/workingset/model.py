@@ -1999,8 +1999,16 @@ def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
                model: Model, wl: Workload):
     """Fill one KV cache (+ optional CPU offload) in arrival order; count the
     resident sessions that are *reusable* (i.e. not cold/unmatchable), total,
-    user-class only, and GPU-resident only.
-    Returns (n_warm_all, n_warm_user, n_warm_gpu, censored).
+    user-class only, and GPU-resident only, plus the decode population.
+    Returns (n_warm_all, n_warm_user, n_warm_gpu, n_resident, censored).
+
+    `n_resident` is the larger of the warm and the cold sessions HBM holds. A
+    cold request holds its whole prompt in HBM while it prefills and
+    decodes, though nothing of it is kept for reuse, so `n_warm_gpu` alone is
+    0 at 100% misses while the pool still holds contexts. Their sum would be
+    the whole HBM population; the larger of the two equals `n_warm_gpu`
+    wherever warm sessions outnumber cold ones (every miss rate below about
+    50%), so the default workload's caps do not move (WS-48).
 
     CPU offload is *storage*: an offloaded session's KV lives in host RAM and
     cannot decode until it is restored over PCIe (see docs/scenarios.md
@@ -2045,9 +2053,10 @@ def _warm_once(full, prefix, is_cold, is_sub, pool_tokens, ram_gib,
         n_cpu = int(np.searchsorted(cb, ram_budget, side="right"))
         n_res = n_gpu + min(n_cpu, len(rem))
     warm = ~is_cold[:n_res]
+    n_warm_gpu = int((~is_cold[:n_gpu]).sum())
     censored = n_res >= len(unique)   # budget not exhausted by this draw
     return (int(warm.sum()), int((warm & ~is_sub[:n_res]).sum()),
-            int((~is_cold[:n_gpu]).sum()), censored)
+            n_warm_gpu, max(n_warm_gpu, n_gpu - n_warm_gpu), censored)
 
 
 def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
@@ -2063,8 +2072,13 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
                  Percentile the difference, never difference the percentiles:
                  p5(all) - p5(gpu) mixes draws and counts nothing. 0 at
                  ram_gib=0;
-    which="gpu"  counts only sessions whose KV is resident in GPU HBM — the
-                 DECODE view. Offloaded sessions are storage: they must be
+    which="resident" counts the larger of the warm and the cold sessions
+                 whose KV is in GPU HBM: the population the scheduler cap and
+                 the steady decode point stop at. A cold request holds its
+                 prompt while it is served, though nothing of it is reusable;
+                 equal to which="gpu" wherever warm sessions outnumber cold;
+    which="gpu"  counts only reusable sessions whose KV is resident in GPU HBM
+                 — the warm DECODE view. Offloaded sessions are storage: they must be
                  restored over PCIe before they can decode, so any per-user or
                  aggregate decode figure must be computed at a concurrency
                  taken from which="gpu", never which="all". With ram_gib=0 the
@@ -2074,7 +2088,7 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     shares the host buffer across its replicas, so DP callers must pass
     system_ram / topo.replicas (the explorer does this via ramPerCache()).
     """
-    valid = ("all", "user", "gpu", "offload")
+    valid = ("all", "user", "gpu", "offload", "resident")
     if which not in valid:
         raise ValueError(f"which must be one of {valid}, got {which!r}")
     check_cap_allowed(model, wl)
@@ -2095,13 +2109,13 @@ def warm_capacity(model: Model, topo: Topology, wl: Workload, ram_gib=0,
     model = _replicated(model, topo)
     for i in range(n_iter):
         full, prefix, cold, sub = wl.sample(rng, draw)
-        n_all, n_user, n_gpu, censored = _warm_once(full, prefix, cold, sub,
-                                                    pool, ram_gib, model, wl)
+        n_all, n_user, n_gpu, n_resident, censored = _warm_once(
+            full, prefix, cold, sub, pool, ram_gib, model, wl)
         if censored:
             raise ValueError(f"draw={draw} too small: budget not exhausted "
                              "(censored result); re-run with a larger draw")
         counts[i] = {"all": n_all, "user": n_user, "gpu": n_gpu,
-                     "offload": n_all - n_gpu}[which]
+                     "offload": n_all - n_gpu, "resident": n_resident}[which]
     return np.percentile(counts, [5, 50, 95])
 
 
@@ -2625,8 +2639,8 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
     THE BATCH CANNOT OUTGROW THE POOL. A batch of n sequences needs n
     contexts resident in HBM, and decode_curves prices exactly that read
     without asking whether they fit. So the search stops at `resident`, the
-    GPU-resident warm population of one cache (warm_capacity which="gpu",
-    p95: the most sessions any fill packs). Past it the engine is evicting
+    decode population one cache holds in HBM (warm_capacity
+    which="resident", p95: the most sessions any fill packs). Past it the engine is evicting
     and every returning session is a cold prefill, which is the miss-rate
     axis's business and is not priced here; a point found out there would be
     a number about a machine that does not exist. `saturated` is therefore
@@ -2667,7 +2681,7 @@ def steady_decode_point(model: Model, topo: Topology, wl: Workload,
         resident = float(warm_capacity(model, topo, wl, ram_gib=0,
                                        n_iter=max(40, n_iter // 4),
                                        draw=warm_draw(model, topo), seed=seed,
-                                       which="gpu")[2])
+                                       which="resident")[2])
     # at least one sequence decodes if anything does; below one resident
     # context decode_curves itself refuses (no pool), so the floor is safe
     cap = max(1, min(hi, int(math.floor(resident))))
@@ -2761,8 +2775,9 @@ def decode_slot_mean(max_num_seqs: int,
 def recommended_max_num_seqs(bandwidth: float, resident: float) -> int:
     """The max_num_seqs working-set recommends, per replica group: the largest
     batch whose per-user p50 still meets the floor (max_users_decode, read as
-    sequences), within the GPU-resident warm p5 (beyond it nobody warm is
-    left to admit). Past the floor crossing a bigger batch only slows every
+    sequences), within the p5 of the decode population HBM holds
+    (warm_capacity which="resident": the GPU-resident warm sessions, or the
+    cold ones where those outnumber them). Past the floor crossing a bigger batch only slows every
     sequence below the floor, so queueing is the better answer. Mirrors
     recommendedMns in interactive/src/prefill.js."""
     return max(1, int(math.floor(min(bandwidth, resident))))
@@ -4796,7 +4811,7 @@ def _selfcheck():
     #     needs n contexts in HBM, and past that every return is a cold
     #     prefill this point does not price. 27B/TP2 holds ~200 resident; a
     #     demand that 4,096 decoders would retire is still no steady state.
-    res = float(warm_capacity(m27, tp2, wl, n_iter=100, which="gpu")[2])
+    res = float(warm_capacity(m27, tp2, wl, n_iter=100, which="resident")[2])
     v_res = float(decode_curves(m27, tp2, wl, [int(res)], n_iter=100)[1][0])
     past = steady_decode_point(m27, tp2, wl, 1.5 * int(res) * v_res / OUT_TOKENS_DEFAULT,
                                n_iter=100, resident=res)

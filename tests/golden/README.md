@@ -215,7 +215,7 @@ can be gated on the **cause** rather than on a model name.
 | `_warm_p5` | the warm count in sessions — one session either way is 33% of three |
 | `_decode_ceiling` | same, for the decode bisection |
 | `_ctx_cv2` | squared coefficient of variation of the context length; `E[S^2\|miss]` runs on `L^4`, so its sampling variance scales with this |
-| `_steady_cap_ratio` | demand / aggregate throughput at the resident cap (the GPU-resident warm p95, where both `steady_decode_point` and `steadyDecodePoint` stop). At `>= 1` both report `saturated`; the cap itself is a Monte-Carlo draw on each side, so `n` there differs by the draw |
+| `_steady_cap_ratio` | demand / aggregate throughput at the resident cap (the p95 of the decode population HBM holds — the warm sessions, or the cold ones where they outnumber them (WS-48) — where both `steady_decode_point` and `steadyDecodePoint` stop). At `>= 1` both report `saturated`; the cap itself is a Monte-Carlo draw on each side, so `n` there differs by the draw |
 | `_wait_margin` | `rho - (1 - p)`; the p-th cold wait `(E[W]/rho) ln(rho/(1 - p))` leaves zero at 0, so near it a small difference in rho is a large relative one in the wait (1 under `mean`) |
 | `_stretch_chunk_edge` | `|L_p - C round(L_p/C)| / L_p`: how close the stretch's prompt length sits to a chunk boundary, where `ceil(L_p/C)` adds a decode step |
 | `_miss_share_swing` | `(f(U; 0.95 W) - f(U; 1.05 W)) / f(U; W)`, f = `miss_share_at`: how far the at-load miss share moves when W moves 5% either way. 0 well inside the warm pool (both sides price the configured rate); past it the share is `1 - W/U`, a difference of two near numbers just past the knee, and each side prices it on its own W |
