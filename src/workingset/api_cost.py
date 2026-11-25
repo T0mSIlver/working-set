@@ -274,6 +274,22 @@ def usd_per_eur() -> float:
 
 
 # ---- the per-request cost ------------------------------------------------------
+def _band_flows(median: float, sigma: float, lo: float, cap: float, lb: float,
+                top: float, delta: float, q: float) -> tuple[float, float, float]:
+    """(P(band), read tokens, written tokens) of one request class over the
+    prompts in (lb, top]: on a hit the prompt less its fresh tail is read and
+    the tail written, on a miss (probability q) the whole prompt is written.
+    Token counts are expectations restricted to the band."""
+    p, e = clipped_partial(median, sigma, lo, cap, lb, top)
+    if p <= 0:
+        return 0.0, 0.0, 0.0
+    # a fresh tail never longer than its own prompt: E[min(delta, L); band]
+    p1, e1 = clipped_partial(median, sigma, lo, cap, lb, min(top, delta))
+    p2, _ = clipped_partial(median, sigma, lo, cap, max(lb, delta), top)
+    dp = e1 + delta * p2
+    return p, (1.0 - q) * (e - dp), (1.0 - q) * dp + q * e
+
+
 def _class_cost(offer: ApiOffer, opt_index: int, median: float, sigma: float,
                 prefix: float, cap: float, delta: float, q: float,
                 out_tokens: float) -> float:
@@ -282,20 +298,48 @@ def _class_cost(offer: ApiOffer, opt_index: int, median: float, sigma: float,
     total = 0.0
     for i, band in enumerate(offer.bands):
         top = offer.bands[i + 1].above_tokens if i + 1 < len(offer.bands) else math.inf
-        p, e = clipped_partial(median, sigma, lo, cap, band.above_tokens if i else -math.inf, top)
+        lb = band.above_tokens if i else -math.inf
+        p, read_tok, write_tok = _band_flows(median, sigma, lo, cap, lb, top, delta, q)
         if p <= 0:
             continue
         opt = band.cache[opt_index]
-        # a fresh tail never longer than its own prompt: E[min(delta, L); band]
-        lb = band.above_tokens if i else -math.inf
-        p1, e1 = clipped_partial(median, sigma, lo, cap, lb, min(top, delta))
-        p2, _ = clipped_partial(median, sigma, lo, cap, max(lb, delta), top)
-        dp = e1 + delta * p2
-        read_tok = (1.0 - q) * (e - dp)
-        write_tok = (1.0 - q) * dp + q * e
         total += (opt.read * read_tok + opt.write * write_tok
                   + band.output * out_tokens * p) / 1e6
     return total
+
+
+@dataclass(frozen=True)
+class RequestFlows:
+    """Mean tokens of one request, main agent and subagents mixed at the
+    workload's ratio: what a price sheet bills and what a server computes."""
+    prompt: float             # E[L], every prompt token
+    read: float               # read from a prefix cache (hits: L - Δ)
+    written: float            # computed fresh (hits: Δ; misses: L)
+    output: float             # decoded
+    miss: float               # q these were priced at
+
+
+def request_flows(wl: M.Workload, q: float, turn_tokens: float = 2_000,
+                  out_tokens: float = M.OUT_TOKENS_DEFAULT) -> RequestFlows:
+    """The token flows `request_cost` bills, at miss probability q: the same
+    clipped lognormal and the same split, without a price sheet."""
+    if not 0.0 <= q <= 1.0:
+        raise ValueError(f"q must be in [0, 1], got {q!r}")
+    if turn_tokens < 0 or out_tokens < 0:
+        raise ValueError("turn_tokens and out_tokens must be >= 0")
+    s = wl.sub_ratio
+    sub_prefix = wl.sys_user if wl.sub_shares_prefix else wl.sys_sub
+    out = []
+    for median, sigma, prefix in ((wl.user_median, wl.user_sigma, wl.sys_user),
+                                  (wl.sub_median, wl.sub_sigma, sub_prefix)):
+        lo = min(prefix, wl.cap)
+        _, read, written = _band_flows(median, sigma, lo, wl.cap, -math.inf, math.inf,
+                                       turn_tokens, q)
+        out.append((read, written))
+    (rm, wm), (rs, ws) = out
+    read = (rm + s * rs) / (1.0 + s)
+    written = (wm + s * ws) / (1.0 + s)
+    return RequestFlows(read + written, read, written, float(out_tokens), q)
 
 
 @dataclass(frozen=True)

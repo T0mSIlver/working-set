@@ -1,0 +1,9 @@
+{"source": {"id": "fixture-pages", "url": "https://example.invalid/prices", "fetched": "2026-11-18T00:00:00Z", "script": "fixture"},
+ "models": [
+  {"ws_model": "GLM52", "hugging_face_id": "fixture/glm", "url": "https://example.invalid/glm", "context_length": 1048576,
+   "endpoints": [
+    {"provider": "fixture-a", "tag": "fixture-a/fp8", "usd_per_mtok_input": 1.0, "usd_per_mtok_output": 4.0, "usd_per_mtok_cache_read": 0.2, "usd_per_mtok_cache_write": null, "other_pricing": {}, "context_length": 1048576, "max_completion_tokens": 131072, "quantization": "fp8", "throughput_tok_s": 80.0, "latency_s": null, "uptime": null, "raw": {}},
+    {"provider": "fixture-b", "tag": "fixture-b", "usd_per_mtok_input": 0.5, "usd_per_mtok_output": 2.0, "usd_per_mtok_cache_read": null, "usd_per_mtok_cache_write": null, "other_pricing": {"discount": 0.5}, "context_length": 131072, "max_completion_tokens": 32768, "quantization": "unknown", "throughput_tok_s": null, "latency_s": null, "uptime": null, "raw": {}},
+    {"provider": "fixture-c", "tag": "fixture-c/fp4", "usd_per_mtok_input": null, "usd_per_mtok_output": 2.0, "usd_per_mtok_cache_read": null, "usd_per_mtok_cache_write": null, "other_pricing": {}, "context_length": 1048576, "max_completion_tokens": null, "quantization": "fp4", "throughput_tok_s": null, "latency_s": null, "uptime": null, "raw": {}}
+   ]}
+ ]}

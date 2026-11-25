@@ -51,6 +51,7 @@ uv run ws report run.json                # re-print the verdicts
 uv run ws models                         # model / GPU keys
 uv run ws catalog Qwen/Qwen3.8-27B-FP8   # a draft catalog.toml table for a new model
 uv run ws api workingset.toml --hours 84 # one seat on each API; what each coding plan holds
+uv run ws market GLM52                   # GPU rent against provider prices: break-even utilisation (docs/market.md)
 uv run pytest                            # self-checks + config round-trips
 ```
 
